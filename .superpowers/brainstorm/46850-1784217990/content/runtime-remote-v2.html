@@ -1,0 +1,54 @@
+<style>
+ .remote-page{max-width:1080px;margin:0 auto}.topology{display:grid;grid-template-columns:1fr 70px 1.2fr;gap:12px;align-items:stretch;margin:20px 0 26px}.zone{border:1px solid #d6dee7;border-radius:7px;background:#fff;padding:15px}.zone h3{font-size:14px;margin:0 0 9px;color:#19242e}.zone ul{font-size:11px;line-height:1.65;color:#5e6b78;margin:0;padding-left:18px}.zone.lan{box-shadow:inset 0 3px 0 #0369a1}.zone.server{box-shadow:inset 0 3px 0 #0f766e}.arrow{display:grid;place-items:center;text-align:center;color:#72808d;font-size:11px}.config{background:#17212b;color:#dce7ef;border-radius:7px;padding:14px;font:11px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap;margin:12px 0 24px}.rules{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:14px 0 26px}.rule{border:1px solid #d8e0e8;border-radius:6px;background:#fff;padding:12px;font-size:11px;line-height:1.5;color:#596774}.rule b{display:block;color:#20303c;margin-bottom:5px}.warn{border-left:5px solid #b45309;background:#fff7ed;border-radius:6px;padding:14px 16px;color:#6f4825;font-size:12px;line-height:1.55;margin:16px 0}.mode-table{display:grid;grid-template-columns:150px 1fr 1fr;border:1px solid #d7dfe7;border-radius:7px;overflow:hidden;margin:14px 0 25px}.cell{padding:10px;border-right:1px solid #e1e6eb;border-bottom:1px solid #e1e6eb;font-size:11px;color:#5c6976;background:#fff}.cell:nth-child(3n){border-right:0}.cell.head{background:#f5f7f9;font-weight:700;color:#23313d}.cell.last{border-bottom:0}@media(max-width:800px){.topology,.rules{grid-template-columns:1fr}.arrow{min-height:30px}.mode-table{grid-template-columns:110px 1fr 1fr}}
+</style>
+<div class="remote-page">
+ <h2>运行时修订：支持 0.0.0.0 受信任内网访问</h2>
+ <p class="subtitle">本地单机指的是“代码与执行发生在部署机器”，不再限定浏览器也必须运行在同一台机器。</p>
+
+ <div class="topology">
+  <div class="zone lan"><h3>内网浏览器</h3><ul><li>访问服务器 IP 和配置端口</li><li>看到服务器上的仓库与任务</li><li>通过 REST + SSE 操作</li><li>不获得 OpenAI/MCP secret</li></ul></div>
+  <div class="arrow">HTTP / SSE<br>trusted LAN</div>
+  <div class="zone server"><h3>CodeLens Host</h3><ul><li>FastAPI 绑定 0.0.0.0</li><li>仓库、SQLite、Artifact、Worker 均在服务器</li><li>Sandbox 仍保持无网和目录隔离</li><li>Fix patch 只应用到服务器工作区</li></ul></div>
+ </div>
+
+ <h3>两种启动配置</h3>
+ <div class="mode-table">
+  <div class="cell head">配置</div><div class="cell head">默认本机模式</div><div class="cell head">受信任内网模式</div>
+  <div class="cell">bind</div><div class="cell">127.0.0.1</div><div class="cell">0.0.0.0</div>
+  <div class="cell">auth</div><div class="cell">none</div><div class="cell">none</div>
+  <div class="cell">访问者</div><div class="cell">当前机器</div><div class="cell">所有可达该端口的主机</div>
+  <div class="cell">风险提示</div><div class="cell">普通</div><div class="cell">启动日志 + UI 固定横幅</div>
+  <div class="cell last">开启方式</div><div class="cell last">默认</div><div class="cell last">必须显式配置</div>
+ </div>
+
+ <div class="config"># CLI
+codelens-review start /srv/repos \
+  --host 0.0.0.0 \
+  --port 8765 \
+  --auth none
+
+# ~/.config/codelens-review/config.toml
+[server]
+host = "0.0.0.0"
+port = 8765
+auth = "none"
+allowed_hosts = ["10.0.1.20", "review.intra.example"]
+allowed_origins = ["http://10.0.1.20:8765", "http://review.intra.example:8765"]</div>
+
+ <h3>无鉴权不等于取消协议安全</h3>
+ <div class="rules">
+  <div class="rule"><b>Host / Origin 校验</b>抵御 DNS rebinding 和跨站请求；CORS 默认关闭，API 只接受 JSON content type。</div>
+  <div class="rule"><b>Secret 留在服务端</b>API key、MCP token 不通过前端 API 返回，不写任务事件或浏览器日志。</div>
+  <div class="rule"><b>沙箱策略不放宽</b>绑定 0.0.0.0 不会自动开放容器网络、宿主目录或命令权限。</div>
+  <div class="rule"><b>服务器路径语义</b>仓库选择器展示和校验的是服务端路径，不尝试访问远程浏览器的本地磁盘。</div>
+  <div class="rule"><b>审计仍保留</b>记录来源 IP、User-Agent、操作、任务和 apply 结果，但不把它当成身份。</div>
+  <div class="rule"><b>反向代理可选</b>后续可由 Nginx/Caddy 提供 TLS 或鉴权；应用首版不强制依赖。</div>
+ </div>
+
+ <div class="warn"><b>明确接受的风险：</b>在 `0.0.0.0 + auth none` 下，任何能访问服务端口的人都可以发起 review、消耗模型配额、查看结果，并在启用 Fix/自动审批时修改服务器仓库。首版允许这样部署，但不会把它描述为安全的多用户部署。</div>
+
+ <div class="options">
+  <div class="option" data-choice="approve_remote_runtime" onclick="toggleSelect(this)"><div class="letter">A</div><div class="content"><h3>确认内网模式</h3><p>继续设计 Web 页面和交互状态。</p></div></div>
+  <div class="option" data-choice="revise_remote_runtime" onclick="toggleSelect(this)"><div class="letter">B</div><div class="content"><h3>继续调整</h3><p>在终端说明默认 host、访问语义或安全限制的修改意见。</p></div></div>
+ </div>
+</div>

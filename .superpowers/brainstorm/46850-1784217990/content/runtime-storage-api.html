@@ -1,0 +1,79 @@
+<style>
+ .runtime-page{max-width:1180px;margin:0 auto}.deploy{display:grid;grid-template-columns:1fr 58px 1.1fr 58px 1.1fr;gap:9px;align-items:stretch;margin:18px 0 26px}.unit{border:1px solid #d5dee7;border-radius:7px;background:#fff;padding:14px}.unit h4{margin:0 0 8px;font-size:14px;color:#17212b}.unit ul{margin:0;padding-left:17px;font-size:11px;line-height:1.6;color:#5e6b78}.unit.web{box-shadow:inset 0 3px 0 #0369a1}.unit.api{box-shadow:inset 0 3px 0 #7c3aed}.unit.worker{box-shadow:inset 0 3px 0 #0f766e}.link{display:grid;place-items:center;text-align:center;color:#788592;font-size:11px}.sandbox-grid{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:14px 0 25px}.sandbox{border:1px solid #d6dee7;border-radius:7px;background:#fff;overflow:hidden}.sandbox-head{padding:10px 13px;background:#f6f8fa;border-bottom:1px solid #e1e7ed;font-weight:700;font-size:13px}.sandbox-body{padding:13px}.mounts{display:grid;grid-template-columns:1fr 1fr;gap:8px}.mount{background:#f8fafc;border:1px solid #dde4eb;border-radius:5px;padding:9px;font-size:11px;line-height:1.45;color:#596774}.mount code{display:block;color:#1f3b4d;margin-bottom:4px}.gates{display:flex;gap:7px;flex-wrap:wrap;margin-top:10px}.gate{border:1px solid #ccd6df;border-radius:4px;background:#fff;padding:5px 7px;font-size:10px;color:#53616f}.storage{display:grid;grid-template-columns:1.2fr .8fr;gap:14px;margin:14px 0 25px}.tables{display:grid;grid-template-columns:repeat(3,1fr);gap:8px}.table{border:1px solid #d7dfe7;border-radius:5px;padding:9px;background:#fff}.table b{display:block;font-size:11px;color:#1f2b35;margin-bottom:5px}.table span{display:block;font-size:10px;line-height:1.45;color:#65727e}.api-list{display:flex;flex-direction:column;gap:6px}.endpoint{display:grid;grid-template-columns:48px 1fr;gap:8px;border:1px solid #d9e1e8;border-radius:5px;padding:7px;background:#fff;font:10px/1.4 ui-monospace,SFMono-Regular,Menlo,monospace}.method{font-weight:700;color:#5b21b6}.safety{display:grid;grid-template-columns:repeat(4,1fr);gap:9px;margin:14px 0 25px}.risk{border-radius:6px;padding:11px;border:1px solid #ead7c2;background:#fff9f2;font-size:11px;line-height:1.5;color:#6e4a27}.risk b{display:block;color:#92400e;margin-bottom:4px}.install{background:#17212b;color:#dce7ef;border-radius:7px;padding:14px;font:11px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;margin:12px 0 24px;white-space:pre-wrap}@media(max-width:900px){.deploy{grid-template-columns:1fr}.link{min-height:30px}.sandbox-grid,.storage{grid-template-columns:1fr}.safety{grid-template-columns:1fr 1fr}.tables{grid-template-columns:1fr 1fr}}
+</style>
+<div class="runtime-page">
+ <h2>本地运行时、沙箱、存储与 API</h2>
+ <p class="subtitle">浏览器只是界面；任务和状态由本机后端持久化。原仓库不会直接暴露给 Agent。</p>
+
+ <h3>单机部署拓扑</h3>
+ <div class="deploy">
+  <div class="unit web"><h4>React + TypeScript</h4><ul><li>开发期由 Vite 独立运行</li><li>发布期打包为静态资源</li><li>REST commands/queries</li><li>SSE 实时事件 + 断线续传</li></ul></div>
+  <div class="link">HTTP<br>127.0.0.1</div>
+  <div class="unit api"><h4>FastAPI API</h4><ul><li>Pydantic DTO 与 OpenAPI</li><li>创建任务、配置和查询</li><li>SQLite transaction + outbox</li><li>随机本地 session token</li><li>Host / Origin / CSRF 防护</li></ul></div>
+  <div class="link">SQLite<br>job lease</div>
+  <div class="unit worker"><h4>Review Worker</h4><ul><li>确定性 DAG + asyncio</li><li>OpenAI Agents SDK adapter</li><li>Sandbox / Git / MCP lifecycle</li><li>心跳、取消、超时、恢复</li><li>子进程组强制清理</li></ul></div>
+ </div>
+
+ <h3>Review 与 Fix 的物理隔离</h3>
+ <div class="sandbox-grid">
+  <div class="sandbox"><div class="sandbox-head">REVIEW Sandbox</div><div class="sandbox-body">
+   <div class="mounts"><div class="mount"><code>/repo : read-only</code>物化后的 ReviewSnapshot，不挂载原仓库。</div><div class="mount"><code>/work : writable temp</code>仅允许测试缓存、工具输出和临时文件。</div></div>
+   <div class="gates"><span class="gate">network: off</span><span class="gate">CPU / memory</span><span class="gate">process limit</span><span class="gate">output cap</span><span class="gate">timeout</span></div>
+  </div></div>
+  <div class="sandbox"><div class="sandbox-head">FIX Sandbox</div><div class="sandbox-body">
+   <div class="mounts"><div class="mount"><code>/repo : isolated worktree</code>Agent 可修改副本，但看不到原工作区路径。</div><div class="mount"><code>PatchSet artifact</code>退出沙箱后由 GitAdapter 校验并应用，不让模型执行落盘。</div></div>
+   <div class="gates"><span class="gate">changed-path allowlist</span><span class="gate">validation gates</span><span class="gate">diff size limit</span><span class="gate">secret scan</span><span class="gate">3-way apply</span></div>
+  </div></div>
+ </div>
+ <p class="subtitle">Docker/Podman 为推荐执行器。未安装容器运行时时，仍可静态 review；运行仓库命令必须显式信任该仓库并开启受限 LocalExecutor。</p>
+
+ <h3>SQLite 保存状态，文件系统保存大 Artifact</h3>
+ <div class="storage">
+  <div class="tables">
+   <div class="table"><b>repositories</b><span>realpath, trust, recent state</span></div><div class="table"><b>review_tasks</b><span>scope, mode, status, budget</span></div><div class="table"><b>review_snapshots</b><span>base/head/hash, manifest</span></div>
+   <div class="table"><b>agent_versions</b><span>prompt, model, policies</span></div><div class="table"><b>agent_runs</b><span>status, usage, error, trace</span></div><div class="table"><b>findings</b><span>schema fields, fingerprint</span></div>
+   <div class="table"><b>review_reports</b><span>summary, coverage, risks</span></div><div class="table"><b>fix_tasks</b><span>source report, approval mode</span></div><div class="table"><b>patch_sets</b><span>artifact ref, base fingerprint</span></div>
+   <div class="table"><b>validation_runs</b><span>command, exit, artifact ref</span></div><div class="table"><b>capability_bindings</b><span>agent → skill/MCP/tools</span></div><div class="table"><b>events / job_leases</b><span>SSE outbox, worker heartbeat</span></div>
+  </div>
+  <div class="panel">
+   <div class="panel-head">Artifact Store</div><div class="panel-body">
+    <div class="kv"><b>snapshots/</b><span>按 task ID 隔离</span></div><div class="kv"><b>logs/</b><span>截断 + 脱敏</span></div><div class="kv"><b>patches/</b><span>diff + hashes</span></div><div class="kv"><b>evidence/</b><span>test/lint/tool outputs</span></div><div class="kv"><b>retention</b><span>默认 30 天，可立即清除</span></div>
+   </div>
+  </div>
+ </div>
+
+ <h3>主要 API</h3>
+ <div class="storage">
+  <div class="api-list">
+   <div class="endpoint"><span class="method">POST</span><span>/api/repositories/inspect</span></div><div class="endpoint"><span class="method">POST</span><span>/api/reviews</span></div><div class="endpoint"><span class="method">GET</span><span>/api/reviews/{id}</span></div><div class="endpoint"><span class="method">GET</span><span>/api/reviews/{id}/events</span></div><div class="endpoint"><span class="method">POST</span><span>/api/reviews/{id}/cancel</span></div><div class="endpoint"><span class="method">POST</span><span>/api/reviews/{id}/fixes</span></div><div class="endpoint"><span class="method">POST</span><span>/api/fixes/{id}/apply</span></div>
+  </div>
+  <div class="api-list">
+   <div class="endpoint"><span class="method">GET</span><span>/api/agents</span></div><div class="endpoint"><span class="method">POST</span><span>/api/agents</span></div><div class="endpoint"><span class="method">PUT</span><span>/api/agents/{id}</span></div><div class="endpoint"><span class="method">GET</span><span>/api/skills</span></div><div class="endpoint"><span class="method">POST</span><span>/api/mcp-servers/{id}/check</span></div><div class="endpoint"><span class="method">POST</span><span>/api/findings/{id}/feedback</span></div><div class="endpoint"><span class="method">GET</span><span>/api/settings</span></div>
+  </div>
+ </div>
+
+ <h3>四个必须显式处理的本地安全风险</h3>
+ <div class="safety">
+  <div class="risk"><b>本地不等于不出机</b>发送给 OpenAI/远程 MCP 的文件会离开本机；任务创建页显示数据目的地与排除路径。</div>
+  <div class="risk"><b>浏览器攻击 localhost</b>只绑定 127.0.0.1，校验 Host/Origin，并使用启动时随机 token；不开放宽泛 CORS。</div>
+  <div class="risk"><b>Trace 泄露代码</b>默认关闭 sensitive trace data；API key/MCP token 存系统钥匙串，不写 SQLite、日志或 RunContext。</div>
+  <div class="risk"><b>恶意仓库执行</b>容器默认无网无宿主凭据；未信任仓库禁止运行 install/test/build 和仓库内 Skill/MCP。</div>
+ </div>
+
+ <h3>跨平台安装体验</h3>
+ <div class="install"># 推荐安装
+pipx install codelens-review
+
+# 从当前仓库启动并自动打开浏览器
+codelens-review start .
+
+# 也支持启动后输入路径 / 选择最近仓库
+codelens-review start
+
+发布包内包含已构建前端；开发源码仍保持 frontend/ 与 backend/ 分离。</div>
+
+ <div class="options">
+  <div class="option" data-choice="approve_runtime" onclick="toggleSelect(this)"><div class="letter">A</div><div class="content"><h3>确认运行时设计</h3><p>继续设计主要页面、交互和异常状态。</p></div></div>
+  <div class="option" data-choice="revise_runtime" onclick="toggleSelect(this)"><div class="letter">B</div><div class="content"><h3>需要调整</h3><p>在终端说明安装、沙箱、数据保留或 API 的修改意见。</p></div></div>
+ </div>
+</div>

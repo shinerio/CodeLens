@@ -1,0 +1,48 @@
+<style>
+  .revision-page{max-width:1080px;margin:0 auto}.callout{border-left:5px solid #0f766e;background:#ecfdf5;padding:16px 18px;border-radius:6px;margin:18px 0;color:#244b45}.callout strong{display:block;margin-bottom:5px;color:#115e59}.filter-flow{display:grid;grid-template-columns:repeat(5,minmax(0,1fr));gap:22px;margin:24px 0}.box{position:relative;border:1px solid #d4dde6;border-radius:7px;background:#fff;padding:13px;min-height:100px}.box:not(:last-child)::after{content:"›";position:absolute;right:-17px;top:34px;font-size:26px;color:#83909c}.box b{display:block;font-size:13px;color:#18232d;margin-bottom:6px}.box span{font-size:11px;line-height:1.5;color:#64717e}.box.ignore{border-color:#0f766e;box-shadow:inset 0 3px 0 #0f766e}.details{display:grid;grid-template-columns:1fr 1fr;gap:14px;margin:18px 0 26px}.panel{border:1px solid #d6dee7;border-radius:7px;background:#fff;padding:15px}.panel h3{font-size:14px;margin:0 0 10px;color:#17212b}.panel ul{margin:0;padding-left:18px;color:#566472;font-size:12px;line-height:1.7}.example{background:#f7f9fb;border:1px solid #d9e1e8;border-radius:6px;padding:13px;font:12px/1.65 ui-monospace,SFMono-Regular,Menlo,monospace;color:#334155;white-space:pre-wrap}.badges{display:flex;gap:8px;flex-wrap:wrap;margin-top:10px}.badge{border:1px solid #cdd7e0;border-radius:4px;padding:5px 8px;font-size:11px;color:#40505f;background:#fff}@media(max-width:800px){.filter-flow,.details{grid-template-columns:1fr}.box:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-20px}}
+</style>
+<div class="revision-page">
+  <h2>范围过滤修订：所有模式强制应用 .gitignore</h2>
+  <p class="subtitle">该约束位于领域层 `IgnorePolicy`，不是交给 Agent 自行理解，因此不会因 prompt 或模型差异失效。</p>
+
+  <div class="callout"><strong>确认后的规则</strong>分支 diff、指定 commit、未提交改动和全仓扫描，都会排除当前仓库各级 <code>.gitignore</code> 命中的路径；Git 已跟踪文件也同样排除。</div>
+
+  <div class="filter-flow">
+    <div class="box"><b>1. 计算原始候选集</b><span>根据 ReviewScope 得到 changed / untracked / full repository 文件。</span></div>
+    <div class="box ignore"><b>2. GitIgnoreResolver</b><span>递归遵循各级 .gitignore、目录作用域、顺序覆盖和 ! 反选。</span></div>
+    <div class="box"><b>3. Review Skip Rules</b><span>再应用 REVIEW.md 中结构化的 skip/include 规则。</span></div>
+    <div class="box"><b>4. Safety Filter</b><span>拒绝仓库外 symlink；标记 binary、LFS pointer 和超大文件。</span></div>
+    <div class="box"><b>5. Freeze Snapshot</b><span>保存最终 included/excluded manifest 及每条排除原因。</span></div>
+  </div>
+
+  <div class="details">
+    <div class="panel">
+      <h3>Git 语义</h3>
+      <ul>
+        <li>使用 Git 自身的 ignore 解析能力，不手写 glob 解释器。</li>
+        <li>支持根目录与嵌套目录的 `.gitignore`。</li>
+        <li>支持 `!important.log` 等重新包含规则。</li>
+        <li>使用 no-index 语义检查 tracked 文件是否命中。</li>
+        <li>`.gitignore` 文件本身可以被审查，除非它也被规则排除。</li>
+      </ul>
+    </div>
+    <div class="panel">
+      <h3>可解释性与 UI</h3>
+      <div class="example">src/generated/api.py
+EXCLUDED
+source: src/generated/.gitignore:3
+pattern: *.py
+
+logs/keep.log
+INCLUDED
+source: logs/.gitignore:5
+pattern: !keep.log</div>
+      <div class="badges"><span class="badge">Included 42</span><span class="badge">.gitignore excluded 318</span><span class="badge">Policy excluded 7</span><span class="badge">Binary 3</span></div>
+    </div>
+  </div>
+
+  <div class="options">
+    <div class="option" data-choice="approve_ignore_policy" onclick="toggleSelect(this)"><div class="letter">A</div><div class="content"><h3>确认修订</h3><p>将该规则纳入快照规范，继续设计 Agent、Skill、MCP 和 finding 契约。</p></div></div>
+    <div class="option" data-choice="revise_ignore_policy" onclick="toggleSelect(this)"><div class="letter">B</div><div class="content"><h3>继续调整</h3><p>在终端说明还需纳入的 ignore 来源或例外规则。</p></div></div>
+  </div>
+</div>

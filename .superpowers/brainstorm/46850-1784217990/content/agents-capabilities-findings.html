@@ -1,0 +1,75 @@
+<style>
+ .cap-page{max-width:1180px;margin:0 auto}.agent-row{display:grid;grid-template-columns:repeat(7,minmax(0,1fr));gap:8px;margin:16px 0 25px}.agent-card{border:1px solid #d8e0e8;border-radius:7px;background:#fff;padding:11px;min-height:104px}.agent-card b{display:block;color:#16212b;font-size:12px;margin:7px 0 5px}.agent-card span{font-size:10px;line-height:1.4;color:#66737f}.agent-icon{width:28px;height:28px;display:grid;place-items:center;border-radius:5px;background:#ecfeff;color:#155e75;font-weight:700}.contract{display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin:14px 0 26px}.panel{border:1px solid #d6dee7;border-radius:7px;background:#fff;overflow:hidden}.panel-head{padding:10px 12px;background:#f6f8fa;border-bottom:1px solid #e1e7ed;font-weight:700;font-size:13px;color:#1b2630}.panel-body{padding:12px}.kv{display:grid;grid-template-columns:115px 1fr;gap:7px;padding:5px 0;border-bottom:1px solid #edf0f3;font-size:11px}.kv:last-child{border-bottom:0}.kv b{color:#354351}.kv span{color:#65727e}.boundary{display:grid;grid-template-columns:1fr 52px 1fr 52px 1fr;align-items:stretch;gap:8px;margin:15px 0 26px}.boundary-card{border:1px solid #d4dde6;border-radius:7px;background:#fff;padding:13px}.boundary-card h4{margin:0 0 7px;font-size:13px;color:#17212b}.boundary-card ul{padding-left:17px;margin:0;font-size:11px;line-height:1.55;color:#5f6d79}.connector{display:grid;place-items:center;color:#84909b;font-size:25px}.boundary-card.skill{box-shadow:inset 0 3px 0 #7c3aed}.boundary-card.mcp{box-shadow:inset 0 3px 0 #b45309}.boundary-card.enforce{box-shadow:inset 0 3px 0 #0f766e}.finding-wrap{display:grid;grid-template-columns:1fr .9fr;gap:14px;margin:14px 0 25px}.schema{background:#17212b;color:#dce7ef;border-radius:7px;padding:15px;font:11px/1.55 ui-monospace,SFMono-Regular,Menlo,monospace;white-space:pre-wrap}.pipeline{display:flex;flex-direction:column;gap:7px}.stage{border:1px solid #d6dee7;border-radius:6px;background:#fff;padding:10px 12px}.stage b{display:block;font-size:12px;color:#1d2832;margin-bottom:3px}.stage span{font-size:11px;color:#63717e}.stage.system{border-left:4px solid #7c3aed}.stage.safe{border-left:4px solid #0f766e}.notes{display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin:12px 0 24px}.note{border-radius:6px;padding:11px;background:#f8fafc;border:1px solid #d9e1e8;font-size:11px;line-height:1.5;color:#586674}@media(max-width:900px){.agent-row{grid-template-columns:repeat(2,1fr)}.contract,.notes,.finding-wrap{grid-template-columns:1fr}.boundary{grid-template-columns:1fr}.connector{transform:rotate(90deg)}}
+</style>
+<div class="cap-page">
+ <h2>Reviewer、Skill、MCP 与 Finding 契约</h2>
+ <p class="subtitle">用户选择决定运行哪些 Reviewer；应用层决定它们能访问什么。模型输出必须先通过结构与证据校验，才能进入最终报告。</p>
+
+ <h3>内置 Reviewer：默认全部选中，可单独关闭</h3>
+ <div class="agent-row">
+  <div class="agent-card"><div class="agent-icon">C</div><b>Correctness</b><span>逻辑、边界、异常、并发、状态机。</span></div>
+  <div class="agent-card"><div class="agent-icon">S</div><b>Security</b><span>鉴权、注入、秘密、数据暴露、供应链。</span></div>
+  <div class="agent-card"><div class="agent-icon">P</div><b>Performance</b><span>复杂度、N+1、阻塞、内存和资源使用。</span></div>
+  <div class="agent-card"><div class="agent-icon">M</div><b>Maintainability</b><span>耦合、重复、职责、契约和可测试性。</span></div>
+  <div class="agent-card"><div class="agent-icon">T</div><b>Testing</b><span>回归风险、边界用例、失败路径和测试质量。</span></div>
+  <div class="agent-card"><div class="agent-icon">D</div><b>Docs & Style</b><span>公开契约、文档、命名和仓库约定。</span></div>
+  <div class="agent-card"><div class="agent-icon">X</div><b>Cross-file</b><span>调用链、导入、接口兼容和上下游影响。</span></div>
+ </div>
+
+ <h3>版本化 AgentDefinition</h3>
+ <div class="contract">
+  <div class="panel"><div class="panel-head">身份与 Prompt</div><div class="panel-body">
+   <div class="kv"><b>id / version</b><span>稳定 ID + 不可变版本</span></div><div class="kv"><b>name / description</b><span>UI 与调度用途</span></div><div class="kv"><b>prompt_template</b><span>独立编辑、预览和回滚</span></div><div class="kv"><b>enabled_default</b><span>是否默认勾选</span></div><div class="kv"><b>output_schema</b><span>FindingBatch 版本</span></div>
+  </div></div>
+  <div class="panel"><div class="panel-head">运行策略</div><div class="panel-body">
+   <div class="kv"><b>model_profile</b><span>模型、推理等级、采样参数</span></div><div class="kv"><b>timeout / turns</b><span>节点级时间和轮数上限</span></div><div class="kv"><b>token_budget</b><span>输入/输出预算和超限策略</span></div><div class="kv"><b>confidence_floor</b><span>最低报告置信度</span></div><div class="kv"><b>failure_policy</b><span>重试、跳过或使任务失败</span></div>
+  </div></div>
+  <div class="panel"><div class="panel-head">能力绑定</div><div class="panel-body">
+   <div class="kv"><b>skills[]</b><span>允许按需加载的 Skill 版本</span></div><div class="kv"><b>mcp_bindings[]</b><span>服务 + 工具 allowlist</span></div><div class="kv"><b>static_tools[]</b><span>Git graph、search、test 等只读工具</span></div><div class="kv"><b>command_policy</b><span>允许的命令模板和参数</span></div><div class="kv"><b>mode_support</b><span>REVIEW / FIX 可用范围</span></div>
+  </div></div>
+ </div>
+
+ <h3>Skill 与 MCP 的信任边界</h3>
+ <div class="boundary">
+  <div class="boundary-card skill"><h4>Skill Catalog</h4><ul><li>内置 Skill 默认可信</li><li>用户 Skill 按校验和版本化</li><li>仓库 Skill 首次使用必须信任</li><li>SKILL.md + references/scripts</li><li>按 Agent lazy load</li></ul></div>
+  <div class="connector">→</div>
+  <div class="boundary-card enforce"><h4>Capability Enforcer</h4><ul><li>权限不由 Prompt 决定</li><li>REVIEW 永远只读</li><li>限制 realpath 与命令模板</li><li>网络默认关闭</li><li>记录每次工具调用</li></ul></div>
+  <div class="connector">←</div>
+  <div class="boundary-card mcp"><h4>MCP Registry</h4><ul><li>stdio / Streamable HTTP</li><li>凭据只保存 secret reference</li><li>每个 Agent 独立 tool allowlist</li><li>健康检查、超时、重试</li><li>写/外部副作用工具需审批</li></ul></div>
+ </div>
+
+ <div class="notes">
+  <div class="note"><b>仓库内容不可信：</b>代码注释、README、REVIEW.md 和工具输出都不能提升权限或修改平台约束。</div>
+  <div class="note"><b>MCP 最小授权：</b>Security Reviewer 无需获得 issue 写入、文件删除或任意 shell 能力。</div>
+  <div class="note"><b>Sandbox Skills：</b>通过 `SkillRuntimePort` 接入，OpenAI Beta API 变化不会污染领域层。</div>
+ </div>
+
+ <h3>Finding 是 reviewer 与主 Agent 的唯一交换契约</h3>
+ <div class="finding-wrap">
+  <div class="schema">Finding {
+  id, reviewer_id, category,
+  title,
+  severity: critical | high | medium | low | info,
+  disposition: blocking | non_blocking | pre_existing,
+  confidence: 0.0..1.0,
+  primary_location: {path, start_line, end_line, side},
+  related_locations[], changed_hunk_id?,
+  change_origin: introduced | exposed | pre_existing | unknown,
+  evidence[]: {kind, artifact_ref, excerpt_hash},
+  impact, explanation, reproduction?, recommendation,
+  suggested_patch?, rule_sources[], fingerprint
+}</div>
+  <div class="pipeline">
+   <div class="stage safe"><b>1. Deterministic Validator</b><span>Schema、路径、行号、hunk、excerpt hash、snapshot 归属。</span></div>
+   <div class="stage system"><b>2. Evidence Verifier</b><span>只验证高风险或低置信候选；可运行允许的测试/静态工具。</span></div>
+   <div class="stage safe"><b>3. Dedup & Suppression</b><span>按 fingerprint 和语义聚类；应用规则、baseline 和用户 suppress。</span></div>
+   <div class="stage system"><b>4. Main Synthesizer</b><span>引用 finding IDs 做排序、归并和摘要；禁止凭空新增 finding。</span></div>
+   <div class="stage"><b>5. ReviewReport</b><span>问题列表、风险热点、失败 Agent、覆盖范围、证据、成本与耗时。</span></div>
+  </div>
+ </div>
+
+ <div class="options">
+  <div class="option" data-choice="approve_agent_contract" onclick="toggleSelect(this)"><div class="letter">A</div><div class="content"><h3>确认 Agent 与输出契约</h3><p>继续设计运行时、沙箱、数据存储和 API。</p></div></div>
+  <div class="option" data-choice="revise_agent_contract" onclick="toggleSelect(this)"><div class="letter">B</div><div class="content"><h3>需要调整</h3><p>在终端说明 Agent 分类、Skill/MCP 权限或 finding 字段问题。</p></div></div>
+ </div>
+</div>

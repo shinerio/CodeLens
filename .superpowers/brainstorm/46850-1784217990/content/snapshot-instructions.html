@@ -1,0 +1,105 @@
+<style>
+  .design-page { max-width:1180px; margin:0 auto; }
+  .grid-4 { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:10px; margin:18px 0 26px; }
+  .scope { border:1px solid #d7dee7; border-radius:7px; padding:14px; background:#fff; min-height:150px; }
+  .scope strong { display:block; color:#16202a; font-size:14px; margin-bottom:7px; }
+  .scope code { display:block; background:#f5f7f9; color:#334155; padding:7px; border-radius:4px; font-size:11px; margin:7px 0; overflow-wrap:anywhere; }
+  .scope p { font-size:12px; line-height:1.5; color:#5f6c78; margin:0; }
+  .pipeline { display:grid; grid-template-columns:repeat(5,minmax(0,1fr)); gap:22px; align-items:stretch; margin:14px 0 28px; }
+  .node { position:relative; border:1px solid #d6dee7; border-radius:7px; padding:12px; background:#fff; min-height:96px; }
+  .node:not(:last-child)::after { content:"›"; position:absolute; right:-17px; top:31px; font-size:26px; color:#8793a0; }
+  .node b { display:block; font-size:13px; color:#17212b; margin-bottom:5px; }
+  .node span { font-size:11px; line-height:1.45; color:#65727e; }
+  .node.accent { border-color:#0f766e; box-shadow:inset 0 3px 0 #0f766e; }
+  .rules { display:grid; grid-template-columns:1.1fr .9fr; gap:16px; margin:12px 0 26px; }
+  .rule-stack { display:flex; flex-direction:column-reverse; gap:7px; }
+  .rule { display:grid; grid-template-columns:36px 1fr auto; gap:10px; align-items:center; border:1px solid #d8e0e8; border-radius:6px; padding:10px; background:#fff; }
+  .rule .priority { width:28px; height:28px; display:grid; place-items:center; border-radius:4px; color:#fff; font-weight:700; font-size:12px; background:#64748b; }
+  .rule.high .priority { background:#9f1239; }
+  .rule.medium .priority { background:#7c3aed; }
+  .rule b { font-size:13px; color:#19232d; }
+  .rule small { font-size:11px; color:#687582; }
+  .rule em { font-size:10px; color:#687582; font-style:normal; }
+  .example { border:1px solid #d7dee7; border-radius:7px; background:#f8fafc; padding:14px; }
+  .example pre { margin:0; white-space:pre-wrap; font-size:11px; line-height:1.55; color:#334155; }
+  .states { display:flex; flex-wrap:wrap; gap:8px; align-items:center; margin:14px 0 8px; }
+  .state { border:1px solid #cfd8e2; border-radius:5px; padding:7px 9px; background:#fff; font-size:11px; color:#344250; }
+  .arrow { color:#8894a0; }
+  .state.run { border-color:#7c3aed; color:#5b21b6; }
+  .state.fix { border-color:#b45309; color:#92400e; }
+  .state.done { border-color:#0f766e; color:#0f766e; }
+  .safety { display:grid; grid-template-columns:repeat(4,minmax(0,1fr)); gap:9px; margin:12px 0 24px; }
+  .gate { padding:10px; border-left:4px solid #b45309; background:#fff7ed; border-radius:5px; font-size:11px; line-height:1.45; color:#6b4423; }
+  @media(max-width:900px){.grid-4,.safety{grid-template-columns:1fr 1fr}.pipeline{grid-template-columns:1fr;gap:10px}.node:not(:last-child)::after{content:"↓";right:50%;top:auto;bottom:-20px}.rules{grid-template-columns:1fr}}
+</style>
+
+<div class="design-page">
+  <h2>快照、规则解析与任务状态</h2>
+  <p class="subtitle">所有 reviewer 使用相同输入；范围差异只发生在快照创建阶段，后续流水线完全复用。</p>
+
+  <h3>四种 ReviewScope</h3>
+  <div class="grid-4">
+    <div class="scope"><strong>1. 分支 Diff + 未提交</strong><code>merge-base(base_branch, HEAD) → WORKTREE</code><p>适合 PR 前自检。包含当前分支提交、staged、unstaged、未忽略的 untracked 文件。</p></div>
+    <div class="scope"><strong>2. 指定 Commit + 未提交</strong><code>base_commit → WORKTREE</code><p>把用户选择的 commit 作为基线。非祖先 commit 允许 direct diff，但 UI 明确警告。</p></div>
+    <div class="scope"><strong>3. 仅未提交</strong><code>HEAD → WORKTREE</code><p>只审查 staged、unstaged 和未忽略的 untracked 文件，适合提交前快速检查。</p></div>
+    <div class="scope"><strong>4. 全仓扫描</strong><code>WORKTREE tracked + untracked</code><p>按模块分片；遵循 ignore/skip；二进制、超大文件、LFS 指针单独标记而非直接发送。</p></div>
+  </div>
+
+  <h3>统一生成不可变 ReviewSnapshot</h3>
+  <div class="pipeline">
+    <div class="node"><b>Validate Repository</b><span>realpath、Git 状态、submodule、symlink、文件数量和大小限制。</span></div>
+    <div class="node"><b>Resolve Range</b><span>保存 base SHA、HEAD SHA、index tree、工作区文件哈希。</span></div>
+    <div class="node accent"><b>Materialize Snapshot</b><span>复制到任务临时目录；源仓库始终只读，不让 agent 直接访问。</span></div>
+    <div class="node"><b>Build Change Index</b><span>changed hunks、行映射、rename、delete、binary、untracked 分类。</span></div>
+    <div class="node"><b>Freeze Policies</b><span>规则、Agent 版本、Skill/MCP 绑定、模型参数和预算全部版本化。</span></div>
+  </div>
+
+  <h3>针对每个目标文件解析指令链</h3>
+  <div class="rules">
+    <div class="rule-stack">
+      <div class="rule"><span class="priority">1</span><div><b>平台不可覆盖约束</b><small>只读、路径边界、输出 schema、不得伪造证据</small></div><em>最低但强制</em></div>
+      <div class="rule"><span class="priority">2</span><div><b>Reviewer Prompt</b><small>该 agent 的职责、检查维度、置信阈值和排除项</small></div><em>版本化</em></div>
+      <div class="rule"><span class="priority">3</span><div><b>/AGENTS.md</b><small>仓库通用约定，默认对所有目标文件生效</small></div><em>根目录</em></div>
+      <div class="rule medium"><span class="priority">4</span><div><b>/REVIEW.md</b><small>仓库级 review 基线</small></div><em>根目录</em></div>
+      <div class="rule medium"><span class="priority">5</span><div><b>祖先目录 REVIEW.md</b><small>从浅到深依次叠加；离目标文件越近优先级越高</small></div><em>可多份</em></div>
+      <div class="rule high"><span class="priority">6</span><div><b>&lt;完整文件名&gt;.review.md</b><small>例如 payment.py.review.md，仅作用于 payment.py</small></div><em>最高</em></div>
+    </div>
+    <div class="example">
+      <div class="label">示例：src/payments/api/payment.py</div>
+      <pre>应用顺序：
+
+/AGENTS.md
+/REVIEW.md
+/src/REVIEW.md
+/src/payments/REVIEW.md
+/src/payments/api/REVIEW.md
+/src/payments/api/payment.py.review.md
+
+冲突规则：后加载的具体规则覆盖前面的宽泛规则；
+平台安全约束永远不可覆盖。每条 finding 记录命中的
+规则文件和行号，便于解释“为什么报告这个问题”。</pre>
+    </div>
+  </div>
+
+  <h3>ReviewTask / FixTask 状态机</h3>
+  <div class="states">
+    <span class="state">CREATED</span><span class="arrow">→</span><span class="state">SNAPSHOTTING</span><span class="arrow">→</span><span class="state">PREPARING</span><span class="arrow">→</span><span class="state run">REVIEWING</span><span class="arrow">→</span><span class="state">VALIDATING</span><span class="arrow">→</span><span class="state">SYNTHESIZING</span><span class="arrow">→</span><span class="state done">COMPLETED / PARTIAL</span>
+  </div>
+  <div class="states">
+    <span class="state done">REVIEW COMPLETED</span><span class="arrow">→</span><span class="state fix">FIXING IN WORKTREE</span><span class="arrow">→</span><span class="state fix">VERIFYING</span><span class="arrow">→</span><span class="state">AWAITING APPROVAL</span><span class="arrow">或</span><span class="state fix">AUTO APPLYING</span><span class="arrow">→</span><span class="state done">APPLIED</span>
+  </div>
+  <p class="subtitle">任意运行态均可进入 CANCELED / FAILED；部分 reviewer 失败时默认生成 PARTIAL 报告，并明确披露缺失维度。</p>
+
+  <h3>默认自动审批仍受四个硬门禁约束</h3>
+  <div class="safety">
+    <div class="gate">源仓库 HEAD、index 和工作区指纹与创建 snapshot 时一致。</div>
+    <div class="gate">补丁只能触及本次 FixTask 允许的文件，不能越过仓库 realpath。</div>
+    <div class="gate">配置为 required 的 test/lint/build/security gates 全部通过。</div>
+    <div class="gate">3-way apply 无冲突；失败时自动降级为人工审批，绝不覆盖用户修改。</div>
+  </div>
+
+  <div class="options">
+    <div class="option" data-choice="approve_snapshot_rules" onclick="toggleSelect(this)"><div class="letter">A</div><div class="content"><h3>确认快照与规则设计</h3><p>继续设计 Agent、Skill、MCP 和 finding 输出契约。</p></div></div>
+    <div class="option" data-choice="revise_snapshot_rules" onclick="toggleSelect(this)"><div class="letter">B</div><div class="content"><h3>需要调整</h3><p>在终端指出范围、命名、优先级或自动审批门禁的问题。</p></div></div>
+  </div>
+</div>
