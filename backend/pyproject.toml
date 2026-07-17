@@ -1,0 +1,56 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "codelens-review"
+version = "0.1.0"
+description = "Local multi-agent code review workbench"
+requires-python = ">=3.12,<3.13"
+dependencies = [
+  "aiosqlite",
+  "alembic",
+  "fastapi",
+  "markdown-it-py",
+  "openai-agents",
+  "pathspec",
+  "pydantic>=2,<3",
+  "pydantic-settings>=2,<3",
+  "python-frontmatter",
+  "sqlalchemy>=2,<3",
+  "uvicorn[standard]",
+]
+
+[project.scripts]
+codelens-review = "codelens.bootstrap.cli:main"
+
+[dependency-groups]
+dev = [
+  "httpx",
+  "mypy",
+  "pytest",
+  "pytest-asyncio",
+  "pytest-cov",
+  "ruff",
+]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/codelens"]
+
+[tool.pytest.ini_options]
+addopts = "-q --strict-markers --strict-config"
+asyncio_mode = "auto"
+testpaths = ["tests"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B", "ASYNC"]
+
+[tool.mypy]
+python_version = "3.12"
+strict = true
+packages = ["codelens"]
+
