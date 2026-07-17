@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 
@@ -37,3 +38,20 @@ class InstructionParserPort(Protocol):
 
         raise NotImplementedError
 
+
+class InstructionResolutionPort(Protocol):
+    """Resolve the ordered control inputs applicable to a repository target."""
+
+    def resolve(self, repository: Path, target_path: str) -> ResolvedInstructionSet:
+        """Return frozen instruction documents, excludes, and warnings."""
+
+        raise NotImplementedError
+
+
+class StructuredSkipPort(Protocol):
+    """Apply deterministic structured exclusions from resolved instructions."""
+
+    def excludes(self, path: str, instructions: ResolvedInstructionSet) -> bool:
+        """Return whether a normalized repository path is policy-excluded."""
+
+        raise NotImplementedError

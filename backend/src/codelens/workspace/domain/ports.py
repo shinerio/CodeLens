@@ -2,7 +2,12 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Protocol
 
-from codelens.workspace.domain.models import RepositoryFingerprint, ReviewScope, TaskWorktree
+from codelens.workspace.domain.models import (
+    OpaqueArtifact,
+    RepositoryFingerprint,
+    ReviewScope,
+    TaskWorktree,
+)
 
 
 @dataclass(frozen=True)
@@ -78,6 +83,95 @@ class ScopePlanningPort(Protocol):
 
     async def plan_scope(self, repository: Path, scope: ReviewScope) -> ScopePlan:
         """Return pinned OIDs and normalized target candidates for one scope."""
+
+        raise NotImplementedError
+
+
+class WorktreeRegistryPort(Protocol):
+    """Persist authoritative ownership records for task worktrees."""
+
+    async def register(self, worktree: TaskWorktree) -> None:
+        """Create one ownership record after the checkout is provisioned."""
+
+        raise NotImplementedError
+
+    async def get(self, task_id: str) -> TaskWorktree | None:
+        """Return the ownership record for a task when present."""
+
+        raise NotImplementedError
+
+    async def remove(self, task_id: str) -> None:
+        """Delete one ownership record after scoped Git cleanup succeeds."""
+
+        raise NotImplementedError
+
+    async def list_all(self) -> tuple[TaskWorktree, ...]:
+        """Return all records for restart reconciliation."""
+
+        raise NotImplementedError
+
+
+class InputArtifactPort(Protocol):
+    """Persist captured input bytes behind opaque, hash-verified references."""
+
+    async def write_bytes(self, payload: bytes) -> OpaqueArtifact:
+        """Atomically persist bytes and return their opaque identity."""
+
+        raise NotImplementedError
+
+    async def read_bytes(self, reference: str, expected_hash: str) -> bytes:
+        """Load bytes only after reference containment and hash verification."""
+
+        raise NotImplementedError
+
+    async def discard(self, reference: str) -> None:
+        """Remove an unreferenced staging or rejected input Artifact."""
+
+        raise NotImplementedError
+
+
+class ReviewInputCapturePort(Protocol):
+    """Read source checkout state only during pre-task input capture."""
+
+    async def fingerprint(
+        self,
+        repository: Path,
+        target_paths: tuple[str, ...],
+    ) -> RepositoryFingerprint:
+        """Fingerprint tracked, untracked, and applicable control input state."""
+
+        raise NotImplementedError
+
+    async def capture_overlay(self, repository: Path, target_paths: tuple[str, ...]) -> bytes:
+        """Return a bounded canonical overlay payload for immutable persistence."""
+
+        raise NotImplementedError
+
+
+class OverlayMaterializerPort(Protocol):
+    """Reconstruct a captured overlay inside one verified task worktree."""
+
+    async def materialize(self, worktree: TaskWorktree, payload: bytes) -> None:
+        """Apply tracked changes and contained entries without source checkout reads."""
+
+        raise NotImplementedError
+
+
+class WorktreeRecoveryPort(Protocol):
+    """Reconcile durable ownership records with task worktree filesystem state."""
+
+    async def is_present(self, worktree: TaskWorktree) -> bool:
+        """Return whether the recorded checkout path currently exists."""
+
+        raise NotImplementedError
+
+    async def verify_ownership(self, worktree: TaskWorktree) -> None:
+        """Validate an existing checkout against all ownership proofs."""
+
+        raise NotImplementedError
+
+    async def forget_missing(self, worktree: TaskWorktree, repository: Path) -> None:
+        """Remove exact stale metadata for a recorded checkout that is absent."""
 
         raise NotImplementedError
 

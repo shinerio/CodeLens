@@ -68,6 +68,19 @@ class IgnoreResolution:
 
 
 @dataclass(frozen=True)
+class SnapshotEntry:
+    """Record immutable metadata for one target, context, or instruction path."""
+
+    path: str
+    kind: Literal["file", "symlink", "deleted"]
+    mode: int
+    size_bytes: int
+    content_hash: str
+    symlink_target: str | None
+    origin: Literal["target", "context", "instruction"]
+
+
+@dataclass(frozen=True)
 class SnapshotManifest:
     """Separate review targets from safe read-only context and control inputs."""
 
@@ -75,6 +88,7 @@ class SnapshotManifest:
     context_paths: tuple[str, ...]
     excluded_paths: tuple[ExcludedPath, ...]
     instruction_paths: tuple[str, ...] = ()
+    entries: tuple[SnapshotEntry, ...] = ()
 
     def is_target(self, path: str) -> bool:
         """Return whether a normalized repository path is a review target."""
@@ -103,6 +117,23 @@ class ReviewTarget:
     base_oid: str
     head_oid: str
     overlay_hash: str | None
+
+
+@dataclass(frozen=True)
+class OpaqueArtifact:
+    """Identify hash-verified bytes without exposing a backing filesystem path."""
+
+    reference: str
+    content_hash: str
+    size_bytes: int
+
+
+@dataclass(frozen=True)
+class CapturedReviewInput:
+    """Carry a pinned target and optional immutable workspace overlay Artifact."""
+
+    target: ReviewTarget
+    overlay_artifact: OpaqueArtifact | None
 
 
 @dataclass(frozen=True)
@@ -148,6 +179,15 @@ class ChangeIndex:
 
 
 @dataclass(frozen=True)
+class SnapshotBuild:
+    """Return a frozen Manifest plus its integrity fingerprint from an adapter."""
+
+    manifest: SnapshotManifest
+    fingerprint: RepositoryFingerprint
+    manifest_hash: str
+
+
+@dataclass(frozen=True)
 class ReviewSnapshot:
     """Freeze the worktree, target, manifest, and change evidence for a review."""
 
@@ -157,3 +197,5 @@ class ReviewSnapshot:
     fingerprint: RepositoryFingerprint
     manifest: SnapshotManifest
     change_index: ChangeIndex
+    manifest_hash: str = ""
+    snapshot_artifact: OpaqueArtifact | None = None
