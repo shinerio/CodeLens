@@ -7,6 +7,17 @@ from codelens.reviewer_catalog.domain.models import AgentVersion
 
 
 @dataclass(frozen=True)
+class AgentResponseDiagnostic:
+    """Retain bounded public response metadata without provider payload bodies."""
+
+    response_id: str | None
+    request_id: str | None
+    input_tokens: int
+    output_tokens: int
+    output_item_count: int
+
+
+@dataclass(frozen=True)
 class UnvalidatedAgentOutput:
     """Carry canonical model output and bounded diagnostics before validation."""
 
@@ -15,6 +26,7 @@ class UnvalidatedAgentOutput:
     model_name: str
     input_tokens: int
     output_tokens: int
+    diagnostics: tuple[AgentResponseDiagnostic, ...]
 
 
 @dataclass(frozen=True)
@@ -85,6 +97,27 @@ class AgentRuntimePort(Protocol):
 
     async def invoke(self, agent: AgentVersion, input_payload: bytes) -> UnvalidatedAgentOutput:
         """Return canonical untrusted output plus redacted usage diagnostics."""
+
+        raise NotImplementedError
+
+
+class AgentOutputCodecPort(Protocol):
+    """Expose a versioned cross-context model output contract to a runtime adapter."""
+
+    @property
+    def schema_version(self) -> str:
+        """Return the immutable output contract version accepted by this codec."""
+
+        raise NotImplementedError
+
+    @property
+    def output_type(self) -> type[object]:
+        """Return the boundary model type passed to the structured-output SDK."""
+
+        raise NotImplementedError
+
+    def encode(self, final_output: object) -> bytes:
+        """Revalidate untrusted output and return canonical checkpoint bytes."""
 
         raise NotImplementedError
 

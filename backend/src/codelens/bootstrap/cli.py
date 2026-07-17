@@ -1,4 +1,8 @@
 import argparse
+import os
+
+os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_MODEL_DATA", "1")
+os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
 import uvicorn
 
