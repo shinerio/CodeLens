@@ -1,11 +1,14 @@
+import asyncio
 import hashlib
 import json
+from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
 from sqlalchemy import case, func, insert, select, update
+from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,7 +24,7 @@ from codelens.findings.domain.models import (
 )
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
-from codelens.review.domain.ports import ReviewEvent, ReviewRecord
+from codelens.review.domain.ports import ReviewEvent, ReviewExecutionRecord, ReviewRecord
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.tables import (
     dag_checkpoints,
@@ -58,6 +61,10 @@ class CheckpointRecord:
 
 def _now() -> datetime:
     return datetime.now(UTC)
+
+
+def _resolve_path(value: str) -> Path:
+    return Path(value).expanduser().resolve()
 
 
 def _json(value: object) -> str:
@@ -118,8 +125,14 @@ def _review_record(row: Any) -> ReviewRecord:
 class SqlReviewStore:
     """Persist ReviewTask commands and atomic Agent success boundaries."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        completion_hook: Callable[[str], Awaitable[None]] | None = None,
+    ) -> None:
         self._database = database
+        self._completion_hook = completion_hook
 
     async def create_with_job(self, task: ReviewTask) -> None:
         """Insert task, singleton job, and review.created event in one transaction."""
@@ -131,6 +144,7 @@ class SqlReviewStore:
                 insert(review_tasks).values(
                     task_id=task.task_id,
                     repository_id=task.repository_id,
+                    repository_path=str(task.repository_path),
                     repository_realpath_hash=task.repository_realpath_hash,
                     git_common_dir_hash=task.git_common_dir_hash,
                     scope_json=_json(asdict(task.scope)),
@@ -138,6 +152,7 @@ class SqlReviewStore:
                     head_oid=task.target.head_oid,
                     overlay_hash=task.target.overlay_hash,
                     overlay_artifact_ref=task.overlay_artifact_ref,
+                    target_paths_json=_json(task.target_paths),
                     status=task.status.value,
                     selected_agent_versions_json=_json(task.selected_agent_versions),
                     worktree_id=task.worktree_id,
@@ -205,6 +220,210 @@ class SqlReviewStore:
                 .one_or_none()
             )
         return _review_record(row) if row is not None else None
+
+    async def get_execution(self, task_id: str) -> ReviewExecutionRecord | None:
+        """Return private executable inputs only to the Worker composition boundary."""
+
+        async with self._database.sessions() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(review_tasks.c.task_id == task_id)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            return None
+        raw_path = row["repository_path"]
+        raw_targets = row["target_paths_json"]
+        if raw_path is None or raw_targets is None:
+            raise RuntimeError("legacy review lacks restart-safe execution inputs")
+        selected: list[str] = json.loads(str(row["selected_agent_versions_json"]))
+        target_paths: list[str] = json.loads(str(raw_targets))
+        repository_path = await asyncio.to_thread(_resolve_path, str(raw_path))
+        return ReviewExecutionRecord(
+            task_id=str(row["task_id"]),
+            repository_path=repository_path,
+            repository_realpath_hash=str(row["repository_realpath_hash"]),
+            git_common_dir_hash=str(row["git_common_dir_hash"]),
+            base_oid=str(row["base_oid"]),
+            head_oid=str(row["head_oid"]),
+            overlay_hash=str(row["overlay_hash"]) if row["overlay_hash"] is not None else None,
+            overlay_artifact_ref=(
+                str(row["overlay_artifact_ref"])
+                if row["overlay_artifact_ref"] is not None
+                else None
+            ),
+            target_paths=tuple(target_paths),
+            selected_agent_versions=tuple(selected),
+            status=str(row["status"]),
+            cancellation_requested=bool(row["cancellation_requested"]),
+        )
+
+    async def list_active_executions(self) -> tuple[ReviewExecutionRecord, ...]:
+        """Return every non-terminal execution for startup worktree reconciliation."""
+
+        async with self._database.sessions() as session:
+            task_ids = (
+                await session.execute(
+                    select(review_tasks.c.task_id).where(
+                        review_tasks.c.status.not_in(
+                            ("completed", "partial", "failed", "canceled")
+                        )
+                    )
+                )
+            ).scalars()
+        executions: list[ReviewExecutionRecord] = []
+        for task_id in task_ids:
+            record = await self.get_execution(str(task_id))
+            if record is not None:
+                executions.append(record)
+        return tuple(executions)
+
+    async def get_status(self, task_id: str) -> str:
+        """Return the current durable workflow state."""
+
+        record = await self.get_review(task_id)
+        if record is None:
+            raise KeyError(task_id)
+        return record.status
+
+    async def cancellation_requested(self, task_id: str) -> bool:
+        record = await self.get_review(task_id)
+        if record is None:
+            raise KeyError(task_id)
+        return record.cancellation_requested
+
+    async def transition(self, task_id: str, status: str, **values: str) -> None:
+        """Move one expected workflow edge and append its event transactionally."""
+
+        predecessors = {
+            "provisioning_worktree": "created",
+            "snapshotting": "provisioning_worktree",
+            "preparing": "snapshotting",
+            "reviewing": "preparing",
+            "validating": "reviewing",
+            "synthesizing": "validating",
+            "completed": "synthesizing",
+        }
+        expected = predecessors.get(status)
+        if expected is None:
+            raise InvalidAgentRunStateError("unknown review workflow transition")
+
+        async def operation(session: AsyncSession) -> None:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(review_tasks)
+                    .where(
+                        review_tasks.c.task_id == task_id,
+                        review_tasks.c.status == expected,
+                    )
+                    .values(status=status, updated_at=_now(), **values)
+                ),
+            )
+            if result.rowcount != 1:
+                current = await session.scalar(
+                    select(review_tasks.c.status).where(review_tasks.c.task_id == task_id)
+                )
+                if current == status:
+                    return
+                raise InvalidAgentRunStateError("review transition lost its expected state")
+            if status == "completed":
+                await session.execute(
+                    update(jobs)
+                    .where(jobs.c.task_id == task_id, jobs.c.status.in_(("running", "queued")))
+                    .values(status="completed", finished_at=_now(), updated_at=_now())
+                )
+            await session.execute(
+                insert(events).values(
+                    **_event_values(task_id, f"review.{status}", {"status": status})
+                )
+            )
+
+        await self._database.run_transaction(operation)
+
+    async def cancel(self, task_id: str) -> None:
+        await self._finish_unsuccessfully(task_id, "canceled", "review.canceled", None)
+
+    async def fail(self, task_id: str, error_code: str) -> None:
+        await self._finish_unsuccessfully(task_id, "failed", "review.failed", error_code)
+
+    async def _finish_unsuccessfully(
+        self,
+        task_id: str,
+        status: str,
+        event_type: str,
+        error_code: str | None,
+    ) -> None:
+        async def operation(session: AsyncSession) -> None:
+            current = await session.scalar(
+                select(review_tasks.c.status).where(review_tasks.c.task_id == task_id)
+            )
+            if current == status:
+                return
+            if current in {"completed", "partial", "failed", "canceled", None}:
+                raise InvalidAgentRunStateError("terminal review cannot finish again")
+            await session.execute(
+                update(review_tasks)
+                .where(review_tasks.c.task_id == task_id)
+                .values(status=status, updated_at=_now())
+            )
+            await session.execute(
+                update(jobs)
+                .where(jobs.c.task_id == task_id)
+                .values(status=status, finished_at=_now(), updated_at=_now())
+            )
+            await session.execute(
+                insert(events).values(
+                    **_event_values(
+                        task_id,
+                        event_type,
+                        {"status": status, **({"error_code": error_code} if error_code else {})},
+                    )
+                )
+            )
+
+        await self._database.run_transaction(operation)
+
+    async def interrupt(self, task_id: str) -> None:
+        """Persist active RUNNING nodes/jobs as resumable without discarding output."""
+
+        async def operation(session: AsyncSession) -> None:
+            await session.execute(
+                update(dag_checkpoints)
+                .where(
+                    dag_checkpoints.c.task_id == task_id,
+                    dag_checkpoints.c.status == "running",
+                )
+                .values(status="pending", updated_at=_now())
+            )
+            await session.execute(
+                update(jobs)
+                .where(jobs.c.task_id == task_id, jobs.c.status == "running")
+                .values(status="queued", started_at=None, updated_at=_now())
+            )
+
+        await self._database.run_transaction(operation)
+
+    async def complete_job(self, task_id: str) -> None:
+        """Idempotently close a job whose task transition already completed atomically."""
+
+        async def operation(session: AsyncSession) -> None:
+            status = await session.scalar(
+                select(review_tasks.c.status).where(review_tasks.c.task_id == task_id)
+            )
+            if status != "completed":
+                raise InvalidAgentRunStateError("job cannot complete before its review")
+            await session.execute(
+                update(jobs)
+                .where(jobs.c.task_id == task_id, jobs.c.status != "completed")
+                .values(status="completed", finished_at=_now(), updated_at=_now())
+            )
+
+        await self._database.run_transaction(operation)
 
     async def request_cancellation(self, task_id: str) -> ReviewRecord | None:
         """Set cancellation intent and append its outbox event in one transaction."""
@@ -313,6 +532,8 @@ class SqlReviewStore:
                         created_at=timestamp,
                     )
                 )
+            if self._completion_hook is not None:
+                await self._completion_hook("after_finding_insert_attempt")
             result = cast(
                 CursorResult[Any],
                 await session.execute(
@@ -338,6 +559,16 @@ class SqlReviewStore:
             )
 
         await self._database.run_transaction(operation)
+
+    async def complete_with_findings(
+        self,
+        task_id: str,
+        node_key: str,
+        findings_batch: FindingBatch,
+    ) -> None:
+        """Implement the orchestrator atomic-completion Port."""
+
+        await self.complete_agent_run(task_id, node_key, findings_batch)
 
     async def list_findings(self, task_id: str) -> tuple[Finding, ...]:
         """Return trusted Findings in stable severity/confidence/path order."""
@@ -424,7 +655,7 @@ class SqlCheckpointStore:
 
         async def operation(session: AsyncSession) -> None:
             await session.execute(
-                insert(dag_checkpoints).values(
+                sqlite_insert(dag_checkpoints).values(
                     task_id=task_id,
                     node_key=node_key,
                     logical_attempt_group=logical_attempt_group,
@@ -432,8 +663,57 @@ class SqlCheckpointStore:
                     execution_attempts=0,
                     created_at=timestamp,
                     updated_at=timestamp,
+                ).on_conflict_do_nothing(
+                    index_elements=(dag_checkpoints.c.task_id, dag_checkpoints.c.node_key)
                 )
             )
+
+        await self._database.run_transaction(operation)
+
+    async def mark_validating(self, task_id: str, node_key: str) -> None:
+        """Move OUTPUT_SAVED to VALIDATING without changing its Artifact identity."""
+
+        async def operation(session: AsyncSession) -> None:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status == "output_saved",
+                    )
+                    .values(status="validating", updated_at=_now())
+                ),
+            )
+            if result.rowcount != 1:
+                raise InvalidAgentRunStateError("checkpoint has no saved output")
+
+        await self._database.run_transaction(operation)
+
+    async def mark_repair_pending(self, task_id: str, node_key: str) -> None:
+        """Schedule one repair attempt while retaining the first Artifact reference."""
+
+        async def operation(session: AsyncSession) -> None:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status == "validating",
+                        dag_checkpoints.c.execution_attempts == 1,
+                    )
+                    .values(
+                        status="pending",
+                        error_code="finding_validation_failed",
+                        updated_at=_now(),
+                    )
+                ),
+            )
+            if result.rowcount != 1:
+                raise InvalidAgentRunStateError("checkpoint cannot schedule schema repair")
 
         await self._database.run_transaction(operation)
 

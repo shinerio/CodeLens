@@ -1,4 +1,5 @@
 from datetime import UTC, datetime
+from pathlib import Path
 
 import pytest
 
@@ -16,6 +17,8 @@ def _review_task() -> ReviewTask:
         repository_id="repository-1",
         repository_realpath_hash="c" * 64,
         git_common_dir_hash="d" * 64,
+        repository_path=Path("/tmp/repository-1"),
+        target_paths=("src/state.py",),
         scope=BranchScope(base_ref="main", target_ref="feature"),
         target=ReviewTarget("a" * 40, "b" * 40, None),
         selected_agent_versions=("correctness:v1",),

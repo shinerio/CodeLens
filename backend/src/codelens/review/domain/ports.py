@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from pathlib import Path
 from typing import Protocol
 
 from codelens.findings.domain.models import FindingBatch
@@ -49,6 +50,24 @@ class ReviewRecord:
     scope_type: str
     base_oid: str
     head_oid: str
+    selected_agent_versions: tuple[str, ...]
+    status: str
+    cancellation_requested: bool
+
+
+@dataclass(frozen=True)
+class ReviewExecutionRecord:
+    """Carry the private durable inputs needed to reconstruct one Worker execution."""
+
+    task_id: str
+    repository_path: Path
+    repository_realpath_hash: str
+    git_common_dir_hash: str
+    base_oid: str
+    head_oid: str
+    overlay_hash: str | None
+    overlay_artifact_ref: str | None
+    target_paths: tuple[str, ...]
     selected_agent_versions: tuple[str, ...]
     status: str
     cancellation_requested: bool
@@ -148,7 +167,12 @@ class FindingBatchValidationPort(Protocol):
 class AgentRunCompletionPort(Protocol):
     """Atomically persist trusted Findings, node success, and an outbox event."""
 
-    async def complete_with_findings(self, run_id: str, findings: FindingBatch) -> None:
+    async def complete_with_findings(
+        self,
+        task_id: str,
+        node_key: str,
+        findings: FindingBatch,
+    ) -> None:
         """Complete only an OUTPUT_SAVED or VALIDATING run in one transaction."""
 
         raise NotImplementedError

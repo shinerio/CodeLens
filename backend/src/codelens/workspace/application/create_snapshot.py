@@ -101,37 +101,50 @@ class SnapshotService:
 
         worktree = await self._lifecycle.create(task_id, repository, captured)
         try:
-            resolved = await self._resolve_instructions(worktree, scope_plan.target_paths)
-            build = await self._manifest_builder.build(
-                worktree,
-                scope_plan.target_paths,
-                resolved,
-                self._structured_skip,
-            )
-            change_index = await self._change_index.build(worktree, captured.target.base_oid)
-            snapshot_id = f"snapshot_{uuid.uuid4().hex}"
-            artifact = await self._artifacts.write_bytes(
-                _snapshot_metadata(snapshot_id, worktree, captured, build, change_index)
-            )
-            return ReviewSnapshot(
-                snapshot_id=snapshot_id,
-                worktree=worktree,
-                target=captured.target,
-                fingerprint=build.fingerprint,
-                manifest=build.manifest,
-                change_index=change_index,
-                manifest_hash=build.manifest_hash,
-                snapshot_artifact=artifact,
-            )
+            resolved = await self.resolve_instructions(worktree, scope_plan.target_paths)
+            return await self.freeze(worktree, captured, scope_plan, resolved)
         except BaseException:
             await self._lifecycle.remove_owned(worktree)
             raise
 
-    async def _resolve_instructions(
+    async def freeze(
+        self,
+        worktree: TaskWorktree,
+        captured: CapturedReviewInput,
+        scope_plan: ScopePlan,
+        instructions: ResolvedInstructionSet,
+    ) -> ReviewSnapshot:
+        """Freeze a Snapshot inside an already recovered and verified worktree."""
+
+        build = await self._manifest_builder.build(
+            worktree,
+            scope_plan.target_paths,
+            instructions,
+            self._structured_skip,
+        )
+        change_index = await self._change_index.build(worktree, captured.target.base_oid)
+        snapshot_id = f"snapshot_{uuid.uuid4().hex}"
+        artifact = await self._artifacts.write_bytes(
+            _snapshot_metadata(snapshot_id, worktree, captured, build, change_index)
+        )
+        return ReviewSnapshot(
+            snapshot_id=snapshot_id,
+            worktree=worktree,
+            target=captured.target,
+            fingerprint=build.fingerprint,
+            manifest=build.manifest,
+            change_index=change_index,
+            manifest_hash=build.manifest_hash,
+            snapshot_artifact=artifact,
+        )
+
+    async def resolve_instructions(
         self,
         worktree: TaskWorktree,
         target_paths: tuple[str, ...],
     ) -> ResolvedInstructionSet:
+        """Resolve and merge the immutable instruction chain for every target path."""
+
         documents_by_path: dict[str, InstructionDocument] = {}
         excludes: list[str] = []
         warnings: list[str] = []

@@ -1,6 +1,7 @@
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
+from pathlib import Path
 
 from codelens.shared.domain.errors import DomainError
 from codelens.workspace.domain.models import ReviewScope, ReviewTarget
@@ -65,6 +66,8 @@ class ReviewTask:
     git_common_dir_hash: str
     scope: ReviewScope
     target: ReviewTarget
+    repository_path: Path
+    target_paths: tuple[str, ...]
     selected_agent_versions: tuple[str, ...]
     created_at: datetime
     overlay_artifact_ref: str | None = None
@@ -85,6 +88,8 @@ class ReviewTask:
         git_common_dir_hash: str,
         scope: ReviewScope,
         target: ReviewTarget,
+        repository_path: Path,
+        target_paths: tuple[str, ...],
         selected_agent_versions: tuple[str, ...],
         created_at: datetime,
         overlay_artifact_ref: str | None = None,
@@ -95,6 +100,8 @@ class ReviewTask:
             raise ValueError("a ReviewTask requires at least one Agent version")
         if created_at.tzinfo is None:
             raise ValueError("ReviewTask timestamps must be timezone-aware")
+        if not target_paths:
+            raise ValueError("a ReviewTask requires at least one frozen target path")
         return cls(
             task_id=task_id,
             repository_id=repository_id,
@@ -102,6 +109,8 @@ class ReviewTask:
             git_common_dir_hash=git_common_dir_hash,
             scope=scope,
             target=target,
+            repository_path=repository_path.expanduser().resolve(),
+            target_paths=target_paths,
             selected_agent_versions=selected_agent_versions,
             created_at=created_at,
             overlay_artifact_ref=overlay_artifact_ref,

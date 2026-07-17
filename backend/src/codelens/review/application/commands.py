@@ -60,6 +60,8 @@ class CreateReviewHandler:
             git_common_dir_hash=command.repository.git_common_dir_hash,
             scope=command.scope,
             target=captured.target,
+            repository_path=command.repository.path,
+            target_paths=scope_plan.target_paths,
             selected_agent_versions=command.selected_agent_versions,
             created_at=self._clock(),
             overlay_artifact_ref=artifact.reference if artifact is not None else None,
