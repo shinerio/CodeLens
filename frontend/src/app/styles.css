@@ -1,0 +1,220 @@
+:root {
+  color: #20241f;
+  background: #e8e9e3;
+  font-family: "Avenir Next", Avenir, "Segoe UI Variable", sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  min-width: 320px;
+  min-height: 100vh;
+  background: #e8e9e3;
+}
+
+button,
+input,
+select,
+textarea {
+  font: inherit;
+}
+
+.app-shell {
+  min-height: 100vh;
+  display: grid;
+  grid-template: 58px 1fr / 216px minmax(0, 1fr);
+}
+
+.topbar {
+  z-index: 2;
+  grid-column: 1 / -1;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 18px;
+  border-bottom: 1px solid #343b36;
+  background: #18211c;
+  color: #f4f5ee;
+  letter-spacing: -0.01em;
+}
+
+.topbar strong {
+  font-size: 1.02rem;
+  letter-spacing: 0.01em;
+}
+
+.brand-sigil {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #c7ff4a;
+  color: #c7ff4a;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+}
+
+.topbar-context {
+  margin-left: auto;
+  color: #aab5ad;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.7rem;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+
+.sidebar {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  padding: 20px 12px 14px;
+  border-right: 1px solid #c9cbc2;
+  background: #ddded7;
+}
+
+.sidebar-label {
+  margin: 0 10px 10px;
+  color: #737970;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.66rem;
+  font-weight: 700;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.sidebar nav {
+  display: grid;
+  gap: 4px;
+}
+
+.nav-link {
+  position: relative;
+  display: flex;
+  min-height: 42px;
+  align-items: center;
+  gap: 11px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  color: #4e554f;
+  font-size: 0.86rem;
+  font-weight: 600;
+  text-decoration: none;
+  transition:
+    background-color 140ms ease,
+    border-color 140ms ease,
+    color 140ms ease,
+    transform 140ms ease;
+}
+
+.nav-link:hover {
+  border-color: #b8bbb2;
+  background: #e9eae4;
+  color: #20241f;
+  transform: translateX(2px);
+}
+
+.nav-link.active {
+  border-color: #303932;
+  background: #f6f7f1;
+  color: #18211c;
+  box-shadow: 3px 3px 0 #a7c34b;
+}
+
+.nav-link svg {
+  width: 17px;
+  height: 17px;
+  stroke-width: 1.8;
+}
+
+.sidebar-boundary {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-top: auto;
+  padding: 14px 10px 2px;
+  border-top: 1px solid #c2c5bc;
+  color: #626961;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  letter-spacing: 0.02em;
+}
+
+.boundary-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #5b7d24;
+  box-shadow: 0 0 0 3px rgb(91 125 36 / 14%);
+}
+
+.main-content {
+  min-width: 0;
+  overflow: auto;
+  background-color: #f6f7f1;
+  background-image: radial-gradient(#cdd0c6 0.7px, transparent 0.7px);
+  background-size: 18px 18px;
+}
+
+.main-content > h1 {
+  margin: 0;
+  padding: clamp(28px, 5vw, 64px);
+  font-size: clamp(2rem, 4vw, 4.5rem);
+  letter-spacing: -0.06em;
+}
+
+@media (max-width: 760px) {
+  .app-shell {
+    grid-template: 52px auto minmax(0, 1fr) / 1fr;
+  }
+
+  .topbar {
+    padding: 0 12px;
+  }
+
+  .topbar-context {
+    display: none;
+  }
+
+  .sidebar {
+    display: block;
+    overflow-x: auto;
+    padding: 8px;
+    border-right: 0;
+    border-bottom: 1px solid #c9cbc2;
+  }
+
+  .sidebar-label,
+  .sidebar-boundary {
+    display: none;
+  }
+
+  .sidebar nav {
+    display: flex;
+    width: max-content;
+    gap: 6px;
+  }
+
+  .nav-link {
+    min-height: 38px;
+    padding: 0 11px;
+    white-space: nowrap;
+  }
+
+  .nav-link:hover {
+    transform: none;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .nav-link {
+    transition: none;
+  }
+}
+
