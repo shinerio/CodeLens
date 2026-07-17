@@ -64,6 +64,15 @@ class WorkspaceGitPort(Protocol):
         raise NotImplementedError
 
 
+class RepositoryMetadataPort(Protocol):
+    """Read repository identity and checkout state without exposing Git commands."""
+
+    async def inspect(self, repository: Path) -> RepositoryInfo:
+        """Return metadata for a repository path already contained by the application."""
+
+        raise NotImplementedError
+
+
 class ReviewWorktreePort(Protocol):
     """Create and remove only detached worktrees owned by a review task."""
 
