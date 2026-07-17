@@ -73,6 +73,15 @@ class RepositoryMetadataPort(Protocol):
         raise NotImplementedError
 
 
+class ScopePlanningPort(Protocol):
+    """Resolve mutable scope input to an immutable executable plan."""
+
+    async def plan_scope(self, repository: Path, scope: ReviewScope) -> ScopePlan:
+        """Return pinned OIDs and normalized target candidates for one scope."""
+
+        raise NotImplementedError
+
+
 class ReviewWorktreePort(Protocol):
     """Create and remove only detached worktrees owned by a review task."""
 
