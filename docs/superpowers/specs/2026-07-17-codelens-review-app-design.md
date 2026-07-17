@@ -1,8 +1,8 @@
 # CodeLens 本地多 Agent 代码 Review 应用设计
 
-**状态：** 已确认  
+**状态：** 已确认（2026-07-17 按单用户功能正确性和 Review worktree 隔离整改）
 **日期：** 2026-07-17  
-**目标版本：** 本地/受信任内网部署的首个可用版本  
+**目标版本：** 单用户本地部署的首个可用版本
 **技术基线：** Python 后端、React Web 前端、OpenAI Agents SDK、DDD 分层
 
 ## 1. 背景
@@ -25,18 +25,20 @@
 
 ## 2. 已确认的产品决策
 
-1. 首版面向本地单机，也支持绑定 `0.0.0.0` 部署到受信任内网。
-2. 首版不实现身份认证、用户、租户、计费和组织管理。
+1. 首版面向单用户本地单机，只绑定 `127.0.0.1`；无鉴权远程访问不属于首版。
+2. 首版不实现身份认证、用户、租户、计费和组织管理，也不支持同一数据目录启动多个 Worker。
 3. 前后端分离开发；发布时后端可以托管已构建的前端静态资源。
 4. 外层工作流由 Python 确定性编排，OpenAI Agents SDK 只负责 Agent 节点执行。
 5. 默认运行全部启用的 Review Agent，用户可以只勾选指定 Agent。
 6. 主 Agent 负责对已校验 Finding 进行汇总，不得创造无来源 Finding。
-7. Review 模式严格只读，严禁修改原仓库或代码快照。
+7. 每个 ReviewTask 必须创建独立、detached、任务专属的 Git worktree；同一任务的 Reviewer 并发只读共享该 worktree，不得直接读取或修改用户工作区。
 8. Fix 模式只修改隔离副本，最终由应用校验并应用 PatchSet。
-9. Fix 支持默认自动审批；任何硬门禁失败时自动降级为人工处理。
+9. Fix 默认人工应用；用户对单个任务显式启用自动应用时，任何硬门禁失败都降级为人工处理。
 10. 所有 Review 范围都排除当前 `.gitignore` 规则命中的路径，包括已跟踪文件。
 11. 根目录 `AGENTS.md`、根目录 `REVIEW.md`、目录级 `REVIEW.md` 和文件级规则都随快照冻结。
-12. 首版允许 `0.0.0.0 + auth=none`，并明确将整个可达内网视为可信边界。
+12. 同一仓库允许多个 ReviewTask 并发；不同任务通过各自 worktree 隔离。应用只在同仓 worktree 注册和回收的短临界区串行化，不串行化 Agent 执行。
+13. API 与 Worker 可独立启动，但一个 data directory 只允许一个 Worker；多 Worker lease、抢占和 fencing 延期。
+14. Secret 引用、日志脱敏、opaque Artifact、路径 containment 和敏感 tracing 默认关闭必须在首次模型或工具调用前具备，不能延后到部署加固阶段。
 
 ## 3. 目标与非目标
 
@@ -46,17 +48,20 @@
 - 支持四种范围：分支、指定 commit、未提交改动和全仓扫描。
 - 支持独立配置和版本化多种 Reviewer Prompt。
 - 支持默认全选和按需选择 Reviewer，并行运行选中的 Reviewer。
+- 支持同一仓库针对不同 feature/ref 并发创建 Review；每个任务在独立 worktree 中固定 `base_oid`、`head_oid` 和可选工作区 overlay。
 - 支持 OpenAI Agents SDK、Skills、MCP 和静态分析工具。
 - 输出可定位、可验证、可去重、可反馈的结构化 Finding。
 - 生成包含覆盖范围、Agent 状态、证据、风险和失败信息的总报告。
 - 在 Fix 模式隔离修复，验证后人工或自动应用到源仓库。
-- 在 Worker/API 重启后恢复未完成任务和浏览器事件流。
+- 在唯一 Worker/API 重启后从持久检查点恢复未完成节点和浏览器事件流，不依赖多 Worker lease。
 - 提供可衡量精度、信噪比、延迟、成本和修复成功率的 eval 体系。
 
 ### 3.2 首版非目标
 
 - GitHub/GitLab PR App、Webhook 和 inline comment 发布。
 - 多租户 SaaS、团队权限、SSO、RBAC 和计费。
+- 多进程 Worker、分布式调度、任务抢占、lease/fencing、跨主机 repo lock 和多用户公平调度。
+- `0.0.0.0 + auth=none`、互联网暴露或任何未认证的远程管理面。
 - 移动端优先体验；移动端只保证状态查看和基本操作可用。
 - 无人监管地修改源仓库以外的系统资源。
 - 自动把单次用户反馈永久写入规则或 Prompt。
@@ -69,11 +74,11 @@
 
 1. **领域层无供应商依赖：** 不导入 OpenAI、Git、SQLite、FastAPI 或 MCP SDK。
 2. **外层确定性编排：** 哪些 Agent 运行、并发数、超时、重试和完成条件由应用代码决定。
-3. **快照一致性：** 一次任务中的所有 Agent 只读取同一个 `ReviewSnapshot`。
+3. **任务级 worktree 与快照一致性：** 每个 ReviewTask 先建立独立 worktree，再冻结一个 `ReviewSnapshot`；该任务的所有 Agent 只读共享它。
 4. **能力最小化：** Agent 只能看到显式绑定的 Skill、MCP 工具和静态工具。
 5. **证据优先：** Finding 必须关联快照路径、位置和可验证证据。
 6. **失败显式化：** 部分成功不能伪装为完整成功。
-7. **原仓库隔离：** 模型和沙箱永远不直接写入原仓库。
+7. **原工作区隔离：** CodeLens 只可在短临界区注册/移除自己拥有的 worktree；模型和沙箱永远不访问用户工作区或修改源分支、index 和文件。
 8. **可替换适配器：** 模型、沙箱、代码检索、MCP 和 Secret Store 均通过 Port 替换。
 
 ### 4.2 组件关系
@@ -83,15 +88,17 @@ flowchart LR
     UI[React Web] -->|REST Commands/Queries| API[FastAPI]
     API --> DB[(SQLite WAL)]
     UI -->|SSE + Last-Event-ID| API
-    Worker[Review Worker] -->|job lease / outbox| DB
+    Worker[Singleton Review Worker] -->|checkpoint / outbox| DB
     Worker --> Git[Git Adapter]
     Worker --> Sandbox[Sandbox Adapter]
     Worker --> AgentRuntime[OpenAI Agents SDK Adapter]
     Worker --> MCP[MCP Registry]
     Worker --> Skills[Skill Runtime]
     Worker --> Artifacts[(Artifact Store)]
-    Git --> Repo[Source Repository]
-    Sandbox --> Snapshot[Snapshot / Isolated Fix Worktree]
+    Git --> Repo[Source Repository Git Metadata]
+    Git --> WT[Task-owned Detached Worktrees]
+    Sandbox -->|read-only in REVIEW| WT
+    WT --> Snapshot[Immutable Manifest / ChangeIndex]
 ```
 
 ### 4.3 OpenAI Agents SDK 的使用边界
@@ -118,6 +125,9 @@ Sandbox Agents 当前是 Beta，因此通过 `SandboxProvider`/`SkillRuntimePort
 - `RepositoryId`
 - `RepositoryDescriptor`
 - `ReviewScope`
+- `ReviewTarget`
+- `TaskWorktree`
+- `WorktreeOwnership`
 - `ReviewSnapshot`
 - `SnapshotManifest`
 - `ChangeIndex`
@@ -134,6 +144,8 @@ Sandbox Agents 当前是 Beta，因此通过 `SandboxProvider`/`SkillRuntimePort
 - `task_id`
 - `repository_id`
 - `scope`
+- `base_oid / head_oid`
+- `worktree_id`
 - `run_mode: REVIEW | FIX`
 - `snapshot_id`
 - `selected_agent_versions`
@@ -227,28 +239,34 @@ Sandbox Agents 当前是 Beta，因此通过 `SandboxProvider`/`SkillRuntimePort
 #### 分支 Diff + 未提交改动
 
 ```text
-base = merge-base(base_branch, HEAD)
-target = current WORKTREE
-range = base -> target
+base_oid = merge-base(resolve(base_ref), resolve(target_ref))
+head_oid = resolve(target_ref; default=current HEAD)
+target = detached task worktree at head_oid + optional captured overlay
+range = base_oid -> target
 ```
 
-包含当前分支在 merge-base 之后的提交，以及 staged、unstaged 和未被忽略的 untracked 文件。
+包含目标 feature/ref 在 merge-base 之后的提交。只有 `target_ref` 是当前 checkout 的
+`HEAD` 且请求显式设置 `include_workspace_changes=true` 时，才把 staged、unstaged 和未被忽略的
+untracked 文件捕获为 overlay；远端分支或其他本地分支不会错误混入当前工作区改动。
 
 #### 指定 Commit + 未提交改动
 
 ```text
-base = selected commit
-target = current WORKTREE
-range = base -> target
+base_oid = resolve(selected base commit)
+head_oid = resolve(target_ref; default=current HEAD)
+target = detached task worktree at head_oid + optional captured overlay
+range = base_oid -> target
 ```
 
-指定 commit 是基线，而不是只审查该 commit 自身。若 commit 不是当前 HEAD 的祖先，允许使用 direct diff，但创建任务前必须显示非祖先警告。
+指定 commit 是基线，而不是只审查该 commit 自身。若 commit 不是 `head_oid` 的祖先，允许 direct diff，
+但创建任务前必须显示非祖先警告并把选择固定成 OID。overlay 仍只允许来自当前 checkout 的 HEAD。
 
 #### 仅未提交改动
 
 ```text
 base = HEAD
-target = current WORKTREE
+head_oid = current HEAD
+target = detached task worktree at head_oid + captured overlay
 range = HEAD -> target
 ```
 
@@ -256,9 +274,40 @@ range = HEAD -> target
 
 #### 全仓扫描
 
-目标是当前 WORKTREE 中符合 include/ignore/safety 策略的全部文件。扫描按模块分片，不把整个仓库一次性发送给模型。
+目标是固定 `head_oid` 的任务 worktree（可选当前 checkout overlay）中符合
+include/ignore/safety 策略的全部文件。扫描按模块分片，不把整个仓库一次性发送给模型。
 
-### 6.2 `.gitignore` 语义
+### 6.2 Review worktree 隔离契约
+
+所有代码 Review 都必须经过以下流程，不允许“直接读取仓库路径”的快捷分支：
+
+1. 创建任务命令先解析并持久化固定的 `base_oid/head_oid`，再入队；Worker 不重新解析 display ref。
+   Worker 在一个短暂的 repository critical section 中执行
+   `git worktree add --detach <owned-path> <head_oid>`。
+2. worktree 路径必须位于应用 data directory，包含不可伪造的数据库记录和 ownership marker；
+   `task_id`、canonical git common-dir hash 和路径必须三者一致。
+3. 若 scope 包含未提交改动，创建任务命令必须先在用户工作区指纹校验前后捕获 staged、unstaged
+   和允许的 untracked overlay，保存为 hash-verified opaque Artifact，再原子创建 task/job；捕获期间
+   变化则重试一次，之后以 `SNAPSHOT_STALE` 拒绝创建。Worker 只把已冻结 overlay 应用到任务
+   worktree，任务创建后不再读取用户工作区内容。
+   根 `AGENTS.md`、适用的 `REVIEW.md` 和文件级 `.review.md` 是控制输入：其未提交/未跟踪版本
+   必须独立捕获，即使它们命中 `.gitignore`，不得因普通 untracked ignore 过滤而遗漏。
+4. worktree 准备完成后冻结 Manifest。所有 Reviewer 只读共享该 task worktree 的 content view；
+   沙箱以只读方式挂载并遮蔽 `.git` 文件/目录，本地文件工具也通过 containment guard 拒绝 `.git`
+   和 Manifest 外路径，避免暴露 Git common-dir 或用户仓库路径。
+5. 每个 AgentRun 前后校验 Manifest 中目标文件的 hash；发现写入或越界访问时将该 run 标记
+   `WORKTREE_MUTATED`，任务进入 `PARTIAL` 或 `FAILED`，并隔离 worktree 供诊断。
+6. 同一仓库的 worktree add/remove/repair 由进程内 repository lock 串行化，成功注册后立即释放锁；
+   不同 ReviewTask 的 Snapshot、Agent、验证和汇总阶段可以并发。
+7. 清理只能执行 `git worktree remove --force <exact-owned-path>`，且必须再次验证 ownership。
+   禁止执行无范围的 `git worktree prune`，禁止删除或修复用户创建的 worktree。
+8. Worker 重启后只核对数据库登记和 ownership marker 均匹配的目录；完整且仍被非终态任务引用的
+   worktree 可恢复，其余移入 quarantine 后定向清理。
+
+同一 ReviewTask 的 Reviewer 不各自创建 worktree：它们对同一不可变输入进行并发只读分析。
+若未来允许 Reviewer 执行可写工具，必须另行引入 per-Agent copy-on-write workspace，记入 TODO。
+
+### 6.3 `.gitignore` 语义
 
 所有范围都必须经过统一 `IgnorePolicy`：
 
@@ -283,34 +332,44 @@ range = HEAD -> target
 git check-ignore --no-index -v --stdin
 ```
 
-### 6.3 Snapshot 创建
+### 6.4 Snapshot 创建
 
 创建过程：
 
-1. 校验 repository realpath、Git 状态、HEAD 和基线引用。
-2. 计算 HEAD SHA、index tree/hash、工作区候选文件哈希。
-3. 计算原始候选集并应用 `.gitignore`、结构化 skip 和 safety filter。
-4. 在任务目录物化当前工作区视图；Review 模式不向 Agent 暴露原仓库路径。
-5. 创建 changed hunks、rename、delete、binary 和 untracked 的 `ChangeIndex`。
-6. 冻结规则文件、AgentVersion、SkillVersion、MCP binding、ModelProfile 和预算。
-7. 再次计算源工作区指纹；若变化则重试一次，仍变化则以 `SNAPSHOT_STALE` 失败。
+1. 校验 repository realpath、git common-dir、目标 ref 和允许的 repository root。
+2. 使用任务创建时已持久化的 `base_oid/head_oid`，在 repository critical section 中创建任务
+   worktree；不得在 Worker 执行阶段重新解析可变 ref。
+3. 需要时读取任务创建阶段已经持久化并校验 hash 的 overlay Artifact，在 worktree 中重建目标视图；
+   Worker 不从用户工作区重新捕获。
+4. 计算原始候选集并应用 `.gitignore`、结构化 skip、symlink containment 和 safety filter。
+5. 创建 changed hunks、rename、delete、binary 和 untracked 的 `ChangeIndex`，并记录 overlay 来源。
+6. 冻结规则文件及其 hash、AgentVersion、SkillVersion、MCP binding、ModelProfile、命令 profile 和预算。
+7. 生成完整 Manifest 并二次读取验证；从此 Reviewer 只能读取 worktree，不再读取用户工作区或可变 ref。
 
 快照必须记录：
 
 - `snapshot_id`
+- `worktree_id / worktree_path_hash`
 - `repository_realpath_hash`
-- `base_revision`
-- `head_revision`
+- `git_common_dir_hash`
+- `base_oid`
+- `head_oid`
 - `index_hash`
-- `worktree_hash`
+- `overlay_hash / overlay_entries[]`
 - `manifest_hash`
 - `created_at`
 - `included_files[]`
 - `target_paths[]`
 - `context_paths[]`
 - `excluded_files[] + reason`
+- `instruction_files[] + content_hash`
+- `agent/model/skill/mcp/command profile version hashes`
+- `change_index_hash`
 
-### 6.4 特殊文件策略
+Manifest 中每个 included/context/rule 文件保存 path、mode、size、content hash、symlink target（如有）
+和来源类别。Snapshot 的完整性校验不得只检查 target 文件或顶层 hash。
+
+### 6.5 特殊文件策略
 
 - 二进制：不发送正文，只保存元数据和变更类型。
 - Git LFS pointer：保存 pointer 信息，并默认不自动拉取大对象。
@@ -423,8 +482,10 @@ AgentVersion
 
 ```mermaid
 flowchart TD
-    A[Create Snapshot] --> B[Resolve Instructions]
-    B --> C[Build Context Plans]
+    A[Resolve base_oid/head_oid] --> W[Create Task Worktree]
+    W --> S[Freeze Snapshot Manifest]
+    S --> B[Resolve Instructions]
+    B --> C[Build Bounded Context Plans]
     C --> D1[Correctness]
     C --> D2[Security]
     C --> D3[Performance]
@@ -446,7 +507,15 @@ flowchart TD
     I -->|FIX mode| J[Fix Coordinator]
 ```
 
-并发通过 `asyncio` 和 semaphore 控制。默认 Agent 并发上限为 4，可配置但不能超过模型、MCP 和本机资源限制。
+唯一 Worker 通过结构化并发（`TaskGroup` 或等价机制）调度任务。并发分两层：
+
+- ReviewTask 层：同仓库和跨仓库任务均可并发；每个任务拥有独立 worktree。
+- AgentRun 层：同一任务选中的 Reviewer 并发，等待 fan-in 后再验证和汇总。
+
+模型、MCP、命令和总 AgentRun 各有全局 semaphore，同时每个任务有独立上限。默认全局 AgentRun
+并发为 8、单 ReviewTask 为 4、活动 ReviewTask 为 4，使单任务 Reviewer 并发时仍为其他任务保留
+执行空间；任务取消必须传播到尚未启动和正在运行的子节点。repository lock 只保护同仓
+worktree add/remove/repair，不得跨越 Snapshot、模型调用或报告生成。
 
 ### 8.4 完成策略
 
@@ -470,6 +539,10 @@ flowchart TD
 6. 与 Agent 绑定的 MCP 业务上下文。
 7. 静态工具输出和命令证据。
 8. 明确的 token 预算和截断记录。
+
+预算是执行前的硬约束：Context Builder 先按 metadata、hunk 和检索摘要排序，再在剩余预算内
+读取正文。禁止先把所有 `target_paths` 拼成字符串、再在模型调用处截断。每个 ContextPlan
+必须记录 considered、included、truncated 和 omitted path/shard 及原因。
 
 ContextPlan 中每个片段记录：
 
@@ -499,9 +572,20 @@ ContextPlan 中每个片段记录：
 5. Cross-file Agent 对高风险边界做第二轮定向检查。
 6. 达到预算上限时报告未覆盖 shard，不能声称全仓完成。
 
+shard 和 pass 是 AgentRun 身份的一部分。稳定执行键至少包含
+`task_id + reviewer_version + pass_index + shard_id + attempt_group`，不得用唯一
+`(task_id, reviewer_id)` 表示所有分片和第二轮检查。
+
 ## 10. Finding 输出契约
 
 Reviewer 的 `output_type` 必须是版本化 Pydantic schema，而不是 Markdown 文本。
+
+模型调用返回后必须先把**未校验的最终结构化输出**作为 hash-verified opaque Artifact 持久化，
+并在同一事务写入 `OUTPUT_SAVED` 检查点，之后才进行 Pydantic、位置和 evidence 校验。默认只从
+Agents SDK 公共 `raw_responses` 表面保存 response ID、模型和 usage 等脱敏诊断信息，不持久化完整
+provider payload。只有结构与确定性校验结果、
+Finding 和终态事件原子提交后，AgentRun 才能进入 `SUCCEEDED`。因此进程在模型返回后崩溃时，
+恢复流程从未校验输出 Artifact 重新校验，不会重复调用模型或丢失结果。
 
 ```python
 class Finding:
@@ -613,19 +697,22 @@ SSE transport 仅作为兼容旧服务的非默认扩展，不用于新配置。
 
 ### 13.1 REVIEW 模式
 
-- Agent 看到物化 Snapshot，挂载为只读。
+- Agent 只看到本 ReviewTask 的 worktree content view，按 SnapshotManifest 校验后挂载为只读并遮蔽 `.git`。
 - 可写目录只有任务临时目录。
-- 原仓库不挂载到 Sandbox。
+- 用户工作区、Git common-dir 和其他任务 worktree 不挂载到 Sandbox。
 - 网络默认关闭。
 - tests、lint、build 和 SAST 必须匹配命令模板。
-- 未安装容器运行时时，静态 review 仍可运行；仓库命令需要显式信任并启用 `LocalExecutor`。
+- 未安装容器运行时时，静态 review 仍可运行；stdio、仓库命令、Skill script 和 CodeGraph CLI
+  明确不可用，required capability 失败关闭。首版不提供宿主机 `LocalExecutor` 逃生口。
 
 ### 13.2 FIX 模式
 
-- GitAdapter 在主机创建隔离临时 worktree。
+- GitAdapter 在主机为 FixTask 创建独立、detached、带 ownership marker 的临时 worktree，
+  并从 ReviewSnapshot 内容而不是用户当前工作区准备初始文件。
 - Sandbox 只挂载 worktree 内容，屏蔽或不挂载指向原仓库的 `.git` 元数据。
 - Agent 可修改隔离副本，但不能访问原工作区路径。
-- GitAdapter 在 Sandbox 外生成 Snapshot-to-Fix PatchSet。
+- GitAdapter 在 Sandbox 外分别计算 `snapshot_tree_oid` 与 `fixed_tree_oid`，生成
+  `Snapshot -> FixedWorkspace` PatchSet；禁止直接对 `HEAD` 运行无基线的 `git diff`。
 - 模型无权直接执行 PatchSet 到原仓库。
 
 ### 13.3 容器限制
@@ -660,7 +747,7 @@ CREATED
   -> PREPARING_WORKTREE
   -> FIXING
   -> VERIFYING
-  -> AWAITING_APPROVAL | AUTO_APPLYING
+  -> AWAITING_APPROVAL | APPLYING
   -> APPLIED
 
 任意运行态 -> CANCELED | FIX_FAILED
@@ -669,7 +756,7 @@ CREATED
 
 ### 14.3 自动审批硬门禁
 
-即使用户开启默认审批，只有全部满足才可自动应用：
+默认进入人工确认。只有用户对该 FixTask 显式启用自动应用且全部满足时才可自动应用：
 
 1. 源仓库 HEAD、index 和 worktree fingerprint 与 Snapshot 创建时一致。
 2. PatchSet 只修改 FixTask allowlist 中的文件。
@@ -677,13 +764,18 @@ CREATED
 4. 配置为 required 的 test/lint/build/security gate 全部通过。
 5. Secret scan 未发现新增 secret。
 6. PatchSet 文件数和行数不超过自动应用阈值。
-7. `git apply --3way --check` 或等价检查无冲突。
+7. 对明确的 apply target 执行无写入的 patch check；只有目标仍等于预期 fingerprint 时才允许
+   进入实际 apply。是否允许 3-way 必须由策略显式决定，不能用它绕过 fingerprint 不一致。
 
 任何门禁失败都不能自动覆盖源仓库，而是保存 PatchSet、证据和失败原因，并进入人工处理。
 
 ### 14.4 应用语义
 
 - 默认把补丁应用到当前工作区，不自动 commit。
+- PatchSet 的逻辑基线始终是冻结的 ReviewSnapshot；不得包含创建 Review 前用户工作区中已有、
+  但不属于本次 Fix 结果的改动。
+- 每个 apply request 必须指定并记录 apply target realpath、预期 HEAD/index/worktree fingerprint。
+- 同一 apply target 的 check 与 apply 在进程内锁下执行；不同 task worktree 的 Fix/Review 不受此锁影响。
 - 应用操作必须幂等；重复请求返回已完成结果。
 - 应用前后保存 RepositoryFingerprint。
 - 若部分应用发生异常，立即停止并报告；不得自动 reset 用户仓库。
@@ -695,6 +787,7 @@ CREATED
 
 ```text
 CREATED
+  -> PROVISIONING_WORKTREE
   -> SNAPSHOTTING
   -> PREPARING
   -> REVIEWING
@@ -710,18 +803,28 @@ CREATED
 ### 15.2 AgentRun 状态
 
 ```text
-PENDING | RUNNING | SUCCEEDED | FAILED | TIMED_OUT | CANCELED | SKIPPED
+PENDING | RUNNING | OUTPUT_SAVED | VALIDATING | SUCCEEDED | FAILED | TIMED_OUT | CANCELED | SKIPPED
 ```
 
-### 15.3 Worker lease
+`run_id` 由 task、ReviewerVersion、pass、shard 和 logical attempt group 共同确定。未校验输出 Artifact
+保存成功后进入 `OUTPUT_SAVED`；Finding 与成功事件落库前不能进入 `SUCCEEDED`。
+
+### 15.3 单 Worker 调度与恢复
 
 - FastAPI 只创建任务和查询状态，不在请求进程运行长任务。
-- 独立 Worker 用 SQLite transaction 领取 job lease。
-- Worker 持续写 heartbeat。
-- lease 超时后其他 Worker 可以重新领取。
+- 独立 Worker 启动时取得 data directory 的 OS 级 singleton lock；锁已被持有则明确退出，
+  首版不允许第二个 Worker 连接同一任务库。
+- Worker 从 SQLite 读取 queued/non-terminal jobs，在一个进程内用结构化并发运行多个 ReviewTask。
+- 启动恢复把没有输出 Artifact 的 `RUNNING` 节点重新排队；`OUTPUT_SAVED/VALIDATING` 节点从已校验 hash
+  的 Artifact 继续；已经原子提交的 `SUCCEEDED` 节点不重复运行。
+- Task、DAG node、Artifact 和 outbox 变更使用小事务与稳定幂等键；SQLite 启用 WAL、foreign keys、
+  busy timeout 和 bounded transaction retry。
 - 每个 DAG node 使用稳定 idempotency key。
 - 已成功节点不会因进程重启重复产生 Finding。
 - API/Worker 单机可由一个 Supervisor 统一启动和停止。
+
+多 Worker lease、heartbeat、过期回收、抢占和 fencing token 明确延期；在它们完成前不得提供
+`--workers > 1` 或让多个服务实例共享 data directory。
 
 ### 15.4 SSE outbox
 
@@ -736,10 +839,13 @@ SQLite 使用 WAL 和 Alembic migration。主要表：
 
 - `repositories`
 - `review_tasks`
+- `task_worktrees`
 - `review_snapshots`
 - `agent_definitions`
 - `agent_versions`
 - `agent_runs`
+- `agent_run_artifacts`
+- `dag_checkpoints`
 - `instruction_documents`
 - `findings`
 - `finding_evidence`
@@ -751,18 +857,20 @@ SQLite 使用 WAL 和 Alembic migration。主要表：
 - `mcp_servers`
 - `capability_bindings`
 - `feedback / suppressions`
-- `jobs / job_leases`
+- `jobs`
 - `events`
 - `artifacts`
 - `settings`
 
-Snapshot、完整日志、Patch、测试输出等大对象保存到 Artifact Store，SQLite 只保存 metadata、hash 和相对路径。
+Snapshot、完整日志、未校验模型最终输出、脱敏 provider 诊断、Patch、测试输出等大对象保存到 Artifact Store，SQLite 只保存
+metadata、content hash 和 opaque storage reference；不得保存可由 API 直接拼接的文件系统路径。
 
 默认 retention：
 
-- Snapshot 和原始 Agent 输出：30 天。
+- Snapshot 和未校验 Agent 输出：30 天。
 - 报告、Finding、Prompt/规则版本和 eval 结果：保留直到用户删除。
-- 临时 worktree：任务结束后立即清理；失败则 quarantine 后重试。
+- Review/Fix worktree：任务终态且所需 Snapshot/输出 Artifact 已持久化后定向清理；失败或完整性异常时
+  quarantine，并在下次启动重新核对 ownership 后重试。
 - UI 支持按任务删除和清空全部本地数据。
 
 ## 17. HTTP API
@@ -785,7 +893,9 @@ GET  /api/reviews/{id}/report
   "repository_path": "/srv/repos/billing-service",
   "scope": {
     "type": "branch",
-    "base_branch": "origin/main"
+    "base_ref": "origin/main",
+    "target_ref": "feature/invoice-rounding",
+    "include_workspace_changes": false
   },
   "mode": "review",
   "agent_ids": [
@@ -880,7 +990,7 @@ Findings 支持按 severity、category、confidence、origin、Agent、文件和
 - 用 fixture repository 做样例试跑。
 - 回滚到历史版本。
 
-## 19. 本机与内网部署
+## 19. 单用户本机部署
 
 ### 19.1 启动方式
 
@@ -889,55 +999,48 @@ pipx install codelens-review
 codelens-review start .
 ```
 
-受信任内网：
-
-```bash
-codelens-review start /srv/repos \
-  --host 0.0.0.0 \
-  --port 8765 \
-  --auth none
-```
-
 配置：
 
 ```toml
 [server]
-host = "0.0.0.0"
+host = "127.0.0.1"
 port = 8765
 auth = "none"
-repository_roots = ["/srv/repos"]
-allowed_hosts = ["10.0.1.20", "review.intra.example"]
-allowed_origins = [
-  "http://10.0.1.20:8765",
-  "http://review.intra.example:8765"
-]
+repository_roots = ["/home/me/code"]
+allowed_hosts = ["127.0.0.1", "localhost"]
+allowed_origins = ["http://127.0.0.1:8765", "http://localhost:8765"]
+
+[worker]
+max_workers = 1
+max_active_reviews = 4
+max_active_agent_runs = 8
+max_agent_runs_per_review = 4
 ```
 
-### 19.2 无鉴权模式的明确边界
+### 19.2 无鉴权本机模式的边界
 
-`0.0.0.0 + auth=none` 意味着任何能访问服务端口的用户都可以：
+`auth=none` 只允许与 loopback host 组合。若配置 `0.0.0.0`、非 loopback IP、反向代理外部 Host
+或 `max_workers > 1`，进程必须在启动前失败并返回稳定配置错误，不能仅显示警告后继续。
 
-- 查看服务器仓库的 review 结果。
-- 发起模型调用并消耗配额。
-- 访问 Artifact。
-- 在 Fix/自动审批允许时修改服务器工作区。
-
-首版允许该部署方式，但 UI 和启动日志必须持续显示无鉴权内网模式。该模式不是安全的互联网或不可信多用户部署。
-
-受信任内网模式必须配置至少一个 `repository_roots`。Repository inspect、Snapshot 和 Fix apply 只接受 realpath 位于这些根目录下的 Git 仓库；API 不接受任意服务器文件路径。Artifact 下载只使用不可猜测的 artifact ID 和数据库映射，不接收文件系统路径。
-
-即使不鉴权，仍执行：
+即使只在本机运行，仍执行：
 
 - Host allowlist，防 DNS rebinding。
 - Origin allowlist 和关闭宽泛 CORS。
 - JSON content type，拒绝 form POST 到命令接口。
 - OpenAI/MCP secret 只保留在服务端。
-- 来源 IP、User-Agent 和操作审计。
+- 操作审计，但不记录完整 Prompt、源代码正文或模型原始输出。
 - Sandbox 网络和文件权限不因 HTTP bind 放宽。
 
-远程浏览器选择的是服务器路径，不访问浏览器所在电脑的本地磁盘。
+Repository inspect、worktree、Snapshot 和 Fix apply 只接受 realpath 位于 `repository_roots` 下的 Git
+仓库。Artifact 下载只使用 opaque artifact ID 和数据库映射，不接收文件系统路径。
+
+受信任内网和远程浏览器部署需要认证、授权、CSRF/会话策略和安全运维设计，明确记入 TODO，
+不以“单用户”假设规避远程访问控制。
 
 ## 20. Secret、隐私与 Tracing
+
+以下条目是首次模型/MCP/命令调用的前置条件，必须在阶段 0–2 落地最小闭环；阶段 6 只增强
+SecretStore provider、容器隔离、retention UI 和发行验证，不能把安全基线推迟到产品已可调用模型之后。
 
 - API key 和 MCP token 优先保存到系统 Secret Store；SQLite 只保存引用。
 - 环境变量作为无 Secret Store 环境下的兼容方式。
@@ -963,7 +1066,9 @@ allowed_origins = [
 | Sandbox 不可用 | 静态 review 可继续；命令型 Agent 明确跳过 |
 | 单个 Agent 超时 | `TIMED_OUT`，报告进入 PARTIAL |
 | 主 Agent 失败 | 确定性模板生成降级报告 |
-| Worker 崩溃 | lease 超时后恢复未完成节点 |
+| worktree 创建/回收失败 | 不启动 Agent；只定向处理 owned path，隔离后可重试，绝不全局 prune |
+| Review worktree hash 变化 | `WORKTREE_MUTATED`；终止受影响 run 并 quarantine |
+| Worker 崩溃 | singleton lock 自动释放；重启后按 DAG/OUTPUT_SAVED 检查点恢复 |
 | 用户取消 | 停止新节点并终止当前工具/子进程 |
 | Fix gate 失败 | 保存 PatchSet，不自动应用 |
 | 源仓库变化 | `APPLY_CONFLICT`，不覆盖用户修改 |
@@ -973,7 +1078,9 @@ allowed_origins = [
 
 ## 22. 性能与成本
 
-- Agent 并发默认 4，并为模型、MCP、命令工具设置独立 semaphore。
+- 唯一 Worker 同时运行多个 ReviewTask；AgentRun 全局并发默认 8、单任务默认 4，并为模型、MCP、
+  命令工具设置独立 semaphore，防止一个大任务耗尽全部资源。
+- worktree 注册/回收按 canonical git common-dir 使用短锁；模型和工具调用期间不得持有该锁。
 - Context Builder 先 diff 后邻域，禁止无条件全仓 prompt。
 - Snapshot 内容按 hash 去重存储或复用只读 cache。
 - Agent 结果缓存键包含 snapshot、AgentVersion、InstructionSet、ModelProfile、SkillVersion 和工具版本。
@@ -1019,6 +1126,10 @@ allowed_origins = [
 - symlink escape。
 - submodule SHA 更新。
 - Snapshot 期间并发修改。
+- 同一仓库两个不同 feature ref 同时创建 ReviewTask，各自固定不同 `head_oid` 和独立 worktree。
+- 同任务多个 Reviewer 并发读取同一 worktree，任何写入都会被检测并隔离。
+- worktree add/remove 短锁不会把同仓 Agent 执行串行化。
+- Worker 崩溃留下 owned worktree 后可恢复；用户 worktree 永远不会被清理。
 
 ### 24.3 Adapter 契约测试
 
@@ -1030,12 +1141,14 @@ allowed_origins = [
 - Secret Store。
 - CodeContextProvider。
 
-外部依赖测试使用 record/replay fixture，但必须保留少量受控 live smoke test。
+外部依赖的 adapter 契约测试可使用 record/replay fixture；Prompt、模型、工具策略或上下文算法的
+质量发布门禁必须运行显式启用的受控 live eval。record/replay 只能证明管道稳定，不能证明候选模型输出质量。
 
 ### 24.4 Worker 和 E2E
 
-- 并行上限和公平调度。
-- 重试、取消、lease 和崩溃恢复。
+- 多任务/多 Agent 并行上限、任务级配额和饥饿保护。
+- 重试、取消、未校验输出检查点和唯一 Worker 崩溃恢复。
+- 第二个 Worker 对同一 data directory 启动时明确失败。
 - PARTIAL/FAILED 降级。
 - SSE 断线续传。
 - Playwright 覆盖创建 review、finding、fix、自动审批、冲突和恢复。
@@ -1143,10 +1256,11 @@ CodeLens/
 
 交付：
 
-- 初始化 Git 仓库、Python/React workspace 和 CI。
+- 保留现有 Git 历史和根 `AGENTS.md`，初始化 Python/React workspace 和 CI。
 - 建立 lint、format、type check、unit test 和 frontend build。
 - 写入本设计和关键 ADR。
 - 定义稳定错误码和领域事件规范。
+- 建立首次模型调用前必需的 loopback bind、Secret 引用、redaction、opaque Artifact 和 tracing 安全默认值。
 
 验收：干净环境一条命令启动后端和前端；CI 可复现。
 
@@ -1156,12 +1270,14 @@ CodeLens/
 
 - 仓库 inspect。
 - 四种 ReviewScope。
+- 固定 `base_oid/head_oid`，并为每个 ReviewTask 创建、登记、校验和定向清理独立 worktree。
 - Git 原生 `.gitignore` 过滤。
 - SnapshotManifest 和 ChangeIndex。
 - 根/目录/文件规则解析。
 - UI 范围预览和 diff 浏览。
 
-验收：临时 Git fixture 覆盖四种范围和 ignore 边界，源仓库不被修改。
+验收：临时 Git fixture 覆盖四种范围、ignore、dirty overlay、同仓并发 task 和 orphan cleanup；
+每个任务拥有独立 worktree，用户工作区、index 和 refs 不被修改。
 
 ### 阶段 2：单 Agent Review MVP
 
@@ -1171,9 +1287,10 @@ CodeLens/
 - AgentDefinition/AgentVersion/ModelProfile。
 - 一个 Correctness Reviewer。
 - Pydantic FindingBatch。
-- ReviewTask/AgentRun、Worker lease、SSE。
+- ReviewTask/AgentRun、未校验输出检查点、唯一 Worker singleton lock、可恢复 DAG 和 SSE。
 
-验收：浏览器能创建任务、观察状态并获得有位置和证据的 Finding。
+验收：浏览器能创建多个任务、观察状态并获得有位置和证据的 Finding；Worker 在模型返回后的
+任一检查点崩溃并重启，都不会丢失未校验输出、重复已完成节点或产生重复 Finding。
 
 ### 阶段 3：多 Agent 和汇总
 
@@ -1185,7 +1302,8 @@ CodeLens/
 - Evidence Verifier、去重、suppression 和主 Agent 汇总。
 - Agent/usage/coverage UI。
 
-验收：选中的 Agent 均被调度；单 Agent 故障不会丢失其他结果；主 Agent 不产生无来源 Finding。
+验收：同一任务的 Reviewer 在同一只读 worktree 上受控并发，同仓不同 feature 的任务在不同
+worktree 上并发；单 Agent 故障不会丢失其他结果；主 Agent 不产生无来源 Finding。
 
 ### 阶段 4：Skill、MCP 和上下文扩展
 
@@ -1203,11 +1321,11 @@ CodeLens/
 
 交付：
 
-- 隔离 worktree。
+- 复用 Phase 1 WorktreeManager 契约创建独立 Fix worktree。
 - Fix Agent 和 PatchSet。
 - ValidationGate。
-- 人工 apply 和默认自动审批。
-- fingerprint、3-way check 和 APPLY_CONFLICT。
+- 默认人工 apply 和单任务显式启用的自动 apply。
+- `Snapshot -> FixedWorkspace` PatchSet、apply target fingerprint、策略化 3-way 和 APPLY_CONFLICT。
 
 验收：Review 模式零写入；Fix 失败不改变原仓库；自动 apply 只在全部门禁通过时发生。
 
@@ -1216,13 +1334,14 @@ CodeLens/
 交付：
 
 - Docker/Podman Sandbox。
-- LocalExecutor 降级模式。
-- SecretStore 和 redaction。
-- Artifact retention。
-- `127.0.0.1` 与 `0.0.0.0 auth=none` 配置。
+- 缺少 Sandbox 时的 fail-closed 降级和可见 coverage gap。
+- SecretStore provider 增强和 redaction 回归验证。
+- Artifact retention、删除和恢复 UI。
+- `127.0.0.1 + auth=none` 强制配置与 Host/Origin 校验。
 - pipx/uv tool 跨平台发布包。
 
-验收：本机和受信任内网均可访问；Host/Origin/security tests 通过；发布包无需前端开发工具即可运行。
+验收：单用户本机可访问；非 loopback host 与多 Worker 配置 fail closed；Host/Origin/security tests
+通过；发布包无需前端开发工具即可运行。
 
 ### 阶段 7：质量评测和发布门禁
 
@@ -1234,19 +1353,21 @@ CodeLens/
 - precision/SNR/cost/latency dashboard。
 - 发布阈值和回滚流程。
 
-验收：任一 Prompt、模型或验证策略变更必须附带 eval 差异报告。
+验收：任一 Prompt、模型、上下文或验证策略变更必须附带候选对基线差异报告；涉及模型行为的
+发布必须包含受控 live eval，record/replay 不得充当质量证明。
 
 ## 27. 风险与缓解
 
 | 风险 | 缓解 |
 |---|---|
 | 多 Agent 成本随数量线性增长 | 上下文复用、节点预算、并发限制、选择 Agent、缓存 |
+| 同仓多任务互相污染 | 固定 OID、task-owned worktree、ownership marker、短锁和 hash 复核 |
 | 全仓扫描超出上下文 | shard、分层汇总、覆盖缺口报告 |
 | Prompt Injection | 能力 Enforcer、Sandbox、schema/evidence 校验 |
 | 误报导致用户失去信任 | confidence floor、证据验证、去重、suppression、eval |
-| 自动 Fix 覆盖用户修改 | fingerprint、硬门禁、3-way check、失败关闭 |
+| 自动 Fix 覆盖用户修改 | 人工默认、明确 apply target、fingerprint、硬门禁、策略化 3-way、失败关闭 |
 | 仓库命令执行恶意代码 | 容器、无网、无凭据、resource limit、trust gate |
-| 无鉴权内网访问被滥用 | 显式配置、持续警告、Host/Origin、审计、可信网络边界 |
+| 无鉴权接口被远程访问 | 首版仅 loopback；非 loopback 配置启动失败，远程模式延期到认证完成后 |
 | OpenAI/MCP 数据外发 | 数据目的地披露、路径排除、redaction、retention |
 | SDK Beta API 变化 | Port/Adapter 隔离、版本锁定、契约测试 |
 | 规则持续腐化 | 规则来源可见、命中统计、RuleProposal 人工确认 |
@@ -1261,20 +1382,26 @@ CodeLens/
 4. 用户选中的所有 Agent 被确定性调度。
 5. Finding 通过 schema、路径、位置和 evidence 校验。
 6. 主 Agent 报告中的问题全部可以追溯到 Finding ID。
-7. 单 Agent、MCP、Worker 和主 Agent 故障具有明确降级行为。
-8. Review 模式测试证明不会写入源仓库。
-9. Fix 模式只在隔离 worktree 修改，自动 apply 受全部硬门禁约束。
-10. `0.0.0.0 + auth=none` 可以运行，并持续显示可信内网风险。
+7. 单 Agent、MCP、唯一 Worker 和主 Agent 故障具有明确降级与检查点恢复行为。
+8. 每个 ReviewTask 都创建并只读使用独立 worktree；同仓不同 feature 任务和同任务多 Agent
+   并发测试证明输入不串扰，用户工作区、index 和 refs 不被修改。
+9. Fix 模式只在隔离 worktree 修改，PatchSet 基线是冻结 Snapshot，自动 apply 受全部硬门禁约束。
+10. `auth=none` 只能绑定 loopback；`0.0.0.0` 或第二个 Worker 必须启动失败。
 11. Secret 不出现在 SQLite、日志、trace、RunContext 和浏览器响应。
 12. 单元、集成、契约、安全、E2E 和最小 golden eval 全部通过。
 13. 可通过 pipx/uv tool 在目标平台安装并启动。
 14. 关键 Prompt、模型、Skill 和规则都具有不可变版本和可审计来源。
+15. Prompt/模型行为变更通过受控 live eval；fake/record-replay 只承担确定性和契约回归。
 
 ## 29. 明确延期事项
 
 以下需求不属于首版，也不作为未决问题：
 
 - 身份认证和 RBAC。
+- `0.0.0.0`/受信任内网部署以及任何远程管理面。
+- 多 Worker、跨进程/跨主机调度、job lease、heartbeat、抢占、fencing token 和分布式 repo lock。
+- 同一 apply target 的并发自动合入与跨任务冲突仲裁。
+- Reviewer 可写工作区或每 Agent copy-on-write worktree；首版 Reviewer 只读共享 task worktree。
 - GitHub/GitLab PR 集成。
 - 多租户和团队共享。
 - 自动提交或推送 Fix。
