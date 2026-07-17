@@ -60,6 +60,14 @@ class ExcludedPath:
 
 
 @dataclass(frozen=True)
+class IgnoreResolution:
+    """Partition candidate paths using Git-native ignore decisions."""
+
+    included: tuple[str, ...]
+    excluded: tuple[ExcludedPath, ...]
+
+
+@dataclass(frozen=True)
 class SnapshotManifest:
     """Separate review targets from safe read-only context and control inputs."""
 
