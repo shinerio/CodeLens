@@ -27,6 +27,7 @@ codelens-review = "codelens.bootstrap.cli:main"
 [dependency-groups]
 dev = [
   "httpx",
+  "httpx2>=2.7.0",
   "mypy",
   "pytest",
   "pytest-asyncio",
