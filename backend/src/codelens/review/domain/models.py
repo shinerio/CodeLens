@@ -61,10 +61,13 @@ class ReviewTask:
 
     task_id: str
     repository_id: str
+    repository_realpath_hash: str
+    git_common_dir_hash: str
     scope: ReviewScope
     target: ReviewTarget
     selected_agent_versions: tuple[str, ...]
     created_at: datetime
+    overlay_artifact_ref: str | None = None
     worktree_id: str | None = None
     snapshot_id: str | None = None
     started_at: datetime | None = None
@@ -78,10 +81,13 @@ class ReviewTask:
         *,
         task_id: str,
         repository_id: str,
+        repository_realpath_hash: str,
+        git_common_dir_hash: str,
         scope: ReviewScope,
         target: ReviewTarget,
         selected_agent_versions: tuple[str, ...],
         created_at: datetime,
+        overlay_artifact_ref: str | None = None,
     ) -> "ReviewTask":
         """Create a task only when at least one immutable Agent version is selected."""
 
@@ -92,10 +98,13 @@ class ReviewTask:
         return cls(
             task_id=task_id,
             repository_id=repository_id,
+            repository_realpath_hash=repository_realpath_hash,
+            git_common_dir_hash=git_common_dir_hash,
             scope=scope,
             target=target,
             selected_agent_versions=selected_agent_versions,
             created_at=created_at,
+            overlay_artifact_ref=overlay_artifact_ref,
         )
 
     @property
@@ -146,4 +155,3 @@ class ReviewTask:
             raise InvalidReviewStateError("terminal task cannot fail again")
         self._status = ReviewStatus.FAILED
         self.finished_at = occurred_at or datetime.now(UTC)
-

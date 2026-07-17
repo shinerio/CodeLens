@@ -76,4 +76,3 @@ class InstructionResolver:
             excludes=tuple(dict.fromkeys(excludes)),
             warnings=tuple(warnings),
         )
-

@@ -45,4 +45,3 @@ class ReviewInputCaptureService:
                 )
             await self._artifacts.discard(artifact.reference)
         raise SnapshotStaleError("repository changed while capturing review input")
-

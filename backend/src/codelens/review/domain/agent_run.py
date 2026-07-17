@@ -160,4 +160,3 @@ class AgentRun:
             raise InvalidAgentRunStateError(
                 f"AgentRun requires {expected}, current state is {self._status}"
             )
-

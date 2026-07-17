@@ -31,4 +31,3 @@ class AgentVersion:
     failure_policy: str
     mode_support: tuple[ReviewMode, ...]
     content_hash: str
-

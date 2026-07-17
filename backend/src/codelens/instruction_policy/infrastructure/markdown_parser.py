@@ -52,4 +52,3 @@ class MarkdownInstructionParser:
                     warnings.append(f"non-path Skip entry kept as prompt only: {value}")
         valid = tuple(dict.fromkeys(value for value in excludes if _is_path_rule(value)))
         return ParsedInstruction(post.content, valid, tuple(warnings))
-

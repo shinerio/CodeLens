@@ -152,6 +152,8 @@ class GitWorkspaceAdapter:
             "--end-of-options",
             f"{ref}^{{commit}}",
         )
+        if b"ambiguous" in result.stderr.lower():
+            raise InvalidRepositoryError("Git ref is ambiguous")
         return self._validated_oid(result.stdout)
 
     @staticmethod

@@ -33,6 +33,8 @@ def _task(task_id: str, *, head: str = "b") -> ReviewTask:
     return ReviewTask.create(
         task_id=task_id,
         repository_id="repository-1",
+        repository_realpath_hash="c" * 64,
+        git_common_dir_hash="d" * 64,
         scope=BranchScope(base_ref="main", target_ref=f"feature-{head}"),
         target=ReviewTarget("a" * 40, head * 40, None),
         selected_agent_versions=("correctness:v1",),

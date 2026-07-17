@@ -14,4 +14,3 @@ class ScopePlanner:
         """Resolve scope labels once and return only immutable executable state."""
 
         return await self._planning.plan_scope(repository, scope)
-

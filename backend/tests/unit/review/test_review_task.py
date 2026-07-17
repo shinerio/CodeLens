@@ -14,6 +14,8 @@ def _review_task() -> ReviewTask:
     return ReviewTask.create(
         task_id="review-1",
         repository_id="repository-1",
+        repository_realpath_hash="c" * 64,
+        git_common_dir_hash="d" * 64,
         scope=BranchScope(base_ref="main", target_ref="feature"),
         target=ReviewTarget("a" * 40, "b" * 40, None),
         selected_agent_versions=("correctness:v1",),
@@ -62,4 +64,3 @@ def test_cancellation_is_valid_from_every_non_terminal_state(status: ReviewStatu
 
     assert task.cancellation_requested
     assert task.status is ReviewStatus.CANCELED
-

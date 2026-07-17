@@ -21,6 +21,7 @@ from codelens.findings.domain.models import (
 )
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
+from codelens.review.domain.ports import ReviewEvent, ReviewRecord
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.tables import (
     dag_checkpoints,
@@ -53,16 +54,6 @@ class CheckpointRecord:
     artifact_ref: str | None
     artifact_hash: str | None
     error_code: str | None
-
-
-@dataclass(frozen=True)
-class EventRecord:
-    """Expose one ordered outbox event for resumable SSE."""
-
-    event_id: int
-    task_id: str
-    event_type: str
-    payload: dict[str, object]
 
 
 def _now() -> datetime:
@@ -107,6 +98,23 @@ def _finding_from_payload(payload: str) -> Finding:
     )
 
 
+def _review_record(row: Any) -> ReviewRecord:
+    scope: dict[str, object] = json.loads(str(row["scope_json"]))
+    selected_agents: list[str] = json.loads(str(row["selected_agent_versions_json"]))
+    return ReviewRecord(
+        task_id=str(row["task_id"]),
+        repository_id=str(row["repository_id"]),
+        repository_realpath_hash=str(row["repository_realpath_hash"]),
+        git_common_dir_hash=str(row["git_common_dir_hash"]),
+        scope_type=str(scope["type"]),
+        base_oid=str(row["base_oid"]),
+        head_oid=str(row["head_oid"]),
+        selected_agent_versions=tuple(selected_agents),
+        status=str(row["status"]),
+        cancellation_requested=bool(row["cancellation_requested"]),
+    )
+
+
 class SqlReviewStore:
     """Persist ReviewTask commands and atomic Agent success boundaries."""
 
@@ -123,10 +131,13 @@ class SqlReviewStore:
                 insert(review_tasks).values(
                     task_id=task.task_id,
                     repository_id=task.repository_id,
+                    repository_realpath_hash=task.repository_realpath_hash,
+                    git_common_dir_hash=task.git_common_dir_hash,
                     scope_json=_json(asdict(task.scope)),
                     base_oid=task.target.base_oid,
                     head_oid=task.target.head_oid,
                     overlay_hash=task.target.overlay_hash,
+                    overlay_artifact_ref=task.overlay_artifact_ref,
                     status=task.status.value,
                     selected_agent_versions_json=_json(task.selected_agent_versions),
                     worktree_id=task.worktree_id,
@@ -166,6 +177,88 @@ class SqlReviewStore:
         async with self._database.sessions() as session:
             value = await session.scalar(select(func.count()).select_from(review_tasks))
         return int(value or 0)
+
+    async def list_input_artifact_references(self) -> frozenset[str]:
+        """Return opaque input references retained by durable ReviewTasks."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(review_tasks.c.overlay_artifact_ref).where(
+                        review_tasks.c.overlay_artifact_ref.is_not(None)
+                    )
+                )
+            ).scalars()
+        return frozenset(str(reference) for reference in rows)
+
+    async def get_review(self, task_id: str) -> ReviewRecord | None:
+        """Return one path-free persisted review summary."""
+
+        async with self._database.sessions() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(review_tasks.c.task_id == task_id)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return _review_record(row) if row is not None else None
+
+    async def request_cancellation(self, task_id: str) -> ReviewRecord | None:
+        """Set cancellation intent and append its outbox event in one transaction."""
+
+        async def operation(session: AsyncSession) -> ReviewRecord | None:
+            row = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(review_tasks.c.task_id == task_id)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            if bool(row["cancellation_requested"]):
+                return _review_record(row)
+            if str(row["status"]) in {"completed", "partial", "failed", "canceled"}:
+                raise InvalidAgentRunStateError("terminal review cannot be canceled")
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(review_tasks)
+                    .where(
+                        review_tasks.c.task_id == task_id,
+                        review_tasks.c.cancellation_requested.is_(False),
+                    )
+                    .values(cancellation_requested=True, updated_at=_now())
+                ),
+            )
+            if result.rowcount != 1:
+                raise InvalidAgentRunStateError("review cancellation state changed concurrently")
+            await session.execute(
+                insert(events).values(
+                    **_event_values(
+                        task_id,
+                        "review.cancel_requested",
+                        {"cancellation_requested": True},
+                    )
+                )
+            )
+            updated = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(review_tasks.c.task_id == task_id)
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            return _review_record(updated)
+
+        return await self._database.run_transaction(operation)
 
     async def recover_after_singleton_restart(self) -> None:
         """Requeue only interrupted jobs/nodes while preserving saved and terminal output."""
@@ -445,7 +538,7 @@ class SqlEventOutbox:
 
         await self._database.run_transaction(operation)
 
-    async def list_after(self, task_id: str, *, after_event_id: int) -> tuple[EventRecord, ...]:
+    async def list_after(self, task_id: str, *, after_event_id: int) -> tuple[ReviewEvent, ...]:
         """Return task events strictly after a supplied SSE event ID."""
 
         async with self._database.sessions() as session:
@@ -461,7 +554,7 @@ class SqlEventOutbox:
                 .all()
             )
         return tuple(
-            EventRecord(
+            ReviewEvent(
                 event_id=int(row["event_id"]),
                 task_id=str(row["task_id"]),
                 event_type=str(row["event_type"]),

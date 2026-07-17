@@ -26,4 +26,3 @@ class WorktreeMutatedError(DomainError):
     """Raised when a read-only review changes its frozen worktree."""
 
     code = "worktree_mutated"
-

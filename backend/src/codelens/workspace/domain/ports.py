@@ -15,6 +15,9 @@ class RepositoryInfo:
     """Expose validated repository metadata without leaking Git adapter types."""
 
     path: Path
+    repository_id: str
+    repository_realpath_hash: str
+    git_common_dir_hash: str
     head_sha: str
     current_branch: str | None
     is_dirty: bool

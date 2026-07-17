@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Protocol
 
 from codelens.findings.domain.models import FindingBatch
+from codelens.review.domain.models import ReviewTask
 from codelens.reviewer_catalog.domain.models import AgentVersion
 
 
@@ -23,6 +24,60 @@ class RunOutputArtifact:
     reference: str
     content_hash: str
     size_bytes: int
+
+
+@dataclass(frozen=True)
+class ReviewRecord:
+    """Expose durable review state without leaking persistence rows or filesystem paths."""
+
+    task_id: str
+    repository_id: str
+    repository_realpath_hash: str
+    git_common_dir_hash: str
+    scope_type: str
+    base_oid: str
+    head_oid: str
+    selected_agent_versions: tuple[str, ...]
+    status: str
+    cancellation_requested: bool
+
+
+@dataclass(frozen=True)
+class ReviewEvent:
+    """Expose one ordered, redacted outbox event for resumable delivery."""
+
+    event_id: int
+    task_id: str
+    event_type: str
+    payload: dict[str, object]
+
+
+class ReviewStorePort(Protocol):
+    """Persist review commands and expose path-free task summaries."""
+
+    async def create_with_job(self, task: ReviewTask) -> None:
+        """Atomically persist a task, singleton job, and creation event."""
+
+        raise NotImplementedError
+
+    async def get_review(self, task_id: str) -> ReviewRecord | None:
+        """Return one review summary when it exists."""
+
+        raise NotImplementedError
+
+    async def request_cancellation(self, task_id: str) -> ReviewRecord | None:
+        """Atomically set cancellation intent and append its event once."""
+
+        raise NotImplementedError
+
+
+class ReviewEventPort(Protocol):
+    """Read ordered durable events without exposing their storage adapter."""
+
+    async def list_after(self, task_id: str, *, after_event_id: int) -> tuple[ReviewEvent, ...]:
+        """Return events strictly after one validated event ID."""
+
+        raise NotImplementedError
 
 
 class AgentRuntimePort(Protocol):

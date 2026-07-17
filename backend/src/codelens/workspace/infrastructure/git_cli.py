@@ -82,4 +82,3 @@ class GitCli:
             message = stderr[:4096].decode("utf-8", errors="replace").strip()
             raise InvalidRepositoryError(message or "git command failed")
         return CommandResult(returncode, stdout, stderr)
-

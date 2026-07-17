@@ -8,6 +8,7 @@ from pathlib import Path
 from codelens.workspace.domain.models import OpaqueArtifact
 
 _REFERENCE_PATTERN = re.compile(r"input_[0-9a-f]{32}\Z")
+_STAGING_PATTERN = re.compile(r"\.input_[0-9a-f]{32}\.tmp\Z")
 
 
 def _write_artifact(root: Path, payload: bytes) -> OpaqueArtifact:
@@ -40,6 +41,17 @@ def _discard_artifact(root: Path, reference: str) -> None:
     (root / reference).unlink(missing_ok=True)
 
 
+def _prune_orphans(root: Path, referenced: frozenset[str]) -> None:
+    if not root.exists():
+        return
+    for candidate in root.iterdir():
+        name = candidate.name
+        is_orphan = _REFERENCE_PATTERN.fullmatch(name) is not None and name not in referenced
+        is_staging = _STAGING_PATTERN.fullmatch(name) is not None
+        if (is_orphan or is_staging) and (candidate.is_file() or candidate.is_symlink()):
+            candidate.unlink()
+
+
 class FilesystemInputArtifactStore:
     """Store input bytes atomically under an app-data-contained opaque namespace."""
 
@@ -61,3 +73,7 @@ class FilesystemInputArtifactStore:
 
         await asyncio.to_thread(_discard_artifact, self._root, reference)
 
+    async def prune_orphans(self, referenced: frozenset[str]) -> None:
+        """Remove only verified unreferenced files from the contained input namespace."""
+
+        await asyncio.to_thread(_prune_orphans, self._root, referenced)
