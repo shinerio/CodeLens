@@ -1,3 +1,4 @@
+import subprocess
 from functools import partial
 from pathlib import Path
 
@@ -5,7 +6,18 @@ import pytest
 from fastapi.testclient import TestClient
 
 from codelens.bootstrap.settings import Settings
+from codelens.findings.domain.models import (
+    ChangeOrigin,
+    Evidence,
+    Finding,
+    FindingBatch,
+    FindingDisposition,
+    FindingSeverity,
+    RuleReference,
+    SourceLocation,
+)
 from codelens.interface.http.app import create_app
+from codelens.review.infrastructure.repositories import SqlCheckpointStore
 from tests.fixtures.git_repository import _run_git
 
 
@@ -40,6 +52,15 @@ def _request(repository: Path, scope: dict[str, object]) -> dict[str, object]:
         "selected_agents": ["correctness:v1"],
         "mode": "review",
     }
+
+
+def _run_git_safe(*arguments: str) -> subprocess.CompletedProcess[bytes]:
+    return subprocess.run(
+        ["git", "-c", "commit.gpgsign=false", *arguments],
+        check=True,
+        capture_output=True,
+        timeout=30.0,
+    )
 
 
 def test_startup_removes_only_verified_orphan_input_artifacts(tmp_path: Path) -> None:
@@ -417,3 +438,101 @@ def test_review_query_cancel_report_and_sse_resume_contract(
     assert invalid_event_id.status_code == 422
     assert persisted.status_code == 200
     assert persisted.json()["cancellation_requested"] is True
+
+
+def test_review_findings_endpoint_returns_empty_then_saved_findings(
+    tmp_path: Path,
+) -> None:
+    git_repository = tmp_path / "repo"
+    git_repository.mkdir()
+    _run_git_safe("init", "-b", "main", str(git_repository))
+    _run_git_safe("-C", str(git_repository), "config", "user.email", "test@example.com")
+    _run_git_safe("-C", str(git_repository), "config", "user.name", "Test User")
+    (git_repository / "README.md").write_text("# fixture\n", encoding="utf-8")
+    _run_git_safe("-C", str(git_repository), "add", "README.md")
+    _run_git_safe("-C", str(git_repository), "commit", "-m", "initial")
+    _run_git_safe("-C", str(git_repository), "switch", "-c", "feature-one")
+    (git_repository / "feature.py").write_text("value = 1\n", encoding="utf-8")
+    _run_git_safe("-C", str(git_repository), "add", "feature.py")
+    _run_git_safe("-C", str(git_repository), "commit", "-m", "feature-one")
+    _run_git_safe("-C", str(git_repository), "switch", "main")
+    settings = _settings(tmp_path, tmp_path)
+    app = create_app(settings)
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        task_id = created.json()["task_id"]
+        empty = client.get(f"/api/reviews/{task_id}/findings")
+        checkpoint_store = SqlCheckpointStore(app.state.components.database)
+        finding = Finding(
+            finding_id="finding_1",
+            fingerprint="d" * 64,
+            reviewer_id="correctness",
+            category="branching",
+            title="Wrong branch",
+            severity=FindingSeverity.MEDIUM,
+            disposition=FindingDisposition.NON_BLOCKING,
+            confidence=0.91,
+            primary_location=SourceLocation(
+                path="feature.py",
+                start_line=1,
+                end_line=2,
+                side="new",
+                excerpt_hash="e" * 64,
+                is_deleted=False,
+            ),
+            related_locations=(),
+            changed_hunk_id=None,
+            change_origin=ChangeOrigin.INTRODUCED,
+            evidence=(
+                Evidence(
+                    kind="excerpt",
+                    description="Captured from the saved review output.",
+                    artifact_ref=None,
+                    excerpt_hash="e" * 64,
+                ),
+            ),
+            impact="The review pointed at the wrong branch.",
+            explanation="This is a stored contract fixture.",
+            reproduction=None,
+            recommendation="Review the correct branch target.",
+            suggested_patch=None,
+            rule_sources=(RuleReference("rules/review.md", "f" * 64),),
+        )
+        batch = FindingBatch("1", (finding,))
+        node_key = "correctness:v1:0:root"
+        client.portal.call(checkpoint_store.ensure, task_id, node_key, "primary")
+        client.portal.call(checkpoint_store.mark_running, task_id, node_key)
+        client.portal.call(
+            checkpoint_store.mark_output_saved,
+            task_id,
+            node_key,
+            "artifact_1",
+            "a" * 64,
+        )
+        client.portal.call(
+            app.state.components.review_store.complete_with_findings,
+            task_id,
+            node_key,
+            batch,
+        )
+        saved = client.get(f"/api/reviews/{task_id}/findings")
+
+    assert empty.status_code == 200
+    assert empty.json() == []
+    assert saved.status_code == 200
+    body = saved.json()
+    assert len(body) == 1
+    assert body[0]["title"] == "Wrong branch"
+    assert body[0]["severity"] == "medium"

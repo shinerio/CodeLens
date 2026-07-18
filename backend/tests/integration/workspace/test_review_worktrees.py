@@ -209,3 +209,51 @@ async def test_recovery_recreates_active_missing_checkout_and_removes_only_owned
     assert await _path_exists(user_worktree)
     assert set(registry.records) == {"review-active"}
     assert not any(call[:2] == ("worktree", "prune") for call in git.calls)
+
+
+async def test_recovery_drops_stale_terminal_missing_checkout() -> None:
+    registry = InMemoryWorktreeRegistry()
+
+    class Recovery:
+        async def is_present(self, _worktree: TaskWorktree) -> bool:
+            return False
+
+        async def verify_ownership(self, _worktree: TaskWorktree) -> None:
+            raise AssertionError("verify_ownership should not be called for stale terminal rows")
+
+        async def forget_missing(self, _worktree: TaskWorktree, _repository: Path) -> None:
+            raise AssertionError("forget_missing should not be called for stale terminal rows")
+
+    class Lifecycle:
+        def __init__(self) -> None:
+            self.removed: list[str] = []
+
+        async def remove_owned(self, worktree: TaskWorktree) -> None:
+            self.removed.append(worktree.task_id)
+
+        async def create(
+            self,
+            _task_id: str,
+            _repository: Path,
+            _captured: CapturedReviewInput,
+        ) -> TaskWorktree:
+            raise AssertionError("create should not be called for stale terminal rows")
+
+    worktree = TaskWorktree(
+        "worktree-terminal",
+        "review-terminal",
+        "d" * 64,
+        Path("/tmp/nonexistent-terminal-worktree"),
+        "e" * 40,
+        "f" * 64,
+    )
+    await registry.register(worktree)
+
+    lifecycle = Lifecycle()
+    recovered = await ReviewWorktreeRecoveryService(
+        lifecycle=lifecycle, registry=registry, recovery=Recovery()
+    ).reconcile({})
+
+    assert recovered == {}
+    assert registry.records == {}
+    assert lifecycle.removed == []

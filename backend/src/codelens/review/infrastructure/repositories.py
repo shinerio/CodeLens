@@ -54,6 +54,7 @@ class CheckpointRecord:
     logical_attempt_group: str
     status: str
     execution_attempts: int
+    validation_attempts: int
     artifact_ref: str | None
     artifact_hash: str | None
     error_code: str | None
@@ -661,6 +662,7 @@ class SqlCheckpointStore:
                     logical_attempt_group=logical_attempt_group,
                     status="pending",
                     execution_attempts=0,
+                    validation_attempts=0,
                     created_at=timestamp,
                     updated_at=timestamp,
                 ).on_conflict_do_nothing(
@@ -683,7 +685,11 @@ class SqlCheckpointStore:
                         dag_checkpoints.c.node_key == node_key,
                         dag_checkpoints.c.status == "output_saved",
                     )
-                    .values(status="validating", updated_at=_now())
+                    .values(
+                        status="validating",
+                        validation_attempts=dag_checkpoints.c.validation_attempts + 1,
+                        updated_at=_now(),
+                    )
                 ),
             )
             if result.rowcount != 1:
@@ -703,7 +709,7 @@ class SqlCheckpointStore:
                         dag_checkpoints.c.task_id == task_id,
                         dag_checkpoints.c.node_key == node_key,
                         dag_checkpoints.c.status == "validating",
-                        dag_checkpoints.c.execution_attempts == 1,
+                        dag_checkpoints.c.validation_attempts == 1,
                     )
                     .values(
                         status="pending",
@@ -799,6 +805,7 @@ class SqlCheckpointStore:
             artifact_ref=str(row["artifact_ref"]) if row["artifact_ref"] is not None else None,
             artifact_hash=str(row["artifact_hash"]) if row["artifact_hash"] is not None else None,
             error_code=str(row["error_code"]) if row["error_code"] is not None else None,
+            validation_attempts=int(row["validation_attempts"]),
         )
 
 

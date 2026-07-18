@@ -1,6 +1,7 @@
 import asyncio
 import json
 from collections.abc import AsyncIterator
+from dataclasses import asdict
 from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request
@@ -81,6 +82,18 @@ async def get_report(
 
     await components.get_review.handle(task_id)
     raise HttpProblem(404, "report_not_ready", "The review report is not ready.")
+
+
+@router.get("/{task_id}/findings")
+async def list_findings(
+    task_id: TaskId,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> list[dict[str, object]]:
+    """Return trusted Findings in stable severity/confidence/path order."""
+
+    await components.get_review.handle(task_id)
+    findings = await components.review_store.list_findings(task_id)
+    return [asdict(finding) for finding in findings]
 
 
 def _parse_last_event_id(raw_event_id: str | None) -> int:

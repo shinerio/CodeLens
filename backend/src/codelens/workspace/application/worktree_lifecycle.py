@@ -94,8 +94,7 @@ class ReviewWorktreeRecoveryService:
                 if await self._recovery.is_present(record):
                     await self._lifecycle.remove_owned(record)
                 else:
-                    message = "missing orphan worktree requires trusted repository metadata"
-                    raise RuntimeError(message)
+                    await self._registry.remove(task_id)
                 continue
             if await self._recovery.is_present(record):
                 await self._recovery.verify_ownership(record)

@@ -86,6 +86,7 @@ dag_checkpoints = Table(
     Column("logical_attempt_group", String(128), nullable=False),
     Column("status", String(32), nullable=False),
     Column("execution_attempts", Integer, nullable=False, default=0),
+    Column("validation_attempts", Integer, nullable=False, default=0),
     Column("artifact_ref", String(128)),
     Column("artifact_hash", String(64)),
     Column("error_code", String(128)),

@@ -1,0 +1,43 @@
+{
+  "schema_version": "1",
+  "findings": [
+    {
+      "reviewer_id": "correctness",
+      "category": "state-machine",
+      "title": "Inverted transition guard allows invalid states",
+      "severity": "medium",
+      "disposition": "blocking",
+      "confidence": 0.97,
+      "primary_location": {
+        "path": "src/state.py",
+        "start_line": 7,
+        "end_line": 7,
+        "side": "new",
+        "excerpt_hash": "__EXCERPT_HASH__",
+        "is_deleted": false
+      },
+      "related_locations": [],
+      "changed_hunk_id": "__HUNK_ID__",
+      "change_origin": "introduced",
+      "evidence": [
+        {
+          "kind": "excerpt",
+          "description": "The guard now allows every non-draft state to reach reviewing.",
+          "artifact_ref": null,
+          "excerpt_hash": "__EXCERPT_HASH__"
+        }
+      ],
+      "impact": "Invalid states can now enter the reviewing state.",
+      "explanation": "The guard was inverted, so the intended state machine no longer fails closed.",
+      "reproduction": null,
+      "recommendation": "Restore the draft-only guard before allowing the reviewing transition.",
+      "suggested_patch": null,
+      "rule_sources": [
+        {
+          "path": "REVIEW.md",
+          "content_hash": "33841fe161157c562472170eb71dac6558c8dfdd9579818660f73e3bf086019b"
+        }
+      ]
+    }
+  ]
+}

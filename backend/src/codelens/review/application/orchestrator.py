@@ -52,6 +52,9 @@ class CheckpointView(Protocol):
     @property
     def execution_attempts(self) -> int: ...
 
+    @property
+    def validation_attempts(self) -> int: ...
+
 
 _CheckpointViewT = TypeVar("_CheckpointViewT", bound=CheckpointView, covariant=True)
 
@@ -230,7 +233,7 @@ class ReviewOrchestrator:
         try:
             findings = await validator.validate(payload)
         except FindingValidationError:
-            if checkpoint.execution_attempts >= 2:
+            if checkpoint.validation_attempts >= 2:
                 raise
             await self._checkpoints.mark_repair_pending(task_id, node_key)
             await self._checkpoint_output(task_id, prepared, agent)

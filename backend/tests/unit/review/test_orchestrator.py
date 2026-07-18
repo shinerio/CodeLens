@@ -29,6 +29,7 @@ class MemoryCheckpoint:
     artifact_ref: str | None = None
     artifact_hash: str | None = None
     execution_attempts: int = 0
+    validation_attempts: int = 0
 
 
 class MemoryWorkflow:
@@ -91,6 +92,7 @@ class MemoryCheckpoints:
     async def mark_validating(self, _task_id: str, _node_key: str) -> None:
         assert self.value.status == "output_saved"
         self.value.status = "validating"
+        self.value.validation_attempts += 1
 
     async def mark_repair_pending(self, _task_id: str, _node_key: str) -> None:
         assert self.value.status == "validating"
@@ -321,5 +323,44 @@ async def test_schema_repair_is_a_second_attempt_and_preserves_first_artifact() 
 
     assert runtime.calls == 2
     assert checkpoints.value.execution_attempts == 2
+    assert checkpoints.value.validation_attempts == 2
     assert tuple(artifacts.payloads) == ("artifact-1", "artifact-2")
     assert checkpoints.value.artifact_ref == "artifact-2"
+
+
+async def test_replay_before_output_saved_does_not_burn_schema_repair() -> None:
+    workflow = MemoryWorkflow()
+    checkpoints = MemoryCheckpoints()
+    runtime = RecordingRuntime(b"not-json")
+    artifacts = MemoryArtifacts()
+    completion = RecordingCompletion(checkpoints)
+    validator = RepairingValidator()
+    crash = OneShotCrash("after_model_return")
+
+    async def prepare(_task_id: str) -> PreparedReview:
+        return _prepared()
+
+    orchestrator = ReviewOrchestrator(
+        workflow=workflow,
+        prepare=prepare,
+        runtime=runtime,
+        artifacts=artifacts,
+        checkpoints=checkpoints,
+        validator_factory=lambda *_args: validator,
+        completion=completion,
+        agent_semaphore=asyncio.Semaphore(1),
+        max_agent_runs_per_review=1,
+        crash_injector=crash,
+    )
+
+    with pytest.raises(RuntimeError, match="crash:after_model_return"):
+        await orchestrator.execute("review-1")
+
+    assert checkpoints.value.status == "running"
+    checkpoints.value.status = "pending"
+
+    await orchestrator.execute("review-1")
+
+    assert runtime.calls == 3
+    assert checkpoints.value.validation_attempts == 2
+    assert completion.calls == 1
