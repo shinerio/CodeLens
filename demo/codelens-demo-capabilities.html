@@ -1,0 +1,75 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:,">
+  <title>CodeLens - Capabilities Demo</title>
+  <link rel="stylesheet" href="codelens-demo.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="codelens-demo.html"><span class="brand-mark"><i data-lucide="scan-search"></i></span><span class="brand-copy"><span class="brand-name">CodeLens</span><span class="brand-env">Local workspace</span></span></a>
+      <nav>
+        <div class="nav-section"><span class="nav-label">Review</span><a class="nav-link" href="codelens-demo.html"><i data-lucide="play-circle"></i>New review</a><a class="nav-link" href="codelens-demo-runs.html"><i data-lucide="history"></i>Runs<span class="nav-badge">4</span></a></div>
+        <div class="nav-section"><span class="nav-label">Configuration</span><a class="nav-link" href="codelens-demo-agents.html"><i data-lucide="bot"></i>Review agents</a><a class="nav-link active" href="codelens-demo-capabilities.html"><i data-lucide="blocks"></i>Capabilities</a><a class="nav-link" href="codelens-demo-settings.html"><i data-lucide="settings-2"></i>Settings</a></div>
+      </nav>
+      <div class="sidebar-footer"><div class="runtime-state"><span class="state-dot"></span>API and worker ready</div></div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu" data-mobile-menu title="Open navigation" aria-label="Open navigation"><i data-lucide="menu"></i></button>
+        <div class="breadcrumb"><span>Configuration</span><i data-lucide="chevron-right"></i><strong>Capabilities</strong></div>
+        <div class="topbar-actions"><button class="btn btn-primary" data-toast="Capability connection dialog opened."><i data-lucide="plus"></i><span>Add capability</span></button></div>
+      </header>
+
+      <main class="page" data-tab-scope data-filter-scope>
+        <div class="page-header">
+          <div><h1 class="page-title">Capabilities</h1><p class="page-subtitle">Skills, MCP servers, static tools, and read-only context providers.</p></div>
+          <div class="toolbar"><span class="status status-ready">Policy enforced</span><button class="icon-btn" title="View capability audit" aria-label="View capability audit"><i data-lucide="scroll-text"></i></button></div>
+        </div>
+
+        <div class="banner banner-warning"><i data-lucide="shield-alert"></i><span>Repository capabilities are untrusted until explicitly approved. Agent bindings cannot expand a capability's declared permissions.</span></div>
+
+        <section class="surface">
+          <div class="tabs" data-tabs>
+            <button class="tab active" data-tab="skills"><i data-lucide="book-key"></i>Skills <span class="chip">6</span></button>
+            <button class="tab" data-tab="mcp"><i data-lucide="plug-zap"></i>MCP servers <span class="chip">3</span></button>
+            <button class="tab" data-tab="tools"><i data-lucide="terminal-square"></i>Static tools <span class="chip">5</span></button>
+            <button class="tab" data-tab="context"><i data-lucide="waypoints"></i>Context providers <span class="chip">2</span></button>
+          </div>
+
+          <div class="list-toolbar"><div class="search"><i data-lucide="search"></i><input class="input" data-filter-input aria-label="Search capabilities" placeholder="Search capabilities"></div><select class="select" style="width:150px" aria-label="Filter by trust"><option>All trust states</option><option>Built-in</option><option>Trusted</option><option>Untrusted</option></select><button class="icon-btn" title="Refresh capabilities" aria-label="Refresh capabilities" data-toast="Capability registry refreshed."><i data-lucide="refresh-cw"></i></button></div>
+
+          <div class="tab-panel" data-panel="skills" style="padding:14px">
+            <div class="catalog-grid">
+              <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon"><i data-lucide="git-pull-request-arrow"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Changed-code reasoning</h2><span class="cell-sub">Built-in skill · v3</span></div><span class="status status-ready">Trusted</span></div><p class="catalog-copy">Interprets changed hunks, old/new sides, call-site impact, and change-origin constraints.</p><div class="catalog-meta"><span class="chip">Read snapshot</span><span class="chip">No scripts</span><span class="chip">4 agents</span></div></article>
+              <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:var(--red-soft);color:var(--red)"><i data-lucide="shield-check"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Security threat analysis</h2><span class="cell-sub">Built-in skill · v2</span></div><span class="status status-ready">Trusted</span></div><p class="catalog-copy">Applies trust-boundary, abuse-case, authorization, and data-exposure review patterns.</p><div class="catalog-meta"><span class="chip">Read snapshot</span><span class="chip">No network</span><span class="chip">1 agent</span></div></article>
+              <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:var(--green-soft);color:var(--green)"><i data-lucide="database-backup"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Migration safety</h2><span class="cell-sub">Workspace skill · v5</span></div><span class="status status-ready">Approved</span></div><p class="catalog-copy">Checks expand-contract sequencing, backfills, lock duration, and rollback expectations.</p><div class="catalog-meta"><span class="chip">Read snapshot</span><span class="chip">Sandbox script</span><span class="chip">2 agents</span></div></article>
+              <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:var(--amber-soft);color:var(--amber)"><i data-lucide="package-search"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Dependency upgrade</h2><span class="cell-sub">Repository skill · v1</span></div><span class="status status-warning">Review needed</span></div><p class="catalog-copy">Repository-provided checks for framework upgrade compatibility and release-note verification.</p><div class="catalog-meta"><span class="chip">Untrusted source</span><span class="chip">Script requested</span></div><div class="toolbar" style="margin-top:12px"><button class="btn btn-primary" data-toast="Trust review opened."><i data-lucide="shield-question"></i>Review trust</button></div></article>
+              <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:var(--blue-soft);color:var(--blue)"><i data-lucide="chart-no-axes-combined"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Performance triage</h2><span class="cell-sub">Built-in skill · v2</span></div><span class="status status-ready">Trusted</span></div><p class="catalog-copy">Structures CPU, allocation, I/O, query count, and contention evidence for performance findings.</p><div class="catalog-meta"><span class="chip">Read artifacts</span><span class="chip">1 agent</span></div></article>
+              <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:#edf1f2;color:#57656c"><i data-lucide="file-check-2"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Evidence verification</h2><span class="cell-sub">Built-in skill · v4</span></div><span class="status status-ready">Trusted</span></div><p class="catalog-copy">Recomputes locations and hashes, rejects unsupported claims, and scores evidence quality.</p><div class="catalog-meta"><span class="chip">Read snapshot</span><span class="chip">Verifier only</span></div></article>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-panel="mcp" hidden>
+            <div class="table-wrap"><table class="data-table"><thead><tr><th>Server</th><th>Transport</th><th>Trust</th><th>Allowed tools</th><th>Bound agents</th><th>Health</th><th></th></tr></thead><tbody><tr data-filter-item><td><span class="cell-main">CodeGraph</span><span class="cell-sub mono">codegraph-local</span></td><td>stdio</td><td><span class="status status-ready">Built-in</span></td><td>5 read-only</td><td>Correctness, Architecture</td><td><span class="status status-ready">Healthy</span></td><td><button class="icon-btn" title="Configure CodeGraph" aria-label="Configure CodeGraph"><i data-lucide="settings"></i></button></td></tr><tr data-filter-item><td><span class="cell-main">OpenAPI Catalog</span><span class="cell-sub mono">http://127.0.0.1:9110/mcp</span></td><td>Streamable HTTP</td><td><span class="status status-ready">Approved</span></td><td>3 read-only</td><td>Data & API</td><td><span class="status status-ready">Healthy</span></td><td><button class="icon-btn" title="Configure OpenAPI Catalog" aria-label="Configure OpenAPI Catalog"><i data-lucide="settings"></i></button></td></tr><tr data-filter-item><td><span class="cell-main">Issue Tracker</span><span class="cell-sub mono">issue-context</span></td><td>stdio</td><td><span class="status status-warning">Restricted</span></td><td>2 read-only</td><td>Maintainability</td><td><span class="status status-warning">Auth expired</span></td><td><button class="icon-btn" title="Configure Issue Tracker" aria-label="Configure Issue Tracker"><i data-lucide="settings"></i></button></td></tr></tbody></table></div>
+          </div>
+
+          <div class="tab-panel" data-panel="tools" hidden>
+            <div class="table-wrap"><table class="data-table"><thead><tr><th>Tool</th><th>Command profile</th><th>Timeout</th><th>Output limit</th><th>Sandbox</th><th>Status</th></tr></thead><tbody><tr data-filter-item><td><span class="cell-main">Ruff</span><span class="cell-sub">Python lint</span></td><td class="mono">ruff check</td><td>60s</td><td>2 MB</td><td>Required</td><td><span class="status status-ready">Enabled</span></td></tr><tr data-filter-item><td><span class="cell-main">mypy</span><span class="cell-sub">Python type analysis</span></td><td class="mono">mypy</td><td>120s</td><td>4 MB</td><td>Required</td><td><span class="status status-ready">Enabled</span></td></tr><tr data-filter-item><td><span class="cell-main">Semgrep</span><span class="cell-sub">Security analysis</span></td><td class="mono">semgrep scan</td><td>180s</td><td>8 MB</td><td>Required</td><td><span class="status status-ready">Enabled</span></td></tr><tr data-filter-item><td><span class="cell-main">pytest</span><span class="cell-sub">Focused tests</span></td><td class="mono">pytest</td><td>300s</td><td>12 MB</td><td>Required</td><td><span class="status status-ready">Enabled</span></td></tr><tr data-filter-item><td><span class="cell-main">npm audit</span><span class="cell-sub">Dependency advisory scan</span></td><td class="mono">pnpm audit</td><td>90s</td><td>4 MB</td><td>Required</td><td><span class="status status-muted">Disabled</span></td></tr></tbody></table></div>
+          </div>
+
+          <div class="tab-panel" data-panel="context" hidden>
+            <div class="catalog-grid" style="padding:14px"><article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon"><i data-lucide="waypoints"></i></span><div><h2 class="catalog-title">CodeGraph provider</h2><span class="cell-sub">Priority 10 · active</span></div></div><p class="catalog-copy">Symbol definitions, inbound and outbound call paths, inheritance, and cross-module relationships.</p><div class="catalog-meta"><span class="chip">Read-only</span><span class="chip">Bounded results</span><span class="chip">Local</span></div></article><article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:#edf1f2;color:#57656c"><i data-lucide="text-search"></i></span><div><h2 class="catalog-title">Text fallback</h2><span class="cell-sub">Priority 100 · active</span></div></div><p class="catalog-copy">Bounded repository text search used only when a structured context provider returns no result.</p><div class="catalog-meta"><span class="chip">Read-only</span><span class="chip">10 result cap</span><span class="chip">Local</span></div></article></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="codelens-demo.js"></script>
+</body>
+</html>

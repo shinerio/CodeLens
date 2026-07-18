@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:,">
+  <title>CodeLens - Runs Demo</title>
+  <link rel="stylesheet" href="codelens-demo.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="codelens-demo.html"><span class="brand-mark"><i data-lucide="scan-search"></i></span><span class="brand-copy"><span class="brand-name">CodeLens</span><span class="brand-env">Local workspace</span></span></a>
+      <nav>
+        <div class="nav-section"><span class="nav-label">Review</span><a class="nav-link" href="codelens-demo.html"><i data-lucide="play-circle"></i>New review</a><a class="nav-link active" href="codelens-demo-runs.html"><i data-lucide="history"></i>Runs<span class="nav-badge">4</span></a></div>
+        <div class="nav-section"><span class="nav-label">Configuration</span><a class="nav-link" href="codelens-demo-agents.html"><i data-lucide="bot"></i>Review agents</a><a class="nav-link" href="codelens-demo-capabilities.html"><i data-lucide="blocks"></i>Capabilities</a><a class="nav-link" href="codelens-demo-settings.html"><i data-lucide="settings-2"></i>Settings</a></div>
+      </nav>
+      <div class="sidebar-footer"><div class="runtime-state"><span class="state-dot"></span>API and worker ready</div></div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu" data-mobile-menu title="Open navigation" aria-label="Open navigation"><i data-lucide="menu"></i></button>
+        <div class="breadcrumb"><span>Review</span><i data-lucide="chevron-right"></i><strong>Runs</strong></div>
+        <div class="topbar-actions"><button class="icon-btn" title="Refresh runs" aria-label="Refresh runs" data-toast="Run list refreshed."><i data-lucide="refresh-cw"></i></button><a class="btn btn-primary" href="codelens-demo.html"><i data-lucide="plus"></i><span>New review</span></a></div>
+      </header>
+
+      <main class="page" data-filter-scope>
+        <div class="page-header">
+          <div><h1 class="page-title">Review runs</h1><p class="page-subtitle">Recent review and fix executions across trusted repositories.</p></div>
+        </div>
+
+        <div class="metric-grid">
+          <div class="metric"><span class="metric-label">Running</span><strong class="metric-value" style="color:var(--blue)">4</strong><span class="metric-meta">2 waiting for agents</span></div>
+          <div class="metric"><span class="metric-label">Completed today</span><strong class="metric-value">23</strong><span class="metric-meta">94% completed normally</span></div>
+          <div class="metric"><span class="metric-label">Blocking findings</span><strong class="metric-value" style="color:var(--red)">7</strong><span class="metric-meta">Across 5 repositories</span></div>
+          <div class="metric"><span class="metric-label">Median duration</span><strong class="metric-value">4m 12s</strong><span class="metric-meta">−18s from last week</span></div>
+        </div>
+
+        <section class="surface">
+          <div class="list-toolbar">
+            <div class="search"><i data-lucide="search"></i><input class="input" data-filter-input aria-label="Search runs" placeholder="Search repository, branch, or run ID"></div>
+            <select class="select" aria-label="Filter by status" style="width:150px"><option>All statuses</option><option>Running</option><option>Completed</option><option>Partial</option><option>Failed</option></select>
+            <button class="icon-btn" title="More filters" aria-label="More filters"><i data-lucide="sliders-horizontal"></i></button>
+          </div>
+          <div class="table-wrap">
+            <table class="data-table">
+              <thead><tr><th>Run</th><th>Repository / scope</th><th>Status</th><th>Findings</th><th>Agents</th><th>Started</th><th></th></tr></thead>
+              <tbody>
+                <tr data-filter-item onclick="location.href='codelens-demo-review.html'">
+                  <td><span class="cell-main mono">#RV-1842</span><span class="cell-sub">Review</span></td>
+                  <td><span class="cell-main">payment-service</span><span class="cell-sub mono">feature/idempotency · uncommitted</span></td>
+                  <td><span class="status status-running">Synthesizing</span></td>
+                  <td><span class="cell-main">6</span><span class="cell-sub">2 blocking</span></td>
+                  <td><span class="cell-main">7 / 7</span><span class="cell-sub">1 verifying</span></td>
+                  <td><span class="cell-main">2 min ago</span><span class="cell-sub">4m 08s elapsed</span></td>
+                  <td><i data-lucide="chevron-right"></i></td>
+                </tr>
+                <tr data-filter-item onclick="location.href='codelens-demo-review.html'">
+                  <td><span class="cell-main mono">#RV-1841</span><span class="cell-sub">Review</span></td>
+                  <td><span class="cell-main">identity-api</span><span class="cell-sub mono">main...feature/passkeys</span></td>
+                  <td><span class="status status-complete">Completed</span></td>
+                  <td><span class="cell-main">3</span><span class="cell-sub">0 blocking</span></td>
+                  <td><span class="cell-main">7 / 7</span><span class="cell-sub">All completed</span></td>
+                  <td><span class="cell-main">18 min ago</span><span class="cell-sub">3m 44s total</span></td>
+                  <td><i data-lucide="chevron-right"></i></td>
+                </tr>
+                <tr data-filter-item onclick="location.href='codelens-demo-fix.html'">
+                  <td><span class="cell-main mono">#FX-1840</span><span class="cell-sub">Fix</span></td>
+                  <td><span class="cell-main">billing-worker</span><span class="cell-sub mono">a18c70d...HEAD</span></td>
+                  <td><span class="status status-warning">Approval</span></td>
+                  <td><span class="cell-main">1</span><span class="cell-sub">Patch ready</span></td>
+                  <td><span class="cell-main">3 / 3</span><span class="cell-sub">Validation passed</span></td>
+                  <td><span class="cell-main">42 min ago</span><span class="cell-sub">6m 09s elapsed</span></td>
+                  <td><i data-lucide="chevron-right"></i></td>
+                </tr>
+                <tr data-filter-item onclick="location.href='codelens-demo-review.html'">
+                  <td><span class="cell-main mono">#RV-1839</span><span class="cell-sub">Review</span></td>
+                  <td><span class="cell-main">web-console</span><span class="cell-sub mono">origin/main...ui/bulk-actions</span></td>
+                  <td><span class="status status-partial">Partial</span></td>
+                  <td><span class="cell-main">8</span><span class="cell-sub">1 unverified</span></td>
+                  <td><span class="cell-main">6 / 7</span><span class="cell-sub">Security timed out</span></td>
+                  <td><span class="cell-main">1 hr ago</span><span class="cell-sub">8m 00s total</span></td>
+                  <td><i data-lucide="chevron-right"></i></td>
+                </tr>
+                <tr data-filter-item onclick="location.href='codelens-demo-review.html'">
+                  <td><span class="cell-main mono">#RV-1838</span><span class="cell-sub">Review</span></td>
+                  <td><span class="cell-main">event-router</span><span class="cell-sub mono">uncommitted</span></td>
+                  <td><span class="status status-failed">Failed</span></td>
+                  <td><span class="cell-main">0</span><span class="cell-sub">Snapshot stale</span></td>
+                  <td><span class="cell-main">0 / 4</span><span class="cell-sub">Not started</span></td>
+                  <td><span class="cell-main">2 hr ago</span><span class="cell-sub">12s total</span></td>
+                  <td><i data-lucide="chevron-right"></i></td>
+                </tr>
+                <tr data-filter-item onclick="location.href='codelens-demo-review.html'">
+                  <td><span class="cell-main mono">#RV-1837</span><span class="cell-sub">Review</span></td>
+                  <td><span class="cell-main">customer-ledger</span><span class="cell-sub mono">release/2026.07 · full repository</span></td>
+                  <td><span class="status status-complete">Completed</span></td>
+                  <td><span class="cell-main">12</span><span class="cell-sub">4 blocking</span></td>
+                  <td><span class="cell-main">7 / 7</span><span class="cell-sub">All completed</span></td>
+                  <td><span class="cell-main">Yesterday</span><span class="cell-sub">14m 31s total</span></td>
+                  <td><i data-lucide="chevron-right"></i></td>
+                </tr>
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="codelens-demo.js"></script>
+</body>
+</html>

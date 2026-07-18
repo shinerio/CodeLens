@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:,">
+  <title>CodeLens - Review Detail Demo</title>
+  <link rel="stylesheet" href="codelens-demo.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="codelens-demo.html"><span class="brand-mark"><i data-lucide="scan-search"></i></span><span class="brand-copy"><span class="brand-name">CodeLens</span><span class="brand-env">Local workspace</span></span></a>
+      <nav>
+        <div class="nav-section"><span class="nav-label">Review</span><a class="nav-link" href="codelens-demo.html"><i data-lucide="play-circle"></i>New review</a><a class="nav-link active" href="codelens-demo-runs.html"><i data-lucide="history"></i>Runs<span class="nav-badge">4</span></a></div>
+        <div class="nav-section"><span class="nav-label">Configuration</span><a class="nav-link" href="codelens-demo-agents.html"><i data-lucide="bot"></i>Review agents</a><a class="nav-link" href="codelens-demo-capabilities.html"><i data-lucide="blocks"></i>Capabilities</a><a class="nav-link" href="codelens-demo-settings.html"><i data-lucide="settings-2"></i>Settings</a></div>
+      </nav>
+      <div class="sidebar-footer"><div class="runtime-state"><span class="state-dot"></span>API and worker ready</div></div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu" data-mobile-menu title="Open navigation" aria-label="Open navigation"><i data-lucide="menu"></i></button>
+        <div class="breadcrumb"><a href="codelens-demo-runs.html">Runs</a><i data-lucide="chevron-right"></i><strong>#RV-1842 · payment-service</strong></div>
+        <div class="topbar-actions"><button class="btn" data-toast="Review cancellation requested."><i data-lucide="circle-stop"></i><span>Cancel</span></button><button class="icon-btn" title="More run actions" aria-label="More run actions"><i data-lucide="ellipsis"></i></button></div>
+      </header>
+
+      <main class="page" data-tab-scope>
+        <div class="page-header">
+          <div>
+            <div class="toolbar" style="margin-bottom:8px"><span class="status status-running">Synthesizing</span><span class="chip mono">#RV-1842</span><span class="chip">Review</span></div>
+            <h1 class="page-title">payment-service</h1>
+            <p class="page-subtitle mono">feature/idempotency · HEAD → working tree · 18 target files</p>
+          </div>
+          <div class="toolbar"><button class="btn" data-toast="Run link copied."><i data-lucide="link"></i>Copy link</button><button class="btn"><i data-lucide="download"></i>Export report</button></div>
+        </div>
+
+        <div class="repo-summary" style="margin-bottom:16px">
+          <div class="summary-cell"><span class="summary-label">Progress</span><span class="summary-value">6 of 7 agents</span><div class="progress" style="margin-top:7px"><span style="width:86%"></span></div></div>
+          <div class="summary-cell"><span class="summary-label">Findings</span><span class="summary-value">6 validated</span><span class="cell-sub">2 blocking · 3 medium · 1 low</span></div>
+          <div class="summary-cell"><span class="summary-label">Coverage</span><span class="summary-value">14 / 18 files</span><span class="cell-sub">4 files awaiting synthesis</span></div>
+          <div class="summary-cell"><span class="summary-label">Elapsed</span><span class="summary-value">4m 08s</span><span class="cell-sub">~40s remaining</span></div>
+        </div>
+
+        <section class="surface">
+          <div class="tabs" data-tabs>
+            <button class="tab" data-tab="overview"><i data-lucide="layout-dashboard"></i>Overview</button>
+            <button class="tab active" data-tab="findings"><i data-lucide="list-tree"></i>Findings <span class="chip">6</span></button>
+            <button class="tab" data-tab="agents"><i data-lucide="bot"></i>Agent runs <span class="chip">7</span></button>
+            <button class="tab" data-tab="artifacts"><i data-lucide="package-open"></i>Artifacts</button>
+          </div>
+
+          <div class="tab-panel" data-panel="overview" hidden>
+            <div class="field-grid" style="padding:20px">
+              <section><h2 class="section-title" style="margin-bottom:16px">Execution timeline</h2><ol class="timeline"><li class="timeline-item"><span class="timeline-icon"><i data-lucide="camera"></i></span><span><span class="timeline-title">Snapshot published</span><span class="timeline-copy">18 targets, 74 context files, 9 policy exclusions</span></span><span class="timeline-time">10:42:08</span></li><li class="timeline-item"><span class="timeline-icon"><i data-lucide="bot"></i></span><span><span class="timeline-title">Reviewer fan-out started</span><span class="timeline-copy">7 versioned agents with isolated budgets</span></span><span class="timeline-time">10:42:12</span></li><li class="timeline-item"><span class="timeline-icon"><i data-lucide="badge-check"></i></span><span><span class="timeline-title">Evidence verification</span><span class="timeline-copy">8 candidate findings, 2 rejected</span></span><span class="timeline-time">10:45:33</span></li><li class="timeline-item"><span class="timeline-icon"><i data-lucide="loader-circle"></i></span><span><span class="timeline-title">Main synthesis running</span><span class="timeline-copy">Combining validated findings and coverage notes</span></span><span class="timeline-time">Now</span></li></ol></section>
+              <section><h2 class="section-title" style="margin-bottom:16px">Scope</h2><div class="surface"><div class="section"><span class="field-label">Base revision</span><span class="mono" style="font-size:12px">7b92e1ac89f0</span></div><div class="section"><span class="field-label">Rules</span><div class="toolbar"><span class="chip mono">AGENTS.md</span><span class="chip mono">REVIEW.md</span><span class="chip mono">src/REVIEW.md</span></div></div><div class="section"><span class="field-label">Model profile</span><span style="font-size:12px">Quality · trusted internal data</span></div></div></section>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-panel="findings">
+            <div class="run-layout" data-select-scope data-filter-scope>
+              <aside class="finding-list">
+                <div class="list-toolbar"><div class="search"><i data-lucide="search"></i><input class="input" data-filter-input aria-label="Search findings" placeholder="Search findings"></div><button class="icon-btn" title="Filter findings" aria-label="Filter findings"><i data-lucide="list-filter"></i></button></div>
+                <button class="finding-item active" data-filter-item data-select-item><span class="severity severity-high"></span><span><span class="finding-item-title">Idempotency guard is checked after the write</span><span class="finding-item-meta"><span>High</span><span class="mono">src/payments/service.py:84</span><span>96%</span></span></span></button>
+                <button class="finding-item" data-filter-item data-select-item><span class="severity severity-high"></span><span><span class="finding-item-title">Retry path can emit duplicate settlement events</span><span class="finding-item-meta"><span>High</span><span class="mono">src/events/publisher.py:57</span><span>91%</span></span></span></button>
+                <button class="finding-item" data-filter-item data-select-item><span class="severity severity-medium"></span><span><span class="finding-item-title">Migration leaves existing keys nullable</span><span class="finding-item-meta"><span>Medium</span><span class="mono">migrations/0184_keys.py:31</span><span>88%</span></span></span></button>
+                <button class="finding-item" data-filter-item data-select-item><span class="severity severity-medium"></span><span><span class="finding-item-title">Concurrent requests bypass the in-memory lock</span><span class="finding-item-meta"><span>Medium</span><span class="mono">src/payments/locks.py:42</span><span>84%</span></span></span></button>
+                <button class="finding-item" data-filter-item data-select-item><span class="severity severity-medium"></span><span><span class="finding-item-title">Failure case is missing from integration tests</span><span class="finding-item-meta"><span>Medium</span><span class="mono">tests/test_payment.py:118</span><span>81%</span></span></span></button>
+                <button class="finding-item" data-filter-item data-select-item><span class="severity severity-low"></span><span><span class="finding-item-title">Metric label creates an unbounded cardinality risk</span><span class="finding-item-meta"><span>Low</span><span class="mono">src/metrics.py:29</span><span>77%</span></span></span></button>
+              </aside>
+
+              <article class="finding-detail">
+                <header class="detail-header">
+                  <div class="toolbar"><span class="status status-blocking">Blocking</span><span class="chip">Correctness</span><span class="chip">Confidence 96%</span></div>
+                  <h2 class="detail-title" data-detail-title>Idempotency guard is checked after the write</h2>
+                  <div class="toolbar" style="margin-top:12px"><span class="mono" style="font-size:11px">src/payments/service.py · lines 84–91</span><button class="icon-btn" title="Copy location" aria-label="Copy location" data-toast="Location copied."><i data-lucide="copy"></i></button></div>
+                </header>
+                <section class="detail-section"><h3>Impact</h3><p>Two requests carrying the same idempotency key can both persist a charge before either request records the key. Customers may be charged twice when a client retries across workers.</p></section>
+                <section class="detail-section"><h3>Evidence</h3><div class="code-frame" aria-label="Code evidence"><div class="code-line"><span class="code-no">82</span><span class="code-sign"></span><span>async with self._database.transaction():</span></div><div class="code-line added"><span class="code-no">83</span><span class="code-sign">+</span><span>    charge = await self._gateway.capture(command)</span></div><div class="code-line added"><span class="code-no">84</span><span class="code-sign">+</span><span>    existing = await self._keys.find(command.idempotency_key)</span></div><div class="code-line added"><span class="code-no">85</span><span class="code-sign">+</span><span>    if existing is not None:</span></div><div class="code-line added"><span class="code-no">86</span><span class="code-sign">+</span><span>        return existing.result</span></div><div class="code-line"><span class="code-no">87</span><span class="code-sign"></span><span>    await self._keys.save(command.idempotency_key, charge)</span></div></div><p class="mono" style="margin-top:8px;font-size:10px;color:var(--muted)">hunk_f69c6afc · SHA-256 verified against immutable snapshot</p></section>
+                <section class="detail-section"><h3>Why this happens</h3><p>The external capture is performed before checking whether the key already has a completed result. The database transaction cannot roll back the external payment side effect, so the later guard does not provide idempotency.</p></section>
+                <section class="detail-section"><h3>Recommendation</h3><p>Reserve the idempotency key atomically before calling the gateway. Persist an in-progress state, return the stored result for completed keys, and make competing requests wait or fail deterministically.</p></section>
+                <section class="detail-section"><h3>Rule sources</h3><div class="toolbar"><span class="chip mono">REVIEW.md · Payment invariants</span><span class="chip mono">src/payments/REVIEW.md</span></div></section>
+                <div class="action-bar"><button class="btn" data-toast="Finding suppressed for this run."><i data-lucide="eye-off"></i>Suppress</button><div class="toolbar"><button class="btn" data-toast="Finding marked as acknowledged."><i data-lucide="check"></i>Acknowledge</button><button class="btn btn-primary" data-toast="Fix draft queued in an isolated worktree."><i data-lucide="wand-sparkles"></i>Draft fix</button></div></div>
+              </article>
+            </div>
+          </div>
+
+          <div class="tab-panel" data-panel="agents" hidden>
+            <div class="table-wrap"><table class="data-table"><thead><tr><th>Agent</th><th>Status</th><th>Findings</th><th>Coverage</th><th>Usage</th><th>Duration</th></tr></thead><tbody><tr><td><span class="cell-main">Correctness Reviewer</span><span class="cell-sub">v3 · quality profile</span></td><td><span class="status status-complete">Completed</span></td><td>2 validated</td><td>18 / 18 files</td><td>21.4k tokens</td><td>2m 14s</td></tr><tr><td><span class="cell-main">Security Reviewer</span><span class="cell-sub">v4 · security profile</span></td><td><span class="status status-complete">Completed</span></td><td>0 validated</td><td>12 / 18 files</td><td>18.7k tokens</td><td>1m 51s</td></tr><tr><td><span class="cell-main">Performance Reviewer</span><span class="cell-sub">v2 · balanced profile</span></td><td><span class="status status-complete">Completed</span></td><td>1 validated</td><td>14 / 18 files</td><td>14.2k tokens</td><td>1m 34s</td></tr><tr><td><span class="cell-main">Architecture Reviewer</span><span class="cell-sub">v3 · quality profile</span></td><td><span class="status status-running">Verifying</span></td><td>1 candidate</td><td>16 / 18 files</td><td>26.1k tokens</td><td>3m 58s</td></tr><tr><td><span class="cell-main">Test Quality Reviewer</span><span class="cell-sub">v2 · balanced profile</span></td><td><span class="status status-complete">Completed</span></td><td>1 validated</td><td>8 / 8 tests</td><td>11.8k tokens</td><td>1m 09s</td></tr></tbody></table></div>
+          </div>
+
+          <div class="tab-panel" data-panel="artifacts" hidden>
+            <div class="table-wrap"><table class="data-table"><thead><tr><th>Artifact</th><th>Type</th><th>Created</th><th>Integrity</th><th></th></tr></thead><tbody><tr><td><span class="cell-main mono">snapshot_manifest.json</span><span class="cell-sub">18 targets · 74 context files</span></td><td>Manifest</td><td>10:42:08</td><td><span class="status status-ready">Verified</span></td><td><button class="icon-btn" title="Download artifact" aria-label="Download artifact"><i data-lucide="download"></i></button></td></tr><tr><td><span class="cell-main mono">change_index.json</span><span class="cell-sub">31 changed hunks</span></td><td>Index</td><td>10:42:09</td><td><span class="status status-ready">Verified</span></td><td><button class="icon-btn" title="Download artifact" aria-label="Download artifact"><i data-lucide="download"></i></button></td></tr><tr><td><span class="cell-main mono">review_report.json</span><span class="cell-sub">Live draft · 6 findings</span></td><td>Report</td><td>10:46:10</td><td><span class="status status-running">Updating</span></td><td><button class="icon-btn" title="Download artifact" aria-label="Download artifact"><i data-lucide="download"></i></button></td></tr></tbody></table></div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="codelens-demo.js"></script>
+</body>
+</html>

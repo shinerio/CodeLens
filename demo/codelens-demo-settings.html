@@ -1,0 +1,73 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:,">
+  <title>CodeLens - Settings Demo</title>
+  <link rel="stylesheet" href="codelens-demo.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="codelens-demo.html"><span class="brand-mark"><i data-lucide="scan-search"></i></span><span class="brand-copy"><span class="brand-name">CodeLens</span><span class="brand-env">Local workspace</span></span></a>
+      <nav>
+        <div class="nav-section"><span class="nav-label">Review</span><a class="nav-link" href="codelens-demo.html"><i data-lucide="play-circle"></i>New review</a><a class="nav-link" href="codelens-demo-runs.html"><i data-lucide="history"></i>Runs<span class="nav-badge">4</span></a></div>
+        <div class="nav-section"><span class="nav-label">Configuration</span><a class="nav-link" href="codelens-demo-agents.html"><i data-lucide="bot"></i>Review agents</a><a class="nav-link" href="codelens-demo-capabilities.html"><i data-lucide="blocks"></i>Capabilities</a><a class="nav-link active" href="codelens-demo-settings.html"><i data-lucide="settings-2"></i>Settings</a></div>
+      </nav>
+      <div class="sidebar-footer"><div class="runtime-state"><span class="state-dot"></span>API and worker ready</div></div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu" data-mobile-menu title="Open navigation" aria-label="Open navigation"><i data-lucide="menu"></i></button>
+        <div class="breadcrumb"><span>Configuration</span><i data-lucide="chevron-right"></i><strong>Settings</strong></div>
+        <div class="topbar-actions"><button class="btn btn-primary" data-save><i data-lucide="save"></i><span>Save changes</span></button></div>
+      </header>
+
+      <main class="page page-narrow" data-tab-scope>
+        <div class="page-header"><div><h1 class="page-title">Settings</h1><p class="page-subtitle">Runtime defaults, model profiles, security boundaries, and artifact retention.</p></div><span class="chip mono">config v12</span></div>
+
+        <div class="settings-layout">
+          <nav class="settings-nav" data-tabs aria-label="Settings sections">
+            <button class="active" data-tab="general"><i data-lucide="sliders-horizontal"></i>General</button>
+            <button data-tab="models"><i data-lucide="cpu"></i>Models</button>
+            <button data-tab="security"><i data-lucide="shield"></i>Security</button>
+            <button data-tab="storage"><i data-lucide="hard-drive"></i>Storage</button>
+            <button data-tab="network"><i data-lucide="network"></i>Network</button>
+          </nav>
+
+          <div>
+            <section class="surface tab-panel" data-panel="general">
+              <div class="section"><div class="section-heading"><div><h2 class="section-title">Workspace defaults</h2><p class="section-copy">Applied to new review runs unless overridden.</p></div></div><div class="field-grid"><div class="field"><label for="default-mode">Default mode</label><select class="select" id="default-mode"><option>Review</option><option>Fix</option></select></div><div class="field"><label for="default-scope">Default scope</label><select class="select" id="default-scope"><option>Uncommitted changes</option><option>Branch diff</option><option>Commit diff</option><option>Full repository</option></select></div><div class="field"><label for="concurrency">Agent concurrency</label><input class="input" id="concurrency" type="number" min="1" max="8" value="4"></div><div class="field"><label for="lease">Worker lease</label><select class="select" id="lease"><option>30 seconds</option><option>60 seconds</option><option>120 seconds</option></select></div></div></div>
+              <div class="section"><div class="section-heading"><div><h2 class="section-title">Review behavior</h2></div></div><div class="toggle-row"><span><span class="toggle-title">Select all enabled agents</span><span class="toggle-copy">Preselect the active reviewer set on new runs.</span></span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="toggle-row"><span><span class="toggle-title">Stop on snapshot changes</span><span class="toggle-copy">Fail closed when the repository changes during materialization.</span></span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="toggle-row"><span><span class="toggle-title">Desktop notifications</span><span class="toggle-copy">Notify when a run completes or requires approval.</span></span><label class="switch"><input type="checkbox"><span></span></label></div></div>
+            </section>
+
+            <section class="surface tab-panel" data-panel="models" hidden>
+              <div class="section"><div class="section-heading"><div><h2 class="section-title">Model profiles</h2><p class="section-copy">Credentials are resolved from the environment and never stored here.</p></div><button class="btn" data-toast="Model profile draft added."><i data-lucide="plus"></i>Add profile</button></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Profile</th><th>Provider</th><th>Model ID</th><th>Use</th><th>Status</th><th></th></tr></thead><tbody><tr><td><span class="cell-main">Quality</span><span class="cell-sub">Default for correctness and architecture</span></td><td>OpenAI</td><td class="mono">configured by env</td><td>5 agents</td><td><span class="status status-ready">Ready</span></td><td><button class="icon-btn" title="Configure Quality profile" aria-label="Configure Quality profile"><i data-lucide="settings"></i></button></td></tr><tr><td><span class="cell-main">Security</span><span class="cell-sub">Extended reasoning budget</span></td><td>OpenAI</td><td class="mono">configured by env</td><td>1 agent</td><td><span class="status status-ready">Ready</span></td><td><button class="icon-btn" title="Configure Security profile" aria-label="Configure Security profile"><i data-lucide="settings"></i></button></td></tr><tr><td><span class="cell-main">Fast</span><span class="cell-sub">Low-latency triage</span></td><td>OpenAI</td><td class="mono">not configured</td><td>0 agents</td><td><span class="status status-muted">Inactive</span></td><td><button class="icon-btn" title="Configure Fast profile" aria-label="Configure Fast profile"><i data-lucide="settings"></i></button></td></tr></tbody></table></div></div>
+              <div class="section"><div class="field-grid"><div class="field"><label for="timeout">Default agent timeout</label><select class="select" id="timeout"><option>5 minutes</option><option>8 minutes</option><option>10 minutes</option></select></div><div class="field"><label for="retry">Transient retry limit</label><select class="select" id="retry"><option>1 retry</option><option>2 retries</option><option>No retries</option></select></div></div><div class="toggle-row"><span><span class="toggle-title">Sensitive tracing</span><span class="toggle-copy">Keep prompts and model content out of traces and events.</span></span><label class="switch"><input type="checkbox"><span></span></label></div></div>
+            </section>
+
+            <section class="surface tab-panel" data-panel="security" hidden>
+              <div class="section"><div class="section-heading"><div><h2 class="section-title">Repository access</h2><p class="section-copy">Only repositories below an allowed root can be inspected.</p></div><button class="btn"><i data-lucide="folder-plus"></i>Add root</button></div><div class="table-wrap"><table class="data-table"><thead><tr><th>Allowed root</th><th>Trust</th><th>Repositories</th><th></th></tr></thead><tbody><tr><td class="mono">/Users/shinerio/Workspace/code</td><td><span class="status status-ready">Trusted</span></td><td>14 discovered</td><td><button class="icon-btn" title="Remove repository root" aria-label="Remove repository root"><i data-lucide="trash-2"></i></button></td></tr><tr><td class="mono">/srv/internal/repos</td><td><span class="status status-warning">Restricted</span></td><td>3 discovered</td><td><button class="icon-btn" title="Remove repository root" aria-label="Remove repository root"><i data-lucide="trash-2"></i></button></td></tr></tbody></table></div></div>
+              <div class="section"><div class="section-heading"><div><h2 class="section-title">Execution boundaries</h2></div></div><div class="toggle-row"><span><span class="toggle-title">Require container sandbox</span><span class="toggle-copy">Reject commands when the configured sandbox is unavailable.</span></span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="toggle-row"><span><span class="toggle-title">Disable network in command sandbox</span><span class="toggle-copy">MCP connections remain controlled by separate adapters.</span></span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="toggle-row"><span><span class="toggle-title">Allow repository skills</span><span class="toggle-copy">Untrusted skills still require an explicit trust decision.</span></span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="toggle-row"><span><span class="toggle-title">Default Fix approval</span><span class="toggle-copy">Auto-apply only after validation, fingerprint, and conflict gates.</span></span><label class="switch"><input type="checkbox"><span></span></label></div></div>
+            </section>
+
+            <section class="surface tab-panel" data-panel="storage" hidden>
+              <div class="section"><div class="section-heading"><div><h2 class="section-title">Database and artifacts</h2></div></div><div class="field-grid"><div class="field field-span"><label for="data-dir">Data directory</label><input class="input mono" id="data-dir" value="~/.local/share/codelens-review"></div><div class="field"><label for="retention">Artifact retention</label><select class="select" id="retention"><option>30 days</option><option>14 days</option><option>90 days</option><option>Keep indefinitely</option></select></div><div class="field"><label for="limit">Storage limit</label><select class="select" id="limit"><option>20 GB</option><option>10 GB</option><option>50 GB</option></select></div></div></div>
+              <div class="section"><div class="repo-summary"><div class="summary-cell"><span class="summary-label">Database</span><span class="summary-value">184 MB</span></div><div class="summary-cell"><span class="summary-label">Snapshots</span><span class="summary-value">3.8 GB</span></div><div class="summary-cell"><span class="summary-label">Reports</span><span class="summary-value">276 MB</span></div><div class="summary-cell"><span class="summary-label">Available</span><span class="summary-value">15.7 GB</span></div></div><div class="toolbar" style="margin-top:14px"><button class="btn" data-toast="Retention cleanup queued."><i data-lucide="archive-x"></i>Run cleanup</button><button class="btn"><i data-lucide="database-backup"></i>Backup database</button></div></div>
+            </section>
+
+            <section class="surface tab-panel" data-panel="network" hidden>
+              <div class="section"><div class="banner banner-warning"><i data-lucide="triangle-alert"></i><span>Authentication is disabled. Binding to 0.0.0.0 treats the reachable network as a trusted boundary.</span></div><div class="field-grid"><div class="field"><label for="bind-host">Bind host</label><select class="select mono" id="bind-host"><option>127.0.0.1</option><option>0.0.0.0</option></select></div><div class="field"><label for="port">API port</label><input class="input mono" id="port" type="number" value="8765"></div><div class="field"><label for="auth">Authentication</label><select class="select" id="auth" disabled><option>None</option></select></div><div class="field"><label for="origin">Allowed UI origin</label><input class="input mono" id="origin" value="http://127.0.0.1:5173"></div></div></div>
+              <div class="section"><div class="toggle-row"><span><span class="toggle-title">Strict Host validation</span><span class="toggle-copy">Reject unexpected Host headers before routing requests.</span></span><label class="switch"><input type="checkbox" checked><span></span></label></div><div class="toggle-row"><span><span class="toggle-title">Expose health endpoint</span><span class="toggle-copy">Allows trusted infrastructure to observe process readiness.</span></span><label class="switch"><input type="checkbox" checked><span></span></label></div></div>
+            </section>
+          </div>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="codelens-demo.js"></script>
+</body>
+</html>

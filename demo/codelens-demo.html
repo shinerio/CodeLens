@@ -1,0 +1,166 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:,">
+  <title>CodeLens - New Review Demo</title>
+  <link rel="stylesheet" href="codelens-demo.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="codelens-demo.html">
+        <span class="brand-mark"><i data-lucide="scan-search"></i></span>
+        <span class="brand-copy"><span class="brand-name">CodeLens</span><span class="brand-env">Local workspace</span></span>
+      </a>
+      <nav>
+        <div class="nav-section">
+          <span class="nav-label">Review</span>
+          <a class="nav-link active" href="codelens-demo.html"><i data-lucide="play-circle"></i>New review</a>
+          <a class="nav-link" href="codelens-demo-runs.html"><i data-lucide="history"></i>Runs<span class="nav-badge">4</span></a>
+        </div>
+        <div class="nav-section">
+          <span class="nav-label">Configuration</span>
+          <a class="nav-link" href="codelens-demo-agents.html"><i data-lucide="bot"></i>Review agents</a>
+          <a class="nav-link" href="codelens-demo-capabilities.html"><i data-lucide="blocks"></i>Capabilities</a>
+          <a class="nav-link" href="codelens-demo-settings.html"><i data-lucide="settings-2"></i>Settings</a>
+        </div>
+      </nav>
+      <div class="sidebar-footer">
+        <div class="runtime-state"><span class="state-dot"></span>API and worker ready</div>
+      </div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu" data-mobile-menu title="Open navigation" aria-label="Open navigation"><i data-lucide="menu"></i></button>
+        <div class="breadcrumb"><span>Review</span><i data-lucide="chevron-right"></i><strong>New review</strong></div>
+        <div class="topbar-actions">
+          <button class="icon-btn" title="Open activity" aria-label="Open activity"><i data-lucide="bell"></i></button>
+          <button class="icon-btn" title="Open command menu" aria-label="Open command menu"><i data-lucide="command"></i></button>
+        </div>
+      </header>
+
+      <main class="page">
+        <div class="page-narrow">
+          <div class="page-header">
+            <div>
+              <h1 class="page-title">New review</h1>
+              <p class="page-subtitle">Repository, change scope, execution mode, and reviewer set.</p>
+            </div>
+            <span class="status status-ready">Worker available</span>
+          </div>
+
+          <form class="surface" onsubmit="return false">
+            <section class="section">
+              <div class="section-heading">
+                <div><h2 class="section-title">Repository</h2><p class="section-copy">Allowed root: /Users/shinerio/Workspace/code</p></div>
+                <span class="chip"><i data-lucide="shield-check"></i>Trusted local</span>
+              </div>
+              <div class="field">
+                <label for="repo-path">Repository path</label>
+                <div class="input-row">
+                  <input class="input mono" id="repo-path" value="/Users/shinerio/Workspace/code/payment-service">
+                  <button class="btn" type="button" data-inspect><i data-lucide="search"></i>Inspect</button>
+                </div>
+              </div>
+              <div class="repo-summary" data-inspection-result hidden style="margin-top: 14px">
+                <div class="summary-cell"><span class="summary-label">Branch</span><span class="summary-value mono">feature/idempotency</span></div>
+                <div class="summary-cell"><span class="summary-label">HEAD</span><span class="summary-value mono">7b92e1ac</span></div>
+                <div class="summary-cell"><span class="summary-label">Working tree</span><span class="summary-value" style="color: var(--amber)">6 changed</span></div>
+                <div class="summary-cell"><span class="summary-label">Policy</span><span class="summary-value" style="color: var(--green)">Rules loaded</span></div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-heading">
+                <div><h2 class="section-title">Review scope</h2><p class="section-copy">Uncommitted changes against the current HEAD.</p></div>
+              </div>
+              <div class="segmented" data-segmented data-target="scope">
+                <button type="button" data-value="branch">Branch diff</button>
+                <button type="button" data-value="commit">Commit diff</button>
+                <button class="active" type="button" data-value="uncommitted">Uncommitted</button>
+                <button type="button" data-value="full">Full repository</button>
+              </div>
+              <div class="field-grid" style="margin-top: 16px">
+                <div class="field" data-conditional="scope" data-value="branch" hidden>
+                  <label for="base-branch">Base branch</label>
+                  <input class="input mono" id="base-branch" value="origin/main">
+                </div>
+                <div class="field" data-conditional="scope" data-value="commit" hidden>
+                  <label for="base-commit">Base commit</label>
+                  <input class="input mono" id="base-commit" placeholder="Commit SHA">
+                </div>
+                <div class="field field-span" data-conditional="scope" data-value="uncommitted">
+                  <div class="banner banner-info" style="margin: 0"><i data-lucide="git-compare-arrows"></i><span>HEAD → working tree, including staged, unstaged, and eligible untracked files.</span></div>
+                </div>
+                <div class="field field-span" data-conditional="scope" data-value="full" hidden>
+                  <div class="banner banner-warning" style="margin: 0"><i data-lucide="scan-line"></i><span>Full scans are sharded by module and may consume a larger review budget.</span></div>
+                </div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-heading">
+                <div><h2 class="section-title">Mode</h2><p class="section-copy">Review is read-only. Fix creates an isolated patch workspace.</p></div>
+              </div>
+              <div class="segmented" data-segmented data-target="mode">
+                <button class="active" type="button" data-value="review"><i data-lucide="search-check"></i>Review</button>
+                <button type="button" data-value="fix"><i data-lucide="wrench"></i>Fix</button>
+              </div>
+              <div class="field-grid" style="margin-top: 16px">
+                <div class="field" data-conditional="mode" data-value="review">
+                  <label for="confidence">Confidence floor</label>
+                  <select class="select" id="confidence"><option>0.75 · Recommended</option><option>0.85 · Strict</option><option>0.60 · Exploratory</option></select>
+                </div>
+                <div class="field" data-conditional="mode" data-value="fix" hidden>
+                  <label for="approval">Apply policy</label>
+                  <select class="select" id="approval"><option>Require approval</option><option>Auto-apply after all gates</option></select>
+                </div>
+                <div class="field">
+                  <label for="budget">Review budget</label>
+                  <select class="select" id="budget"><option>Balanced · 120k tokens</option><option>Fast · 48k tokens</option><option>Thorough · 240k tokens</option></select>
+                </div>
+              </div>
+            </section>
+
+            <section class="section">
+              <div class="section-heading">
+                <div><h2 class="section-title">Review agents</h2><p class="section-copy">7 selected · runs execute independently before evidence synthesis.</p></div>
+                <button class="btn" type="button" data-toast="All available reviewers selected."><i data-lucide="list-checks"></i>Select all</button>
+              </div>
+              <div class="agent-grid">
+                <label class="agent-option"><input type="checkbox" checked><span class="agent-icon"><i data-lucide="bug"></i></span><span><span class="agent-name">Correctness</span><span class="agent-desc">Logic and state transitions</span></span><span class="chip">v3</span></label>
+                <label class="agent-option"><input type="checkbox" checked><span class="agent-icon" style="background:var(--red-soft);color:var(--red)"><i data-lucide="shield-alert"></i></span><span><span class="agent-name">Security</span><span class="agent-desc">Trust boundaries and misuse</span></span><span class="chip">v4</span></label>
+                <label class="agent-option"><input type="checkbox" checked><span class="agent-icon" style="background:var(--blue-soft);color:var(--blue)"><i data-lucide="gauge"></i></span><span><span class="agent-name">Performance</span><span class="agent-desc">Latency and resource pressure</span></span><span class="chip">v2</span></label>
+                <label class="agent-option"><input type="checkbox" checked><span class="agent-icon" style="background:var(--green-soft);color:var(--green)"><i data-lucide="test-tube-2"></i></span><span><span class="agent-name">Test Quality</span><span class="agent-desc">Coverage and failure modes</span></span><span class="chip">v2</span></label>
+                <label class="agent-option"><input type="checkbox" checked><span class="agent-icon" style="background:var(--amber-soft);color:var(--amber)"><i data-lucide="network"></i></span><span><span class="agent-name">Architecture</span><span class="agent-desc">Boundaries and dependencies</span></span><span class="chip">v3</span></label>
+                <label class="agent-option"><input type="checkbox" checked><span class="agent-icon"><i data-lucide="database"></i></span><span><span class="agent-name">Data & API</span><span class="agent-desc">Contracts and migrations</span></span><span class="chip">v1</span></label>
+                <label class="agent-option"><input type="checkbox" checked><span class="agent-icon" style="background:#edf1f2;color:#57656c"><i data-lucide="book-open-check"></i></span><span><span class="agent-name">Maintainability</span><span class="agent-desc">Clarity and operational risk</span></span><span class="chip">v2</span></label>
+              </div>
+            </section>
+
+            <section class="section" data-inspection-result hidden>
+              <div class="section-heading"><div><h2 class="section-title">Snapshot preview</h2><p class="section-copy">Filters applied before any reviewer receives context.</p></div><span class="status status-ready">Ready</span></div>
+              <div class="repo-summary">
+                <div class="summary-cell"><span class="summary-label">Targets</span><span class="summary-value">18 files</span></div>
+                <div class="summary-cell"><span class="summary-label">Context</span><span class="summary-value">74 files</span></div>
+                <div class="summary-cell"><span class="summary-label">Ignored</span><span class="summary-value">126 files</span></div>
+                <div class="summary-cell"><span class="summary-label">Policy excluded</span><span class="summary-value">9 files</span></div>
+              </div>
+            </section>
+
+            <div class="action-bar">
+              <span class="action-note"><i data-lucide="lock-keyhole" style="width:13px;vertical-align:-2px"></i> Source repository remains read-only in Review mode.</span>
+              <button class="btn btn-primary" type="button" data-start-review disabled><i data-lucide="play"></i>Start review</button>
+            </div>
+          </form>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="codelens-demo.js"></script>
+</body>
+</html>

@@ -1,0 +1,56 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <link rel="icon" href="data:,">
+  <title>CodeLens - Review Agents Demo</title>
+  <link rel="stylesheet" href="codelens-demo.css">
+</head>
+<body>
+  <div class="app-shell">
+    <aside class="sidebar" aria-label="Primary navigation">
+      <a class="brand" href="codelens-demo.html"><span class="brand-mark"><i data-lucide="scan-search"></i></span><span class="brand-copy"><span class="brand-name">CodeLens</span><span class="brand-env">Local workspace</span></span></a>
+      <nav>
+        <div class="nav-section"><span class="nav-label">Review</span><a class="nav-link" href="codelens-demo.html"><i data-lucide="play-circle"></i>New review</a><a class="nav-link" href="codelens-demo-runs.html"><i data-lucide="history"></i>Runs<span class="nav-badge">4</span></a></div>
+        <div class="nav-section"><span class="nav-label">Configuration</span><a class="nav-link active" href="codelens-demo-agents.html"><i data-lucide="bot"></i>Review agents</a><a class="nav-link" href="codelens-demo-capabilities.html"><i data-lucide="blocks"></i>Capabilities</a><a class="nav-link" href="codelens-demo-settings.html"><i data-lucide="settings-2"></i>Settings</a></div>
+      </nav>
+      <div class="sidebar-footer"><div class="runtime-state"><span class="state-dot"></span>API and worker ready</div></div>
+    </aside>
+
+    <div class="workspace">
+      <header class="topbar">
+        <button class="icon-btn mobile-menu" data-mobile-menu title="Open navigation" aria-label="Open navigation"><i data-lucide="menu"></i></button>
+        <div class="breadcrumb"><span>Configuration</span><i data-lucide="chevron-right"></i><strong>Review agents</strong></div>
+        <div class="topbar-actions"><button class="btn" data-toast="Built-in agent catalog refreshed."><i data-lucide="refresh-cw"></i><span>Refresh</span></button><button class="btn btn-primary" data-toast="Agent draft created."><i data-lucide="plus"></i><span>New agent</span></button></div>
+      </header>
+
+      <main class="page" data-filter-scope>
+        <div class="page-header">
+          <div><h1 class="page-title">Review agents</h1><p class="page-subtitle">Versioned reviewer definitions, execution budgets, and bound capabilities.</p></div>
+          <div class="toolbar"><span class="status status-ready">7 enabled</span><span class="chip">2 custom drafts</span></div>
+        </div>
+
+        <div class="list-toolbar surface" style="margin-bottom:14px">
+          <div class="search"><i data-lucide="search"></i><input class="input" data-filter-input aria-label="Search agents" placeholder="Search agents"></div>
+          <select class="select" aria-label="Filter agent source" style="width:150px"><option>All sources</option><option>Built-in</option><option>Custom</option></select>
+          <button class="icon-btn" title="Sort agents" aria-label="Sort agents"><i data-lucide="arrow-up-down"></i></button>
+        </div>
+
+        <div class="catalog-grid">
+          <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon"><i data-lucide="bug"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Correctness Reviewer</h2><span class="cell-sub">Built-in · v3 active</span></div><span class="status status-ready">Enabled</span></div><p class="catalog-copy">Validates logic, state transitions, edge cases, and changed-hunk behavior against repository rules.</p><div class="catalog-meta"><span class="chip">120k tokens</span><span class="chip">8 turns</span><span class="chip">2 skills</span><span class="chip">CodeGraph</span></div><div class="toolbar" style="margin-top:14px"><button class="btn" data-toast="Correctness Reviewer opened for editing."><i data-lucide="settings"></i>Configure</button><button class="icon-btn" title="Agent version history" aria-label="Agent version history"><i data-lucide="history"></i></button></div></article>
+          <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:var(--red-soft);color:var(--red)"><i data-lucide="shield-alert"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Security Reviewer</h2><span class="cell-sub">Built-in · v4 active</span></div><span class="status status-ready">Enabled</span></div><p class="catalog-copy">Checks trust boundaries, authorization, injection paths, secret handling, and unsafe defaults.</p><div class="catalog-meta"><span class="chip">140k tokens</span><span class="chip">10 turns</span><span class="chip">3 skills</span><span class="chip">Semgrep</span></div><div class="toolbar" style="margin-top:14px"><button class="btn"><i data-lucide="settings"></i>Configure</button><button class="icon-btn" title="Agent version history" aria-label="Agent version history"><i data-lucide="history"></i></button></div></article>
+          <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:var(--blue-soft);color:var(--blue)"><i data-lucide="gauge"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Performance Reviewer</h2><span class="cell-sub">Built-in · v2 active</span></div><span class="status status-ready">Enabled</span></div><p class="catalog-copy">Finds avoidable I/O, contention, resource growth, latency regressions, and scaling risks.</p><div class="catalog-meta"><span class="chip">96k tokens</span><span class="chip">7 turns</span><span class="chip">1 skill</span><span class="chip">Profiler MCP</span></div><div class="toolbar" style="margin-top:14px"><button class="btn"><i data-lucide="settings"></i>Configure</button><button class="icon-btn" title="Agent version history" aria-label="Agent version history"><i data-lucide="history"></i></button></div></article>
+          <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:var(--green-soft);color:var(--green)"><i data-lucide="test-tube-2"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Test Quality Reviewer</h2><span class="cell-sub">Built-in · v2 active</span></div><span class="status status-ready">Enabled</span></div><p class="catalog-copy">Examines assertions, failure modes, fixture realism, flakiness, and meaningful coverage gaps.</p><div class="catalog-meta"><span class="chip">84k tokens</span><span class="chip">6 turns</span><span class="chip">2 skills</span><span class="chip">Test runner</span></div><div class="toolbar" style="margin-top:14px"><button class="btn"><i data-lucide="settings"></i>Configure</button><button class="icon-btn" title="Agent version history" aria-label="Agent version history"><i data-lucide="history"></i></button></div></article>
+          <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:var(--amber-soft);color:var(--amber)"><i data-lucide="network"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Architecture Reviewer</h2><span class="cell-sub">Built-in · v3 active</span></div><span class="status status-ready">Enabled</span></div><p class="catalog-copy">Reviews dependency direction, domain ownership, public contracts, and architectural decisions.</p><div class="catalog-meta"><span class="chip">150k tokens</span><span class="chip">10 turns</span><span class="chip">3 skills</span><span class="chip">CodeGraph</span></div><div class="toolbar" style="margin-top:14px"><button class="btn"><i data-lucide="settings"></i>Configure</button><button class="icon-btn" title="Agent version history" aria-label="Agent version history"><i data-lucide="history"></i></button></div></article>
+          <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon"><i data-lucide="database"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Data & API Reviewer</h2><span class="cell-sub">Built-in · v1 active</span></div><span class="status status-ready">Enabled</span></div><p class="catalog-copy">Checks schema evolution, API compatibility, data integrity, transactions, and migration safety.</p><div class="catalog-meta"><span class="chip">110k tokens</span><span class="chip">8 turns</span><span class="chip">2 skills</span><span class="chip">OpenAPI MCP</span></div><div class="toolbar" style="margin-top:14px"><button class="btn"><i data-lucide="settings"></i>Configure</button><button class="icon-btn" title="Agent version history" aria-label="Agent version history"><i data-lucide="history"></i></button></div></article>
+          <article class="catalog-item" data-filter-item><div class="catalog-head"><span class="agent-icon" style="background:#edf1f2;color:#57656c"><i data-lucide="book-open-check"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Maintainability Reviewer</h2><span class="cell-sub">Built-in · v2 active</span></div><span class="status status-ready">Enabled</span></div><p class="catalog-copy">Surfaces difficult control flow, fragile abstractions, operational ambiguity, and ownership gaps.</p><div class="catalog-meta"><span class="chip">72k tokens</span><span class="chip">6 turns</span><span class="chip">1 skill</span><span class="chip">Read-only</span></div><div class="toolbar" style="margin-top:14px"><button class="btn"><i data-lucide="settings"></i>Configure</button><button class="icon-btn" title="Agent version history" aria-label="Agent version history"><i data-lucide="history"></i></button></div></article>
+          <article class="catalog-item" data-filter-item style="border-style:dashed;background:var(--surface-soft)"><div class="catalog-head"><span class="agent-icon" style="background:#edf1f2;color:#68757c"><i data-lucide="git-pull-request-draft"></i></span><div style="min-width:0;flex:1"><h2 class="catalog-title">Release Risk Reviewer</h2><span class="cell-sub">Custom · draft v1</span></div><span class="status status-muted">Draft</span></div><p class="catalog-copy">Custom reviewer for rollout hazards, feature flags, migration sequencing, and rollback readiness.</p><div class="catalog-meta"><span class="chip">Not published</span><span class="chip">0 runs</span></div><div class="toolbar" style="margin-top:14px"><button class="btn"><i data-lucide="pencil"></i>Edit draft</button><button class="icon-btn" title="Delete draft" aria-label="Delete draft"><i data-lucide="trash-2"></i></button></div></article>
+        </div>
+      </main>
+    </div>
+  </div>
+  <script src="https://unpkg.com/lucide@0.468.0/dist/umd/lucide.min.js"></script>
+  <script src="codelens-demo.js"></script>
+</body>
+</html>
