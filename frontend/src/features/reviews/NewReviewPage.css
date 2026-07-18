@@ -1,20 +1,19 @@
 .new-review-page {
-  --page-ink: #182018;
-  --page-muted: #5c665f;
-  --page-line: #c7cabf;
-  --page-paper: rgba(246, 247, 241, 0.88);
-  --page-paper-strong: #f5f6f0;
-  --page-accent: #6d8429;
-  --page-accent-soft: rgba(109, 132, 41, 0.14);
-  --page-warn: #7b4f11;
-  --page-shadow: 0 24px 80px rgba(15, 22, 15, 0.12);
+  --page-ink: #172027;
+  --page-muted: #65727b;
+  --page-line: #d8e0e3;
+  --page-paper: rgba(255, 255, 255, 0.96);
+  --page-paper-strong: #f7f9fa;
+  --page-accent: #087f8c;
+  --page-accent-soft: rgba(8, 127, 140, 0.14);
+  --page-warn: #a86709;
+  --page-shadow: 0 8px 24px rgba(23, 32, 39, 0.08);
   min-height: 100%;
   padding: clamp(24px, 4vw, 56px);
   color: var(--page-ink);
   background:
-    radial-gradient(circle at top left, rgba(110, 132, 41, 0.16), transparent 32%),
-    radial-gradient(circle at 88% 8%, rgba(24, 33, 28, 0.1), transparent 28%),
-    linear-gradient(180deg, rgba(247, 247, 241, 0.98), rgba(236, 238, 230, 0.94));
+    radial-gradient(circle at top left, rgba(8, 127, 140, 0.08), transparent 32%),
+    linear-gradient(180deg, #f7f9fa, #f3f6f7);
 }
 
 .new-review-page__header {
@@ -37,12 +36,12 @@
 
 .new-review-page__header h1 {
   margin: 0;
-  color: #151b15;
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  color: #172027;
+  font-family: inherit;
   font-size: clamp(2.2rem, 4.8vw, 4.4rem);
-  font-weight: 700;
-  letter-spacing: -0.06em;
-  line-height: 0.96;
+  font-weight: 760;
+  letter-spacing: -0.045em;
+  line-height: 1;
 }
 
 .new-review-page__header p {

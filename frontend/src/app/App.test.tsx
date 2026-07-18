@@ -47,11 +47,8 @@ describe("App", () => {
     render(<App />, { wrapper: TestProviders });
 
     expect(screen.getByText("CodeLens")).toBeInTheDocument();
-    expect(screen.getByText("Reviews")).toBeInTheDocument();
-    expect(screen.getByRole("link", { name: "New review" })).toHaveAttribute(
-      "href",
-      "/reviews/new",
-    );
+    expect(screen.getAllByText("Reviews").length).toBeGreaterThan(0);
+    expect(screen.getByRole("button", { name: "New review" })).toBeInTheDocument();
     expect(await screen.findByRole("link", { name: /codelens/ })).toHaveAttribute(
       "href",
       "/reviews/review_1",

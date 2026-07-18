@@ -2,10 +2,14 @@ import { useQuery } from "@tanstack/react-query";
 import {
   Activity,
   CircleCheckBig,
+  CircleStop,
+  Copy,
+  Download,
   FileDigit,
   ListChecks,
   PanelTop,
   PlayCircle,
+  WandSparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -81,6 +85,7 @@ export function ReviewRunPage() {
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const terminalRef = useRef<string | null>(null);
   const { status: eventStatus, events, connectionState } = useReviewEvents(taskId);
+  function handleUnsupported() { window.alert(t("common.notSupported")); }
 
   const reviewQuery = useQuery({
     queryKey: ["review", taskId],
@@ -166,6 +171,9 @@ export function ReviewRunPage() {
           </p>
         </div>
         <div className="review-run-page__chips">
+          <button className="run-action" type="button" onClick={handleUnsupported}><CircleStop aria-hidden="true" /> Cancel</button>
+          <button className="run-action" type="button" onClick={handleUnsupported}><Copy aria-hidden="true" /> Copy link</button>
+          <button className="run-action" type="button" onClick={handleUnsupported}><Download aria-hidden="true" /> Export report</button>
           <span className="run-chip">
             <PlayCircle aria-hidden="true" />
             {reviewQuery.data?.base_oid ?? t("run.waiting")}
@@ -264,6 +272,7 @@ export function ReviewRunPage() {
           </article>
           <article className="run-panel run-panel--detail">
             <FindingDetail finding={selectedFinding} />
+            {selectedFinding !== null ? <div className="run-preview-actions"><button type="button" onClick={handleUnsupported}>Suppress</button><button type="button" onClick={handleUnsupported}>Acknowledge</button><button type="button" onClick={handleUnsupported}><WandSparkles aria-hidden="true" /> Draft fix</button></div> : null}
           </article>
         </section>
       ) : null}

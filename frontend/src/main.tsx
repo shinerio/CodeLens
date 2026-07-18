@@ -4,10 +4,13 @@ import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom";
 
 import { App } from "./app/App";
+import { CatalogPreviewPage } from "./features/catalog/CatalogPreviewPage";
 import { NewReviewPage } from "./features/reviews/NewReviewPage";
+import { FixPreviewPage } from "./features/reviews/FixPreviewPage";
+import { RunListPage } from "./features/reviews/RunListPage";
 import { ReviewRunPage } from "./features/reviews/ReviewRunPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
-import { I18nProvider, useI18n } from "./shared/i18n/i18n";
+import { I18nProvider } from "./shared/i18n/i18n";
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -20,11 +23,6 @@ const queryClient = new QueryClient({
   },
 });
 
-function ReviewAgentsPage() {
-  const { t } = useI18n();
-  return <h1>{t("nav.reviewAgents")}</h1>;
-}
-
 const router = createBrowserRouter([
   {
     path: "/",
@@ -32,9 +30,12 @@ const router = createBrowserRouter([
     children: [
       { index: true, element: <Navigate replace to="/reviews/new" /> },
       { path: "reviews/new", element: <NewReviewPage /> },
+      { path: "runs", element: <RunListPage /> },
       { path: "reviews/:taskId", element: <ReviewRunPage /> },
       { path: "runs/:taskId", element: <ReviewRunPage /> },
-      { path: "agents", element: <ReviewAgentsPage /> },
+      { path: "fix/:fixId", element: <FixPreviewPage /> },
+      { path: "agents", element: <CatalogPreviewPage kind="agents" /> },
+      { path: "capabilities", element: <CatalogPreviewPage kind="capabilities" /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },

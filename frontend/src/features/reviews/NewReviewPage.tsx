@@ -24,7 +24,7 @@ import type {
 } from "../repositories/types";
 import { listModelGateways } from "../settings/api";
 import { createReview } from "./api";
-import type { CreateReviewRequest, ReviewMode, ScopeRequest } from "./types";
+import type { CreateReviewRequest, ScopeRequest } from "./types";
 import "./NewReviewPage.css";
 
 const CORRECTNESS_AGENT_REFERENCE = "correctness:v1";
@@ -127,7 +127,7 @@ export function NewReviewPage() {
   const [commitTargetRef, setCommitTargetRef] = useState("");
   const [fullTargetRef, setFullTargetRef] = useState("");
   const [correctnessEnabled, setCorrectnessEnabled] = useState(true);
-  const [mode, setMode] = useState<ReviewMode>("review");
+  const mode = "review" as const;
 
   const gatewayQuery = useQuery({
     queryKey: ["model-gateways"],
@@ -248,6 +248,10 @@ export function NewReviewPage() {
       mode,
     };
     createMutation.mutate(request);
+  }
+
+  function handleUnsupported() {
+    window.alert(t("common.notSupported"));
   }
 
   function scopeToggle(type: ScopeType, title: TranslationKey, note: TranslationKey) {
@@ -454,12 +458,11 @@ export function NewReviewPage() {
               <button
                 className={mode === "review" ? "mode-toggle mode-toggle--active" : "mode-toggle"}
                 type="button"
-                onClick={() => setMode("review")}
               >
                 <span className="mode-toggle__label">REVIEW</span>
                 <span className="mode-toggle__note">{t("review.enabledNow")}</span>
               </button>
-              <button className="mode-toggle" disabled type="button">
+              <button className="mode-toggle" type="button" onClick={handleUnsupported}>
                 <span className="mode-toggle__label">FIX</span>
                 <span className="mode-toggle__note">{t("review.availablePhase5")}</span>
               </button>
@@ -475,7 +478,11 @@ export function NewReviewPage() {
               {REVIEWER_ROWS.map((row) => {
                 const Icon = row.icon;
                 return (
-                  <label className={row.enabled ? "agent-row" : "agent-row agent-row--disabled"} key={row.reference}>
+                  <label
+                    className={row.enabled ? "agent-row" : "agent-row agent-row--disabled"}
+                    key={row.reference}
+                    onClick={row.enabled ? undefined : handleUnsupported}
+                  >
                     <span className="agent-row__leading"><Icon aria-hidden="true" /></span>
                     <span className="agent-row__content">
                       <span className="agent-row__headline">

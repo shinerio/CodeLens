@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Bot, FolderKanban, Plus, Settings, Trash2 } from "lucide-react";
+import { Blocks, Bot, FolderKanban, History, Plus, Settings, Trash2 } from "lucide-react";
 import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
 
 import { deleteReview, listReviews } from "../features/reviews/api";
@@ -34,31 +34,29 @@ export function App() {
     hour: "2-digit",
     minute: "2-digit",
   });
+  const isNewReview = location.pathname === "/reviews/new";
 
   return (
     <div className="app-shell">
-      <header className="topbar">
-        <span className="brand-sigil" aria-hidden="true">CL</span>
-        <strong>CodeLens</strong>
-        <span className="topbar-context">{t("app.context")}</span>
-      </header>
-
       <aside className="sidebar" aria-label={t("nav.primary")}>
-        <p className="sidebar-label">{t("nav.workspace")}</p>
+        <div className="brand">
+          <span className="brand-mark" aria-hidden="true">CL</span>
+          <span className="brand-copy"><strong>CodeLens</strong><small>{t("app.context")}</small></span>
+        </div>
         <nav>
-          <section className="review-navigation">
+          <section className="nav-section review-navigation">
+            <p className="nav-label">{t("nav.workspace")}</p>
             <div className="review-navigation__heading">
               <span><FolderKanban aria-hidden="true" /> {t("nav.reviews")}</span>
+              <button
+                aria-label={t("nav.newReview")}
+                className="review-navigation__create"
+                type="button"
+                onClick={() => navigate("/reviews/new")}
+              >
+                <Plus aria-hidden="true" />
+              </button>
             </div>
-            <NavLink
-              className={({ isActive }) =>
-                isActive ? "review-create-link active" : "review-create-link"
-              }
-              to="/reviews/new"
-            >
-              <Plus aria-hidden="true" />
-              <span>{t("nav.newReview")}</span>
-            </NavLink>
             <div className="review-workspace-list">
               {reviewsQuery.isLoading ? (
                 <p className="review-workspace-empty">{t("common.loading")}</p>
@@ -91,15 +89,21 @@ export function App() {
                 </div>
               ))}
             </div>
+            <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/runs">
+              <History aria-hidden="true" />
+              <span>Runs</span>
+            </NavLink>
           </section>
 
-          <div className="navigation-secondary">
-            <NavLink
-              className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
-              to="/agents"
-            >
+          <div className="nav-section navigation-secondary">
+            <p className="nav-label">Configuration</p>
+            <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/agents">
               <Bot aria-hidden="true" />
               <span>{t("nav.reviewAgents")}</span>
+            </NavLink>
+            <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/capabilities">
+              <Blocks aria-hidden="true" />
+              <span>Capabilities</span>
             </NavLink>
             <NavLink
               className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}
@@ -110,13 +114,19 @@ export function App() {
             </NavLink>
           </div>
         </nav>
-        <div className="sidebar-boundary">
-          <span className="boundary-dot" aria-hidden="true" />
+        <div className="sidebar-footer"><div className="sidebar-boundary">
+          <span className="boundary-dot state-dot" aria-hidden="true" />
           {t("nav.loopback")}
-        </div>
+        </div></div>
       </aside>
 
-      <main className="main-content"><Outlet /></main>
+      <div className="workspace">
+        <header className="topbar">
+          <div className="breadcrumb"><span>{t("nav.reviews")}</span><span aria-hidden="true">/</span><strong>{isNewReview ? t("nav.newReview") : "Workspace"}</strong></div>
+          <span className="topbar-context">{t("app.context")}</span>
+        </header>
+        <main className="main-content"><Outlet /></main>
+      </div>
     </div>
   );
 }

@@ -1,18 +1,16 @@
 .settings-page {
-  --settings-ink: #182018;
-  --settings-muted: #5b655e;
-  --settings-line: #b8beb2;
-  --settings-accent: #6d8429;
-  --settings-acid: #c7ff4a;
+  --settings-ink: #172027;
+  --settings-muted: #65727b;
+  --settings-line: #d8e0e3;
+  --settings-accent: #087f8c;
+  --settings-acid: #4fc1c9;
   min-height: 100%;
   padding: clamp(24px, 4vw, 56px);
   color: var(--settings-ink);
   background:
-    linear-gradient(90deg, rgb(109 132 41 / 8%) 1px, transparent 1px),
-    linear-gradient(rgb(109 132 41 / 8%) 1px, transparent 1px),
-    radial-gradient(circle at 92% 4%, rgb(199 255 74 / 17%), transparent 24%),
-    #eef0e8;
-  background-size: 34px 34px, 34px 34px, auto, auto;
+    radial-gradient(circle at 92% 4%, rgb(8 127 140 / 9%), transparent 24%),
+    #f3f6f7;
+  background-size: auto, auto;
 }
 
 .settings-page__header {
@@ -38,7 +36,7 @@
 
 .settings-page__header h1 {
   margin: 0;
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: inherit;
   font-size: clamp(2.4rem, 5vw, 4.8rem);
   letter-spacing: -0.065em;
   line-height: 0.92;

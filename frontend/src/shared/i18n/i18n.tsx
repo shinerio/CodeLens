@@ -28,6 +28,7 @@ const EN_MESSAGES = {
   "common.yes": "Yes",
   "common.no": "No",
   "common.loadMore": "Load more",
+  "common.notSupported": "This feature is not supported yet.",
   "settings.eyebrow": "Runtime control / model gateways",
   "settings.title": "Model gateways",
   "settings.subtitle":
@@ -215,6 +216,7 @@ const ZH_MESSAGES: Record<TranslationKey, string> = {
   "common.yes": "是",
   "common.no": "否",
   "common.loadMore": "加载更多",
+  "common.notSupported": "该功能暂未支持。",
   "settings.eyebrow": "运行时控制 / 模型网关",
   "settings.title": "模型网关",
   "settings.subtitle": "保存多个 OpenAI 兼容网关，无需重启 CodeLens 即可切换当前 Review 模型。",

@@ -1,21 +1,20 @@
 .review-run-page {
-  --run-ink: #141b17;
-  --run-muted: #627068;
-  --run-line: #c8cdc3;
-  --run-paper: rgba(245, 246, 240, 0.94);
-  --run-paper-strong: #f5f6f0;
-  --run-accent: #617c23;
-  --run-accent-soft: rgba(97, 124, 35, 0.14);
-  --run-failed: #8a2d19;
-  --run-partial: #7d5a0d;
-  --run-canceled: #4f5a63;
+  --run-ink: #172027;
+  --run-muted: #65727b;
+  --run-line: #d8e0e3;
+  --run-paper: rgba(255, 255, 255, 0.96);
+  --run-paper-strong: #f7f9fa;
+  --run-accent: #087f8c;
+  --run-accent-soft: rgba(8, 127, 140, 0.14);
+  --run-failed: #b33a3a;
+  --run-partial: #a86709;
+  --run-canceled: #65727b;
   min-height: 100%;
   padding: clamp(22px, 4vw, 48px);
   color: var(--run-ink);
   background:
-    radial-gradient(circle at 10% 8%, rgba(97, 124, 35, 0.12), transparent 26%),
-    radial-gradient(circle at 88% 10%, rgba(20, 27, 23, 0.08), transparent 20%),
-    linear-gradient(180deg, rgba(246, 247, 241, 0.96), rgba(235, 238, 229, 0.96));
+    radial-gradient(circle at 10% 8%, rgba(8, 127, 140, 0.08), transparent 26%),
+    linear-gradient(180deg, #f7f9fa, #f3f6f7);
 }
 
 .review-run-page__header {
@@ -38,7 +37,7 @@
 
 .review-run-page__header h1 {
   margin: 0;
-  font-family: "Iowan Old Style", "Palatino Linotype", "Book Antiqua", Georgia, serif;
+  font-family: inherit;
   font-size: clamp(2rem, 4.4vw, 4rem);
   line-height: 0.98;
   letter-spacing: -0.05em;
@@ -70,6 +69,8 @@
   color: var(--run-ink);
   font-size: 0.85rem;
 }
+
+.run-action,.run-preview-actions button{display:inline-flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--run-line);background:var(--run-paper);color:var(--run-ink);font-size:.76rem;font-weight:700}.run-action svg,.run-preview-actions svg{width:14px;height:14px}.run-action:hover,.run-preview-actions button:hover{border-color:var(--run-accent);color:var(--run-accent)}.run-preview-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding:0 18px 18px}.run-preview-actions button:last-child{border-color:var(--run-accent);background:var(--run-accent);color:#fff}
 
 .run-chip svg {
   width: 16px;
