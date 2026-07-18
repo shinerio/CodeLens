@@ -35,6 +35,7 @@ review_tasks = Table(
     Column("cancellation_requested", Boolean, nullable=False, default=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+    Column("deleted_at", DateTime(timezone=True)),
 )
 
 task_worktrees = Table(

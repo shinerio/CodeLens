@@ -1,14 +1,16 @@
 import type { FindingRecord } from "./types";
+import { useI18n } from "../../shared/i18n/i18n";
 
 function formatLocation(finding: FindingRecord) {
   return `${finding.primary_location.path}:${finding.primary_location.start_line}-${finding.primary_location.end_line}`;
 }
 
 export function FindingDetail({ finding }: { finding: FindingRecord | null }) {
+  const { t } = useI18n();
   if (finding === null) {
     return (
       <div className="finding-detail finding-detail--empty">
-        Select a finding to inspect its evidence and recommendation.
+        {t("finding.select")}
       </div>
     );
   }
@@ -28,27 +30,27 @@ export function FindingDetail({ finding }: { finding: FindingRecord | null }) {
 
       <dl className="finding-detail__facts">
         <div>
-          <dt>Impact</dt>
+          <dt>{t("finding.impact")}</dt>
           <dd>{finding.impact}</dd>
         </div>
         <div>
-          <dt>Explanation</dt>
+          <dt>{t("finding.explanation")}</dt>
           <dd>{finding.explanation}</dd>
         </div>
         <div>
-          <dt>Recommendation</dt>
+          <dt>{t("finding.recommendation")}</dt>
           <dd>{finding.recommendation}</dd>
         </div>
         {finding.reproduction !== null ? (
           <div>
-            <dt>Reproduction</dt>
+            <dt>{t("finding.reproduction")}</dt>
             <dd>{finding.reproduction}</dd>
           </div>
         ) : null}
       </dl>
 
       <section className="finding-detail__section">
-        <h4>Evidence</h4>
+        <h4>{t("finding.evidence")}</h4>
         <ul>
           {finding.evidence.map((item, index) => (
             <li key={`${finding.finding_id}-evidence-${index}`}>
@@ -60,7 +62,7 @@ export function FindingDetail({ finding }: { finding: FindingRecord | null }) {
       </section>
 
       <section className="finding-detail__section">
-        <h4>Rule sources</h4>
+        <h4>{t("finding.ruleSources")}</h4>
         <ul>
           {finding.rule_sources.length > 0 ? (
             finding.rule_sources.map((rule) => (
@@ -69,7 +71,7 @@ export function FindingDetail({ finding }: { finding: FindingRecord | null }) {
               </li>
             ))
           ) : (
-            <li>No rule sources recorded.</li>
+            <li>{t("finding.noRules")}</li>
           )}
         </ul>
       </section>

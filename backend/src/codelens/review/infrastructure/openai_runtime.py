@@ -14,11 +14,13 @@ from agents.exceptions import (
     ModelRefusalError,
     UserError,
 )
+from agents.models.openai_responses import OpenAIResponsesModel
 from agents.result import RunResult
 from openai import (
     APIConnectionError,
     APIStatusError,
     APITimeoutError,
+    AsyncOpenAI,
     InternalServerError,
     RateLimitError,
 )
@@ -33,6 +35,7 @@ from codelens.review.domain.ports import (
     UnvalidatedAgentOutput,
 )
 from codelens.reviewer_catalog.domain.models import AgentVersion
+from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
 
 
 class _RunnerPort(Protocol):
@@ -69,13 +72,11 @@ class OpenAIAgentRuntime:
 
     def __init__(
         self,
-        model_name: str,
+        config_store: ModelProviderConfigPort,
         output_codec: AgentOutputCodecPort,
         runner: _RunnerPort | None = None,
     ) -> None:
-        if not model_name.strip():
-            raise ValueError("model_name must not be empty")
-        self._model_name = model_name
+        self._config_store = config_store
         self._output_codec = output_codec
         self._runner = runner or _PublicSdkRunner()
 
@@ -84,6 +85,9 @@ class OpenAIAgentRuntime:
         agent: AgentVersion,
         input_payload: bytes,
     ) -> UnvalidatedAgentOutput:
+        provider_config = await self._config_store.load()
+        if provider_config is None:
+            raise PermanentAgentOutputError("Model provider is not configured")
         input_text: str | None = None
         try:
             input_text = input_payload.decode("utf-8", errors="strict")
@@ -94,40 +98,50 @@ class OpenAIAgentRuntime:
         if agent.output_schema_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
+        client = AsyncOpenAI(
+            api_key=provider_config.api_key,
+            base_url=provider_config.base_url,
+        )
         sdk_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
             instructions=agent.prompt_template,
-            model=self._model_name,
+            model=OpenAIResponsesModel(
+                model=provider_config.model,
+                openai_client=client,
+            ),
             output_type=self._output_codec.output_type,
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
         failure_kind: Literal["transient", "permanent"] | None = None
         raw_result: object | None = None
         try:
-            async with asyncio.timeout(agent.timeout_seconds):
-                raw_result = await self._runner.run(
-                    sdk_agent,
-                    input_text,
-                    max_turns=agent.max_turns,
-                    run_config=run_config,
-                )
-        except (
-            TimeoutError,
-            APIConnectionError,
-            APITimeoutError,
-            RateLimitError,
-            InternalServerError,
-        ):
-            failure_kind = "transient"
-        except APIStatusError as provider_error:
-            failure_kind = "transient" if provider_error.status_code >= 500 else "permanent"
-        except (
-            MaxTurnsExceeded,
-            ModelBehaviorError,
-            ModelRefusalError,
-            UserError,
-        ):
-            failure_kind = "permanent"
+            try:
+                async with asyncio.timeout(agent.timeout_seconds):
+                    raw_result = await self._runner.run(
+                        sdk_agent,
+                        input_text,
+                        max_turns=agent.max_turns,
+                        run_config=run_config,
+                    )
+            except (
+                TimeoutError,
+                APIConnectionError,
+                APITimeoutError,
+                RateLimitError,
+                InternalServerError,
+            ):
+                failure_kind = "transient"
+            except APIStatusError as provider_error:
+                failure_kind = "transient" if provider_error.status_code >= 500 else "permanent"
+            except (
+                MaxTurnsExceeded,
+                ModelBehaviorError,
+                ModelRefusalError,
+                UserError,
+            ):
+                failure_kind = "permanent"
+        finally:
+            await client.close()
 
         if failure_kind == "transient":
             raise TransientAgentRuntimeError("Agent provider request can be retried") from None
@@ -160,7 +174,7 @@ class OpenAIAgentRuntime:
                 for diagnostic in diagnostics
                 if diagnostic.response_id is not None
             ),
-            model_name=self._model_name,
+            model_name=provider_config.model,
             input_tokens=sum(item.input_tokens for item in diagnostics),
             output_tokens=sum(item.output_tokens for item in diagnostics),
             diagnostics=diagnostics,

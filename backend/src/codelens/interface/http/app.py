@@ -14,10 +14,13 @@ from codelens.interface.http.dependencies import (
 )
 from codelens.interface.http.routers.repositories import router as repositories_router
 from codelens.interface.http.routers.reviews import router as reviews_router
+from codelens.interface.http.routers.settings import router as settings_router
 from codelens.review.application.commands import ReviewNotFoundError
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
+from codelens.reviewer_catalog.application.provider_settings import ModelGatewayNotFoundError
 from codelens.shared.domain.errors import (
     DomainError,
+    FilesystemBrowseError,
     InvalidRepositoryError,
     SnapshotStaleError,
 )
@@ -108,10 +111,14 @@ class LocalHttpSafetyMiddleware:
 def _domain_problem(error: DomainError) -> tuple[int, str]:
     if isinstance(error, InvalidRepositoryError):
         return 422, "The repository or revision is invalid."
+    if isinstance(error, FilesystemBrowseError):
+        return 422, "The directory cannot be browsed."
     if isinstance(error, SnapshotStaleError):
         return 409, "The repository changed while its review input was captured."
     if isinstance(error, ReviewNotFoundError):
         return 404, "The review does not exist."
+    if isinstance(error, ModelGatewayNotFoundError):
+        return 404, "The model gateway does not exist."
     if isinstance(error, InvalidAgentRunStateError):
         return 409, "The review state does not allow this operation."
     return 400, "The request violates a domain rule."
@@ -158,4 +165,5 @@ def create_app(settings: Settings) -> FastAPI:
 
     app.include_router(repositories_router)
     app.include_router(reviews_router)
+    app.include_router(settings_router)
     return app

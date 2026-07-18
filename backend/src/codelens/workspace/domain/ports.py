@@ -24,6 +24,57 @@ class RepositoryInfo:
 
 
 @dataclass(frozen=True)
+class RepositoryBranch:
+    """Describe one selectable local or remote branch without Git adapter types."""
+
+    name: str
+    oid: str
+    is_current: bool
+    is_remote: bool
+
+
+@dataclass(frozen=True)
+class RepositoryCommit:
+    """Describe one selectable commit using bounded human-readable metadata."""
+
+    oid: str
+    short_oid: str
+    author: str
+    message: str
+    committed_at: str
+
+
+@dataclass(frozen=True)
+class RepositoryCatalog:
+    """Return branch choices and one page of recent commit summaries."""
+
+    branches: tuple[RepositoryBranch, ...]
+    commits: tuple[RepositoryCommit, ...]
+    next_commit_offset: int | None
+
+
+@dataclass(frozen=True)
+class DirectoryEntry:
+    """Describe one browsable filesystem directory without exposing files."""
+
+    name: str
+    path: Path
+    is_git_repository: bool
+
+
+@dataclass(frozen=True)
+class DirectoryListing:
+    """Describe a bounded directory page or the platform filesystem roots."""
+
+    current_path: Path | None
+    parent_path: Path | None
+    roots: tuple[Path, ...]
+    directories: tuple[DirectoryEntry, ...]
+    current_is_git_repository: bool = False
+    is_truncated: bool = False
+
+
+@dataclass(frozen=True)
 class ScopePlan:
     """Freeze resolved object IDs and candidate paths before task creation."""
 
@@ -77,6 +128,30 @@ class RepositoryMetadataPort(Protocol):
 
     async def inspect(self, repository: Path) -> RepositoryInfo:
         """Return metadata for a repository path already contained by the application."""
+
+        raise NotImplementedError
+
+
+class RepositoryCatalogPort(Protocol):
+    """Read selectable branches and paginated commits through bounded Git commands."""
+
+    async def list_catalog(
+        self,
+        repository: Path,
+        *,
+        commit_offset: int,
+        commit_limit: int,
+    ) -> RepositoryCatalog:
+        """Return all branch refs and one bounded recent-commit page."""
+
+        raise NotImplementedError
+
+
+class DirectoryBrowserPort(Protocol):
+    """Browse platform roots and directories without reading file contents."""
+
+    async def browse(self, path: Path | None) -> DirectoryListing:
+        """Return roots for ``None`` or one bounded directory listing."""
 
         raise NotImplementedError
 

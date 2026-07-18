@@ -9,13 +9,18 @@ from pathlib import Path
 from codelens.bootstrap.settings import Settings
 from codelens.interface.http.dependencies import build_components
 from codelens.review.application.commands import CreateReviewCommand
+from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
+from codelens.reviewer_catalog.infrastructure.file_provider_config import (
+    FilesystemModelProviderConfigAdapter,
+)
 from codelens.testing.correctness_fixture import prepare_simple_branch_repository
 from codelens.worker.main import build_worker
 from codelens.workspace.domain.models import UncommittedScope
 
 
 async def _run() -> int:
-    if not os.environ.get("OPENAI_API_KEY"):
+    api_key = os.environ.get("OPENAI_API_KEY")
+    if not api_key:
         print("OPENAI_API_KEY must be set for the live smoke test")
         return 1
     model = os.environ.get("CODELENS_OPENAI_MODEL")
@@ -29,7 +34,13 @@ async def _run() -> int:
         settings = Settings(
             data_dir=workspace / "data",
             repository_roots=(fixture.repository,),
-            openai_model=model,
+        )
+        await FilesystemModelProviderConfigAdapter(settings.data_dir).save(
+            ModelProviderConfig(
+                api_key=api_key,
+                model=model,
+                base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+            )
         )
         components = build_components(settings)
         worker = build_worker(settings)

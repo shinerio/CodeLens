@@ -536,3 +536,57 @@ def test_review_findings_endpoint_returns_empty_then_saved_findings(
     assert len(body) == 1
     assert body[0]["title"] == "Wrong branch"
     assert body[0]["severity"] == "medium"
+
+
+def test_reviews_are_listed_as_workspaces_and_can_be_soft_deleted(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    _prepared_repository(git_repository)
+    app = create_app(Settings(data_dir=tmp_path / "data"))
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        first = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        second = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-two",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        listed = client.get("/api/reviews")
+        deleted = client.request(
+            "DELETE",
+            f"/api/reviews/{first.json()['task_id']}",
+            json={},
+        )
+        after_delete = client.get("/api/reviews")
+        hidden = client.get(f"/api/reviews/{first.json()['task_id']}")
+
+    assert first.status_code == second.status_code == 202
+    assert listed.status_code == 200, listed.text
+    assert [review["task_id"] for review in listed.json()] == [
+        second.json()["task_id"],
+        first.json()["task_id"],
+    ]
+    assert all(review["repository_name"] == git_repository.name for review in listed.json())
+    assert all(review["created_at"] for review in listed.json())
+    assert deleted.status_code == 204, deleted.text
+    assert [review["task_id"] for review in after_delete.json()] == [second.json()["task_id"]]
+    assert hidden.status_code == 404

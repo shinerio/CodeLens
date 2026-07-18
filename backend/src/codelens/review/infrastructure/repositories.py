@@ -120,6 +120,13 @@ def _review_record(row: Any) -> ReviewRecord:
         selected_agent_versions=tuple(selected_agents),
         status=str(row["status"]),
         cancellation_requested=bool(row["cancellation_requested"]),
+        repository_name=(
+            Path(str(row["repository_path"])).name
+            if row["repository_path"] is not None
+            else str(row["repository_id"])[-12:]
+        ),
+        created_at=cast(datetime, row["created_at"]),
+        is_deleted=row["deleted_at"] is not None,
     )
 
 
@@ -221,6 +228,74 @@ class SqlReviewStore:
                 .one_or_none()
             )
         return _review_record(row) if row is not None else None
+
+    async def list_reviews(self) -> tuple[ReviewRecord, ...]:
+        """Return non-deleted workspaces in deterministic newest-first order."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                (
+                    await session.execute(
+                        select(review_tasks)
+                        .where(review_tasks.c.deleted_at.is_(None))
+                        .order_by(
+                            review_tasks.c.created_at.desc(),
+                            review_tasks.c.task_id.desc(),
+                        )
+                    )
+                )
+                .mappings()
+                .all()
+            )
+        return tuple(_review_record(row) for row in rows)
+
+    async def soft_delete_review(self, task_id: str) -> bool:
+        """Hide one workspace and atomically request cancellation if it is active."""
+
+        terminal_statuses = {"completed", "partial", "failed", "canceled"}
+
+        async def operation(session: AsyncSession) -> bool:
+            row = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(review_tasks.c.task_id == task_id)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return False
+            if row["deleted_at"] is not None:
+                return True
+            is_active = str(row["status"]) not in terminal_statuses
+            should_request_cancellation = is_active and not bool(
+                row["cancellation_requested"]
+            )
+            await session.execute(
+                update(review_tasks)
+                .where(review_tasks.c.task_id == task_id)
+                .values(
+                    deleted_at=_now(),
+                    cancellation_requested=(
+                        True if is_active else bool(row["cancellation_requested"])
+                    ),
+                    updated_at=_now(),
+                )
+            )
+            if should_request_cancellation:
+                await session.execute(
+                    insert(events).values(
+                        **_event_values(
+                            task_id,
+                            "review.cancel_requested",
+                            {"cancellation_requested": True},
+                        )
+                    )
+                )
+            return True
+
+        return await self._database.run_transaction(operation)
 
     async def get_execution(self, task_id: str) -> ReviewExecutionRecord | None:
         """Return private executable inputs only to the Worker composition boundary."""

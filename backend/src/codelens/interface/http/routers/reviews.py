@@ -4,7 +4,7 @@ from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Annotated
 
-from fastapi import APIRouter, Depends, Header, Request
+from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import StreamingResponse
 from pydantic import StringConstraints
 
@@ -52,6 +52,18 @@ async def create_review(
     return ReviewResponse.from_domain(record)
 
 
+@router.get("", response_model=list[ReviewResponse])
+async def list_reviews(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> list[ReviewResponse]:
+    """Return persistent visible Review workspaces in newest-first order."""
+
+    return [
+        ReviewResponse.from_domain(record)
+        for record in await components.list_reviews.handle()
+    ]
+
+
 @router.get("/{task_id}", response_model=ReviewResponse)
 async def get_review(
     task_id: TaskId,
@@ -60,6 +72,17 @@ async def get_review(
     """Return one path-free persisted review summary."""
 
     return ReviewResponse.from_domain(await components.get_review.handle(task_id))
+
+
+@router.delete("/{task_id}", status_code=204)
+async def delete_review(
+    task_id: TaskId,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> Response:
+    """Hide one Review workspace and safely cancel it when still active."""
+
+    await components.delete_review.handle(task_id)
+    return Response(status_code=204)
 
 
 @router.post("/{task_id}/cancel", response_model=ReviewResponse, status_code=202)

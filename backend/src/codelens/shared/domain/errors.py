@@ -10,6 +10,12 @@ class InvalidRepositoryError(DomainError):
     code = "invalid_repository"
 
 
+class FilesystemBrowseError(DomainError):
+    """Raised when a requested local directory cannot be safely enumerated."""
+
+    code = "filesystem_browse_failed"
+
+
 class SnapshotStaleError(DomainError):
     """Raised when repository inputs change while a snapshot is captured."""
 

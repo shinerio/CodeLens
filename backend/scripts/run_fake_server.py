@@ -19,6 +19,7 @@ from codelens.interface.http.app import (
 from codelens.interface.http.dependencies import HttpProblem, build_components
 from codelens.interface.http.routers.repositories import router as repositories_router
 from codelens.interface.http.routers.reviews import router as reviews_router
+from codelens.interface.http.routers.settings import router as settings_router
 from codelens.shared.domain.errors import DomainError
 from codelens.testing.correctness_fixture import (
     FixtureRuntime,
@@ -108,6 +109,7 @@ async def _build_app(settings: Settings) -> FastAPI:
 
     app.include_router(repositories_router)
     app.include_router(reviews_router)
+    app.include_router(settings_router)
     return app
 
 

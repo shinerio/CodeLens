@@ -21,6 +21,9 @@ from codelens.review.infrastructure.repositories import (
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.review.infrastructure.snapshot_context import FilesystemSnapshotContextAdapter
+from codelens.reviewer_catalog.infrastructure.file_provider_config import (
+    FilesystemModelProviderConfigAdapter,
+)
 from codelens.worker.execution import SqlJobQueuePortAdapter, WorkerReviewExecutor
 from codelens.worker.scheduler import ReviewScheduler, WorkerSemaphores
 from codelens.worker.singleton import platform_worker_singleton
@@ -103,7 +106,10 @@ def build_worker(
     )
     context_adapter = FilesystemSnapshotContextAdapter()
     codec = AgentOutputCodec("1")
-    provider_runtime = runtime or OpenAIAgentRuntime(settings.openai_model, codec)
+    provider_runtime = runtime or OpenAIAgentRuntime(
+        FilesystemModelProviderConfigAdapter(settings.data_dir),
+        codec,
+    )
     semaphores = WorkerSemaphores.create(
         agent_limit=settings.max_active_agent_runs,
         model_limit=settings.max_active_agent_runs,

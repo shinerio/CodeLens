@@ -1,7 +1,16 @@
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import (
+    AnyHttpUrl,
+    BaseModel,
+    ConfigDict,
+    Field,
+    SecretStr,
+    StringConstraints,
+    field_validator,
+)
 
 from codelens.review.domain.ports import ReviewRecord
 from codelens.workspace.domain.models import (
@@ -110,6 +119,66 @@ class RepositoryResponse(StrictDto):
         )
 
 
+class RepositoryCatalogRequest(StrictDto):
+    """Request selectable refs for one validated exact repository root."""
+
+    path: Path
+    commit_offset: Annotated[int, Field(ge=0, le=1_000_000)] = 0
+    commit_limit: Annotated[int, Field(ge=1, le=50)] = 10
+
+
+class RepositoryBranchResponse(StrictDto):
+    """Expose one local or remote branch option."""
+
+    name: str
+    oid: str
+    is_current: bool
+    is_remote: bool
+
+
+class RepositoryCommitResponse(StrictDto):
+    """Expose one bounded recent-commit option."""
+
+    oid: str
+    short_oid: str
+    author: str
+    message: str
+    committed_at: str
+
+
+class RepositoryCatalogResponse(StrictDto):
+    """Expose branch options and a paginated commit summary page."""
+
+    branches: list[RepositoryBranchResponse]
+    commits: list[RepositoryCommitResponse]
+    next_commit_offset: int | None
+
+
+class DirectoryBrowseRequest(StrictDto):
+    """Request system roots or the children of one absolute local directory."""
+
+    path: Path | None = None
+
+
+class DirectoryEntryResponse(StrictDto):
+    """Expose one directory selectable in the local resource browser."""
+
+    name: str
+    path: str
+    is_git_repository: bool
+
+
+class DirectoryListingResponse(StrictDto):
+    """Expose a bounded directory-only listing and all platform roots."""
+
+    current_path: str | None
+    parent_path: str | None
+    roots: list[str]
+    directories: list[DirectoryEntryResponse]
+    current_is_git_repository: bool
+    is_truncated: bool
+
+
 class CreateReviewRequest(StrictDto):
     repository_path: Path
     scope: ScopeRequest
@@ -129,6 +198,8 @@ class ReviewResponse(StrictDto):
     repository_realpath_hash: str
     git_common_dir_hash: str
     cancellation_requested: bool
+    repository_name: str
+    created_at: datetime
 
     @classmethod
     def from_domain(cls, review: ReviewRecord) -> "ReviewResponse":
@@ -143,6 +214,8 @@ class ReviewResponse(StrictDto):
             repository_realpath_hash=review.repository_realpath_hash,
             git_common_dir_hash=review.git_common_dir_hash,
             cancellation_requested=review.cancellation_requested,
+            repository_name=review.repository_name,
+            created_at=review.created_at,
         )
 
 
@@ -153,3 +226,98 @@ class CancelReviewRequest(StrictDto):
 class ProblemResponse(StrictDto):
     code: str
     message: str
+
+
+class UpdateOpenAISettingsRequest(StrictDto):
+    """Validate one complete write-only OpenAI-compatible provider configuration."""
+
+    api_key: SecretStr
+    model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
+    base_url: AnyHttpUrl
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: SecretStr) -> SecretStr:
+        """Reject empty credentials and normalize accidental surrounding whitespace."""
+
+        normalized = value.get_secret_value().strip()
+        if not normalized:
+            raise ValueError("api_key must not be empty")
+        return SecretStr(normalized)
+
+
+class OpenAISettingsResponse(StrictDto):
+    """Expose provider readiness without ever serializing the API key."""
+
+    is_configured: bool
+    model: str | None
+    base_url: str | None
+
+
+GatewayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
+GatewayModel = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+]
+
+
+class CreateModelGatewayRequest(StrictDto):
+    """Validate one new named gateway while keeping its API key write-only."""
+
+    name: GatewayName
+    api_key: SecretStr
+    model: GatewayModel
+    base_url: AnyHttpUrl
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_api_key(cls, value: SecretStr) -> SecretStr:
+        normalized = value.get_secret_value().strip()
+        if not normalized:
+            raise ValueError("api_key must not be empty")
+        return SecretStr(normalized)
+
+
+class UpdateModelGatewayRequest(StrictDto):
+    """Replace gateway metadata and optionally rotate its write-only API key."""
+
+    name: GatewayName
+    api_key: SecretStr | None = None
+    model: GatewayModel
+    base_url: AnyHttpUrl
+
+    @field_validator("api_key")
+    @classmethod
+    def validate_optional_api_key(cls, value: SecretStr | None) -> SecretStr | None:
+        if value is None:
+            return None
+        normalized = value.get_secret_value().strip()
+        if not normalized:
+            raise ValueError("api_key must not be empty")
+        return SecretStr(normalized)
+
+
+class ActivateModelGatewayRequest(StrictDto):
+    """Select one persistent gateway for subsequent model invocations."""
+
+    gateway_id: Annotated[
+        str,
+        StringConstraints(pattern=r"^gateway_[A-Za-z0-9_-]{3,64}$", max_length=72),
+    ]
+
+
+class ModelGatewayResponse(StrictDto):
+    """Expose redacted gateway metadata."""
+
+    gateway_id: str
+    name: str
+    model: str
+    base_url: str
+    is_active: bool
+
+
+class ModelGatewayCatalogResponse(StrictDto):
+    """Expose the redacted ordered gateway catalog and active selection."""
+
+    active_gateway_id: str | None
+    gateways: list[ModelGatewayResponse]

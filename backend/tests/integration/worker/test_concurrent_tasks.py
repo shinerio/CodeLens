@@ -177,7 +177,6 @@ async def test_two_refs_in_one_real_repository_review_in_distinct_worktrees(
         data_dir=data_dir,
         repository_roots=(git_repository,),
         database_url=f"sqlite+aiosqlite:///{data_dir / 'review.sqlite3'}",
-        openai_model="fake-model",
         max_active_reviews=2,
         max_active_agent_runs=2,
         max_agent_runs_per_review=1,

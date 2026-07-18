@@ -86,9 +86,34 @@ class GetReviewHandler:
 
     async def handle(self, task_id: str) -> ReviewRecord:
         record = await self._store.get_review(task_id)
-        if record is None:
+        if record is None or record.is_deleted:
             raise ReviewNotFoundError("review does not exist")
         return record
+
+
+class ListReviewsHandler:
+    """List persistent visible Review workspaces through an application boundary."""
+
+    def __init__(self, store: ReviewStorePort) -> None:
+        self._store = store
+
+    async def handle(self) -> tuple[ReviewRecord, ...]:
+        """Return newest Review workspaces for the navigation hierarchy."""
+
+        return await self._store.list_reviews()
+
+
+class DeleteReviewHandler:
+    """Remove a Review workspace from the UI without racing active Worker execution."""
+
+    def __init__(self, store: ReviewStorePort) -> None:
+        self._store = store
+
+    async def handle(self, task_id: str) -> None:
+        """Soft-delete the workspace and request cancellation for active tasks."""
+
+        if not await self._store.soft_delete_review(task_id):
+            raise ReviewNotFoundError("review does not exist")
 
 
 class CancelReviewHandler:

@@ -5,6 +5,7 @@ import pytest
 
 from codelens.bootstrap.cli import parse_command, prepare_runtime, supervise
 from codelens.bootstrap.settings import Settings
+from codelens.worker.main import build_worker
 
 
 class FakeChild:
@@ -89,3 +90,9 @@ async def test_supervisor_starts_exactly_api_and_worker_and_stops_peer_on_failur
     ]
     assert children[0].terminated
     assert result != 0
+
+
+def test_worker_composition_does_not_require_model_configuration(tmp_path: Path) -> None:
+    components = build_worker(Settings(data_dir=tmp_path / "data"))
+
+    assert components.settings.data_dir == tmp_path / "data"

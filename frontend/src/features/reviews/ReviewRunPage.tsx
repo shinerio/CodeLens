@@ -10,6 +10,7 @@ import {
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
 
+import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
@@ -24,25 +25,39 @@ const TERMINAL_STATUSES = new Set(["completed", "partial", "failed", "canceled"]
 const TAB_OPTIONS: Array<{
   icon: typeof PanelTop;
   id: TabName;
-  label: string;
-  note: string;
+  labelKey: TranslationKey;
+  noteKey: TranslationKey;
 }> = [
-  { id: "overview", label: "Overview", note: "Live status and summary", icon: PanelTop },
-  { id: "findings", label: "Findings", note: "Validated output", icon: ListChecks },
-  { id: "agent_runs", label: "Agent Runs", note: "Event stream", icon: Activity },
-  { id: "artifacts", label: "Artifacts", note: "Locked for now", icon: FileDigit },
+  { id: "overview", labelKey: "run.overview", noteKey: "run.overviewNote", icon: PanelTop },
+  { id: "findings", labelKey: "run.findings", noteKey: "run.findingsNote", icon: ListChecks },
+  { id: "agent_runs", labelKey: "run.agentRuns", noteKey: "run.agentRunsNote", icon: Activity },
+  { id: "artifacts", labelKey: "run.artifacts", noteKey: "run.artifactsNote", icon: FileDigit },
 ];
 
-function reviewerLabel(reference: string) {
+const STATUS_KEYS: Readonly<Record<string, TranslationKey>> = {
+  loading: "status.loading",
+  created: "status.created",
+  queued: "status.queued",
+  running: "status.running",
+  completed: "status.completed",
+  partial: "status.partial",
+  failed: "status.failed",
+  canceled: "status.canceled",
+  cancellation_requested: "status.cancelRequested",
+};
+
+function reviewerLabel(reference: string, t: (key: TranslationKey, values?: Record<string, string>) => string) {
   const [agentId] = reference.split(":");
   if (agentId.length === 0) {
     return reference;
   }
-  return `${agentId[0].toUpperCase()}${agentId.slice(1)} Reviewer`;
+  const name = `${agentId[0].toUpperCase()}${agentId.slice(1)}`;
+  return t("run.reviewer", { name });
 }
 
-function statusLabel(status: string) {
-  return status.replaceAll("_", " ");
+function statusLabel(status: string, t: (key: TranslationKey) => string) {
+  const key = STATUS_KEYS[status];
+  return key === undefined ? status.replaceAll("_", " ") : t(key);
 }
 
 function bannerClass(status: string) {
@@ -59,6 +74,7 @@ function bannerClass(status: string) {
 }
 
 export function ReviewRunPage() {
+  const { locale, t } = useI18n();
   const params = useParams();
   const taskId = params.taskId;
   const [activeTab, setActiveTab] = useState<TabName>("findings");
@@ -70,7 +86,7 @@ export function ReviewRunPage() {
     queryKey: ["review", taskId],
     queryFn: async () => {
       if (taskId === undefined) {
-        throw new Error("Missing task id");
+        throw new Error(t("run.missingTask"));
       }
       return getReview(taskId);
     },
@@ -81,7 +97,7 @@ export function ReviewRunPage() {
     queryKey: ["review-findings", taskId],
     queryFn: async () => {
       if (taskId === undefined) {
-        throw new Error("Missing task id");
+        throw new Error(t("run.missingTask"));
       }
       return listFindings(taskId);
     },
@@ -94,10 +110,10 @@ export function ReviewRunPage() {
   const reviewTitle = useMemo(() => {
     const selectedAgents = reviewQuery.data?.selected_agents ?? [];
     if (selectedAgents.length === 0) {
-      return "Review";
+      return t("run.review");
     }
-    return selectedAgents.map(reviewerLabel).join(" · ");
-  }, [reviewQuery.data?.selected_agents]);
+    return selectedAgents.map((reference) => reviewerLabel(reference, t)).join(" · ");
+  }, [reviewQuery.data?.selected_agents, t]);
 
   useEffect(() => {
     if (!TERMINAL_STATUSES.has(currentStatus)) {
@@ -124,13 +140,13 @@ export function ReviewRunPage() {
   }, [findingsQuery.data, selectedFindingId]);
 
   if (taskId === undefined) {
-    return <div className="run-empty">Missing task id.</div>;
+    return <div className="run-empty">{t("run.missingTask")}</div>;
   }
 
   if (reviewQuery.isError) {
     return (
       <div className="run-empty" role="alert">
-        {reviewQuery.error instanceof Error ? reviewQuery.error.message : "Unable to load run."}
+        {reviewQuery.error instanceof Error ? reviewQuery.error.message : t("run.unableLoad")}
       </div>
     );
   }
@@ -142,34 +158,34 @@ export function ReviewRunPage() {
     <section className="review-run-page">
       <header className="review-run-page__header">
         <div>
-          <p className="review-run-page__eyebrow">Live review run</p>
+          <p className="review-run-page__eyebrow">{t("run.live")}</p>
           <h1>{reviewTitle}</h1>
           <p className="review-run-page__subtitle">
-            Task <span>{taskId}</span> · {statusLabel(currentStatus)} · connection{" "}
+            {t("run.task")} <span>{taskId}</span> · {statusLabel(currentStatus, t)} · {t("run.connection")}{" "}
             {connectionState}
           </p>
         </div>
         <div className="review-run-page__chips">
           <span className="run-chip">
             <PlayCircle aria-hidden="true" />
-            {reviewQuery.data?.base_oid ?? "Waiting for review"}
+            {reviewQuery.data?.base_oid ?? t("run.waiting")}
           </span>
           <span className="run-chip">
             <CircleCheckBig aria-hidden="true" />
-            {reviewQuery.data?.head_oid ?? "Waiting for review"}
+            {reviewQuery.data?.head_oid ?? t("run.waiting")}
           </span>
         </div>
       </header>
 
       {TERMINAL_STATUSES.has(currentStatus) && currentStatus !== "completed" ? (
         <div className={bannerClass(currentStatus)} role="status">
-          {currentStatus === "partial" ? "The run finished with partial output." : null}
-          {currentStatus === "failed" ? "The run failed before synthesis completed." : null}
-          {currentStatus === "canceled" ? "The run was canceled and preserved its checkpoint." : null}
+          {currentStatus === "partial" ? t("run.partial") : null}
+          {currentStatus === "failed" ? t("run.failed") : null}
+          {currentStatus === "canceled" ? t("run.canceled") : null}
         </div>
       ) : null}
 
-      <nav className="review-run-page__tabs" aria-label="Run sections">
+      <nav className="review-run-page__tabs" aria-label={t("run.sections")}>
         {TAB_OPTIONS.map((tab) => {
           const Icon = tab.icon;
           return (
@@ -181,8 +197,8 @@ export function ReviewRunPage() {
             >
               <Icon aria-hidden="true" />
               <span className="run-tab__copy">
-                <span className="run-tab__label">{tab.label}</span>
-                <span className="run-tab__note">{tab.note}</span>
+                <span className="run-tab__label">{t(tab.labelKey)}</span>
+                <span className="run-tab__note">{t(tab.noteKey)}</span>
               </span>
             </button>
           );
@@ -192,33 +208,33 @@ export function ReviewRunPage() {
       {activeTab === "overview" ? (
         <section className="run-layout">
           <article className="run-panel">
-            <h2>Overview</h2>
+            <h2>{t("run.overview")}</h2>
             <dl className="run-summary">
               <div>
-                <dt>Status</dt>
-                <dd>{statusLabel(currentStatus)}</dd>
+                <dt>{t("run.status")}</dt>
+                <dd>{statusLabel(currentStatus, t)}</dd>
               </div>
               <div>
-                <dt>Connection</dt>
+                <dt>{t("run.connection")}</dt>
                 <dd>{connectionState}</dd>
               </div>
               <div>
-                <dt>Events</dt>
+                <dt>{t("run.events")}</dt>
                 <dd>{events.length}</dd>
               </div>
               <div>
-                <dt>Findings</dt>
+                <dt>{t("run.findings")}</dt>
                 <dd>{findingsQuery.data.length}</dd>
               </div>
             </dl>
           </article>
 
           <article className="run-panel">
-            <h2>Reviewers</h2>
+            <h2>{t("run.reviewers")}</h2>
             <div className="run-reviewer-stack">
               {(reviewQuery.data?.selected_agents ?? []).map((reference) => (
                 <div className="run-reviewer" key={reference}>
-                  <strong>{reviewerLabel(reference)}</strong>
+                  <strong>{reviewerLabel(reference, t)}</strong>
                   <span>{reference}</span>
                 </div>
               ))}
@@ -233,9 +249,12 @@ export function ReviewRunPage() {
             <div className="run-panel__heading">
               <div>
                 <p className="run-panel__eyebrow">{reviewTitle}</p>
-                <h2>{findingsQuery.data.length} finding{findingsQuery.data.length === 1 ? "" : "s"}</h2>
+                <h2>
+                  {t("run.findingCount", { count: findingsQuery.data.length })}
+                  {locale === "en" && findingsQuery.data.length !== 1 ? "s" : ""}
+                </h2>
               </div>
-              <span className="run-panel__status">{statusLabel(currentStatus)}</span>
+              <span className="run-panel__status">{statusLabel(currentStatus, t)}</span>
             </div>
             <FindingList
               findings={findingsQuery.data}
@@ -254,8 +273,8 @@ export function ReviewRunPage() {
           <article className="run-panel run-panel--wide">
             <div className="run-panel__heading">
               <div>
-                <p className="run-panel__eyebrow">Agent runs</p>
-                <h2>Event stream</h2>
+                <p className="run-panel__eyebrow">{t("run.agentRuns")}</p>
+                <h2>{t("run.eventStream")}</h2>
               </div>
               <span className="run-panel__status">{connectionState}</span>
             </div>
@@ -269,7 +288,7 @@ export function ReviewRunPage() {
                   </li>
                 ))
               ) : (
-                <li className="event-log__empty">Waiting for events.</li>
+                <li className="event-log__empty">{t("run.waitingEvents")}</li>
               )}
             </ul>
           </article>
@@ -279,10 +298,8 @@ export function ReviewRunPage() {
       {activeTab === "artifacts" ? (
         <section className="run-layout">
           <article className="run-panel run-panel--wide">
-            <h2>Artifacts</h2>
-            <p className="run-muted">
-              Artifact browsing lands in Phase 6. The run already persists findings and events.
-            </p>
+            <h2>{t("run.artifacts")}</h2>
+            <p className="run-muted">{t("run.artifactPlaceholder")}</p>
           </article>
         </section>
       ) : null}

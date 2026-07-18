@@ -1,4 +1,5 @@
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Protocol
 
@@ -53,6 +54,9 @@ class ReviewRecord:
     selected_agent_versions: tuple[str, ...]
     status: str
     cancellation_requested: bool
+    repository_name: str
+    created_at: datetime
+    is_deleted: bool
 
 
 @dataclass(frozen=True)
@@ -93,6 +97,16 @@ class ReviewStorePort(Protocol):
 
     async def get_review(self, task_id: str) -> ReviewRecord | None:
         """Return one review summary when it exists."""
+
+        raise NotImplementedError
+
+    async def list_reviews(self) -> tuple[ReviewRecord, ...]:
+        """Return every visible review workspace in newest-first order."""
+
+        raise NotImplementedError
+
+    async def soft_delete_review(self, task_id: str) -> bool:
+        """Hide one review and request cancellation when it is still active."""
 
         raise NotImplementedError
 

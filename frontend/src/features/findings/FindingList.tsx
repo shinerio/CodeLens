@@ -1,4 +1,5 @@
 import type { FindingRecord } from "./types";
+import { useI18n } from "../../shared/i18n/i18n";
 
 function formatLocation(finding: FindingRecord) {
   return `${finding.primary_location.path}:${finding.primary_location.start_line}-${finding.primary_location.end_line}`;
@@ -21,12 +22,13 @@ export function FindingList({
   selectedFindingId: string | null;
   onSelect: (findingId: string) => void;
 }) {
+  const { t } = useI18n();
   if (findings.length === 0) {
-    return <p className="finding-list__empty">No findings yet.</p>;
+    return <p className="finding-list__empty">{t("finding.none")}</p>;
   }
 
   return (
-    <ul className="finding-list" aria-label="Findings">
+    <ul className="finding-list" aria-label={t("finding.list")}>
       {findings.map((finding) => {
         const isSelected = finding.finding_id === selectedFindingId;
         return (

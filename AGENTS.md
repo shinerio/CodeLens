@@ -27,7 +27,7 @@
 
 ```bash
 uv sync --project backend
-uv run --project backend codelens-review start .
+uv run --project backend codelens-review start
 ```
 
 - 前端依赖与命令统一通过 `pnpm` 管理：

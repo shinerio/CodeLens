@@ -27,7 +27,7 @@ textarea {
 .app-shell {
   min-height: 100vh;
   display: grid;
-  grid-template: 58px 1fr / 216px minmax(0, 1fr);
+  grid-template: 58px 1fr / 252px minmax(0, 1fr);
 }
 
 .topbar {
@@ -92,6 +92,275 @@ textarea {
 .sidebar nav {
   display: grid;
   gap: 4px;
+}
+
+.review-navigation {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 12px;
+  padding-bottom: 12px;
+  border-bottom: 1px solid #c2c5bc;
+}
+
+.review-navigation__heading {
+  display: flex;
+  min-height: 38px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 0 8px;
+  color: #232a25;
+  font-size: 0.82rem;
+  font-weight: 800;
+}
+
+.review-navigation__heading > span {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+}
+
+.review-navigation__heading svg {
+  width: 16px;
+  height: 16px;
+}
+
+.review-navigation__heading a {
+  display: grid;
+  width: 28px;
+  height: 28px;
+  place-items: center;
+  border: 1px solid #303932;
+  background: #f6f7f1;
+  color: #18211c;
+}
+
+.review-workspace-list {
+  display: grid;
+  max-height: min(48vh, 440px);
+  gap: 5px;
+  overflow-y: auto;
+}
+
+.review-workspace-empty {
+  margin: 2px 8px 8px 34px;
+  color: #737970;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.review-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 30px;
+  gap: 3px;
+  align-items: stretch;
+  padding-left: 18px;
+}
+
+.review-workspace__link {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 8px 9px;
+  border-left: 1px solid #b8bbb2;
+  color: #4e554f;
+  text-decoration: none;
+}
+
+.review-workspace__link span,
+.review-workspace__link small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-workspace__link span {
+  font-size: 0.78rem;
+  font-weight: 700;
+}
+
+.review-workspace__link small {
+  color: #737970;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.62rem;
+  text-transform: uppercase;
+}
+
+.review-workspace__link:hover,
+.review-workspace__link.active {
+  border-left-color: #6d8429;
+  background: #eff1e9;
+  color: #18211c;
+}
+
+.review-workspace > button {
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #71776f;
+  opacity: 0;
+}
+
+.review-workspace:hover > button,
+.review-workspace > button:focus-visible {
+  opacity: 1;
+}
+
+.review-workspace > button svg {
+  width: 14px;
+  height: 14px;
+}
+
+.navigation-secondary {
+  display: grid;
+  gap: 4px;
+}
+
+.review-navigation {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+
+.review-navigation__heading {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 7px;
+  color: #363d37;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.69rem;
+  font-weight: 800;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.review-navigation__heading > span,
+.review-navigation__heading > a,
+.review-create-link {
+  display: flex;
+  align-items: center;
+}
+
+.review-navigation__heading > span {
+  gap: 7px;
+}
+
+.review-navigation__heading svg,
+.review-create-link svg {
+  width: 15px;
+  height: 15px;
+}
+
+.review-navigation__heading > a {
+  width: 28px;
+  height: 28px;
+  justify-content: center;
+  border: 1px solid #b4b8ae;
+  color: #34402f;
+}
+
+.review-create-link {
+  gap: 8px;
+  min-height: 36px;
+  margin-left: 10px;
+  padding: 0 9px;
+  border-left: 1px solid #b8bcb2;
+  color: #4e554f;
+  font-size: 0.78rem;
+  font-weight: 700;
+  text-decoration: none;
+}
+
+.review-create-link.active {
+  border-left: 3px solid #6d8429;
+  background: #f5f6f0;
+  color: #1d261e;
+}
+
+.review-workspace-list {
+  display: grid;
+  gap: 3px;
+  max-height: min(48vh, 520px);
+  margin-left: 10px;
+  overflow-y: auto;
+  border-left: 1px solid #b8bcb2;
+}
+
+.review-workspace {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 28px;
+  align-items: center;
+}
+
+.review-workspace__link {
+  display: grid;
+  min-width: 0;
+  gap: 2px;
+  padding: 8px 7px 8px 10px;
+  color: #4e554f;
+  text-decoration: none;
+}
+
+.review-workspace__link span,
+.review-workspace__link small {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-workspace__link span {
+  font-size: 0.79rem;
+  font-weight: 750;
+}
+
+.review-workspace__link small {
+  color: #747b73;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.59rem;
+}
+
+.review-workspace__link.active {
+  border-left: 3px solid #6d8429;
+  background: #f5f6f0;
+  color: #1d261e;
+}
+
+.review-workspace > button {
+  display: grid;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: #777e76;
+}
+
+.review-workspace > button:hover {
+  background: #eee1db;
+  color: #8a321f;
+}
+
+.review-workspace > button svg {
+  width: 13px;
+  height: 13px;
+}
+
+.review-workspace-empty {
+  margin: 4px 9px 9px;
+  color: #747b73;
+  font-size: 0.72rem;
+  line-height: 1.4;
+}
+
+.navigation-secondary {
+  display: grid;
+  gap: 4px;
+  margin-top: 18px;
+  padding-top: 12px;
+  border-top: 1px solid #c2c5bc;
 }
 
 .nav-link {
@@ -201,6 +470,61 @@ textarea {
     gap: 6px;
   }
 
+  .review-navigation {
+    display: flex;
+    align-items: center;
+    gap: 6px;
+    margin: 0;
+    padding: 0;
+    border: 0;
+  }
+
+  .review-navigation__heading {
+    padding: 0 4px 0 8px;
+  }
+
+  .review-workspace-list,
+  .navigation-secondary {
+    display: flex;
+    max-height: none;
+    gap: 6px;
+    overflow: visible;
+  }
+
+  .review-workspace-empty {
+    display: none;
+  }
+
+  .review-workspace {
+    grid-template-columns: minmax(0, 132px) 26px;
+    padding: 0;
+    border: 1px solid #c2c5bc;
+  }
+
+  .review-workspace__link {
+    border: 0;
+    padding: 6px 8px;
+  }
+
+  .review-navigation {
+    min-width: 220px;
+  }
+
+  .review-workspace-list {
+    display: none;
+  }
+
+  .review-create-link {
+    margin-left: 0;
+  }
+
+  .navigation-secondary {
+    display: flex;
+    margin-top: 0;
+    padding-top: 0;
+    border-top: 0;
+  }
+
   .nav-link {
     min-height: 38px;
     padding: 0 11px;
@@ -217,4 +541,3 @@ textarea {
     transition: none;
   }
 }
-

@@ -1,443 +1,378 @@
-import { useMutation } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpenText,
   CirclePlay,
   FileCode2,
+  FolderSearch,
   Gauge,
   GitBranch,
   GitCommitVertical,
   Lock,
-  Search,
   ShieldCheck,
   Wrench,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
-import { useNavigate } from "react-router-dom";
+import { useState, type FormEvent } from "react";
+import { Link, useNavigate } from "react-router-dom";
 
-import { inspectRepository } from "../repositories/api";
-import { createReview } from "./api";
+import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
+import { getRepositoryCatalog, inspectRepository } from "../repositories/api";
+import { RepositoryBrowser } from "../repositories/RepositoryBrowser";
 import type {
-  BranchScopeRequest,
-  CommitScopeRequest,
-  CreateReviewRequest,
-  FullRepositoryScopeRequest,
+  RepositoryCatalog,
+  RepositoryCommit,
   RepositoryInspectionResponse,
-  ReviewMode,
-  ScopeRequest,
-  UncommittedScopeRequest,
-} from "./types";
+} from "../repositories/types";
+import { listModelGateways } from "../settings/api";
+import { createReview } from "./api";
+import type { CreateReviewRequest, ReviewMode, ScopeRequest } from "./types";
 import "./NewReviewPage.css";
 
 const CORRECTNESS_AGENT_REFERENCE = "correctness:v1";
-
-const REVIEWER_ROWS = [
+const REVIEWER_ROWS: Array<{
+  reference: string;
+  labelKey: TranslationKey;
+  noteKey: TranslationKey;
+  enabled: boolean;
+  statusKey: TranslationKey;
+  icon: typeof ShieldCheck;
+}> = [
   {
     reference: CORRECTNESS_AGENT_REFERENCE,
-    label: "Correctness",
-    description: "Logic, edge cases, concurrency, and state-machine correctness.",
+    labelKey: "review.correctness",
+    noteKey: "review.correctnessNote",
     enabled: true,
-    status: "Enabled now",
+    statusKey: "review.enabledNow",
     icon: ShieldCheck,
   },
   {
     reference: "security:v1",
-    label: "Security",
-    description: "Auth, secrets, injection, data exposure, and supply chain.",
+    labelKey: "review.security",
+    noteKey: "review.securityNote",
     enabled: false,
-    status: "Available in Phase 3",
+    statusKey: "review.availablePhase3",
     icon: Lock,
   },
   {
     reference: "performance:v1",
-    label: "Performance",
-    description: "Complexity, blocking work, memory, and resource usage.",
+    labelKey: "review.performance",
+    noteKey: "review.performanceNote",
     enabled: false,
-    status: "Available in Phase 3",
+    statusKey: "review.availablePhase3",
     icon: Gauge,
   },
   {
     reference: "maintainability:v1",
-    label: "Maintainability",
-    description: "Responsibilities, coupling, repetition, and testability.",
+    labelKey: "review.maintainability",
+    noteKey: "review.maintainabilityNote",
     enabled: false,
-    status: "Available in Phase 3",
+    statusKey: "review.availablePhase3",
     icon: Wrench,
   },
   {
     reference: "testing:v1",
-    label: "Testing",
-    description: "Regression risk, edge cases, failure paths, and coverage.",
+    labelKey: "review.testing",
+    noteKey: "review.testingNote",
     enabled: false,
-    status: "Available in Phase 3",
+    statusKey: "review.availablePhase3",
     icon: FileCode2,
   },
   {
     reference: "docs_style:v1",
-    label: "Docs & Style",
-    description: "Public contracts, documentation, naming, and repo rules.",
+    labelKey: "review.docsStyle",
+    noteKey: "review.docsStyleNote",
     enabled: false,
-    status: "Available in Phase 3",
+    statusKey: "review.availablePhase3",
     icon: BookOpenText,
   },
   {
     reference: "cross_file:v1",
-    label: "Cross-file",
-    description: "Call chains, imports, compatibility, and downstream impact.",
+    labelKey: "review.crossFile",
+    noteKey: "review.crossFileNote",
     enabled: false,
-    status: "Available in Phase 3",
+    statusKey: "review.availablePhase3",
     icon: GitCommitVertical,
   },
-] as const;
-
-const DEFAULT_BRANCH_BASE = "origin/main";
-const DEFAULT_TARGET_REF = "HEAD";
-const MODE_OPTIONS: Array<{ value: ReviewMode; label: string; note: string }> = [
-  { value: "review", label: "REVIEW", note: "Enabled now" },
-  { value: "fix", label: "FIX", note: "Available in Phase 5" },
 ];
 
 type ScopeType = ScopeRequest["type"];
 
-function buildScope(
-  scopeType: ScopeType,
-  includeWorkspaceChanges: boolean,
-  branchBaseRef: string,
-  branchTargetRef: string,
-  commitBaseRef: string,
-  commitTargetRef: string,
-  fullTargetRef: string,
-): ScopeRequest {
-  if (scopeType === "branch") {
-    const scope: BranchScopeRequest = {
-      type: "branch",
-      base_ref: branchBaseRef.trim(),
-      target_ref: branchTargetRef.trim() || DEFAULT_TARGET_REF,
-      include_workspace_changes: includeWorkspaceChanges,
-    };
-    return scope;
+function preferredBase(branchNames: string[], target: string): string {
+  for (const candidate of ["origin/main", "main", "origin/master", "master"]) {
+    if (candidate !== target && branchNames.includes(candidate)) {
+      return candidate;
+    }
   }
-  if (scopeType === "commit") {
-    const scope: CommitScopeRequest = {
-      type: "commit",
-      base_commit: commitBaseRef.trim(),
-      target_ref: commitTargetRef.trim() || DEFAULT_TARGET_REF,
-      include_workspace_changes: includeWorkspaceChanges,
-    };
-    return scope;
-  }
-  if (scopeType === "full") {
-    const scope: FullRepositoryScopeRequest = {
-      type: "full",
-      target_ref: fullTargetRef.trim() || DEFAULT_TARGET_REF,
-      include_workspace_changes: includeWorkspaceChanges,
-    };
-    return scope;
-  }
-  const scope: UncommittedScopeRequest = {
-    type: "uncommitted",
-  };
-  return scope;
+  return branchNames.find((branch) => branch !== target) ?? branchNames[0] ?? "";
 }
 
-function ScopeToggle({
-  active,
-  children,
-  description,
-  onClick,
-}: {
-  active: boolean;
-  children: string;
-  description: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={active ? "scope-toggle scope-toggle--active" : "scope-toggle"}
-      type="button"
-      onClick={onClick}
-    >
-      <span className="scope-toggle__title">{children}</span>
-      <span className="scope-toggle__description">{description}</span>
-    </button>
-  );
-}
-
-function AgentRow({
-  enabled,
-  checked,
-  description,
-  icon: Icon,
-  label,
-  onChange,
-  reference,
-  status,
-}: {
-  enabled: boolean;
-  checked: boolean;
-  description: string;
-  icon: typeof ShieldCheck;
-  label: string;
-  onChange: (checked: boolean) => void;
-  reference: string;
-  status: string;
-}) {
-  return (
-    <label className={enabled ? "agent-row" : "agent-row agent-row--disabled"}>
-      <span className="agent-row__leading">
-        <Icon aria-hidden="true" />
-      </span>
-      <span className="agent-row__content">
-        <span className="agent-row__headline">
-          <span>{label}</span>
-          <span className="agent-row__reference">{reference}</span>
-        </span>
-        <span className="agent-row__description">{description}</span>
-      </span>
-      <span className="agent-row__status">{status}</span>
-      <input
-        checked={checked}
-        disabled={!enabled}
-        className="agent-row__input"
-        aria-label={label}
-        type="checkbox"
-        onChange={(event) => onChange(event.currentTarget.checked)}
-      />
-    </label>
-  );
-}
-
-function ModeToggle({
-  active,
-  disabled,
-  label,
-  note,
-  onClick,
-}: {
-  active: boolean;
-  disabled: boolean;
-  label: string;
-  note: string;
-  onClick: () => void;
-}) {
-  return (
-    <button
-      className={active ? "mode-toggle mode-toggle--active" : "mode-toggle"}
-      type="button"
-      disabled={disabled}
-      onClick={onClick}
-    >
-      <span className="mode-toggle__label">{label}</span>
-      <span className="mode-toggle__note">{note}</span>
-    </button>
-  );
+function commitLabel(commit: RepositoryCommit): string {
+  return `${commit.short_oid} · ${commit.author} · ${commit.message}`;
 }
 
 export function NewReviewPage() {
   const navigate = useNavigate();
+  const queryClient = useQueryClient();
+  const { t } = useI18n();
+  const [browserOpen, setBrowserOpen] = useState(false);
   const [repositoryPath, setRepositoryPath] = useState("");
   const [inspection, setInspection] = useState<RepositoryInspectionResponse | null>(null);
+  const [catalog, setCatalog] = useState<RepositoryCatalog | null>(null);
+  const [commits, setCommits] = useState<RepositoryCommit[]>([]);
+  const [nextCommitOffset, setNextCommitOffset] = useState<number | null>(null);
   const [scopeType, setScopeType] = useState<ScopeType>("branch");
   const [includeWorkspaceChanges, setIncludeWorkspaceChanges] = useState(false);
-  const [branchBaseRef, setBranchBaseRef] = useState(DEFAULT_BRANCH_BASE);
+  const [branchBaseRef, setBranchBaseRef] = useState("");
   const [branchTargetRef, setBranchTargetRef] = useState("");
   const [commitBaseRef, setCommitBaseRef] = useState("");
-  const [commitTargetRef, setCommitTargetRef] = useState(DEFAULT_TARGET_REF);
-  const [fullTargetRef, setFullTargetRef] = useState(DEFAULT_TARGET_REF);
+  const [commitTargetRef, setCommitTargetRef] = useState("");
+  const [fullTargetRef, setFullTargetRef] = useState("");
   const [correctnessEnabled, setCorrectnessEnabled] = useState(true);
   const [mode, setMode] = useState<ReviewMode>("review");
 
+  const gatewayQuery = useQuery({
+    queryKey: ["model-gateways"],
+    queryFn: listModelGateways,
+  });
+
   const inspectMutation = useMutation({
-    mutationFn: async () => inspectRepository(repositoryPath.trim()),
-    onSuccess: (result) => {
-      setInspection(result);
-      if (scopeType === "branch" && branchTargetRef.trim() === "") {
-        setBranchTargetRef(result.current_branch ?? DEFAULT_TARGET_REF);
-      }
-      if (scopeType === "commit" && commitTargetRef.trim() === "") {
-        setCommitTargetRef(DEFAULT_TARGET_REF);
-      }
-      if (scopeType === "full" && fullTargetRef.trim() === "") {
-        setFullTargetRef(DEFAULT_TARGET_REF);
-      }
+    mutationFn: async (path: string) => {
+      const [repository, repositoryCatalog] = await Promise.all([
+        inspectRepository(path),
+        getRepositoryCatalog(path),
+      ]);
+      return { repository, repositoryCatalog };
+    },
+    onSuccess: ({ repository, repositoryCatalog }) => {
+      const branchNames = repositoryCatalog.branches.map((branch) => branch.name);
+      const target =
+        repositoryCatalog.branches.find((branch) => branch.is_current)?.name ??
+        branchNames[0] ??
+        "";
+      setInspection(repository);
+      setCatalog(repositoryCatalog);
+      setCommits(repositoryCatalog.commits);
+      setNextCommitOffset(repositoryCatalog.next_commit_offset);
+      setBranchTargetRef(target);
+      setCommitTargetRef(target);
+      setFullTargetRef(target);
+      setBranchBaseRef(preferredBase(branchNames, target));
+      setCommitBaseRef(repositoryCatalog.commits[0]?.oid ?? "");
+    },
+  });
+
+  const loadMoreMutation = useMutation({
+    mutationFn: async (offset: number) => getRepositoryCatalog(repositoryPath, offset),
+    onSuccess: (nextCatalog) => {
+      setCommits((current) => {
+        const existing = new Set(current.map((commit) => commit.oid));
+        return [...current, ...nextCatalog.commits.filter((commit) => !existing.has(commit.oid))];
+      });
+      setNextCommitOffset(nextCatalog.next_commit_offset);
     },
   });
 
   const createMutation = useMutation({
-    mutationFn: async (request: CreateReviewRequest) => createReview(request),
-    onSuccess: (result) => {
-      navigate(`/runs/${result.task_id}`);
+    mutationFn: createReview,
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["reviews"] });
+      navigate(`/reviews/${result.task_id}`);
     },
   });
 
-  useEffect(() => {
-    if (inspection === null) {
-      return;
-    }
-    if (scopeType === "branch" && branchTargetRef.trim() === "") {
-      setBranchTargetRef(inspection.current_branch ?? DEFAULT_TARGET_REF);
-    }
-    if (scopeType === "commit" && commitTargetRef.trim() === "") {
-      setCommitTargetRef(DEFAULT_TARGET_REF);
-    }
-    if (scopeType === "full" && fullTargetRef.trim() === "") {
-      setFullTargetRef(DEFAULT_TARGET_REF);
-    }
-  }, [inspection, scopeType, branchTargetRef, commitTargetRef, fullTargetRef]);
-
+  const branchNames = catalog?.branches.map((branch) => branch.name) ?? [];
   const selectedAgents = correctnessEnabled ? [CORRECTNESS_AGENT_REFERENCE] : [];
+  const hasActiveGateway = gatewayQuery.data?.active_gateway_id != null;
+  const selectedScopeIsValid =
+    scopeType === "uncommitted" ||
+    (scopeType === "branch" && branchBaseRef !== "" && branchTargetRef !== "") ||
+    (scopeType === "commit" && commitBaseRef !== "" && commitTargetRef !== "") ||
+    (scopeType === "full" && fullTargetRef !== "");
   const startDisabled =
     inspection === null ||
     selectedAgents.length === 0 ||
+    !hasActiveGateway ||
+    !selectedScopeIsValid ||
     inspectMutation.isPending ||
     createMutation.isPending;
-  const errorMessage =
-    createMutation.error instanceof Error
-      ? createMutation.error.message
-      : inspectMutation.error instanceof Error
-        ? inspectMutation.error.message
-        : null;
+  const errorMessage = [
+    inspectMutation.error,
+    loadMoreMutation.error,
+    createMutation.error,
+    gatewayQuery.error,
+  ].find((error): error is Error => error instanceof Error)?.message;
+
+  function selectRepository(path: string) {
+    setBrowserOpen(false);
+    setRepositoryPath(path);
+    setInspection(null);
+    setCatalog(null);
+    inspectMutation.mutate(path);
+  }
+
+  function buildScope(): ScopeRequest {
+    if (scopeType === "branch") {
+      return {
+        type: "branch",
+        base_ref: branchBaseRef,
+        target_ref: branchTargetRef,
+        include_workspace_changes: includeWorkspaceChanges,
+      };
+    }
+    if (scopeType === "commit") {
+      return {
+        type: "commit",
+        base_commit: commitBaseRef,
+        target_ref: commitTargetRef,
+        include_workspace_changes: includeWorkspaceChanges,
+      };
+    }
+    if (scopeType === "full") {
+      return {
+        type: "full",
+        target_ref: fullTargetRef,
+        include_workspace_changes: includeWorkspaceChanges,
+      };
+    }
+    return { type: "uncommitted" };
+  }
 
   function handleStartReview(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    if (inspection === null || selectedAgents.length === 0) {
+    if (startDisabled) {
       return;
     }
-    createMutation.mutate({
-      repository_path: repositoryPath.trim(),
-      scope: buildScope(
-        scopeType,
-        includeWorkspaceChanges,
-        branchBaseRef,
-        branchTargetRef,
-        commitBaseRef,
-        commitTargetRef,
-        fullTargetRef,
-      ),
+    const request: CreateReviewRequest = {
+      repository_path: repositoryPath,
+      scope: buildScope(),
       selected_agents: selectedAgents,
       mode,
-    });
+    };
+    createMutation.mutate(request);
+  }
+
+  function scopeToggle(type: ScopeType, title: TranslationKey, note: TranslationKey) {
+    return (
+      <button
+        className={scopeType === type ? "scope-toggle scope-toggle--active" : "scope-toggle"}
+        type="button"
+        onClick={() => setScopeType(type)}
+      >
+        <span className="scope-toggle__title">{t(title)}</span>
+        <span className="scope-toggle__description">{t(note)}</span>
+      </button>
+    );
   }
 
   return (
     <section className="new-review-page">
+      <RepositoryBrowser
+        isOpen={browserOpen}
+        onClose={() => setBrowserOpen(false)}
+        onSelect={selectRepository}
+      />
       <header className="new-review-page__header">
-        <div className="new-review-page__eyebrow">Phase 0-2 review creation</div>
-        <h1>New Review</h1>
-        <p>
-          Inspect a repository, pin the review scope, and launch the first correctness-only run
-          from one contained workbench.
-        </p>
+        <div className="new-review-page__eyebrow">{t("review.newEyebrow")}</div>
+        <h1>{t("review.newTitle")}</h1>
+        <p>{t("review.newSubtitle")}</p>
       </header>
 
       <div className="new-review-page__grid">
         <form className="new-review-page__form" onSubmit={handleStartReview}>
           <section className="panel panel--primary">
             <div className="panel__heading">
-              <Search aria-hidden="true" />
-              <h2>Repository inspection</h2>
+              <FolderSearch aria-hidden="true" />
+              <h2>{t("repository.inspection")}</h2>
             </div>
             <div className="field-row field-row--path">
               <label className="field">
-                <span className="field__label">Repository path</span>
+                <span className="field__label">{t("repository.path")}</span>
                 <input
-                  autoComplete="off"
-                  className="field__control"
-                  placeholder="/srv/repos/app"
+                  aria-label={t("repository.path")}
+                  className="field__control repository-path-control"
+                  readOnly
                   value={repositoryPath}
-                  onChange={(event) => setRepositoryPath(event.currentTarget.value)}
                 />
               </label>
               <button
                 className="action-button action-button--secondary"
-                disabled={repositoryPath.trim() === "" || inspectMutation.isPending}
+                disabled={inspectMutation.isPending}
                 type="button"
-                onClick={() => inspectMutation.mutate()}
+                onClick={() => setBrowserOpen(true)}
               >
-                Inspect
+                {repositoryPath === "" ? t("repository.browse") : t("repository.change")}
               </button>
             </div>
 
-            {inspection === null ? (
-              <p className="hint">
-                Inspect a local repository to lock the path, branch, and HEAD before creating the
-                task.
-              </p>
-            ) : (
+            {inspectMutation.isPending ? <p className="hint">{t("repository.inspecting")}</p> : null}
+            {!inspectMutation.isPending && inspection === null ? (
+              <p className="hint">{t("repository.required")}</p>
+            ) : null}
+            {inspection !== null ? (
               <dl className="inspection-summary">
                 <div>
-                  <dt>Repository</dt>
+                  <dt>{t("repository.repository")}</dt>
                   <dd>{inspection.display_path}</dd>
                 </div>
                 <div>
-                  <dt>HEAD</dt>
+                  <dt>{t("repository.head")}</dt>
                   <dd>{inspection.head_oid}</dd>
                 </div>
                 <div>
-                  <dt>Branch</dt>
-                  <dd>{inspection.current_branch ?? "Detached HEAD"}</dd>
+                  <dt>{t("repository.branch")}</dt>
+                  <dd>{inspection.current_branch ?? t("repository.detached")}</dd>
                 </div>
                 <div>
-                  <dt>Dirty</dt>
-                  <dd>{inspection.is_dirty ? "Dirty working tree" : "Clean working tree"}</dd>
+                  <dt>{t("repository.dirty")}</dt>
+                  <dd>
+                    {inspection.is_dirty
+                      ? t("repository.dirtyTree")
+                      : t("repository.cleanTree")}
+                  </dd>
                 </div>
               </dl>
-            )}
+            ) : null}
           </section>
 
           <section className="panel">
             <div className="panel__heading">
               <GitBranch aria-hidden="true" />
-              <h2>Scope</h2>
+              <h2>{t("review.scope")}</h2>
             </div>
-            <div className="scope-toggle-grid" role="radiogroup" aria-label="Review scope">
-              <ScopeToggle
-                active={scopeType === "branch"}
-                description="Compare a named branch range."
-                onClick={() => setScopeType("branch")}
-              >
-                Branch diff
-              </ScopeToggle>
-              <ScopeToggle
-                active={scopeType === "commit"}
-                description="Inspect one commit against a pinned base."
-                onClick={() => setScopeType("commit")}
-              >
-                Commit diff
-              </ScopeToggle>
-              <ScopeToggle
-                active={scopeType === "uncommitted"}
-                description="Review the current workspace delta."
-                onClick={() => setScopeType("uncommitted")}
-              >
-                Uncommitted
-              </ScopeToggle>
-              <ScopeToggle
-                active={scopeType === "full"}
-                description="Pin the repository without a narrower diff."
-                onClick={() => setScopeType("full")}
-              >
-                Full repository
-              </ScopeToggle>
+            <div className="scope-toggle-grid" role="radiogroup" aria-label={t("review.scopeGroup")}>
+              {scopeToggle("branch", "review.branchDiff", "review.branchDiffNote")}
+              {scopeToggle("commit", "review.commitDiff", "review.commitDiffNote")}
+              {scopeToggle("uncommitted", "review.uncommitted", "review.uncommittedNote")}
+              {scopeToggle("full", "review.fullRepository", "review.fullRepositoryNote")}
             </div>
 
             <div className="scope-fields">
               {scopeType === "branch" ? (
                 <>
                   <label className="field">
-                    <span className="field__label">Base branch</span>
-                    <input
+                    <span className="field__label">{t("review.baseBranch")}</span>
+                    <select
+                      aria-label={t("review.baseBranch")}
                       className="field__control"
+                      disabled={branchNames.length === 0}
                       value={branchBaseRef}
                       onChange={(event) => setBranchBaseRef(event.currentTarget.value)}
-                    />
+                    >
+                      {branchNames.length === 0 ? <option value="">{t("review.noBranches")}</option> : null}
+                      {branchNames.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+                    </select>
                   </label>
                   <label className="field">
-                    <span className="field__label">Target branch</span>
-                    <input
+                    <span className="field__label">{t("review.targetBranch")}</span>
+                    <select
+                      aria-label={t("review.targetBranch")}
                       className="field__control"
+                      disabled={branchNames.length === 0}
                       value={branchTargetRef}
                       onChange={(event) => setBranchTargetRef(event.currentTarget.value)}
-                    />
+                    >
+                      {branchNames.length === 0 ? <option value="">{t("review.noBranches")}</option> : null}
+                      {branchNames.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+                    </select>
                   </label>
                 </>
               ) : null}
@@ -445,33 +380,55 @@ export function NewReviewPage() {
               {scopeType === "commit" ? (
                 <>
                   <label className="field">
-                    <span className="field__label">Base commit</span>
-                    <input
-                      className="field__control"
-                      placeholder="HEAD~1"
+                    <span className="field__label">{t("review.baseCommit")}</span>
+                    <select
+                      aria-label={t("review.baseCommit")}
+                      className="field__control commit-select"
+                      disabled={commits.length === 0}
                       value={commitBaseRef}
                       onChange={(event) => setCommitBaseRef(event.currentTarget.value)}
-                    />
+                    >
+                      {commits.length === 0 ? <option value="">{t("review.noCommits")}</option> : null}
+                      {commits.map((commit) => (
+                        <option key={commit.oid} value={commit.oid}>{commitLabel(commit)}</option>
+                      ))}
+                    </select>
                   </label>
+                  {nextCommitOffset !== null ? (
+                    <button
+                      className="load-more-button"
+                      disabled={loadMoreMutation.isPending}
+                      type="button"
+                      onClick={() => loadMoreMutation.mutate(nextCommitOffset)}
+                    >
+                      {loadMoreMutation.isPending ? t("common.loading") : t("review.moreCommits")}
+                    </button>
+                  ) : null}
                   <label className="field">
-                    <span className="field__label">Target ref</span>
-                    <input
+                    <span className="field__label">{t("review.targetBranch")}</span>
+                    <select
+                      aria-label={t("review.targetBranch")}
                       className="field__control"
                       value={commitTargetRef}
                       onChange={(event) => setCommitTargetRef(event.currentTarget.value)}
-                    />
+                    >
+                      {branchNames.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+                    </select>
                   </label>
                 </>
               ) : null}
 
               {scopeType === "full" ? (
                 <label className="field">
-                  <span className="field__label">Target ref</span>
-                  <input
+                  <span className="field__label">{t("review.targetBranch")}</span>
+                  <select
+                    aria-label={t("review.targetBranch")}
                     className="field__control"
                     value={fullTargetRef}
                     onChange={(event) => setFullTargetRef(event.currentTarget.value)}
-                  />
+                  >
+                    {branchNames.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+                  </select>
                 </label>
               ) : null}
 
@@ -482,7 +439,7 @@ export function NewReviewPage() {
                     type="checkbox"
                     onChange={(event) => setIncludeWorkspaceChanges(event.currentTarget.checked)}
                   />
-                  <span>Include workspace changes</span>
+                  <span>{t("review.includeWorkspace")}</span>
                 </label>
               ) : null}
             </div>
@@ -491,61 +448,73 @@ export function NewReviewPage() {
           <section className="panel">
             <div className="panel__heading">
               <CirclePlay aria-hidden="true" />
-              <h2>Mode</h2>
+              <h2>{t("review.mode")}</h2>
             </div>
-            <div className="mode-toggle-grid" role="radiogroup" aria-label="Review mode">
-              {MODE_OPTIONS.map((option) => (
-                <ModeToggle
-                  active={mode === option.value}
-                  disabled={option.value === "fix"}
-                  key={option.value}
-                  label={option.label}
-                  note={option.note}
-                  onClick={() => setMode(option.value)}
-                />
-              ))}
+            <div className="mode-toggle-grid" role="radiogroup" aria-label={t("review.mode")}>
+              <button
+                className={mode === "review" ? "mode-toggle mode-toggle--active" : "mode-toggle"}
+                type="button"
+                onClick={() => setMode("review")}
+              >
+                <span className="mode-toggle__label">REVIEW</span>
+                <span className="mode-toggle__note">{t("review.enabledNow")}</span>
+              </button>
+              <button className="mode-toggle" disabled type="button">
+                <span className="mode-toggle__label">FIX</span>
+                <span className="mode-toggle__note">{t("review.availablePhase5")}</span>
+              </button>
             </div>
           </section>
 
           <section className="panel">
             <div className="panel__heading">
               <ShieldCheck aria-hidden="true" />
-              <h2>Reviewers</h2>
+              <h2>{t("review.reviewers")}</h2>
             </div>
             <div className="reviewer-list">
-              {REVIEWER_ROWS.map((row) => (
-                <AgentRow
-                  checked={row.enabled ? correctnessEnabled : false}
-                  description={row.description}
-                  enabled={row.enabled}
-                  icon={row.icon}
-                  key={row.reference}
-                  label={row.label}
-                  reference={row.reference}
-                  status={row.status}
-                  onChange={(checked) => {
-                    if (row.reference === CORRECTNESS_AGENT_REFERENCE) {
-                      setCorrectnessEnabled(checked);
-                    }
-                  }}
-                />
-              ))}
+              {REVIEWER_ROWS.map((row) => {
+                const Icon = row.icon;
+                return (
+                  <label className={row.enabled ? "agent-row" : "agent-row agent-row--disabled"} key={row.reference}>
+                    <span className="agent-row__leading"><Icon aria-hidden="true" /></span>
+                    <span className="agent-row__content">
+                      <span className="agent-row__headline">
+                        <span>{t(row.labelKey)}</span>
+                        <span className="agent-row__reference">{row.reference}</span>
+                      </span>
+                      <span className="agent-row__description">{t(row.noteKey)}</span>
+                    </span>
+                    <span className="agent-row__status">{t(row.statusKey)}</span>
+                    <input
+                      aria-label={t(row.labelKey)}
+                      checked={row.enabled ? correctnessEnabled : false}
+                      className="agent-row__input"
+                      disabled={!row.enabled}
+                      type="checkbox"
+                      onChange={(event) => setCorrectnessEnabled(event.currentTarget.checked)}
+                    />
+                  </label>
+                );
+              })}
             </div>
           </section>
 
-          {errorMessage !== null ? (
-            <div className="alert" role="alert">
-              {errorMessage}
+          {errorMessage !== undefined ? <div className="alert" role="alert">{errorMessage}</div> : null}
+          {gatewayQuery.data?.active_gateway_id === null ? (
+            <div className="provider-required" role="status">
+              <span>{t("review.providerRequired")}</span>
+              <Link to="/settings">{t("review.configureGateway")}</Link>
             </div>
           ) : null}
 
           <div className="form-actions">
             <div className="form-actions__summary">
-              <span>{inspection === null ? "Inspection required" : "Inspection ready"}</span>
-              <span>{selectedAgents.length} enabled agent</span>
+              <span>{inspection === null ? t("repository.notReady") : t("repository.ready")}</span>
+              <span>{t("review.agentCount", { count: selectedAgents.length })}</span>
+              <span>{hasActiveGateway ? t("review.gatewayReady") : t("review.gatewayMissing")}</span>
             </div>
             <button className="action-button" disabled={startDisabled} type="submit">
-              Start review
+              {createMutation.isPending ? t("review.starting") : t("review.start")}
             </button>
           </div>
         </form>
@@ -553,44 +522,19 @@ export function NewReviewPage() {
         <aside className="panel panel--aside">
           <div className="panel__heading">
             <FileCode2 aria-hidden="true" />
-            <h2>Inspection summary</h2>
+            <h2>{t("review.summary")}</h2>
           </div>
-          {inspection === null ? (
-            <p className="hint">
-              The summary appears after inspection and stays visible while you tune the scope.
-            </p>
-          ) : (
+          {inspection === null ? <p className="hint">{t("review.summaryEmpty")}</p> : (
             <dl className="inspector-card">
-              <div>
-                <dt>Branch</dt>
-                <dd>{inspection.current_branch ?? "Detached HEAD"}</dd>
-              </div>
-              <div>
-                <dt>HEAD</dt>
-                <dd>{inspection.head_oid}</dd>
-              </div>
-              <div>
-                <dt>Dirty</dt>
-                <dd>{inspection.is_dirty ? "Yes" : "No"}</dd>
-              </div>
-              <div>
-                <dt>Repository ID</dt>
-                <dd>{inspection.repository_id}</dd>
-              </div>
-              <div>
-                <dt>Realpath hash</dt>
-                <dd>{inspection.repository_realpath_hash}</dd>
-              </div>
-              <div>
-                <dt>Common dir hash</dt>
-                <dd>{inspection.git_common_dir_hash}</dd>
-              </div>
+              <div><dt>{t("repository.branch")}</dt><dd>{inspection.current_branch ?? t("repository.detached")}</dd></div>
+              <div><dt>{t("repository.head")}</dt><dd>{inspection.head_oid}</dd></div>
+              <div><dt>{t("repository.dirty")}</dt><dd>{inspection.is_dirty ? t("common.yes") : t("common.no")}</dd></div>
+              <div><dt>{t("review.repositoryId")}</dt><dd>{inspection.repository_id}</dd></div>
+              <div><dt>{t("review.realpathHash")}</dt><dd>{inspection.repository_realpath_hash}</dd></div>
+              <div><dt>{t("review.commonDirHash")}</dt><dd>{inspection.git_common_dir_hash}</dd></div>
             </dl>
           )}
-          <div className="aside-note">
-            Only the correctness reviewer is active in this phase. The rest of the catalog is shown
-            so the form matches the future review topology.
-          </div>
+          <div className="aside-note">{t("review.phaseNote")}</div>
         </aside>
       </div>
     </section>

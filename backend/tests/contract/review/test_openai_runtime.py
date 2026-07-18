@@ -7,6 +7,7 @@ import httpx
 import pytest
 from agents import Agent, RunConfig
 from agents.exceptions import ModelBehaviorError
+from agents.models.openai_responses import OpenAIResponsesModel
 from openai import APIConnectionError, InternalServerError, RateLimitError
 
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
@@ -17,6 +18,7 @@ from codelens.review.domain.errors import (
 )
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.reviewer_catalog.domain.models import AgentVersion
+from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
 from codelens.workspace.domain.models import ReviewMode
 
@@ -66,6 +68,25 @@ class FakeRunner:
         return self.result
 
 
+class StaticProviderConfigStore:
+    def __init__(self, config: ModelProviderConfig | None = None) -> None:
+        self.config = config
+
+    async def load(self) -> ModelProviderConfig | None:
+        return self.config
+
+    async def save(self, config: ModelProviderConfig) -> None:
+        self.config = config
+
+
+def _provider_config() -> ModelProviderConfig:
+    return ModelProviderConfig(
+        api_key="sk-contract-secret",
+        model="gpt-5.1",
+        base_url="http://model-gateway.example:8080",
+    )
+
+
 def _agent() -> AgentVersion:
     return AgentVersion(
         agent_id="correctness",
@@ -97,7 +118,7 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
         )
     )
     runtime = OpenAIAgentRuntime(
-        model_name="gpt-5.1",
+        config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         runner=runner,
     )
@@ -110,7 +131,9 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     assert sdk_agent is not None
     assert sdk_agent.output_type is FindingBatchSchema
     assert sdk_agent.instructions == _agent().prompt_template
-    assert sdk_agent.model == "gpt-5.1"
+    assert isinstance(sdk_agent.model, OpenAIResponsesModel)
+    assert sdk_agent.model.model == "gpt-5.1"
+    assert str(sdk_agent.model._client.base_url) == "http://model-gateway.example:8080"
     assert runner.input_payload == source_secret
     assert runner.max_turns == 3
     assert runner.run_config is not None
@@ -154,7 +177,7 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
 )
 async def test_maps_retryable_provider_failures_without_leaking_details(failure: Exception) -> None:
     runtime = OpenAIAgentRuntime(
-        model_name="gpt-5.1",
+        config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         runner=FakeRunner(failure),
     )
@@ -175,7 +198,7 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
 )
 async def test_maps_invalid_output_to_a_permanent_failure(result: FakeResult | Exception) -> None:
     runtime = OpenAIAgentRuntime(
-        model_name="gpt-5.1",
+        config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         runner=FakeRunner(result),
     )
@@ -187,6 +210,17 @@ async def test_maps_invalid_output_to_a_permanent_failure(result: FakeResult | E
     formatted = "".join(traceback.format_exception(captured.value))
     assert "FULL_PROVIDER_PAYLOAD_SECRET" not in formatted
     assert captured.value.__context__ is None
+
+
+async def test_missing_provider_configuration_fails_only_when_invoked() -> None:
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(),
+        output_codec=AgentOutputCodec("1"),
+        runner=FakeRunner(FakeResult({}, ())),
+    )
+
+    with pytest.raises(PermanentAgentOutputError, match="not configured"):
+        await runtime.invoke(_agent(), b"bounded input")
 
 
 def test_builtin_correctness_agent_is_immutable_and_content_addressed() -> None:

@@ -20,7 +20,6 @@ class Settings(BaseSettings):
     max_agent_runs_per_review: int = 4
     repository_roots: tuple[Path, ...] = ()
     database_url: str | None = None
-    openai_model: str = ""
     initialize_schema: bool = True
 
     @field_validator("repository_roots")

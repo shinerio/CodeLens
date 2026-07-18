@@ -29,19 +29,48 @@ async function assertNoOverlap(page: import("@playwright/test").Page) {
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 }
 
+async function chooseRepository(
+  page: import("@playwright/test").Page,
+  repository: string,
+) {
+  await page.getByRole("button", { name: "Browse folders" }).click();
+  const dialog = page.getByRole("dialog", { name: "Repository browser" });
+  const root = path.parse(repository).root;
+  await dialog.getByRole("button", { name: root, exact: true }).click();
+
+  const parts = repository.slice(root.length).split(path.sep).filter(Boolean);
+  for (const [index, part] of parts.entries()) {
+    const row = dialog.locator(".directory-row").filter({ hasText: part }).first();
+    await expect(row).toBeVisible();
+    if (index === parts.length - 1) {
+      await row.getByRole("button", { name: `Select repository ${part}` }).click();
+    } else {
+      await row.locator(":scope > button").first().click();
+    }
+  }
+}
+
 test("streams the correctness fixture from inspect to validated findings", async ({ page }) => {
   const repository = fixtureRepositoryPath();
-  await page.goto("/");
+  await page.goto("/settings");
 
-  await page.getByLabel("Repository path").fill(repository);
-  await page.getByRole("button", { name: "Inspect", exact: true }).click();
+  await page.getByLabel("Gateway name").fill("E2E fixture");
+  await page.getByLabel("API Key").fill("sk-e2e-fixture-secret");
+  await page.getByLabel("Base URL").fill("http://127.0.0.1:9999");
+  await page.getByLabel("Model").fill("fixture-model");
+  await page.getByRole("button", { name: "Add gateway", exact: true }).click();
+  await expect(page.getByText("Active gateway", { exact: true }).first()).toBeVisible();
+
+  await page.goto("/reviews/new");
+
+  await chooseRepository(page, repository);
   await expect(page.getByText("Inspection ready")).toBeVisible();
 
   await page.getByRole("button", { name: /Uncommitted/ }).click();
   await page.getByRole("button", { name: "Start review", exact: true }).click();
 
   await expect(page.getByText("Live review run")).toBeVisible();
-  await expect(page.getByText("completed", { exact: true })).toBeVisible({
+  await expect(page.locator(".review-run-page__subtitle")).toContainText("completed", {
     timeout: 15000,
   });
   await expect(

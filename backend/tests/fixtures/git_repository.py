@@ -33,6 +33,7 @@ def git_repository(tmp_path: Path) -> Path:
     _run_git("init", "-b", "main", str(repository))
     _run_git("-C", str(repository), "config", "user.email", "test@example.com")
     _run_git("-C", str(repository), "config", "user.name", "Test User")
+    _run_git("-C", str(repository), "config", "commit.gpgSign", "false")
     (repository / "README.md").write_text("# fixture\n", encoding="utf-8")
     _run_git("-C", str(repository), "add", "README.md")
     _run_git("-C", str(repository), "commit", "-m", "initial")

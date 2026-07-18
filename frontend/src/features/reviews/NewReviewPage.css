@@ -126,6 +126,39 @@
   align-items: end;
 }
 
+.repository-picker {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 14px;
+  align-items: end;
+  padding: 18px;
+}
+
+.repository-picker > div {
+  display: grid;
+  min-width: 0;
+  gap: 8px;
+}
+
+.repository-picker span {
+  color: var(--page-muted);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+  font-weight: 800;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.repository-picker code {
+  min-height: 44px;
+  overflow: hidden;
+  padding: 12px 14px;
+  border: 1px solid var(--page-line);
+  background: var(--page-paper-strong);
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
 .field {
   display: grid;
   gap: 8px;
@@ -268,6 +301,21 @@
   padding: 0 18px 18px;
 }
 
+.commit-selector {
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.82rem;
+}
+
+.load-more-button {
+  justify-self: start;
+  padding: 8px 12px;
+  border: 1px solid var(--page-line);
+  background: transparent;
+  color: var(--page-accent);
+  font-size: 0.78rem;
+  font-weight: 800;
+}
+
 .reviewer-list {
   display: grid;
   gap: 10px;
@@ -374,6 +422,28 @@
   color: #6f4205;
 }
 
+.provider-required {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 18px;
+  border: 1px solid rgba(109, 132, 41, 0.42);
+  background: rgba(229, 235, 216, 0.9);
+  color: #3d4d22;
+}
+
+.provider-required a {
+  flex: 0 0 auto;
+  color: #283616;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+  font-weight: 800;
+  letter-spacing: 0.07em;
+  text-transform: uppercase;
+  text-underline-offset: 3px;
+}
+
 .form-actions {
   display: flex;
   align-items: center;
@@ -453,6 +523,7 @@
   }
 
   .field-row--path,
+  .repository-picker,
   .mode-toggle-grid,
   .scope-toggle-grid,
   .inspection-summary,
@@ -472,6 +543,11 @@
   .form-actions {
     flex-direction: column;
     align-items: stretch;
+  }
+
+  .provider-required {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .action-button {
