@@ -45,13 +45,22 @@ async def create_review(
 
     _LOGGER.info("Review creation requested", extra={"scope_type": request.scope.type})
     repository = await components.repository_inspector.inspect(request.repository_path)
-    record = await components.create_review.handle(
-        CreateReviewCommand(
-            repository=repository,
-            scope=request.scope.to_domain(),
-            selected_agent_versions=tuple(request.selected_agents),
+    try:
+        record = await components.create_review.handle(
+            CreateReviewCommand(
+                repository=repository,
+                scope=request.scope.to_domain(),
+                selected_agent_versions=tuple(request.selected_agents),
+            )
         )
-    )
+    except ValueError as error:
+        if str(error) != "a ReviewTask requires at least one frozen target path":
+            raise
+        raise HttpProblem(
+            422,
+            "empty_review_scope",
+            "No eligible changed files were found. Choose two commits or branches with changes.",
+        ) from None
     _LOGGER.info(
         "Review created",
         extra={"task_id": record.task_id, "scope_type": request.scope.type},

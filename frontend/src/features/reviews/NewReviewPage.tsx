@@ -124,6 +124,7 @@ export function NewReviewPage() {
   const [branchBaseRef, setBranchBaseRef] = useState("");
   const [branchTargetRef, setBranchTargetRef] = useState("");
   const [commitBaseRef, setCommitBaseRef] = useState("");
+  const [commitBranchRef, setCommitBranchRef] = useState("");
   const [commitTargetRef, setCommitTargetRef] = useState("");
   const [fullTargetRef, setFullTargetRef] = useState("");
   const [correctnessEnabled, setCorrectnessEnabled] = useState(true);
@@ -154,9 +155,13 @@ export function NewReviewPage() {
       setNextCommitOffset(repositoryCatalog.next_commit_offset);
       setBranchTargetRef(target);
       setCommitTargetRef(target);
+      setCommitBranchRef(target);
       setFullTargetRef(target);
       setBranchBaseRef(preferredBase(branchNames, target));
-      setCommitBaseRef(repositoryCatalog.commits[0]?.oid ?? "");
+      setCommitBaseRef("");
+      setCommitTargetRef(
+        repositoryCatalog.branches.find((branch) => branch.name === target)?.oid ?? "",
+      );
     },
   });
 
@@ -185,7 +190,7 @@ export function NewReviewPage() {
   const selectedScopeIsValid =
     scopeType === "uncommitted" ||
     (scopeType === "branch" && branchBaseRef !== "" && branchTargetRef !== "") ||
-    (scopeType === "commit" && commitBaseRef !== "" && commitTargetRef !== "") ||
+    (scopeType === "commit" && commitBranchRef !== "" && commitBaseRef !== "" && commitTargetRef !== "") ||
     (scopeType === "full" && fullTargetRef !== "");
   const startDisabled =
     inspection === null ||
@@ -402,6 +407,24 @@ export function NewReviewPage() {
               {scopeType === "commit" ? (
                 <>
                   <label className="field">
+                    <span className="field__label">{t("review.targetBranch")}</span>
+                    <select
+                      aria-label={t("review.targetBranch")}
+                      className="field__control"
+                      disabled={branchNames.length === 0}
+                      value={commitBranchRef}
+                      onChange={(event) => {
+                        const branch = catalog?.branches.find(
+                          (candidate) => candidate.name === event.currentTarget.value,
+                        );
+                        setCommitBranchRef(event.currentTarget.value);
+                        setCommitTargetRef(branch?.oid ?? "");
+                      }}
+                    >
+                      {branchNames.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
+                    </select>
+                  </label>
+                  <label className="field">
                     <span className="field__label">{t("review.baseCommit")}</span>
                     <select
                       aria-label={t("review.baseCommit")}
@@ -427,15 +450,13 @@ export function NewReviewPage() {
                     </button>
                   ) : null}
                   <label className="field">
-                    <span className="field__label">{t("review.targetBranch")}</span>
-                    <select
-                      aria-label={t("review.targetBranch")}
+                    <span className="field__label">{t("review.targetCommit")}</span>
+                    <input
+                      aria-label={t("review.targetCommit")}
                       className="field__control"
+                      readOnly
                       value={commitTargetRef}
-                      onChange={(event) => setCommitTargetRef(event.currentTarget.value)}
-                    >
-                      {branchNames.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
-                    </select>
+                    />
                   </label>
                 </>
               ) : null}
