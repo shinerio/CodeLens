@@ -162,7 +162,7 @@ export function SettingsPage() {
           <section className="gateway-inventory">
             <header className="gateway-section-heading">
               <div>
-                <p>01 / inventory</p>
+                <p>{t("settings.inventoryStep")}</p>
                 <h2>{t("settings.gatewayInventory")}</h2>
                 <span>{t("settings.gatewayInventoryNote")}</span>
               </div>
@@ -219,7 +219,7 @@ export function SettingsPage() {
                       </button>
                     ) : (
                       <span className="gateway-card__online">
-                        <Check aria-hidden="true" /> online
+                        <Check aria-hidden="true" /> {t("settings.online")}
                       </span>
                     )}
                     <button
@@ -247,7 +247,7 @@ export function SettingsPage() {
           <form className="gateway-form" onSubmit={handleSubmit}>
             <div className="gateway-section-heading gateway-section-heading--form">
               <div>
-                <p>02 / configuration</p>
+                <p>{t("settings.configurationStep")}</p>
                 <h2>{isEditing ? t("settings.updateGateway") : t("settings.addGateway")}</h2>
               </div>
               <Plus aria-hidden="true" />
@@ -304,7 +304,7 @@ export function SettingsPage() {
                   {t("common.cancel")}
                 </button>
               ) : (
-                <span>{saveMutation.isSuccess ? t("settings.saved") : "Secret / write only"}</span>
+                <span>{saveMutation.isSuccess ? t("settings.saved") : t("settings.secretWriteOnly")}</span>
               )}
               <button disabled={isSaveDisabled} type="submit">
                 {isEditing ? t("common.save") : t("settings.addGateway")}
@@ -315,17 +315,17 @@ export function SettingsPage() {
 
         <aside className="security-rail">
           <label className="settings-field">
-            <span className="settings-field__label">Runtime log level</span>
+            <span className="settings-field__label">{t("settings.runtimeLogLevel")}</span>
             <select
-              aria-label="Runtime log level"
+              aria-label={t("settings.runtimeLogLevel")}
               disabled={logLevelQuery.isPending || logLevelMutation.isPending}
               value={logLevelQuery.data?.level ?? "info"}
               onChange={(event) => logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)}
             >
-              <option value="debug">Debug</option>
-              <option value="info">Info</option>
-              <option value="warning">Warning</option>
-              <option value="error">Error</option>
+              <option value="debug">{t("settings.logDebug")}</option>
+              <option value="info">{t("settings.logInfo")}</option>
+              <option value="warning">{t("settings.logWarning")}</option>
+              <option value="error">{t("settings.logError")}</option>
             </select>
           </label>
           <div className="security-rail__icon">

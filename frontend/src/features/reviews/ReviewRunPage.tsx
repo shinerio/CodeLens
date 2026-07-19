@@ -78,7 +78,7 @@ function bannerClass(status: string) {
 }
 
 export function ReviewRunPage() {
-  const { locale, t } = useI18n();
+  const { t } = useI18n();
   const params = useParams();
   const taskId = params.taskId;
   const [activeTab, setActiveTab] = useState<TabName>("findings");
@@ -171,9 +171,9 @@ export function ReviewRunPage() {
           </p>
         </div>
         <div className="review-run-page__chips">
-          <button className="run-action" type="button" onClick={handleUnsupported}><CircleStop aria-hidden="true" /> Cancel</button>
-          <button className="run-action" type="button" onClick={handleUnsupported}><Copy aria-hidden="true" /> Copy link</button>
-          <button className="run-action" type="button" onClick={handleUnsupported}><Download aria-hidden="true" /> Export report</button>
+          <button className="run-action" type="button" onClick={handleUnsupported}><CircleStop aria-hidden="true" /> {t("run.cancel")}</button>
+          <button className="run-action" type="button" onClick={handleUnsupported}><Copy aria-hidden="true" /> {t("run.copyLink")}</button>
+          <button className="run-action" type="button" onClick={handleUnsupported}><Download aria-hidden="true" /> {t("run.exportReport")}</button>
           <span className="run-chip">
             <PlayCircle aria-hidden="true" />
             {reviewQuery.data?.base_oid ?? t("run.waiting")}
@@ -258,8 +258,7 @@ export function ReviewRunPage() {
               <div>
                 <p className="run-panel__eyebrow">{reviewTitle}</p>
                 <h2>
-                  {t("run.findingCount", { count: findingsQuery.data.length })}
-                  {locale === "en" && findingsQuery.data.length !== 1 ? "s" : ""}
+                  {t(findingsQuery.data.length === 1 ? "run.findingCount" : "run.findingCountPlural", { count: findingsQuery.data.length })}
                 </h2>
               </div>
               <span className="run-panel__status">{statusLabel(currentStatus, t)}</span>
@@ -272,7 +271,7 @@ export function ReviewRunPage() {
           </article>
           <article className="run-panel run-panel--detail">
             <FindingDetail finding={selectedFinding} />
-            {selectedFinding !== null ? <div className="run-preview-actions"><button type="button" onClick={handleUnsupported}>Suppress</button><button type="button" onClick={handleUnsupported}>Acknowledge</button><button type="button" onClick={handleUnsupported}><WandSparkles aria-hidden="true" /> Draft fix</button></div> : null}
+            {selectedFinding !== null ? <div className="run-preview-actions"><button type="button" onClick={handleUnsupported}>{t("run.suppress")}</button><button type="button" onClick={handleUnsupported}>{t("run.acknowledge")}</button><button type="button" onClick={handleUnsupported}><WandSparkles aria-hidden="true" /> {t("run.draftFix")}</button></div> : null}
           </article>
         </section>
       ) : null}

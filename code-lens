@@ -146,7 +146,7 @@ start_services() {
     local pid
     pid=$(read_pid "$pid_file") || continue
     if is_running "$pid"; then
-      fail "CodeLens is already running; use ./start.sh restart or ./start.sh stop"
+      fail "CodeLens is already running; use ./code-lens restart or ./code-lens stop"
     fi
   done
   remove_runtime_state
@@ -175,23 +175,11 @@ start_services() {
   printf '  OpenAPI:   http://127.0.0.1:8765/docs\n'
   printf '\nAll locally accessible Git repositories are allowed by default.\n'
   printf 'Choose a repository and configure model gateways in the Web UI.\n'
-  printf 'Press Ctrl+C or run ./start.sh stop to stop all services.\n\n'
+  printf 'Run ./code-lens stop to stop all services.\n\n'
 
-  while :; do
-    if ! is_running "$API_PID"; then
-      wait "$API_PID" || true
-      fail "Backend process stopped."
-    fi
-    if ! is_running "$WORKER_PID"; then
-      wait "$WORKER_PID" || true
-      fail "Worker process stopped."
-    fi
-    if ! is_running "$FRONTEND_PID"; then
-      wait "$FRONTEND_PID" || true
-      fail "Frontend process stopped."
-    fi
-    sleep 1
-  done
+  # The children are intentionally left running after readiness succeeds. PID
+  # files are the lifecycle contract consumed by the stop and restart actions.
+  trap - EXIT INT TERM
 }
 
 ACTION=${1:-start}

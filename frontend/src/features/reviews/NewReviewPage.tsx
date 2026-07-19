@@ -180,7 +180,7 @@ export function NewReviewPage() {
     mutationFn: createReview,
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["reviews"] });
-      navigate(`/reviews/${result.task_id}`);
+      navigate(`/runs/${result.task_id}`);
     },
   });
 
@@ -498,11 +498,11 @@ export function NewReviewPage() {
                 className={mode === "review" ? "mode-toggle mode-toggle--active" : "mode-toggle"}
                 type="button"
               >
-                <span className="mode-toggle__label">REVIEW</span>
+                <span className="mode-toggle__label">{t("review.reviewMode")}</span>
                 <span className="mode-toggle__note">{t("review.enabledNow")}</span>
               </button>
               <button className="mode-toggle" type="button" onClick={handleUnsupported}>
-                <span className="mode-toggle__label">FIX</span>
+                <span className="mode-toggle__label">{t("review.fixMode")}</span>
                 <span className="mode-toggle__note">{t("review.availablePhase5")}</span>
               </button>
             </div>

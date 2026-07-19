@@ -27,6 +27,24 @@ def test_configure_process_logging_writes_structured_events_to_the_log_directory
     }
 
 
+def test_configure_process_logging_writes_worker_exception_stacks(tmp_path: Path) -> None:
+    log_path = configure_process_logging("worker", log_directory=tmp_path)
+
+    try:
+        raise RuntimeError("worktree creation failed")
+    except RuntimeError:
+        logging.getLogger("codelens.worker.scheduler").exception(
+            "Review job failed",
+            extra={"task_id": "task-1", "error_type": "RuntimeError"},
+        )
+
+    payload = json.loads(log_path.read_text(encoding="utf-8"))
+    assert payload["process"] == "worker"
+    assert payload["task_id"] == "task-1"
+    assert payload["error_type"] == "RuntimeError"
+    assert "RuntimeError: worktree creation failed" in payload["exception"]
+
+
 def test_runtime_log_level_is_persisted_for_other_processes(tmp_path: Path) -> None:
     assert get_runtime_log_level(tmp_path) == "info"
 

@@ -28,7 +28,7 @@ const router = createBrowserRouter([
     path: "/",
     element: <App />,
     children: [
-      { index: true, element: <Navigate replace to="/reviews/new" /> },
+      { index: true, element: <Navigate replace to="/runs" /> },
       { path: "reviews/new", element: <NewReviewPage /> },
       { path: "runs", element: <RunListPage /> },
       { path: "reviews/:taskId", element: <ReviewRunPage /> },

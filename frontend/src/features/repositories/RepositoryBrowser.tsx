@@ -54,7 +54,7 @@ export function RepositoryBrowser({
       >
         <header className="repository-browser__header">
           <div>
-            <p>filesystem / navigator</p>
+            <p>{t("repository.navigator")}</p>
             <h2 id="repository-browser-title">{t("repository.browserTitle")}</h2>
             <span>{t("repository.browserSubtitle")}</span>
           </div>
@@ -81,7 +81,7 @@ export function RepositoryBrowser({
           <div className="repository-browser__error" role="alert">
             {browseMutation.error instanceof Error
               ? browseMutation.error.message
-              : "Unable to browse directory."}
+              : t("common.unableBrowseDirectory")}
           </div>
         ) : null}
 

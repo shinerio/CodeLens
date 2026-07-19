@@ -38,10 +38,10 @@ CodeLens 是一个本地优先的多 Agent 代码 Review 工作台。它通过 W
 macOS / Linux：
 
 ```bash
-./start.sh
+./code-lens
 ```
 
-`start` 是默认参数；还可以使用 `./start.sh stop` 停止服务，或使用 `./start.sh restart` 先停止再重新启动。
+`start` 是默认参数；启动完成后命令会退出，服务继续在后台运行。使用 `./code-lens stop` 停止服务，或使用 `./code-lens restart` 先停止再重新启动。
 
 Windows PowerShell：
 
