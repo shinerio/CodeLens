@@ -230,5 +230,6 @@ def test_builtin_correctness_agent_is_immutable_and_content_addressed() -> None:
     assert first == second
     assert first.agent_id == "correctness"
     assert first.output_schema_version == "1"
+    assert "`reviewer_id` to exactly `correctness`" in first.prompt_template
     assert ReviewMode.REVIEW in first.mode_support
     assert len(first.content_hash) == 64

@@ -412,6 +412,7 @@
 .event-log {
   display: grid;
   gap: 10px;
+  min-width: 0;
   margin: 0;
   padding: 18px;
   list-style: none;
@@ -420,6 +421,7 @@
 .event-log__item {
   display: grid;
   gap: 8px;
+  min-width: 0;
   padding: 14px 15px;
   border: 1px solid var(--run-line);
   background: var(--run-paper-strong);
@@ -439,11 +441,17 @@
 }
 
 .event-log pre {
-  overflow: auto;
+  min-width: 0;
+  max-width: 100%;
+  overflow-x: hidden;
+  overflow-y: auto;
   margin: 0;
   padding: 12px;
   background: rgba(225, 229, 218, 0.72);
   font-size: 0.82rem;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  word-break: break-word;
 }
 
 .event-log__empty {

@@ -40,6 +40,7 @@ it("shows the live run and refreshes findings after completion", async () => {
       }),
     )
     .mockResolvedValueOnce(jsonResponse([]))
+    .mockResolvedValueOnce(jsonResponse([]))
     .mockResolvedValueOnce(
       jsonResponse([
         {
