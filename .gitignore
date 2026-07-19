@@ -2,6 +2,7 @@
 .idea/
 .vscode/
 .superpowers/
+.codebase-memory/
 .venv/
 node_modules/
 __pycache__/
