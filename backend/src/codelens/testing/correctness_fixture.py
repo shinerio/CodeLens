@@ -145,7 +145,9 @@ class FixtureRuntime:
         self.model_name = model_name
         self.delay_seconds = delay_seconds
 
-    async def invoke(self, _agent: object, _payload: bytes) -> UnvalidatedAgentOutput:
+    async def invoke(
+        self, _agent: object, _payload: bytes, _snapshot: object
+    ) -> UnvalidatedAgentOutput:
         self.calls += 1
         if self.delay_seconds > 0:
             await asyncio.sleep(self.delay_seconds)

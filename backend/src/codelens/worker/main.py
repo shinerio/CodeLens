@@ -110,6 +110,7 @@ def build_worker(
     provider_runtime = runtime or OpenAIAgentRuntime(
         FilesystemModelProviderConfigAdapter(settings.data_dir),
         codec,
+        git,
     )
     semaphores = WorkerSemaphores.create(
         agent_limit=settings.max_active_agent_runs,

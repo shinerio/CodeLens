@@ -6,6 +6,7 @@ from typing import Protocol
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.models import ReviewTask
 from codelens.reviewer_catalog.domain.models import AgentVersion
+from codelens.workspace.domain.models import ReviewSnapshot
 
 
 @dataclass(frozen=True)
@@ -128,7 +129,12 @@ class ReviewEventPort(Protocol):
 class AgentRuntimePort(Protocol):
     """Invoke one immutable Agent node through a provider-neutral boundary."""
 
-    async def invoke(self, agent: AgentVersion, input_payload: bytes) -> UnvalidatedAgentOutput:
+    async def invoke(
+        self,
+        agent: AgentVersion,
+        input_payload: bytes,
+        snapshot: ReviewSnapshot,
+    ) -> UnvalidatedAgentOutput:
         """Return canonical untrusted output plus redacted usage diagnostics."""
 
         raise NotImplementedError

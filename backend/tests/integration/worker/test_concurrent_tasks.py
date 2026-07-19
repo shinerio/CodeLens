@@ -137,7 +137,9 @@ class GatedRuntime:
         self.maximum = 0
         self.calls = 0
 
-    async def invoke(self, _agent: object, _payload: bytes) -> UnvalidatedAgentOutput:
+    async def invoke(
+        self, _agent: object, _payload: bytes, _snapshot: object
+    ) -> UnvalidatedAgentOutput:
         self.calls += 1
         self.active += 1
         self.maximum = max(self.maximum, self.active)

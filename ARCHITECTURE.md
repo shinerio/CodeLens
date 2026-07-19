@@ -14,7 +14,7 @@
 - FastAPI 提供 HTTP API 和 SSE 事件流；Pydantic v2 负责边界数据校验。
 - SQLAlchemy 2 负责持久化适配，Alembic 管理数据库迁移。
 - SQLite 使用 WAL 模式；大对象写入 Artifact Store，数据库仅保存元数据、内容哈希和不透明引用。
-- OpenAI Agents SDK、Git、文件系统、Skill、MCP、沙箱、代码检索和 Secret Store 均作为外部能力，通过 Port/Adapter 接入。
+- OpenAI Agents SDK、Git、文件系统、Skill、MCP、沙箱、代码检索和 Secret Store 均作为外部能力，通过 Port/Adapter 接入。MVP 的代码检索仅由 CodeLens 内置、只读的 Snapshot 工具提供，不依赖本机预装的第三方代码图、LSP 或 MCP 工具。
 - 模型 Provider 配置由本机 Web Settings API 在运行期写入 Secret Store；API Key 是只写字段，不进入普通配置、数据库、日志、事件或 API 响应。
 - 异步 I/O 使用 `asyncio`；Git 和外部进程使用参数数组调用，禁止 `shell=True`。
 - pytest、Ruff 和 mypy 是后端的基础质量门禁。
@@ -136,6 +136,14 @@ Interface 层当前包含 FastAPI 路由、请求/响应 DTO、SSE 端点和 Wor
 
 跨上下文协作必须使用明确的应用服务、领域事件或 Port。一个上下文不得导入另一个上下文的 `infrastructure` 实现、ORM 模型或内部可变状态。共享模块只允许放置稳定、无领域归属且被多个上下文实际复用的最小基础类型。
 
+### 5.1 MVP 内置 Review 工具
+
+MVP 为每个 Agent Run 提供 CodeLens 自身实现的只读工具：`explore`、`glob`、`grep`、`read_file`、`get_change_map`、`get_diff` 与 `read_revision`。这些工具的唯一数据源是该任务冻结后的 `ReviewSnapshot`；工具驱动的 Agent 初始 Prompt 只包含平台工具指引、适用规则、输出契约和 Snapshot 标识，禁止预先拼入变更 hunk 或完整仓库正文。Agent 必须先通过 `get_change_map` 建立调查计划，再按需读取证据。
+
+工具实现必须位于 `review.infrastructure` 或 `workspace.infrastructure`，并通过 Review 的 Runtime Port 接入。每次工具调用必须校验 Snapshot ID、规范化相对路径、Manifest 可见性和内容哈希；必须限制读取字节数、行数、搜索结果数、总调用次数与 Git 输出。工具不得写入文件、执行任意 Shell、访问网络、访问原始工作区或读取 Snapshot 之外的路径。
+
+MVP 不实现 Serena、CodeGraph、codebase-memory、第三方 MCP、Skills、LSP 或通用沙箱工具。未来接入这些能力时，必须经 `capabilities` 上下文的版本化 Capability Profile 与受控 Adapter 暴露稳定工具契约，不能将供应商工具、路径或权限直接泄漏给 Agent。
+
 推荐目录结构：
 
 ```text
@@ -162,6 +170,7 @@ frontend/src/
 - REVIEW 模式对源仓库严格只读。每个任务在应用数据目录创建自己拥有的 detached worktree，并在其中冻结 `ReviewSnapshot`。
 - FIX 模式只能修改隔离工作区；补丁通过结构校验、测试或命令门禁、审批和目标仓库冲突检查后才能应用。
 - Agent、模型和沙箱不得访问用户原始工作区，也不得修改源分支、index、tag 或非本任务 worktree。
+- Agent 的内置代码工具只能读取 Snapshot Manifest 中的 target/context 文件，并在每次读取前重新验证内容哈希；Git 旧版本读取只能使用 Snapshot 固定的 base/head OID，不能接受模型提供的任意 ref。
 - 默认本地部署不设置仓库根目录白名单，目录浏览从 POSIX `/` 或 Windows 现有盘符开始；因此操作系统用户可读的全部目录构成本地信任边界。该模式只能绑定回环地址。显式传入允许根目录时，后端仍必须在每次仓库访问时执行真实路径边界校验。
 - 目录浏览只能列出当前启动用户具备读取和进入权限的目录及必要的 Git 仓库标记，无权限或无法解析的目录项必须逐项跳过且不得阻断同级列表，并设置数量上限；分支和 Commit 列表由后端通过受限 Git 参数数组读取，前端不得接收任意 Git 参数或自由文本 ref。
 - 仓库内容、规则文件、Skill、MCP 输出和模型输出全部视为不可信数据，不能扩大 Agent、进程或工具权限。

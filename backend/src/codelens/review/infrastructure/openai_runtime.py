@@ -34,8 +34,11 @@ from codelens.review.domain.ports import (
     AgentResponseDiagnostic,
     UnvalidatedAgentOutput,
 )
+from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
+from codelens.workspace.domain.models import ReviewSnapshot
+from codelens.workspace.infrastructure.git_cli import GitCli
 
 
 class _RunnerPort(Protocol):
@@ -74,16 +77,19 @@ class OpenAIAgentRuntime:
         self,
         config_store: ModelProviderConfigPort,
         output_codec: AgentOutputCodecPort,
+        git: GitCli,
         runner: _RunnerPort | None = None,
     ) -> None:
         self._config_store = config_store
         self._output_codec = output_codec
+        self._git = git
         self._runner = runner or _PublicSdkRunner()
 
     async def invoke(
         self,
         agent: AgentVersion,
         input_payload: bytes,
+        snapshot: ReviewSnapshot,
     ) -> UnvalidatedAgentOutput:
         provider_config = await self._config_store.load()
         if provider_config is None:
@@ -110,6 +116,7 @@ class OpenAIAgentRuntime:
                 openai_client=client,
             ),
             output_type=self._output_codec.output_type,
+            tools=FilesystemReviewTools(snapshot, self._git, max_tool_calls=50).as_agent_tools(),
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
         failure_kind: Literal["transient", "permanent"] | None = None

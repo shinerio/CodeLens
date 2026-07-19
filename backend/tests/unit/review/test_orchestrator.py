@@ -104,7 +104,9 @@ class RecordingRuntime:
         self.payload = payload
         self.calls = 0
 
-    async def invoke(self, _agent: object, _input_payload: bytes) -> UnvalidatedAgentOutput:
+    async def invoke(
+        self, _agent: object, _input_payload: bytes, _snapshot: object
+    ) -> UnvalidatedAgentOutput:
         self.calls += 1
         return UnvalidatedAgentOutput(self.payload, (), "fake", 1, 2, ())
 
@@ -114,8 +116,10 @@ class CancellingRuntime(RecordingRuntime):
         super().__init__(payload)
         self._workflow = workflow
 
-    async def invoke(self, agent: object, input_payload: bytes) -> UnvalidatedAgentOutput:
-        output = await super().invoke(agent, input_payload)
+    async def invoke(
+        self, agent: object, input_payload: bytes, snapshot: object
+    ) -> UnvalidatedAgentOutput:
+        output = await super().invoke(agent, input_payload, snapshot)
         self._workflow.is_cancellation_requested = True
         return output
 

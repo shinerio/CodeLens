@@ -1,4 +1,5 @@
 import hashlib
+import json
 from dataclasses import replace
 from pathlib import Path
 
@@ -217,6 +218,94 @@ async def test_plans_ten_candidates_then_reads_only_the_two_that_fit() -> None:
     assert agent_input.plan.omitted_paths == context_paths[2:]
     assert agent_input.plan.used_tokens <= agent_input.plan.total_tokens
     assert b"/private/source/repository" not in agent_input.canonical_bytes()
+
+
+async def test_tool_driven_input_does_not_preload_changed_or_repository_bodies() -> None:
+    context_paths = ("src/context.py",)
+    bodies = {
+        ("src/changed.py", "new"): b"return ready\n",
+        ("src/context.py", "new"): b"return context\n",
+    }
+    reader = RecordingReader(bodies)
+    builder = ContextBuilder(
+        FakeContextProvider(
+            (
+                CandidateSummary(
+                    "src/context.py",
+                    1,
+                    1,
+                    "new",
+                    10,
+                    10,
+                    "context",
+                    "repository_context",
+                    _hash(bodies[("src/context.py", "new")]),
+                ),
+            )
+        ),
+        reader,
+    )
+
+    agent_input = await builder.build(
+        _snapshot(context_paths, {"src/context.py": _hash(bodies[("src/context.py", "new")])}),
+        _instructions(),
+        ContextBudget(
+            total_tokens=240,
+            platform_policy_tokens=30,
+            instruction_tokens=20,
+            output_schema_tokens=30,
+            changed_hunk_tokens=20,
+            max_excerpt_bytes=256,
+            max_line_chars=120,
+            tool_driven=True,
+        ),
+    )
+
+    assert reader.paths_read == []
+    assert agent_input.changed_hunks == ()
+    assert agent_input.context == ()
+    assert agent_input.plan.decisions == ()
+    assert "get_change_map" in agent_input.platform_policy
+    tool_catalog = json.loads(agent_input.canonical_bytes())["tool_catalog"]
+    assert tool_catalog == [
+        {
+            "name": "explore",
+            "parameters": "path?: relative directory",
+            "purpose": "List visible Snapshot files under a directory.",
+        },
+        {
+            "name": "glob",
+            "parameters": "pattern: POSIX glob",
+            "purpose": "Find visible Snapshot paths matching a pattern.",
+        },
+        {
+            "name": "grep",
+            "parameters": "pattern: regular expression",
+            "purpose": "Search visible Snapshot text.",
+        },
+        {
+            "name": "read_file",
+            "parameters": "path, start_line, end_line",
+            "purpose": "Read a bounded range from the current Snapshot file.",
+        },
+        {
+            "name": "get_change_map",
+            "parameters": "none",
+            "purpose": "List changed paths and hunk locations; call first.",
+        },
+        {
+            "name": "get_diff",
+            "parameters": "path",
+            "purpose": "Read the fixed base-to-head diff for a changed file.",
+        },
+        {
+            "name": "read_revision",
+            "parameters": "path, revision: base|head, start_line, end_line",
+            "purpose": "Read a bounded base or head revision of a visible file.",
+        },
+    ]
+    assert b"return ready" not in agent_input.canonical_bytes()
+    assert b"return context" not in agent_input.canonical_bytes()
 
 
 async def test_binary_deleted_oversized_unicode_and_long_lines_are_bounded() -> None:

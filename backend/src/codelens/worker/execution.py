@@ -38,6 +38,7 @@ from codelens.workspace.application.worktree_lifecycle import (
 from codelens.workspace.domain.models import (
     CapturedReviewInput,
     OpaqueArtifact,
+    ReviewSnapshot,
     ReviewTarget,
 )
 from codelens.workspace.domain.ports import ScopePlan
@@ -58,9 +59,10 @@ class _ModelLimitedRuntime:
         self,
         agent: AgentVersion,
         input_payload: bytes,
+        snapshot: ReviewSnapshot,
     ) -> UnvalidatedAgentOutput:
         async with self._semaphore:
-            return await self._runtime.invoke(agent, input_payload)
+            return await self._runtime.invoke(agent, input_payload, snapshot)
 
 
 class SqlCheckpointPortAdapter:
@@ -281,6 +283,7 @@ class WorkerReviewExecutor:
             changed_hunk_tokens=8_192,
             max_excerpt_bytes=64 * 1024,
             max_line_chars=2_000,
+            tool_driven=True,
         )
 
     def _validator(

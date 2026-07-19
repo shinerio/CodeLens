@@ -32,7 +32,9 @@ class Runtime:
     def __init__(self) -> None:
         self.calls = 0
 
-    async def invoke(self, _agent: object, _payload: bytes) -> UnvalidatedAgentOutput:
+    async def invoke(
+        self, _agent: object, _payload: bytes, _snapshot: object
+    ) -> UnvalidatedAgentOutput:
         self.calls += 1
         return UnvalidatedAgentOutput(
             b'{"schema_version":"1","findings":[]}', (), "fake", 0, 0, ()

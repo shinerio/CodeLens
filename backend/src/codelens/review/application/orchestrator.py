@@ -225,7 +225,7 @@ class ReviewOrchestrator:
         await self._hit("before_model_invocation")
         async with self._review_agent_semaphore:
             async with self._agent_semaphore:
-                output = await self._runtime.invoke(agent, input_payload)
+                output = await self._runtime.invoke(agent, input_payload, prepared.snapshot)
         await self._record(
             task_id,
             "model_output",

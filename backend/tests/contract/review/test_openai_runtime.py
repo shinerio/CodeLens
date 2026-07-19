@@ -2,6 +2,7 @@ import logging
 import os
 import traceback
 from dataclasses import dataclass
+from pathlib import Path
 
 import httpx
 import pytest
@@ -20,7 +21,16 @@ from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
-from codelens.workspace.domain.models import ReviewMode
+from codelens.workspace.domain.models import (
+    ChangeIndex,
+    RepositoryFingerprint,
+    ReviewMode,
+    ReviewSnapshot,
+    ReviewTarget,
+    SnapshotManifest,
+    TaskWorktree,
+)
+from codelens.workspace.infrastructure.git_cli import GitCli
 
 
 @dataclass(frozen=True)
@@ -104,6 +114,17 @@ def _agent() -> AgentVersion:
     )
 
 
+def _snapshot() -> ReviewSnapshot:
+    return ReviewSnapshot(
+        snapshot_id="snapshot-1",
+        worktree=TaskWorktree("worktree-1", "review-1", "a" * 64, Path("/tmp"), "b" * 40, "c" * 64),
+        target=ReviewTarget("d" * 40, "b" * 40, None),
+        fingerprint=RepositoryFingerprint("b" * 40, "e" * 64, "f" * 64),
+        manifest=SnapshotManifest((), (), (), entries=()),
+        change_index=ChangeIndex(()),
+    )
+
+
 async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
@@ -120,17 +141,27 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
         runner=runner,
     )
     source_secret = "SOURCE_BODY_SECRET"
 
     with caplog.at_level(logging.DEBUG):
-        output = await runtime.invoke(_agent(), source_secret.encode())
+        output = await runtime.invoke(_agent(), source_secret.encode(), _snapshot())
 
     sdk_agent = runner.starting_agent
     assert sdk_agent is not None
     assert sdk_agent.output_type is FindingBatchSchema
     assert sdk_agent.instructions == _agent().prompt_template
+    assert [tool.name for tool in sdk_agent.tools] == [
+        "explore",
+        "glob",
+        "grep",
+        "read_file",
+        "get_change_map",
+        "get_diff",
+        "read_revision",
+    ]
     assert isinstance(sdk_agent.model, OpenAIResponsesModel)
     assert sdk_agent.model.model == "gpt-5.1"
     assert str(sdk_agent.model._client.base_url) == "http://model-gateway.example:8080"
@@ -179,11 +210,12 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
         runner=FakeRunner(failure),
     )
 
     with pytest.raises(TransientAgentRuntimeError) as captured:
-        await runtime.invoke(_agent(), b"bounded input")
+        await runtime.invoke(_agent(), b"bounded input", _snapshot())
 
     assert "rate limited" not in str(captured.value)
     assert "server failed" not in str(captured.value)
@@ -200,11 +232,12 @@ async def test_maps_invalid_output_to_a_permanent_failure(result: FakeResult | E
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
         runner=FakeRunner(result),
     )
 
     with pytest.raises(PermanentAgentOutputError) as captured:
-        await runtime.invoke(_agent(), b"bounded input")
+        await runtime.invoke(_agent(), b"bounded input", _snapshot())
 
     assert "FULL_PROVIDER_PAYLOAD_SECRET" not in str(captured.value)
     formatted = "".join(traceback.format_exception(captured.value))
@@ -216,11 +249,12 @@ async def test_missing_provider_configuration_fails_only_when_invoked() -> None:
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(),
         output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
         runner=FakeRunner(FakeResult({}, ())),
     )
 
     with pytest.raises(PermanentAgentOutputError, match="not configured"):
-        await runtime.invoke(_agent(), b"bounded input")
+        await runtime.invoke(_agent(), b"bounded input", _snapshot())
 
 
 def test_builtin_correctness_agent_is_immutable_and_content_addressed() -> None:
