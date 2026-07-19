@@ -149,6 +149,22 @@ it("creates a branch review using Git branch dropdowns", async () => {
   });
 });
 
+it("inspects a repository path entered directly into the path field", async () => {
+  installApiMock();
+  const user = userEvent.setup();
+
+  render(<NewReviewPage />, { wrapper: TestProviders });
+
+  const pathField = screen.getByLabelText("Repository path");
+  await user.type(pathField, "  /app  ");
+  await user.keyboard("{Enter}");
+
+  expect(await screen.findByText("Inspection ready")).toBeVisible();
+  expect(pathField).toHaveValue("/app");
+  const inspectionCall = fetchMock.mock.calls.find(([url]) => url === "/api/repositories/inspect");
+  expect(JSON.parse(String(inspectionCall?.[1]?.body))).toEqual({ path: "/app" });
+});
+
 it("requires an active gateway before a review can start", async () => {
   installApiMock({ configured: false });
   const user = userEvent.setup();

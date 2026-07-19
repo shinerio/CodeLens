@@ -1,11 +1,14 @@
 """Structured-concurrency review scheduler."""
 
 import asyncio
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from typing import Protocol, TypeVar
 
 from codelens.worker.singleton import WorkerSingletonPort
+
+_LOGGER = logging.getLogger("codelens.worker.scheduler")
 
 
 @dataclass(frozen=True)
@@ -91,7 +94,9 @@ class ReviewScheduler:
         try:
             await self._singleton.acquire()
             acquired = True
+            _LOGGER.info("Worker singleton acquired")
             await self._recover()
+            _LOGGER.info("Worker recovery completed")
             await self._poll(stop_event)
         finally:
             if acquired:
@@ -111,6 +116,7 @@ class ReviewScheduler:
                     if job is None:
                         break
                     task = tasks.create_task(self._execute_isolated(job.task_id))
+                    _LOGGER.info("Review job claimed", extra={"task_id": job.task_id})
                     active.add(task)
                     task.add_done_callback(active.discard)
                     claimed = True
@@ -129,8 +135,13 @@ class ReviewScheduler:
     async def _execute_isolated(self, task_id: str) -> None:
         try:
             await self._execute(task_id)
+            _LOGGER.info("Review job completed", extra={"task_id": task_id})
         except asyncio.CancelledError:
             raise
         except Exception as error:
+            _LOGGER.exception(
+                "Review job failed",
+                extra={"task_id": task_id, "error_type": type(error).__name__},
+            )
             if self._record_failure is not None:
                 await self._record_failure(task_id, type(error).__name__)

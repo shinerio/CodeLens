@@ -86,7 +86,10 @@ export function RepositoryBrowser({
         ) : null}
 
         {!browseMutation.isPending && listing !== undefined ? (
-          <div className="repository-browser__body">
+          <div
+            className="repository-browser__body repository-browser__body--scrollable"
+            data-testid="directory-list"
+          >
             {listing.current_path === null ? (
               <div className="repository-browser__roots">
                 {listing.roots.map((root) => (

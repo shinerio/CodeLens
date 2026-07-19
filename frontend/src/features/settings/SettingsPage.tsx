@@ -17,13 +17,16 @@ import {
   activateModelGateway,
   createModelGateway,
   deleteModelGateway,
+  getRuntimeLogLevel,
   listModelGateways,
+  updateRuntimeLogLevel,
   updateModelGateway,
 } from "./api";
-import type { ModelGateway, ModelGatewayCatalog } from "./types";
+import type { ModelGateway, ModelGatewayCatalog, RuntimeLogLevel } from "./types";
 import "./SettingsPage.css";
 
 export const MODEL_GATEWAYS_QUERY_KEY = ["model-gateways"] as const;
+const RUNTIME_LOG_LEVEL_QUERY_KEY = ["runtime-log-level"] as const;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unable to save the gateway.";
@@ -40,6 +43,16 @@ export function SettingsPage() {
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
     queryFn: listModelGateways,
+  });
+  const logLevelQuery = useQuery({
+    queryKey: RUNTIME_LOG_LEVEL_QUERY_KEY,
+    queryFn: getRuntimeLogLevel,
+  });
+  const logLevelMutation = useMutation({
+    mutationFn: updateRuntimeLogLevel,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, settings);
+    },
   });
 
   const updateCatalog = (catalog: ModelGatewayCatalog) => {
@@ -118,7 +131,7 @@ export function SettingsPage() {
   }
 
   const mutationError =
-    saveMutation.error ?? activateMutation.error ?? deleteMutation.error ?? gatewayQuery.error;
+    saveMutation.error ?? activateMutation.error ?? deleteMutation.error ?? gatewayQuery.error ?? logLevelQuery.error ?? logLevelMutation.error;
 
   return (
     <section className="settings-page">
@@ -301,6 +314,20 @@ export function SettingsPage() {
         </div>
 
         <aside className="security-rail">
+          <label className="settings-field">
+            <span className="settings-field__label">Runtime log level</span>
+            <select
+              aria-label="Runtime log level"
+              disabled={logLevelQuery.isPending || logLevelMutation.isPending}
+              value={logLevelQuery.data?.level ?? "info"}
+              onChange={(event) => logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)}
+            >
+              <option value="debug">Debug</option>
+              <option value="info">Info</option>
+              <option value="warning">Warning</option>
+              <option value="error">Error</option>
+            </select>
+          </label>
           <div className="security-rail__icon">
             <ShieldCheck aria-hidden="true" />
           </div>

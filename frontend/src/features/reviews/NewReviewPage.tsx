@@ -11,7 +11,7 @@ import {
   ShieldCheck,
   Wrench,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
@@ -209,6 +209,23 @@ export function NewReviewPage() {
     inspectMutation.mutate(path);
   }
 
+  function handleRepositoryPathChange(path: string) {
+    setRepositoryPath(path);
+    setInspection(null);
+    setCatalog(null);
+  }
+
+  function handleRepositoryPathKeyDown(event: KeyboardEvent<HTMLInputElement>) {
+    if (event.key !== "Enter") {
+      return;
+    }
+    event.preventDefault();
+    const path = event.currentTarget.value.trim();
+    if (path !== "") {
+      selectRepository(path);
+    }
+  }
+
   function buildScope(): ScopeRequest {
     if (scopeType === "branch") {
       return {
@@ -293,8 +310,9 @@ export function NewReviewPage() {
                 <input
                   aria-label={t("repository.path")}
                   className="field__control repository-path-control"
-                  readOnly
                   value={repositoryPath}
+                  onChange={(event) => handleRepositoryPathChange(event.currentTarget.value)}
+                  onKeyDown={handleRepositoryPathKeyDown}
                 />
               </label>
               <button

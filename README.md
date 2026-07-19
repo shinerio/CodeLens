@@ -41,6 +41,8 @@ macOS / Linux：
 ./start.sh
 ```
 
+`start` 是默认参数；还可以使用 `./start.sh stop` 停止服务，或使用 `./start.sh restart` 先停止再重新启动。
+
 Windows PowerShell：
 
 ```powershell

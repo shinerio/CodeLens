@@ -14,6 +14,7 @@ os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
 import uvicorn
 
+from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.settings import Settings
 from codelens.interface.http.app import create_app
 
@@ -123,7 +124,7 @@ async def prepare_runtime(settings: Settings) -> None:
 def run_api(settings: Settings) -> None:
     """Run only the loopback HTTP API process."""
 
-    uvicorn.run(create_app(settings), host=settings.host, port=settings.port)
+    uvicorn.run(create_app(settings), host=settings.host, port=settings.port, log_config=None)
 
 
 def _child_arguments(command: Literal["api", "worker"], settings: Settings) -> tuple[str, ...]:
@@ -239,9 +240,11 @@ def main(arguments: Sequence[str] | None = None) -> None:
     command = parse_command(sys.argv[1:] if arguments is None else arguments)
     asyncio.run(prepare_runtime(command.settings))
     if command.name == "api":
+        configure_process_logging("api", data_directory=command.settings.data_dir)
         run_api(command.settings)
         return
     if command.name == "worker":
+        configure_process_logging("worker", data_directory=command.settings.data_dir)
         from codelens.worker.main import run_worker
         from codelens.worker.singleton import WorkerAlreadyRunningError
 
@@ -251,6 +254,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
             print(error.code, file=sys.stderr)
             raise SystemExit(2) from None
         return
+    configure_process_logging("supervisor", data_directory=command.settings.data_dir)
     exit_code = asyncio.run(supervise(command.settings))
     if exit_code != 0:
         raise SystemExit(exit_code)

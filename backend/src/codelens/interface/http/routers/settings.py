@@ -1,8 +1,11 @@
+import asyncio
+import logging
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
 from pydantic import StringConstraints
 
+from codelens.bootstrap.logging import get_runtime_log_level, set_runtime_log_level
 from codelens.interface.http.dependencies import HttpComponents, get_components
 from codelens.interface.http.dto import (
     ActivateModelGatewayRequest,
@@ -10,12 +13,15 @@ from codelens.interface.http.dto import (
     ModelGatewayCatalogResponse,
     ModelGatewayResponse,
     OpenAISettingsResponse,
+    RuntimeLogLevelResponse,
     UpdateModelGatewayRequest,
     UpdateOpenAISettingsRequest,
+    UpdateRuntimeLogLevelRequest,
 )
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
+_LOGGER = logging.getLogger("codelens.settings")
 
 GatewayId = Annotated[
     str,
@@ -37,6 +43,28 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
             for gateway in view.gateways
         ],
     )
+
+
+@router.get("/logging", response_model=RuntimeLogLevelResponse)
+async def get_runtime_log_level_setting(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> RuntimeLogLevelResponse:
+    """Return the persisted runtime log threshold without exposing log contents."""
+
+    level = await asyncio.to_thread(get_runtime_log_level, components.settings.data_dir)
+    return RuntimeLogLevelResponse(level=level)
+
+
+@router.put("/logging", response_model=RuntimeLogLevelResponse)
+async def update_runtime_log_level_setting(
+    request: UpdateRuntimeLogLevelRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> RuntimeLogLevelResponse:
+    """Persist a shared threshold used by every process on its next log event."""
+
+    await asyncio.to_thread(set_runtime_log_level, components.settings.data_dir, request.level)
+    _LOGGER.info("Runtime log level updated", extra={"log_level": request.level})
+    return RuntimeLogLevelResponse(level=request.level)
 
 
 @router.get("/model-gateways", response_model=ModelGatewayCatalogResponse)

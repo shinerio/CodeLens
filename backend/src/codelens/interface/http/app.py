@@ -1,3 +1,4 @@
+import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from urllib.parse import urlsplit
@@ -27,6 +28,7 @@ from codelens.shared.domain.errors import (
 
 _STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
 _LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_LOGGER = logging.getLogger("uvicorn.error")
 
 
 def _validated_host(raw_host: str) -> str | None:
@@ -155,6 +157,19 @@ def create_app(settings: Settings) -> FastAPI:
         return JSONResponse(
             {"code": error.code, "message": error.message},
             status_code=error.status_code,
+        )
+
+    @app.exception_handler(Exception)
+    async def handle_unexpected_error(request: Request, _error: Exception) -> JSONResponse:
+        """Record unhandled request failures without persisting request bodies or credentials."""
+
+        _LOGGER.exception(
+            "Unhandled HTTP request error",
+            extra={"method": request.method, "path": request.url.path},
+        )
+        return JSONResponse(
+            {"code": "internal_error", "message": "An internal server error occurred."},
+            status_code=500,
         )
 
     @app.get("/api/health")

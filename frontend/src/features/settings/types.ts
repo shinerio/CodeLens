@@ -11,6 +11,12 @@ export type ModelGatewayCatalog = {
   gateways: ModelGateway[];
 };
 
+export type RuntimeLogLevel = "debug" | "info" | "warning" | "error";
+
+export type RuntimeLogLevelSettings = {
+  level: RuntimeLogLevel;
+};
+
 export type CreateModelGateway = {
   name: string;
   api_key: string;

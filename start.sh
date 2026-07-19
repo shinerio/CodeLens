@@ -3,7 +3,12 @@
 set -u
 
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
-BACKEND_PID=""
+RUNTIME_DIR="${TMPDIR:-/tmp}/codelens-review-${UID:-$(id -u)}"
+API_PID_FILE="$RUNTIME_DIR/api.pid"
+WORKER_PID_FILE="$RUNTIME_DIR/worker.pid"
+FRONTEND_PID_FILE="$RUNTIME_DIR/frontend.pid"
+API_PID=""
+WORKER_PID=""
 FRONTEND_PID=""
 
 fail() {
@@ -11,73 +16,207 @@ fail() {
   exit 1
 }
 
-command -v uv >/dev/null 2>&1 || fail "uv is required: https://docs.astral.sh/uv/"
-command -v pnpm >/dev/null 2>&1 || fail "pnpm is required: https://pnpm.io/installation"
+usage() {
+  printf 'Usage: %s [start|stop|restart]\n' "${0##*/}"
+}
 
-cleanup() {
-  trap - EXIT INT TERM
-  if [ -n "$FRONTEND_PID" ] && kill -0 "$FRONTEND_PID" 2>/dev/null; then
-    kill "$FRONTEND_PID" 2>/dev/null || true
-  fi
-  if [ -n "$BACKEND_PID" ] && kill -0 "$BACKEND_PID" 2>/dev/null; then
-    kill "$BACKEND_PID" 2>/dev/null || true
-  fi
-  if [ -n "$FRONTEND_PID" ]; then
-    wait "$FRONTEND_PID" 2>/dev/null || true
-  fi
-  if [ -n "$BACKEND_PID" ]; then
-    wait "$BACKEND_PID" 2>/dev/null || true
+read_pid() {
+  local pid_file=$1
+  [ -f "$pid_file" ] || return 1
+  local pid
+  pid=$(<"$pid_file")
+  case "$pid" in
+    ''|*[!0-9]*) return 1 ;;
+  esac
+  printf '%s\n' "$pid"
+}
+
+is_running() {
+  local pid=$1
+  kill -0 "$pid" 2>/dev/null
+}
+
+remove_runtime_state() {
+  rm -f "$API_PID_FILE" "$WORKER_PID_FILE" "$FRONTEND_PID_FILE"
+  rmdir "$RUNTIME_DIR" 2>/dev/null || true
+}
+
+stop_process() {
+  local pid_file=$1
+  local pid
+  pid=$(read_pid "$pid_file") || return 0
+  if is_running "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      is_running "$pid" || break
+      sleep 0.1
+    done
+    if is_running "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
   fi
 }
 
-trap cleanup EXIT
-trap 'exit 130' INT TERM
-
-cd "$SCRIPT_DIR"
-
-printf '\n[1/3] Installing backend dependencies...\n'
-uv sync --project backend || fail "backend dependency installation failed"
-
-printf '\n[2/3] Installing frontend dependencies...\n'
-pnpm --dir frontend install || fail "frontend dependency installation failed"
-
-printf '\n[3/3] Starting CodeLens...\n'
-uv run --project backend codelens-review start &
-BACKEND_PID=$!
-pnpm --dir frontend dev --host 127.0.0.1 --strictPort &
-FRONTEND_PID=$!
-
-sleep 1
-if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
-  wait "$BACKEND_PID" 2>/dev/null || true
-  fail "backend failed to start; make sure port 8765 is available"
-fi
-if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
-  wait "$FRONTEND_PID" 2>/dev/null || true
-  fail "frontend failed to start; make sure port 5173 is available"
-fi
-
-printf '\nCodeLens is starting. Open these addresses:\n'
-printf '  Frontend:  http://127.0.0.1:5173\n'
-printf '  Backend:   http://127.0.0.1:8765\n'
-printf '  OpenAPI:   http://127.0.0.1:8765/docs\n'
-printf '\nAll locally accessible Git repositories are allowed by default.\n'
-printf 'Choose a repository and configure model gateways in the Web UI.\n'
-printf 'Press Ctrl+C to stop both services.\n\n'
-
-EXIT_CODE=0
-while :; do
-  if ! kill -0 "$BACKEND_PID" 2>/dev/null; then
-    wait "$BACKEND_PID" || EXIT_CODE=$?
-    printf 'Backend process stopped.\n' >&2
-    break
+stop_pid() {
+  local pid=$1
+  [ -n "$pid" ] || return 0
+  if is_running "$pid"; then
+    kill "$pid" 2>/dev/null || true
+    for _ in $(seq 1 50); do
+      is_running "$pid" || break
+      sleep 0.1
+    done
+    if is_running "$pid"; then
+      kill -KILL "$pid" 2>/dev/null || true
+    fi
   fi
-  if ! kill -0 "$FRONTEND_PID" 2>/dev/null; then
-    wait "$FRONTEND_PID" || EXIT_CODE=$?
-    printf 'Frontend process stopped.\n' >&2
-    break
-  fi
-  sleep 1
-done
+}
 
-exit "$EXIT_CODE"
+remove_pid_file_if_owned() {
+  local pid_file=$1
+  local owned_pid=$2
+  [ -n "$owned_pid" ] || return 0
+  local recorded_pid
+  recorded_pid=$(read_pid "$pid_file") || return 0
+  [ "$recorded_pid" = "$owned_pid" ] && rm -f "$pid_file"
+}
+
+stop_services() {
+  local was_running=false
+  local pid_file
+  for pid_file in "$API_PID_FILE" "$WORKER_PID_FILE" "$FRONTEND_PID_FILE"; do
+    local pid
+    pid=$(read_pid "$pid_file") || continue
+    if is_running "$pid"; then
+      was_running=true
+    fi
+    stop_process "$pid_file"
+  done
+  remove_runtime_state
+  if [ "$was_running" = true ]; then
+    printf 'CodeLens stopped.\n'
+  else
+    printf 'CodeLens is not running.\n'
+  fi
+}
+
+cleanup() {
+  trap - EXIT INT TERM
+  stop_pid "$FRONTEND_PID"
+  stop_pid "$WORKER_PID"
+  stop_pid "$API_PID"
+  remove_pid_file_if_owned "$FRONTEND_PID_FILE" "$FRONTEND_PID"
+  remove_pid_file_if_owned "$WORKER_PID_FILE" "$WORKER_PID"
+  remove_pid_file_if_owned "$API_PID_FILE" "$API_PID"
+  rmdir "$RUNTIME_DIR" 2>/dev/null || true
+}
+
+wait_for_http() {
+  local url=$1
+  local process_pid=$2
+  local name=$3
+  for _ in $(seq 1 60); do
+    if ! is_running "$process_pid"; then
+      wait "$process_pid" 2>/dev/null || true
+      fail "$name failed to start; inspect the output above"
+    fi
+    if curl --fail --silent --show-error --max-time 1 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 0.5
+  done
+  fail "$name did not become ready within 30 seconds"
+}
+
+ensure_dependencies() {
+  command -v uv >/dev/null 2>&1 || fail "uv is required: https://docs.astral.sh/uv/"
+  command -v pnpm >/dev/null 2>&1 || fail "pnpm is required: https://pnpm.io/installation"
+  command -v curl >/dev/null 2>&1 || fail "curl is required to verify service startup"
+
+  printf '\n[1/3] Installing backend dependencies...\n'
+  uv sync --project backend || fail "backend dependency installation failed"
+
+  printf '\n[2/3] Installing frontend dependencies...\n'
+  pnpm --dir frontend install || fail "frontend dependency installation failed"
+}
+
+start_services() {
+  local pid_file
+  for pid_file in "$API_PID_FILE" "$WORKER_PID_FILE" "$FRONTEND_PID_FILE"; do
+    local pid
+    pid=$(read_pid "$pid_file") || continue
+    if is_running "$pid"; then
+      fail "CodeLens is already running; use ./start.sh restart or ./start.sh stop"
+    fi
+  done
+  remove_runtime_state
+
+  ensure_dependencies
+  umask 077
+  mkdir -p "$RUNTIME_DIR" || fail "could not create runtime directory"
+
+  printf '\n[3/3] Starting CodeLens...\n'
+  uv run --project backend codelens-review api &
+  API_PID=$!
+  printf '%s\n' "$API_PID" >"$API_PID_FILE"
+  uv run --project backend codelens-review worker &
+  WORKER_PID=$!
+  printf '%s\n' "$WORKER_PID" >"$WORKER_PID_FILE"
+  pnpm --dir frontend dev --host 127.0.0.1 --strictPort &
+  FRONTEND_PID=$!
+  printf '%s\n' "$FRONTEND_PID" >"$FRONTEND_PID_FILE"
+
+  wait_for_http "http://127.0.0.1:8765/api/health" "$API_PID" "Backend"
+  wait_for_http "http://127.0.0.1:5173" "$FRONTEND_PID" "Frontend"
+
+  printf '\nCodeLens is ready. Open these addresses:\n'
+  printf '  Frontend:  http://127.0.0.1:5173\n'
+  printf '  Backend:   http://127.0.0.1:8765\n'
+  printf '  OpenAPI:   http://127.0.0.1:8765/docs\n'
+  printf '\nAll locally accessible Git repositories are allowed by default.\n'
+  printf 'Choose a repository and configure model gateways in the Web UI.\n'
+  printf 'Press Ctrl+C or run ./start.sh stop to stop all services.\n\n'
+
+  while :; do
+    if ! is_running "$API_PID"; then
+      wait "$API_PID" || true
+      fail "Backend process stopped."
+    fi
+    if ! is_running "$WORKER_PID"; then
+      wait "$WORKER_PID" || true
+      fail "Worker process stopped."
+    fi
+    if ! is_running "$FRONTEND_PID"; then
+      wait "$FRONTEND_PID" || true
+      fail "Frontend process stopped."
+    fi
+    sleep 1
+  done
+}
+
+ACTION=${1:-start}
+case "$ACTION" in
+  start)
+    [ "$#" -eq 0 ] || [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    cd "$SCRIPT_DIR"
+    trap cleanup EXIT
+    trap 'exit 130' INT TERM
+    start_services
+    ;;
+  stop)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    stop_services
+    ;;
+  restart)
+    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    stop_services
+    cd "$SCRIPT_DIR"
+    trap cleanup EXIT
+    trap 'exit 130' INT TERM
+    start_services
+    ;;
+  *)
+    usage >&2
+    exit 2
+    ;;
+esac

@@ -1,3 +1,4 @@
+import logging
 import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
@@ -10,6 +11,8 @@ from codelens.workspace.application.capture_overlay import ReviewInputCaptureSer
 from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.domain.models import ReviewScope
 from codelens.workspace.domain.ports import InputArtifactPort, RepositoryInfo
+
+_LOGGER = logging.getLogger("codelens.review.commands")
 
 
 class ReviewNotFoundError(DomainError):
@@ -50,7 +53,12 @@ class CreateReviewHandler:
     async def handle(self, command: CreateReviewCommand) -> ReviewRecord:
         """Create a task only after all mutable repository input is frozen."""
 
+        _LOGGER.debug("Planning review scope", extra={"scope_type": type(command.scope).__name__})
         scope_plan = await self._planner.plan(command.repository.path, command.scope)
+        _LOGGER.info(
+            "Review scope planned",
+            extra={"target_path_count": len(scope_plan.target_paths)},
+        )
         captured = await self._capture.capture(command.repository.path, scope_plan)
         artifact = captured.overlay_artifact
         task = ReviewTask.create(
@@ -69,12 +77,15 @@ class CreateReviewHandler:
         try:
             await self._store.create_with_job(task)
         except BaseException:
+            _LOGGER.exception("Review persistence failed", extra={"task_id": task.task_id})
             if artifact is not None:
                 await self._input_artifacts.discard(artifact.reference)
             raise
         record = await self._store.get_review(task.task_id)
         if record is None:
+            _LOGGER.error("Persisted review could not be reloaded", extra={"task_id": task.task_id})
             raise RuntimeError("persisted ReviewTask could not be reloaded")
+        _LOGGER.info("Review task persisted", extra={"task_id": task.task_id})
         return record
 
 

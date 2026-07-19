@@ -23,6 +23,12 @@ it("creates the first persistent model gateway without retaining its API key", a
       }),
     )
     .mockResolvedValueOnce(
+      new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           active_gateway_id: "gateway_1",
@@ -50,7 +56,9 @@ it("creates the first persistent model gateway without retaining its API key", a
   await user.type(screen.getByLabelText("Base URL"), "http://model-gateway.example:8080");
   await user.click(screen.getByRole("button", { name: "Add gateway" }));
 
-  const createCall = fetchMock.mock.calls[1];
+  const createCall = fetchMock.mock.calls.find(
+    ([url, init]) => url === "/api/settings/model-gateways" && init?.method === "POST",
+  );
   expect(createCall?.[0]).toBe("/api/settings/model-gateways");
   expect(createCall?.[1]).toMatchObject({ method: "POST" });
   expect(JSON.parse(String(createCall?.[1]?.body))).toEqual({
@@ -91,6 +99,12 @@ it("switches the active gateway without asking for the stored key", async () => 
       }),
     )
     .mockResolvedValueOnce(
+      new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           ...initialCatalog,
@@ -110,8 +124,10 @@ it("switches the active gateway without asking for the stored key", async () => 
   const secondary = await screen.findByTestId("gateway-gateway_secondary");
   await user.click(within(secondary).getByRole("button", { name: "Activate" }));
 
-  expect(fetchMock.mock.calls[1]?.[0]).toBe("/api/settings/active-model-gateway");
-  expect(JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body))).toEqual({
+  const activateCall = fetchMock.mock.calls.find(
+    ([url]) => url === "/api/settings/active-model-gateway",
+  );
+  expect(JSON.parse(String(activateCall?.[1]?.body))).toEqual({
     gateway_id: "gateway_secondary",
   });
   expect(await within(secondary).findByText("Active gateway")).toBeInTheDocument();

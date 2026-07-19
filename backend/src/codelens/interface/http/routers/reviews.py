@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 from collections.abc import AsyncIterator
 from dataclasses import asdict
 from typing import Annotated
@@ -21,6 +22,7 @@ from codelens.interface.http.dto import (
 from codelens.review.application.commands import CreateReviewCommand
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
+_LOGGER = logging.getLogger("codelens.reviews")
 
 TaskId = Annotated[
     str,
@@ -41,6 +43,7 @@ async def create_review(
 ) -> ReviewResponse:
     """Validate a source path, pin refs once, and create a durable review command."""
 
+    _LOGGER.info("Review creation requested", extra={"scope_type": request.scope.type})
     repository = await components.repository_inspector.inspect(request.repository_path)
     record = await components.create_review.handle(
         CreateReviewCommand(
@@ -48,6 +51,10 @@ async def create_review(
             scope=request.scope.to_domain(),
             selected_agent_versions=tuple(request.selected_agents),
         )
+    )
+    _LOGGER.info(
+        "Review created",
+        extra={"task_id": record.task_id, "scope_type": request.scope.type},
     )
     return ReviewResponse.from_domain(record)
 

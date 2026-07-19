@@ -3,11 +3,26 @@ import type {
   CreateModelGateway,
   ModelGatewayCatalog,
   OpenAISettings,
+  RuntimeLogLevel,
+  RuntimeLogLevelSettings,
   UpdateModelGateway,
 } from "./types";
 
 export async function listModelGateways(): Promise<ModelGatewayCatalog> {
   return api<ModelGatewayCatalog>("/settings/model-gateways");
+}
+
+export async function getRuntimeLogLevel(): Promise<RuntimeLogLevelSettings> {
+  return api<RuntimeLogLevelSettings>("/settings/logging");
+}
+
+export async function updateRuntimeLogLevel(
+  level: RuntimeLogLevel,
+): Promise<RuntimeLogLevelSettings> {
+  return api<RuntimeLogLevelSettings>("/settings/logging", {
+    method: "PUT",
+    body: JSON.stringify({ level }),
+  });
 }
 
 export async function createModelGateway(

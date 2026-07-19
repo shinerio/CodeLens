@@ -29,6 +29,14 @@ class StrictDto(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class RuntimeLogLevelResponse(StrictDto):
+    level: Literal["debug", "info", "warning", "error"]
+
+
+class UpdateRuntimeLogLevelRequest(RuntimeLogLevelResponse):
+    pass
+
+
 RefLabel = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 AgentReference = Annotated[
     str,
