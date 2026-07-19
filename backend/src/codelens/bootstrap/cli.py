@@ -244,10 +244,13 @@ def main(arguments: Sequence[str] | None = None) -> None:
         run_api(command.settings)
         return
     if command.name == "worker":
-        configure_process_logging("worker", data_directory=command.settings.data_dir)
         from codelens.worker.main import run_worker
         from codelens.worker.singleton import WorkerAlreadyRunningError
 
+        # Worker imports construct the provider runtime and may configure third-party
+        # loggers. Install the process handler only after those imports so failures
+        # from the scheduler always retain the Worker file handler.
+        configure_process_logging("worker", data_directory=command.settings.data_dir)
         try:
             asyncio.run(run_worker(command.settings))
         except WorkerAlreadyRunningError as error:

@@ -320,6 +320,8 @@ class ContextBuilder:
 
         target_paths = set(snapshot.manifest.target_paths)
         for hunk in snapshot.change_index.hunks:
+            if hunk.side == "old":
+                continue
             entry = entries.get(hunk.path)
             if (
                 not ContextBuilder._is_normalized_relative(hunk.path)
@@ -450,6 +452,10 @@ class ContextBuilder:
         )
         excerpts: list[ContextExcerpt] = []
         for hunk in hunks:
+            # A review Snapshot contains the target (new) tree only. Deleted lines
+            # remain valid change evidence, but cannot be read as review context.
+            if hunk.side != "new":
+                continue
             read = await self._reader.read(
                 snapshot,
                 hunk.path,

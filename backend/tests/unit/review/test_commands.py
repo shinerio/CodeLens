@@ -3,7 +3,11 @@ from pathlib import Path
 
 import pytest
 
-from codelens.review.application.commands import CreateReviewCommand, CreateReviewHandler
+from codelens.review.application.commands import (
+    CreateReviewCommand,
+    CreateReviewHandler,
+    DeleteReviewHandler,
+)
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import ReviewRecord
 from codelens.shared.domain.errors import SnapshotStaleError
@@ -13,6 +17,7 @@ from codelens.workspace.domain.models import (
     BranchScope,
     OpaqueArtifact,
     RepositoryFingerprint,
+    TaskWorktree,
 )
 from codelens.workspace.domain.ports import RepositoryInfo, ScopePlan
 
@@ -88,6 +93,27 @@ class FailingStore:
         return None
 
 
+class DeletingStore:
+    async def soft_delete_review(self, _task_id: str) -> bool:
+        return True
+
+
+class RecordingWorktreeRegistry:
+    def __init__(self, worktree: TaskWorktree) -> None:
+        self._worktree = worktree
+
+    async def get(self, _task_id: str) -> TaskWorktree | None:
+        return self._worktree
+
+
+class RecordingWorktreeManager:
+    def __init__(self) -> None:
+        self.removed: list[TaskWorktree] = []
+
+    async def remove_owned(self, worktree: TaskWorktree) -> None:
+        self.removed.append(worktree)
+
+
 def _command(tmp_path: Path) -> CreateReviewCommand:
     repository = RepositoryInfo(
         path=tmp_path,
@@ -142,3 +168,22 @@ async def test_stale_capture_never_creates_a_durable_command(tmp_path: Path) -> 
         "input_00000000000000000000000000000001.json",
         "input_00000000000000000000000000000002.json",
     ]
+
+
+async def test_delete_review_removes_its_registered_owned_worktree(tmp_path: Path) -> None:
+    task_id = "review_" + "1" * 32
+    worktree = TaskWorktree(
+        worktree_id="worktree-1",
+        task_id=task_id,
+        repository_common_dir_hash="a" * 64,
+        root=tmp_path / "worktrees" / task_id / "checkout",
+        head_oid="b" * 40,
+        ownership_token_hash="c" * 64,
+    )
+    registry = RecordingWorktreeRegistry(worktree)
+    manager = RecordingWorktreeManager()
+    handler = DeleteReviewHandler(DeletingStore(), registry, manager)
+
+    await handler.handle(task_id)
+
+    assert manager.removed == [worktree]

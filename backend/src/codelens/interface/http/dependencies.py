@@ -12,7 +12,11 @@ from codelens.review.application.commands import (
     ListReviewsHandler,
 )
 from codelens.review.infrastructure.database import Database
-from codelens.review.infrastructure.repositories import SqlEventOutbox, SqlReviewStore
+from codelens.review.infrastructure.repositories import (
+    SqlEventOutbox,
+    SqlReviewStore,
+    SqlWorktreeRegistry,
+)
 from codelens.reviewer_catalog.application.provider_settings import (
     GetProviderSettingsHandler,
     ModelGatewaySettingsService,
@@ -30,6 +34,10 @@ from codelens.workspace.infrastructure.filesystem_browser import LocalFilesystem
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.git_overlay import GitReviewInputCaptureAdapter
 from codelens.workspace.infrastructure.git_workspace import GitWorkspaceAdapter
+from codelens.workspace.infrastructure.git_worktrees import (
+    GitReviewWorktreeManager,
+    RepositoryLockRegistry,
+)
 from codelens.workspace.infrastructure.input_artifacts import FilesystemInputArtifactStore
 from codelens.workspace.infrastructure.repository_catalog import GitRepositoryCatalogAdapter
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
@@ -83,6 +91,13 @@ def build_components(settings: Settings) -> HttpComponents:
     input_artifacts = FilesystemInputArtifactStore(settings.data_dir / "artifacts" / "inputs")
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     review_store = SqlReviewStore(database)
+    worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
+    worktree_manager = GitReviewWorktreeManager(
+        data_dir=settings.data_dir,
+        git=git,
+        registry=worktree_registry,
+        locks=RepositoryLockRegistry(),
+    )
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
     return HttpComponents(
         settings=settings,
@@ -96,7 +111,11 @@ def build_components(settings: Settings) -> HttpComponents:
         create_review=CreateReviewHandler(planner, capture, review_store, input_artifacts),
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
-        delete_review=DeleteReviewHandler(review_store),
+        delete_review=DeleteReviewHandler(
+            review_store,
+            worktree_registry,
+            worktree_manager,
+        ),
         cancel_review=CancelReviewHandler(review_store),
         events=SqlEventOutbox(database),
         review_store=review_store,

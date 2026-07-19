@@ -10,7 +10,12 @@ from codelens.shared.domain.errors import DomainError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.domain.models import ReviewScope
-from codelens.workspace.domain.ports import InputArtifactPort, RepositoryInfo
+from codelens.workspace.domain.ports import (
+    InputArtifactPort,
+    RepositoryInfo,
+    ReviewWorktreePort,
+    WorktreeRegistryPort,
+)
 
 _LOGGER = logging.getLogger("codelens.review.commands")
 
@@ -115,16 +120,26 @@ class ListReviewsHandler:
 
 
 class DeleteReviewHandler:
-    """Remove a Review workspace from the UI without racing active Worker execution."""
+    """Tombstone a Review and remove only its verified owned worktree."""
 
-    def __init__(self, store: ReviewStorePort) -> None:
+    def __init__(
+        self,
+        store: ReviewStorePort,
+        worktree_registry: WorktreeRegistryPort,
+        worktrees: ReviewWorktreePort,
+    ) -> None:
         self._store = store
+        self._worktree_registry = worktree_registry
+        self._worktrees = worktrees
 
     async def handle(self, task_id: str) -> None:
-        """Soft-delete the workspace and request cancellation for active tasks."""
+        """Request cancellation, then remove a scoped checkout when one exists."""
 
         if not await self._store.soft_delete_review(task_id):
             raise ReviewNotFoundError("review does not exist")
+        worktree = await self._worktree_registry.get(task_id)
+        if worktree is not None:
+            await self._worktrees.remove_owned(worktree)
 
 
 class CancelReviewHandler:

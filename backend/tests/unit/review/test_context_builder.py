@@ -312,6 +312,30 @@ async def test_binary_deleted_oversized_unicode_and_long_lines_are_bounded() -> 
     assert agent_input.plan.truncated_paths == ("src/long.py",)
 
 
+async def test_skips_old_side_changed_hunks_that_are_not_readable_from_snapshot() -> None:
+    changed = b"return ready\n"
+    snapshot = replace(
+        _snapshot(()),
+        change_index=ChangeIndex(
+            (
+                ChangedHunk("hunk-new", "src/changed.py", 1, 1, "new", _hash(changed)),
+                ChangedHunk("hunk-old", "src/deleted.py", 1, 1, "old", _hash(b"removed\n")),
+            )
+        ),
+    )
+    reader = RecordingReader({("src/changed.py", "new"): changed})
+    builder = ContextBuilder(FakeContextProvider(()), reader)
+
+    agent_input = await builder.build(
+        snapshot,
+        _instructions(),
+        ContextBudget(240, 30, 20, 30, 20, 128, 80),
+    )
+
+    assert [excerpt.path for excerpt in agent_input.changed_hunks] == ["src/changed.py"]
+    assert reader.paths_read == ["src/changed.py"]
+
+
 async def test_rejects_provider_paths_outside_the_snapshot_before_reading() -> None:
     candidate = CandidateSummary(
         "../private.env",

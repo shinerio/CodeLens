@@ -85,6 +85,25 @@ class _RuntimeLevelFilter(logging.Filter):
         return record.levelno >= _LOG_LEVELS[get_runtime_log_level(self._data_directory)]
 
 
+def _file_handler(
+    log_path: Path,
+    process_name: ProcessName,
+    data_directory: Path,
+) -> _CodeLensFileHandler:
+    """Create one bounded handler without sharing lifecycle with another logger."""
+
+    handler = _CodeLensFileHandler(
+        log_path,
+        encoding="utf-8",
+        maxBytes=5 * 1024 * 1024,
+        backupCount=5,
+    )
+    handler.setFormatter(_JsonLogFormatter(process_name))
+    handler.addFilter(_RuntimeLevelFilter(data_directory))
+    handler.codelens_log_path = log_path
+    return handler
+
+
 def configure_process_logging(
     process_name: ProcessName,
     *,
@@ -100,15 +119,7 @@ def configure_process_logging(
     directory = (log_directory or Path.cwd() / "logs").resolve()
     directory.mkdir(parents=True, exist_ok=True)
     log_path = directory / f"{process_name}.log"
-    handler = _CodeLensFileHandler(
-        log_path,
-        encoding="utf-8",
-        maxBytes=5 * 1024 * 1024,
-        backupCount=5,
-    )
-    handler.setFormatter(_JsonLogFormatter(process_name))
-    handler.addFilter(_RuntimeLevelFilter((data_directory or Path.cwd() / "data").resolve()))
-    handler.codelens_log_path = log_path
+    level_directory = (data_directory or Path.cwd() / "data").resolve()
 
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
@@ -116,11 +127,22 @@ def configure_process_logging(
         if isinstance(existing_handler, _CodeLensFileHandler):
             root_logger.removeHandler(existing_handler)
             existing_handler.close()
-    root_logger.addHandler(handler)
+    root_logger.addHandler(_file_handler(log_path, process_name, level_directory))
+
+    application_logger = logging.getLogger("codelens")
+    for existing_handler in tuple(application_logger.handlers):
+        if isinstance(existing_handler, _CodeLensFileHandler):
+            application_logger.removeHandler(existing_handler)
+            existing_handler.close()
+    # Third-party runtimes can replace root handlers during import. Keep CodeLens
+    # task failures on an independently owned logger so their tracebacks survive.
+    application_logger.addHandler(_file_handler(log_path, process_name, level_directory))
+    application_logger.propagate = False
 
     for logger_name in ("codelens", "uvicorn", "uvicorn.error", "uvicorn.access"):
         logger = logging.getLogger(logger_name)
         logger.disabled = False
         logger.setLevel(logging.INFO)
-        logger.propagate = True
+        if logger_name != "codelens":
+            logger.propagate = True
     return log_path
