@@ -18,7 +18,7 @@ import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
-import { getReview, listFindings } from "./api";
+import { getReview, getTranscript, listFindings } from "./api";
 import { useReviewEvents } from "./useReviewEvents";
 import "./ReviewRunPage.css";
 
@@ -108,6 +108,13 @@ export function ReviewRunPage() {
     },
     enabled: taskId !== undefined,
     initialData: [] as FindingRecord[],
+  });
+  const transcriptQuery = useQuery({
+    queryKey: ["review-transcript", taskId],
+    queryFn: () => getTranscript(taskId ?? ""),
+    enabled: taskId !== undefined,
+    refetchInterval: TERMINAL_STATUSES.has(eventStatus) ? false : 1500,
+    initialData: [],
   });
 
   const currentStatus =
@@ -287,12 +294,13 @@ export function ReviewRunPage() {
               <span className="run-panel__status">{connectionState}</span>
             </div>
             <ul className="event-log">
-              {events.length > 0 ? (
-                events.map((event) => (
-                  <li className="event-log__item" key={`${event.type}-${event.id}`}>
-                    <span className="event-log__type">{event.type}</span>
-                    <span className="event-log__id">#{event.id}</span>
-                    <pre>{JSON.stringify(event.payload, null, 2)}</pre>
+              {transcriptQuery.data.length > 0 ? (
+                transcriptQuery.data.map((entry) => (
+                  <li className="event-log__item" key={entry.sequence}>
+                    <span className="event-log__type">{entry.kind.replaceAll("_", " ")}</span>
+                    <span className="event-log__id">#{entry.sequence}</span>
+                    <pre>{entry.content}</pre>
+                    {entry.redacted || entry.truncated ? <small>{entry.redacted ? "Credential redacted" : ""}{entry.redacted && entry.truncated ? " · " : ""}{entry.truncated ? "Truncated" : ""}</small> : null}
                   </li>
                 ))
               ) : (

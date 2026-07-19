@@ -17,6 +17,7 @@ from codelens.review.infrastructure.repositories import (
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
+from codelens.review.infrastructure.transcripts import ExecutionTranscriptStore
 from codelens.reviewer_catalog.application.provider_settings import (
     GetProviderSettingsHandler,
     ModelGatewaySettingsService,
@@ -63,6 +64,7 @@ class HttpComponents:
     get_provider_settings: GetProviderSettingsHandler
     update_provider_settings: UpdateProviderSettingsHandler
     model_gateways: ModelGatewaySettingsService
+    transcripts: ExecutionTranscriptStore
 
     async def start(self) -> None:
         """Create contained runtime directories and apply migrations before serving."""
@@ -123,6 +125,7 @@ def build_components(settings: Settings) -> HttpComponents:
         get_provider_settings=GetProviderSettingsHandler(provider_config),
         update_provider_settings=UpdateProviderSettingsHandler(provider_config),
         model_gateways=ModelGatewaySettingsService(provider_config),
+        transcripts=ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts"),
     )
 
 

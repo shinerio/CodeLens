@@ -123,6 +123,17 @@ async def get_report(
     raise HttpProblem(404, "report_not_ready", "The review report is not ready.")
 
 
+@router.get("/{task_id}/transcript")
+async def get_transcript(
+    task_id: TaskId,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> list[dict[str, object]]:
+    """Return the credential-redacted execution conversation for one Review."""
+
+    await components.get_review.handle(task_id)
+    return [entry.model_dump(mode="json") for entry in await components.transcripts.list(task_id)]
+
+
 @router.get("/{task_id}/findings")
 async def list_findings(
     task_id: TaskId,

@@ -590,3 +590,30 @@ def test_reviews_are_listed_as_workspaces_and_can_be_soft_deleted(
     assert deleted.status_code == 204, deleted.text
     assert [review["task_id"] for review in after_delete.json()] == [second.json()["task_id"]]
     assert hidden.status_code == 404
+
+
+def test_review_transcript_contract_returns_empty_history_before_worker_execution(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    _prepared_repository(git_repository)
+    app = create_app(Settings(data_dir=tmp_path / "data"))
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        transcript = client.get(f"/api/reviews/{created.json()['task_id']}/transcript")
+
+    assert created.status_code == 202, created.text
+    assert transcript.status_code == 200, transcript.text
+    assert transcript.json() == []

@@ -24,6 +24,7 @@ from codelens.review.infrastructure.repositories import (
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
+from codelens.review.infrastructure.transcripts import ExecutionTranscriptStore
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
 from codelens.worker.scheduler import ClaimedJob, WorkerSemaphores
@@ -126,6 +127,7 @@ class WorkerReviewExecutor:
         checkpoints: SqlCheckpointStore,
         codec: AgentOutputCodec,
         semaphores: WorkerSemaphores,
+        transcripts: ExecutionTranscriptStore,
     ) -> None:
         self._settings = settings
         self._review_store = review_store
@@ -139,6 +141,7 @@ class WorkerReviewExecutor:
         self._checkpoints = SqlCheckpointPortAdapter(checkpoints)
         self._codec = codec
         self._semaphores = semaphores
+        self._transcripts = transcripts
         self._repository_inspector = RepositoryInspector(
             GitRepositoryMetadataAdapter(GitCli()),
             settings.repository_roots,
@@ -170,6 +173,7 @@ class WorkerReviewExecutor:
             completion=self._review_store,
             agent_semaphore=self._semaphores.agent,
             max_agent_runs_per_review=self._settings.max_agent_runs_per_review,
+            transcript=self._transcripts,
         )
         await orchestrator.execute(task_id)
         await self._cleanup_terminal_worktree(task_id)

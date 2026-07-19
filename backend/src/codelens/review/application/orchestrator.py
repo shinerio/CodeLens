@@ -3,9 +3,9 @@
 import asyncio
 import base64
 import json
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass
-from typing import Protocol, TypeVar
+from typing import Literal, Protocol, TypeVar
 
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.application.validate_findings import FindingValidationError
@@ -16,6 +16,10 @@ from codelens.review.domain.ports import (
 )
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.workspace.domain.models import ReviewSnapshot
+
+type TranscriptKind = Literal[
+    "lifecycle", "prompt", "model_output", "tool_call", "tool_result", "skill_loaded"
+]
 
 
 @dataclass(frozen=True)
@@ -78,6 +82,17 @@ class _CrashInjectorPort(Protocol):
     async def hit(self, boundary: str) -> None: ...
 
 
+class _TranscriptPort(Protocol):
+    async def append(
+        self,
+        task_id: str,
+        kind: TranscriptKind,
+        content: str,
+        *,
+        metadata: Mapping[str, str] | None = None,
+    ) -> None: ...
+
+
 class ReviewOrchestrator:
     """Execute one review from durable checkpoints."""
 
@@ -93,6 +108,7 @@ class ReviewOrchestrator:
         completion: AgentRunCompletionPort,
         agent_semaphore: asyncio.Semaphore,
         max_agent_runs_per_review: int,
+        transcript: _TranscriptPort | None = None,
         crash_injector: _CrashInjectorPort | None = None,
     ) -> None:
         self._workflow = workflow
@@ -105,11 +121,13 @@ class ReviewOrchestrator:
         self._agent_semaphore = agent_semaphore
         self._review_agent_semaphore = asyncio.Semaphore(max_agent_runs_per_review)
         self._crash_injector = crash_injector
+        self._transcript = transcript
 
     async def execute(self, task_id: str) -> None:
         """Resume one task without re-invoking nodes that have durable output."""
 
         try:
+            await self._record(task_id, "lifecycle", "Review execution started")
             status = await self._workflow.get_status(task_id)
             if status in {"completed", "partial", "failed", "canceled"}:
                 return
@@ -142,6 +160,7 @@ class ReviewOrchestrator:
             status = await self._advance(task_id, status, "synthesizing", "completed")
             if status == "completed":
                 await self._workflow.complete_job(task_id)
+                await self._record(task_id, "lifecycle", "Review execution completed")
         except asyncio.CancelledError:
             await self._workflow.interrupt(task_id)
             raise
@@ -158,6 +177,7 @@ class ReviewOrchestrator:
         if await self._cancel_if_requested(task_id):
             return "canceled"
         await self._workflow.transition(task_id, target)
+        await self._record(task_id, "lifecycle", f"Review phase entered: {target}")
         return target
 
     async def _cancel_if_requested(self, task_id: str) -> bool:
@@ -182,6 +202,19 @@ class ReviewOrchestrator:
         if checkpoint.status != "pending":
             raise RuntimeError("interrupted checkpoint was not recovered before execution")
         input_payload = prepared.input_payloads[self._agent_key(agent)]
+        await self._record(
+            task_id,
+            "prompt",
+            json.dumps(
+                {
+                    "system_instructions": agent.prompt_template,
+                    "user_input": input_payload.decode("utf-8", errors="replace"),
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            {"agent": self._agent_key(agent)},
+        )
         if checkpoint.artifact_ref is not None and checkpoint.artifact_hash is not None:
             invalid_output = await self._artifacts.read_output(
                 checkpoint.artifact_ref,
@@ -193,6 +226,12 @@ class ReviewOrchestrator:
         async with self._review_agent_semaphore:
             async with self._agent_semaphore:
                 output = await self._runtime.invoke(agent, input_payload)
+        await self._record(
+            task_id,
+            "model_output",
+            output.canonical_bytes.decode("utf-8", errors="replace"),
+            {"agent": self._agent_key(agent)},
+        )
         await self._hit("after_model_return")
         artifact = await self._artifacts.write_output(node_key, output.canonical_bytes)
         await self._hit("after_artifact_write")
@@ -245,6 +284,16 @@ class ReviewOrchestrator:
     async def _hit(self, boundary: str) -> None:
         if self._crash_injector is not None:
             await self._crash_injector.hit(boundary)
+
+    async def _record(
+        self,
+        task_id: str,
+        kind: TranscriptKind,
+        content: str,
+        metadata: Mapping[str, str] | None = None,
+    ) -> None:
+        if self._transcript is not None:
+            await self._transcript.append(task_id, kind, content, metadata=metadata)
 
     @staticmethod
     def _agent_key(agent: AgentVersion) -> str:
