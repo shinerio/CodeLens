@@ -42,3 +42,13 @@ export type FindingRecord = {
   suggested_patch: string | null;
   rule_sources: RuleReferenceRecord[];
 };
+
+export type FindingSourcePreview = {
+  path: string;
+  revision: string;
+  start_line: number;
+  end_line: number;
+  highlight_start_line: number;
+  highlight_end_line: number;
+  content: string;
+};

@@ -1,6 +1,6 @@
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 
 from codelens.shared.domain.errors import InvalidRepositoryError
 
@@ -82,3 +82,18 @@ class GitCli:
             message = stderr[:4096].decode("utf-8", errors="replace").strip()
             raise InvalidRepositoryError(message or "git command failed")
         return CommandResult(returncode, stdout, stderr)
+
+    async def read_revision(self, repository: Path, revision: str, path: str) -> bytes:
+        """Read one normalized repository-relative path from a pinned Git revision."""
+
+        candidate = PurePosixPath(path)
+        if (
+            not path
+            or "\0" in path
+            or "\\" in path
+            or candidate.is_absolute()
+            or ".." in candidate.parts
+            or candidate.as_posix() != path
+        ):
+            raise InvalidRepositoryError("revision path is unsafe")
+        return (await self.run(repository, "show", f"{revision}:{path}")).stdout

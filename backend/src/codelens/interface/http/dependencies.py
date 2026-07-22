@@ -11,6 +11,7 @@ from codelens.review.application.commands import (
     GetReviewHandler,
     ListReviewsHandler,
 )
+from codelens.review.application.source_preview import FindingSourcePreviewService
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
@@ -65,6 +66,7 @@ class HttpComponents:
     update_provider_settings: UpdateProviderSettingsHandler
     model_gateways: ModelGatewaySettingsService
     transcripts: ExecutionTranscriptStore
+    finding_source_preview: FindingSourcePreviewService
 
     async def start(self) -> None:
         """Create contained runtime directories and apply migrations before serving."""
@@ -126,6 +128,7 @@ def build_components(settings: Settings) -> HttpComponents:
         update_provider_settings=UpdateProviderSettingsHandler(provider_config),
         model_gateways=ModelGatewaySettingsService(provider_config),
         transcripts=ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts"),
+        finding_source_preview=FindingSourcePreviewService(review_store, git),
     )
 
 

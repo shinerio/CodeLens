@@ -57,7 +57,7 @@ class ReviewScheduler:
         max_active_reviews: int,
         poll_min_seconds: float,
         poll_max_seconds: float,
-        record_failure: Callable[[str, str], Awaitable[None]] | None = None,
+        record_failure: Callable[[str, Exception], Awaitable[None]] | None = None,
     ) -> None:
         self._queue = queue
         self._execute = execute
@@ -144,4 +144,4 @@ class ReviewScheduler:
                 extra={"task_id": task_id, "error_type": type(error).__name__},
             )
             if self._record_failure is not None:
-                await self._record_failure(task_id, type(error).__name__)
+                await self._record_failure(task_id, error)

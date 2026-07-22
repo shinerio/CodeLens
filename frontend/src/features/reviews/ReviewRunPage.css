@@ -409,6 +409,21 @@
   line-height: 1.5;
 }
 
+.finding-detail__source pre {
+  overflow: auto;
+  max-height: 28rem;
+  padding: 0.85rem;
+  border: 1px solid var(--border-subtle);
+  border-radius: 0.5rem;
+  background: var(--surface-inset);
+  font-size: 0.78rem;
+  line-height: 1.55;
+}
+
+.finding-detail__source-line { display: block; white-space: pre; }
+.finding-detail__source-line b { display: inline-block; width: 4.8rem; color: var(--text-muted); user-select: none; }
+.finding-detail__source-line--highlight { background: color-mix(in srgb, var(--accent) 18%, transparent); }
+
 .event-log {
   display: grid;
   gap: 10px;
@@ -457,6 +472,33 @@
 .event-log__empty {
   color: var(--run-muted);
 }
+
+.review-console { padding: 18px; background: #172027; color: #dce7e8; }
+.review-console__toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
+.review-console__toolbar button { border: 1px solid #466168; background: transparent; color: #dce7e8; padding: 7px 9px; font: inherit; font-size: .75rem; }
+.review-console__filters { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; margin: 0; padding: 5px 8px; border: 1px solid #466168; }
+.review-console__filters legend { padding: 0 4px; color: #91a3a7; font: 700 .66rem "SFMono-Regular", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.review-console__filters label { display: inline-flex; align-items: center; gap: 4px; color: #dce7e8; font-size: .72rem; white-space: nowrap; }
+.review-console__filters input { accent-color: #7fd4d0; }
+.review-console__search { display: flex; flex: 1 1 260px; align-items: center; gap: 8px; border: 1px solid #466168; padding: 0 9px; }
+.review-console__search svg { width: 15px; }
+.review-console__search input { width: 100%; border: 0; outline: 0; background: transparent; color: inherit; padding: 8px 0; font: inherit; }
+.review-console__messages { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
+.review-console__message { border-left: 3px solid #627d23; background: rgba(255,255,255,.05); }
+.review-console__message--tool { border-left-color: #d9a441; }.review-console__message--system { border-left-color: #6b8490; }
+.review-console__message-head { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; background: transparent; color: inherit; padding: 10px 12px; text-align: left; font: 700 .72rem "SFMono-Regular", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
+.review-console__message-head svg { width: 15px; }.review-console__avatar { color: #7fd4d0; }.review-console__message-head time { margin-left: auto; color: #91a3a7; }
+.review-console__content { max-height: min(70vh, 900px); overflow: auto; margin: 0; padding: 0 14px 14px 38px; color: #eef6f5; font: .8rem/1.65 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-console__content--thinking { color: #b9d6ee; border-left: 2px solid #4c7ca0; margin-left: 38px; padding-left: 12px; }
+.review-console__markdown { max-height: min(70vh, 900px); overflow: auto; padding: 0 14px 14px 38px; color: #eef6f5; line-height: 1.65; overflow-wrap: anywhere; }
+.review-console__markdown > :first-child { margin-top: 0; }.review-console__markdown > :last-child { margin-bottom: 0; }.review-console__markdown :is(h1,h2,h3,h4,h5,h6) { color: #7fd4d0; line-height: 1.25; }.review-console__markdown :is(ul,ol) { padding-left: 1.5rem; }.review-console__markdown pre { overflow: auto; padding: 10px; background: rgba(0,0,0,.22); }.review-console__markdown code { font-family: "SFMono-Regular", Consolas, monospace; }.review-console__markdown :not(pre) > code { padding: 1px 4px; background: rgba(127,212,208,.12); }.review-console__markdown a { color: #7fd4d0; }.review-console__markdown blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #466168; color: #b9d6ee; }
+.review-console__message small { display: block; padding: 0 14px 12px 38px; color: #e7c168; }
+.review-console__prompt,.review-console__output { display: grid; gap: 12px; padding: 0 14px 14px 38px; }
+.review-console__prompt section { border: 1px solid rgba(220,231,232,.16); background: rgba(0,0,0,.14); }.review-console__prompt h3 { margin: 0; padding: 8px 10px; color: #7fd4d0; border-bottom: 1px solid rgba(220,231,232,.16); font: 700 .69rem "SFMono-Regular", Consolas, monospace; letter-spacing: .09em; text-transform: uppercase; }.review-console__prompt pre { max-height: 420px; overflow: auto; margin: 0; padding: 11px; color: #eef6f5; white-space: pre-wrap; font: .8rem/1.65 "SFMono-Regular", Consolas, monospace; }
+.review-console__prompt .review-console__markdown { padding: 11px; }
+.review-console__structured { display: grid; gap: 0; margin: 0; padding: 0; }.review-console__structured > div { display: grid; grid-template-columns: minmax(110px, .26fr) 1fr; gap: 12px; padding: 8px 10px; border-bottom: 1px solid rgba(220,231,232,.1); }.review-console__structured dt { color: #91a3a7; font: 700 .68rem "SFMono-Regular", Consolas, monospace; letter-spacing: .05em; text-transform: uppercase; }.review-console__structured dd { min-width: 0; margin: 0; overflow-wrap: anywhere; }.review-console__structured-list { display: grid; gap: 8px; margin: 0; padding: 8px 0 8px 20px; }
+.review-console__output-summary { margin: 0; color: #91a3a7; font: .74rem "SFMono-Regular", Consolas, monospace; }.review-console__finding { border: 1px solid rgba(217,164,65,.36); background: rgba(217,164,65,.08); }.review-console__finding header { display: flex; gap: 9px; align-items: baseline; padding: 10px 12px; border-bottom: 1px solid rgba(217,164,65,.24); }.review-console__finding header span { color: #f2c96b; font: 800 .68rem "SFMono-Regular", Consolas, monospace; }.review-console__finding p { margin: 0; padding: 10px 12px; line-height: 1.55; }.review-console__finding dl { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin: 0; padding: 0 12px 12px; }.review-console__finding dt { color: #91a3a7; font-size: .7rem; text-transform: uppercase; }.review-console__finding dd { margin: 4px 0 0; overflow-wrap: anywhere; }.review-console__finding details,.review-console__raw { margin: 0 12px 12px; }.review-console__finding summary,.review-console__raw summary { cursor: pointer; color: #7fd4d0; font: 700 .72rem "SFMono-Regular", Consolas, monospace; }.review-console__raw { border: 1px solid rgba(220,231,232,.18); padding: 9px; }
+.sr-only { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0,0,0,0); }
 
 .run-muted {
   margin: 0;

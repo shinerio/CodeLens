@@ -4,7 +4,11 @@ import asyncio
 
 from codelens.bootstrap.settings import Settings
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
-from codelens.review.application.context_builder import ContextBudget, ContextBuilder
+from codelens.review.application.context_builder import (
+    ContextBudget,
+    ContextBuilder,
+    SnapshotFileReaderPort,
+)
 from codelens.review.application.orchestrator import (
     CheckpointView,
     PreparedReview,
@@ -12,7 +16,9 @@ from codelens.review.application.orchestrator import (
 )
 from codelens.review.application.validate_findings import FindingValidator
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
+from codelens.review.domain.errors import AgentRuntimeError
 from codelens.review.domain.ports import (
+    AgentRuntimeEventSink,
     AgentRuntimePort,
     ReviewExecutionRecord,
     UnvalidatedAgentOutput,
@@ -63,6 +69,21 @@ class _ModelLimitedRuntime:
     ) -> UnvalidatedAgentOutput:
         async with self._semaphore:
             return await self._runtime.invoke(agent, input_payload, snapshot)
+
+    async def invoke_stream(
+        self,
+        agent: AgentVersion,
+        input_payload: bytes,
+        snapshot: ReviewSnapshot,
+        sink: AgentRuntimeEventSink,
+    ) -> UnvalidatedAgentOutput:
+        """Keep streamed provider work inside the Worker-wide model concurrency limit."""
+
+        stream = getattr(self._runtime, "invoke_stream", None)
+        if stream is None:
+            return await self.invoke(agent, input_payload, snapshot)
+        async with self._semaphore:
+            return await stream(agent, input_payload, snapshot, sink)
 
 
 class SqlCheckpointPortAdapter:
@@ -124,6 +145,7 @@ class WorkerReviewExecutor:
         worktree_recovery: ReviewWorktreeRecoveryService,
         snapshot_service: SnapshotService,
         context_builder: ContextBuilder,
+        excerpt_reader: SnapshotFileReaderPort,
         runtime: AgentRuntimePort,
         output_artifacts: FilesystemRunArtifactStore,
         checkpoints: SqlCheckpointStore,
@@ -138,6 +160,7 @@ class WorkerReviewExecutor:
         self._worktree_recovery = worktree_recovery
         self._snapshot_service = snapshot_service
         self._context_builder = context_builder
+        self._excerpt_reader = excerpt_reader
         self._runtime = _ModelLimitedRuntime(runtime, semaphores.model)
         self._output_artifacts = output_artifacts
         self._checkpoints = SqlCheckpointPortAdapter(checkpoints)
@@ -224,9 +247,21 @@ class WorkerReviewExecutor:
             payloads[f"{agent.agent_id}:v{agent.version}"] = agent_input.canonical_bytes()
         return PreparedReview(snapshot=snapshot, agents=agents, input_payloads=payloads)
 
-    async def record_failure(self, task_id: str, _error_code: str) -> None:
-        """Record a stable task failure without exposing provider or filesystem diagnostics."""
+    async def record_failure(self, task_id: str, error: Exception) -> None:
+        """Record a stable, readable failure without provider response content."""
 
+        metadata: dict[str, str] = {"error_type": type(error).__name__}
+        content = "Review execution failed before final aggregation."
+        if isinstance(error, AgentRuntimeError):
+            metadata.update(error.failure_metadata())
+            content = str(error)
+
+        await self._transcripts.append(
+            task_id,
+            "lifecycle",
+            content,
+            metadata=metadata,
+        )
         try:
             await self._review_store.fail(task_id, "review_execution_failed")
         except InvalidAgentRunStateError:
@@ -299,4 +334,5 @@ class WorkerReviewExecutor:
             snapshot=prepared.snapshot,
             agent=agent,
             codec=self._codec,
+            excerpt_reader=self._excerpt_reader,
         )

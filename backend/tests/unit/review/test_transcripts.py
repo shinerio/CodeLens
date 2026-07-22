@@ -30,3 +30,35 @@ async def test_transcript_returns_empty_entries_for_a_review_without_execution(
     store = ExecutionTranscriptStore(tmp_path)
 
     assert await store.list("review_" + "b" * 32) == ()
+
+
+async def test_transcript_keeps_complete_stream_chunks_without_truncation(tmp_path: Path) -> None:
+    """Streaming console payloads remain lossless when restored after a reconnect."""
+
+    store = ExecutionTranscriptStore(tmp_path)
+    content = "model-token " * 30_000
+
+    await store.append(
+        "review_" + "c" * 32,
+        "model_output_delta",
+        content,
+        metadata={"agent": "correctness:v1", "message_id": "message-1"},
+    )
+
+    (entry,) = await store.list("review_" + "c" * 32)
+
+    assert entry.content == content
+    assert not entry.truncated
+
+
+async def test_transcript_append_ignores_a_stale_legacy_temporary_file(tmp_path: Path) -> None:
+    """A previous interrupted write cannot prevent a Worker from resuming a Review."""
+
+    store = ExecutionTranscriptStore(tmp_path)
+    task_id = "review_" + "d" * 32
+    (tmp_path / f"{task_id}.tmp").write_text("partial", encoding="utf-8")
+
+    await store.append(task_id, "lifecycle", "Review execution started")
+
+    (entry,) = await store.list(task_id)
+    assert entry.content == "Review execution started"

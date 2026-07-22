@@ -31,9 +31,15 @@ class FilesystemReviewTools:
     it prevents a tool-using agent from scanning an unbounded repository.
     """
 
-    def __init__(self, snapshot: ReviewSnapshot, git: GitCli, *, max_tool_calls: int) -> None:
-        if max_tool_calls <= 0:
-            raise ValueError("tool call budget must be positive")
+    def __init__(
+        self,
+        snapshot: ReviewSnapshot,
+        git: GitCli,
+        *,
+        max_tool_calls: int | None,
+    ) -> None:
+        if max_tool_calls is not None and max_tool_calls <= 0:
+            raise ValueError("tool call budget must be positive when configured")
         self._snapshot = snapshot
         self._git = git
         self._remaining_calls = max_tool_calls
@@ -260,9 +266,10 @@ class FilesystemReviewTools:
         ]
 
     def _consume(self) -> None:
-        if self._remaining_calls <= 0:
+        if self._remaining_calls is not None and self._remaining_calls <= 0:
             raise ValueError("tool call budget exceeded")
-        self._remaining_calls -= 1
+        if self._remaining_calls is not None:
+            self._remaining_calls -= 1
 
     def _entry(self, path: str) -> SnapshotEntry:
         if not self._is_normalized_relative(path) or path not in self._entries:

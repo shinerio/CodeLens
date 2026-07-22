@@ -4,6 +4,7 @@ import asyncio
 import json
 import os
 import re
+import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
@@ -18,12 +19,17 @@ TranscriptKind = Literal[
     "tool_call",
     "tool_result",
     "skill_loaded",
+    "model_started",
+    "model_reasoning_delta",
+    "model_reasoning_completed",
+    "model_output_delta",
+    "model_output_completed",
+    "model_completed",
 ]
 
 _SECRET_PATTERN = re.compile(
     r"(?i)(?:authorization\s*:\s*bearer\s+|(?:api[_-]?key|bearer|cookie|token)\s*[:=]\s*)[^\s,\"}]+"
 )
-_MAX_ENTRY_CHARS = 256_000
 
 
 class TranscriptEntry(BaseModel):
@@ -41,8 +47,10 @@ class TranscriptEntry(BaseModel):
 class ExecutionTranscriptStore:
     """Append and read transcript entries without placing model content in logs/events.
 
-    Files are task-scoped and atomically replaced. Credential-like substrings are removed
-    before writing, so this store is safe for the local detail API but never for secrets.
+    Files are task-scoped and atomically replaced through unique, same-directory temporary
+    files, so stale interrupted writes cannot block a Worker. Credential-like substrings are
+    removed before writing. Entries are deliberately lossless: console collapse is
+    presentation-only.
     """
 
     def __init__(self, root: Path) -> None:
@@ -63,14 +71,13 @@ class ExecutionTranscriptStore:
         async with lock:
             entries = await self.list(task_id)
             safe_content, redacted = _redact(content)
-            truncated = len(safe_content) > _MAX_ENTRY_CHARS
             entry = TranscriptEntry(
                 sequence=len(entries) + 1,
                 kind=kind,
-                content=safe_content[:_MAX_ENTRY_CHARS],
+                content=safe_content,
                 created_at=datetime.now(UTC),
                 redacted=redacted,
-                truncated=truncated,
+                truncated=False,
                 metadata=dict(metadata or {}),
             )
             await asyncio.to_thread(self._write, task_id, [*entries, entry])
@@ -95,12 +102,25 @@ class ExecutionTranscriptStore:
     def _write(self, task_id: str, entries: Sequence[TranscriptEntry]) -> None:
         path = self._path(task_id)
         path.parent.mkdir(parents=True, exist_ok=True)
-        temporary = path.with_suffix(".tmp")
-        with temporary.open("x", encoding="utf-8") as handle:
-            json.dump([entry.model_dump(mode="json") for entry in entries], handle)
-            handle.flush()
-            os.fsync(handle.fileno())
-        os.replace(temporary, path)
+        temporary: Path | None = None
+        try:
+            with tempfile.NamedTemporaryFile(
+                mode="w",
+                encoding="utf-8",
+                dir=path.parent,
+                prefix=f".{path.stem}.",
+                suffix=".tmp",
+                delete=False,
+            ) as handle:
+                temporary = Path(handle.name)
+                json.dump([entry.model_dump(mode="json") for entry in entries], handle)
+                handle.flush()
+                os.fsync(handle.fileno())
+            os.replace(temporary, path)
+        except BaseException:
+            if temporary is not None:
+                temporary.unlink(missing_ok=True)
+            raise
 
 
 def _redact(content: str) -> tuple[str, bool]:

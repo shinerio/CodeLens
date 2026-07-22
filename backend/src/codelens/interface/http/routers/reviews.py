@@ -17,6 +17,7 @@ from codelens.interface.http.dependencies import (
 from codelens.interface.http.dto import (
     CancelReviewRequest,
     CreateReviewRequest,
+    FindingSourcePreviewResponse,
     ReviewResponse,
 )
 from codelens.review.application.commands import CreateReviewCommand
@@ -144,6 +145,23 @@ async def list_findings(
     await components.get_review.handle(task_id)
     findings = await components.review_store.list_findings(task_id)
     return [asdict(finding) for finding in findings]
+
+
+@router.get("/{task_id}/findings/{finding_id}/source", response_model=FindingSourcePreviewResponse)
+async def get_finding_source(
+    task_id: TaskId,
+    finding_id: str,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> FindingSourcePreviewResponse:
+    """Return the pinned source lines that support one persisted review opinion."""
+
+    try:
+        preview = await components.finding_source_preview.get(task_id, finding_id)
+    except KeyError:
+        raise HttpProblem(
+            404, "finding_source_not_found", "The requested finding source is unavailable."
+        ) from None
+    return FindingSourcePreviewResponse(**asdict(preview))
 
 
 def _parse_last_event_id(raw_event_id: str | None) -> int:

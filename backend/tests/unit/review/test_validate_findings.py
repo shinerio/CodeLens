@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
+from codelens.review.application.context_builder import SnapshotRead
 from codelens.review.application.validate_findings import (
     FindingValidationError,
     FindingValidator,
@@ -22,7 +23,21 @@ from codelens.workspace.domain.models import (
 )
 
 
-def _validator() -> FindingValidator:
+class _ExcerptReader:
+    async def read(
+        self,
+        _snapshot: ReviewSnapshot,
+        _path: str,
+        _start_line: int,
+        _end_line: int,
+        _side: str,
+        _max_bytes: int,
+    ) -> SnapshotRead:
+        payload = b"return False\n"
+        return SnapshotRead(payload, hashlib.sha256(payload).hexdigest(), False)
+
+
+def _validator(*, excerpt_reader: _ExcerptReader | None = None) -> FindingValidator:
     excerpt_hash = hashlib.sha256(b"return False\n").hexdigest()
     worktree = TaskWorktree(
         "worktree-1", "review-1", "a" * 64, Path("/owned"), "b" * 40, "c" * 64
@@ -46,6 +61,7 @@ def _validator() -> FindingValidator:
         snapshot=snapshot,
         agent=correctness_agent(),
         codec=AgentOutputCodec("1"),
+        excerpt_reader=excerpt_reader,
     )
 
 
@@ -100,6 +116,14 @@ async def test_derives_stable_identity_after_path_hunk_and_evidence_validation()
     assert first == second
     assert first.findings[0].finding_id.startswith("finding_")
     assert first.findings[0].changed_hunk_id == "hunk-1"
+
+
+async def test_accepts_a_primary_excerpt_hash_for_a_subrange_of_a_changed_hunk() -> None:
+    batch = await _validator(excerpt_reader=_ExcerptReader()).validate(_payload())
+
+    assert batch.findings[0].primary_location.excerpt_hash == hashlib.sha256(
+        b"return False\n"
+    ).hexdigest()
 
 
 @pytest.mark.parametrize(
