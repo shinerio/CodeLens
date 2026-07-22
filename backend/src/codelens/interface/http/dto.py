@@ -29,6 +29,16 @@ class StrictDto(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
+class FindingSourcePreviewResponse(StrictDto):
+    path: str
+    revision: str
+    start_line: int
+    end_line: int
+    highlight_start_line: int
+    highlight_end_line: int
+    content: str
+
+
 class RuntimeLogLevelResponse(StrictDto):
     level: Literal["debug", "info", "warning", "error"]
 

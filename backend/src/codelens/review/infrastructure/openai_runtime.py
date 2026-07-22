@@ -1,13 +1,14 @@
 # ruff: noqa: E402
 
 import asyncio
+import json
 import os
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_MODEL_DATA", "1")
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
-from agents import Agent, RunConfig, Runner
+from agents import Agent, RawResponsesStreamEvent, RunConfig, RunItemStreamEvent, Runner
 from agents.exceptions import (
     MaxTurnsExceeded,
     ModelBehaviorError,
@@ -26,12 +27,15 @@ from openai import (
 )
 
 from codelens.review.domain.errors import (
+    AgentMaxTurnsExceededError,
     PermanentAgentOutputError,
     TransientAgentRuntimeError,
 )
 from codelens.review.domain.ports import (
     AgentOutputCodecPort,
     AgentResponseDiagnostic,
+    AgentRuntimeEvent,
+    AgentRuntimeEventSink,
     UnvalidatedAgentOutput,
 )
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
@@ -40,12 +44,17 @@ from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
 from codelens.workspace.domain.models import ReviewSnapshot
 from codelens.workspace.infrastructure.git_cli import GitCli
 
+type _AgentFailure = (
+    AgentMaxTurnsExceededError | TransientAgentRuntimeError | PermanentAgentOutputError
+)
+_FINALIZER_MAX_ATTEMPTS = 3
+
 
 class _RunnerPort(Protocol):
     async def run(
         self,
         starting_agent: Agent[None],
-        input: str,
+        input: Any,
         *,
         max_turns: int,
         run_config: RunConfig,
@@ -63,6 +72,21 @@ class _PublicSdkRunner:
         run_config: RunConfig,
     ) -> object:
         return await Runner.run(
+            starting_agent=starting_agent,
+            input=input,
+            max_turns=max_turns,
+            run_config=run_config,
+        )
+
+    def run_streamed(
+        self,
+        starting_agent: Agent[None],
+        input: Any,
+        *,
+        max_turns: int,
+        run_config: RunConfig,
+    ) -> object:
+        return Runner.run_streamed(
             starting_agent=starting_agent,
             input=input,
             max_turns=max_turns,
@@ -91,6 +115,26 @@ class OpenAIAgentRuntime:
         input_payload: bytes,
         snapshot: ReviewSnapshot,
     ) -> UnvalidatedAgentOutput:
+        return await self._invoke(agent, input_payload, snapshot, sink=None)
+
+    async def invoke_stream(
+        self,
+        agent: AgentVersion,
+        input_payload: bytes,
+        snapshot: ReviewSnapshot,
+        sink: AgentRuntimeEventSink,
+    ) -> UnvalidatedAgentOutput:
+        """Emit visible model text and tool evidence while preserving the final checkpoint."""
+
+        return await self._invoke(agent, input_payload, snapshot, sink=sink)
+
+    async def _invoke(
+        self,
+        agent: AgentVersion,
+        input_payload: bytes,
+        snapshot: ReviewSnapshot,
+        sink: AgentRuntimeEventSink | None,
+    ) -> UnvalidatedAgentOutput:
         provider_config = await self._config_store.load()
         if provider_config is None:
             raise PermanentAgentOutputError("Model provider is not configured")
@@ -108,61 +152,98 @@ class OpenAIAgentRuntime:
             api_key=provider_config.api_key,
             base_url=provider_config.base_url,
         )
-        sdk_agent: Agent[None] = Agent(
+        investigation_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
             instructions=agent.prompt_template,
             model=OpenAIResponsesModel(
                 model=provider_config.model,
                 openai_client=client,
             ),
-            output_type=self._output_codec.output_type,
-            tools=FilesystemReviewTools(snapshot, self._git, max_tool_calls=50).as_agent_tools(),
+            tools=FilesystemReviewTools(snapshot, self._git, max_tool_calls=None).as_agent_tools(),
+        )
+        final_agent: Agent[None] = Agent(
+            name=f"{agent.agent_id}:v{agent.version}:finalize",
+            instructions=(
+                f"{agent.prompt_template}\nUse the controlled tool evidence in the conversation "
+                "above. Do not call tools. Return exactly one JSON value that validates against "
+                "this JSON Schema. Do not use Markdown fences or omit required fields.\n"
+                f"{self._output_codec.json_schema()}"
+            ),
+            model=OpenAIResponsesModel(
+                model=provider_config.model,
+                openai_client=client,
+            ),
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
-        failure_kind: Literal["transient", "permanent"] | None = None
         raw_result: object | None = None
+        failure: _AgentFailure | None = None
+        phase: Literal["investigation", "finalizing", "unknown"] = "investigation"
         try:
             try:
-                async with asyncio.timeout(agent.timeout_seconds):
-                    raw_result = await self._runner.run(
-                        sdk_agent,
-                        input_text,
-                        max_turns=agent.max_turns,
-                        run_config=run_config,
-                    )
-            except (
-                TimeoutError,
-                APIConnectionError,
-                APITimeoutError,
-                RateLimitError,
-                InternalServerError,
-            ):
-                failure_kind = "transient"
+                investigation = await self._run_observable(
+                    investigation_agent, input_text, agent.max_turns, run_config, sink
+                )
+                phase = "finalizing"
+                raw_result = await self._run_finalizer(
+                    final_agent,
+                    self._finalizer_input(investigation),
+                    run_config,
+                    sink,
+                )
             except APIStatusError as provider_error:
-                failure_kind = "transient" if provider_error.status_code >= 500 else "permanent"
-            except (
-                MaxTurnsExceeded,
-                ModelBehaviorError,
-                ModelRefusalError,
-                UserError,
-            ):
-                failure_kind = "permanent"
+                failure = self._status_failure(provider_error, phase)
+            except APITimeoutError:
+                failure = self._failure(
+                    phase, "provider_timeout", "provider timeout", retryable=True
+                )
+            except APIConnectionError:
+                failure = self._failure(
+                    phase, "provider_connection_error", "provider connection error", retryable=True
+                )
+            except RateLimitError:
+                failure = self._failure(
+                    phase, "provider_rate_limited", "provider rate limit", retryable=True
+                )
+            except InternalServerError:
+                failure = self._failure(
+                    phase, "provider_server_error", "provider server error", retryable=True
+                )
+            except MaxTurnsExceeded:
+                failure = AgentMaxTurnsExceededError(
+                    f"{self._phase_label(phase)} failed: model used all allowed turns.",
+                    phase=phase,
+                    reason_code="max_model_turns_exceeded",
+                )
+            except (ModelBehaviorError, ModelRefusalError, UserError):
+                failure = self._failure(
+                    phase, "invalid_model_output", "model returned unusable output", retryable=False
+                )
         finally:
             await client.close()
 
-        if failure_kind == "transient":
-            raise TransientAgentRuntimeError("Agent provider request can be retried") from None
-        if failure_kind == "permanent" or raw_result is None:
-            raise PermanentAgentOutputError("Agent returned unusable output") from None
+        if failure is not None:
+            raise failure from None
+        if raw_result is None:
+            raise self._failure(
+                "finalizing",
+                "missing_model_output",
+                "model returned no structured output",
+                retryable=False,
+            )
 
         result = cast(RunResult, raw_result)
         canonical_bytes: bytes | None = None
         try:
-            canonical_bytes = self._output_codec.encode(result.final_output)
+            canonical_bytes = self._output_codec.encode(self._finalizer_output(result.final_output))
         except ValueError:
             pass
         if canonical_bytes is None:
-            raise PermanentAgentOutputError("Agent returned unusable output") from None
+            raise self._failure(
+                "finalizing",
+                "invalid_structured_output",
+                "model returned invalid structured output",
+                retryable=False,
+            ) from None
 
         diagnostics = tuple(
             AgentResponseDiagnostic(
@@ -186,3 +267,202 @@ class OpenAIAgentRuntime:
             output_tokens=sum(item.output_tokens for item in diagnostics),
             diagnostics=diagnostics,
         )
+
+    async def _run_finalizer(
+        self,
+        agent: Agent[None],
+        input_value: Any,
+        run_config: RunConfig,
+        sink: AgentRuntimeEventSink | None,
+    ) -> object:
+        """Retry only the final structured-output request after transient provider failures."""
+
+        for attempt in range(1, _FINALIZER_MAX_ATTEMPTS + 1):
+            try:
+                return await self._run_observable(agent, input_value, 1, run_config, sink)
+            except Exception as error:
+                if (
+                    not self._is_retryable_provider_error(error)
+                    or attempt == _FINALIZER_MAX_ATTEMPTS
+                ):
+                    raise
+                if sink is not None:
+                    await sink(
+                        AgentRuntimeEvent(
+                            "lifecycle",
+                            "Final structured output request failed temporarily; retrying.",
+                            {
+                                "agent_name": agent.name,
+                                "attempt": str(attempt),
+                                "max_attempts": str(_FINALIZER_MAX_ATTEMPTS),
+                            },
+                        )
+                    )
+                await asyncio.sleep(float(attempt))
+        raise AssertionError("finalizer retry loop must return or raise")
+
+    @staticmethod
+    def _finalizer_input(investigation: object) -> Any:
+        """Send the conclusion, not the full SDK/tool-object history, to finalization."""
+
+        conclusion = getattr(investigation, "final_output", None)
+        if isinstance(conclusion, str) and conclusion.strip():
+            return conclusion
+        return cast(Any, investigation).to_input_list()
+
+    @staticmethod
+    def _finalizer_output(value: object) -> object:
+        """Decode JSON-only finalizer text before validating the stable FindingBatch contract."""
+
+        if not isinstance(value, str):
+            return value
+        text = value.strip()
+        if text.startswith("```") and text.endswith("```"):
+            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
+        return json.loads(text)
+
+    @staticmethod
+    def _is_retryable_provider_error(error: Exception) -> bool:
+        if isinstance(
+            error, (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
+        ):
+            return True
+        return isinstance(error, APIStatusError) and error.status_code >= 500
+
+    @staticmethod
+    def _phase_label(phase: Literal["investigation", "finalizing", "unknown"]) -> str:
+        return "Final structured output" if phase == "finalizing" else "Code investigation"
+
+    @classmethod
+    def _failure(
+        cls,
+        phase: Literal["investigation", "finalizing", "unknown"],
+        reason_code: str,
+        reason: str,
+        *,
+        retryable: bool,
+        provider_status_code: int | None = None,
+    ) -> TransientAgentRuntimeError | PermanentAgentOutputError:
+        message = f"{cls._phase_label(phase)} failed: {reason}."
+        if retryable:
+            return TransientAgentRuntimeError(
+                f"{message} Retry the review.",
+                phase=phase,
+                reason_code=reason_code,
+                retryable=True,
+                provider_status_code=provider_status_code,
+            )
+        return PermanentAgentOutputError(
+            message,
+            phase=phase,
+            reason_code=reason_code,
+            retryable=False,
+            provider_status_code=provider_status_code,
+        )
+
+    @classmethod
+    def _status_failure(
+        cls, error: APIStatusError, phase: Literal["investigation", "finalizing", "unknown"]
+    ) -> TransientAgentRuntimeError | PermanentAgentOutputError:
+        status_code = error.status_code
+        if status_code == 429:
+            return cls._failure(
+                phase,
+                "provider_rate_limited",
+                "provider rate limit",
+                retryable=True,
+                provider_status_code=status_code,
+            )
+        if status_code >= 500:
+            return cls._failure(
+                phase,
+                "provider_server_error",
+                "provider server error",
+                retryable=True,
+                provider_status_code=status_code,
+            )
+        return cls._failure(
+            phase,
+            "provider_request_rejected",
+            "provider rejected the request",
+            retryable=False,
+            provider_status_code=status_code,
+        )
+
+    async def _run_observable(
+        self,
+        agent: Agent[None],
+        input_value: Any,
+        max_turns: int,
+        run_config: RunConfig,
+        sink: AgentRuntimeEventSink | None,
+    ) -> object:
+        if sink is None or not hasattr(self._runner, "run_streamed"):
+            return await self._runner.run(
+                agent,
+                input_value,
+                max_turns=max_turns,
+                run_config=run_config,
+            )
+        await sink(AgentRuntimeEvent("model_started", "", {"agent_name": agent.name}))
+        stream = cast(Any, self._runner).run_streamed(
+            agent, input_value, max_turns=max_turns, run_config=run_config
+        )
+        async for event in stream.stream_events():
+            emitted = _visible_event(event)
+            if emitted is not None:
+                await sink(emitted)
+        await sink(AgentRuntimeEvent("model_completed", "", {"agent_name": agent.name}))
+        return stream
+
+
+def _visible_event(event: object) -> AgentRuntimeEvent | None:
+    """Map streamed output and provider-issued reasoning summaries to console records."""
+
+    if isinstance(event, RawResponsesStreamEvent):
+        payload = event.data
+        if getattr(payload, "type", "") == "response.output_text.delta":
+            return AgentRuntimeEvent(
+                "model_output_delta",
+                str(getattr(payload, "delta", "")),
+                _message_metadata(payload, "content_index"),
+            )
+        if getattr(payload, "type", "") == "response.output_text.done":
+            return AgentRuntimeEvent(
+                "model_output_completed", "", _message_metadata(payload, "content_index")
+            )
+        if getattr(payload, "type", "") == "response.reasoning_summary_text.delta":
+            return AgentRuntimeEvent(
+                "model_reasoning_delta",
+                str(getattr(payload, "delta", "")),
+                _message_metadata(payload, "summary_index"),
+            )
+        if getattr(payload, "type", "") == "response.reasoning_summary_text.done":
+            return AgentRuntimeEvent(
+                "model_reasoning_completed", "", _message_metadata(payload, "summary_index")
+            )
+        if getattr(payload, "type", "") == "response.function_call_arguments.delta":
+            return AgentRuntimeEvent(
+                "tool_call", _json_value(payload), {"stream": "arguments_delta"}
+            )
+        return None
+    if isinstance(event, RunItemStreamEvent):
+        if event.name == "tool_called":
+            return AgentRuntimeEvent("tool_call", _json_value(event.item), {})
+        if event.name == "tool_output":
+            return AgentRuntimeEvent("tool_result", _json_value(event.item), {})
+    return None
+
+
+def _message_metadata(payload: object, index_name: str) -> dict[str, str]:
+    """Return a stable per-content-part ID shared by stream deltas and completion events."""
+
+    item_id = str(getattr(payload, "item_id", ""))
+    index = str(getattr(payload, index_name, ""))
+    return {"message_id": f"{item_id}:{index}"}
+
+
+def _json_value(value: object) -> str:
+    dump = getattr(value, "model_dump", None)
+    payload = dump(mode="json") if callable(dump) else {"value": str(value)}
+    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)

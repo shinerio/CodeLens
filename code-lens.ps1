@@ -17,6 +17,8 @@ function Stop-ProcessTree {
     }
 
     try {
+        # `/T` includes child processes spawned by `uv run`, including the
+        # independent API and Worker services. This mirrors the Unix launcher.
         & taskkill.exe /PID $Process.Id /T /F 2>$null | Out-Null
     }
     catch {

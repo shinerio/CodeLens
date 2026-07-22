@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 import traceback
@@ -52,6 +53,9 @@ class FakeResult:
     final_output: object
     raw_responses: tuple[FakeResponse, ...]
 
+    def to_input_list(self) -> str:
+        return "controlled tool history"
+
 
 class FakeRunner:
     def __init__(self, result: FakeResult | Exception) -> None:
@@ -60,6 +64,7 @@ class FakeRunner:
         self.input_payload: str | None = None
         self.max_turns: int | None = None
         self.run_config: RunConfig | None = None
+        self.calls: list[tuple[Agent[None], object, int]] = []
 
     async def run(
         self,
@@ -73,6 +78,7 @@ class FakeRunner:
         self.input_payload = input
         self.max_turns = max_turns
         self.run_config = run_config
+        self.calls.append((starting_agent, input, max_turns))
         if isinstance(self.result, Exception):
             raise self.result
         return self.result
@@ -149,9 +155,9 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     with caplog.at_level(logging.DEBUG):
         output = await runtime.invoke(_agent(), source_secret.encode(), _snapshot())
 
-    sdk_agent = runner.starting_agent
+    sdk_agent = runner.calls[0][0]
     assert sdk_agent is not None
-    assert sdk_agent.output_type is FindingBatchSchema
+    assert sdk_agent.output_type is None
     assert sdk_agent.instructions == _agent().prompt_template
     assert [tool.name for tool in sdk_agent.tools] == [
         "explore",
@@ -165,8 +171,12 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     assert isinstance(sdk_agent.model, OpenAIResponsesModel)
     assert sdk_agent.model.model == "gpt-5.1"
     assert str(sdk_agent.model._client.base_url) == "http://model-gateway.example:8080"
-    assert runner.input_payload == source_secret
-    assert runner.max_turns == 3
+    assert runner.calls[0][1] == source_secret
+    assert runner.calls[0][2] == 3
+    assert runner.calls[1][0].output_type is None
+    assert runner.calls[1][0].tools == []
+    assert runner.calls[1][2] == 1
+    assert '"changed_hunk_id"' in runner.calls[1][0].instructions
     assert runner.run_config is not None
     assert runner.run_config.trace_include_sensitive_data is False
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
@@ -219,6 +229,117 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
 
     assert "rate limited" not in str(captured.value)
     assert "server failed" not in str(captured.value)
+    assert captured.value.reason_code in {
+        "provider_connection_error",
+        "provider_rate_limited",
+        "provider_server_error",
+    }
+    assert captured.value.phase == "investigation"
+    assert captured.value.retryable is True
+
+
+async def test_finalizer_failure_identifies_the_structured_output_phase() -> None:
+    class FinalizerFailingRunner(FakeRunner):
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            self.calls.append((starting_agent, input, max_turns))
+            if len(self.calls) >= 2:
+                raise APIConnectionError(request=httpx.Request("POST", "https://api.openai.com"))
+            return FakeResult(FindingBatchSchema(schema_version="1", findings=()), ())
+
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        runner=FinalizerFailingRunner(FakeResult({}, ())),
+    )
+
+    with pytest.raises(TransientAgentRuntimeError) as captured:
+        await runtime.invoke(_agent(), b"bounded input", _snapshot())
+
+    assert str(captured.value) == (
+        "Final structured output failed: provider connection error. Retry the review."
+    )
+    assert captured.value.phase == "finalizing"
+    assert captured.value.reason_code == "provider_connection_error"
+
+
+async def test_retries_a_transient_finalizer_failure_without_repeating_investigation() -> None:
+    class RetryingFinalizerRunner(FakeRunner):
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            self.calls.append((starting_agent, input, max_turns))
+            if len(self.calls) == 2:
+                raise InternalServerError(
+                    "gateway temporarily unavailable",
+                    response=httpx.Response(
+                        502, request=httpx.Request("POST", "https://api.openai.com")
+                    ),
+                    body=None,
+                )
+            return FakeResult(FindingBatchSchema(schema_version="1", findings=()), ())
+
+    runner = RetryingFinalizerRunner(FakeResult({}, ()))
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        runner=runner,
+    )
+
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+
+    assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
+    assert [call[0].name for call in runner.calls] == [
+        "correctness:v1",
+        "correctness:v1:finalize",
+        "correctness:v1:finalize",
+    ]
+
+
+def test_finalizer_receives_the_compact_investigation_conclusion() -> None:
+    assert OpenAIAgentRuntime._finalizer_input(FakeResult("compact evidence conclusion", ())) == (
+        "compact evidence conclusion"
+    )
+
+
+async def test_does_not_apply_agent_timeout_to_the_whole_review() -> None:
+    class SlowRunner(FakeRunner):
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            await asyncio.sleep(0.01)
+            return FakeResult(FindingBatchSchema(schema_version="1", findings=()), ())
+
+    agent = _agent()
+    short_timeout_agent = AgentVersion(**{**agent.__dict__, "timeout_seconds": 0.001})
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        runner=SlowRunner(FakeResult({}, ())),
+    )
+
+    output = await runtime.invoke(short_timeout_agent, b"bounded input", _snapshot())
+
+    assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
 
 
 @pytest.mark.parametrize(

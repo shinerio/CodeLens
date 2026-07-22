@@ -18,7 +18,8 @@ import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
-import { getReview, getTranscript, listFindings } from "./api";
+import { getFindingSource, getReview, getTranscript, listFindings } from "./api";
+import { ReviewConsole } from "./ReviewConsole";
 import { useReviewEvents } from "./useReviewEvents";
 import "./ReviewRunPage.css";
 
@@ -81,7 +82,7 @@ export function ReviewRunPage() {
   const { t } = useI18n();
   const params = useParams();
   const taskId = params.taskId;
-  const [activeTab, setActiveTab] = useState<TabName>("findings");
+  const [activeTab, setActiveTab] = useState<TabName>("agent_runs");
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const terminalRef = useRef<string | null>(null);
   const { status: eventStatus, events, connectionState } = useReviewEvents(taskId);
@@ -113,7 +114,7 @@ export function ReviewRunPage() {
     queryKey: ["review-transcript", taskId],
     queryFn: () => getTranscript(taskId ?? ""),
     enabled: taskId !== undefined,
-    refetchInterval: TERMINAL_STATUSES.has(eventStatus) ? false : 1500,
+    refetchInterval: TERMINAL_STATUSES.has(eventStatus) ? false : 250,
     initialData: [],
   });
 
@@ -151,6 +152,14 @@ export function ReviewRunPage() {
     }
   }, [findingsQuery.data, selectedFindingId]);
 
+  const selectedFinding =
+    findingsQuery.data.find((finding) => finding.finding_id === selectedFindingId) ?? null;
+  const sourceQuery = useQuery({
+    queryKey: ["review-finding-source", taskId, selectedFinding?.finding_id],
+    queryFn: () => getFindingSource(taskId ?? "", selectedFinding?.finding_id ?? ""),
+    enabled: taskId !== undefined && selectedFinding !== null,
+  });
+
   if (taskId === undefined) {
     return <div className="run-empty">{t("run.missingTask")}</div>;
   }
@@ -162,9 +171,6 @@ export function ReviewRunPage() {
       </div>
     );
   }
-
-  const selectedFinding =
-    findingsQuery.data.find((finding) => finding.finding_id === selectedFindingId) ?? null;
 
   return (
     <section className="review-run-page">
@@ -277,7 +283,7 @@ export function ReviewRunPage() {
             />
           </article>
           <article className="run-panel run-panel--detail">
-            <FindingDetail finding={selectedFinding} />
+            <FindingDetail finding={selectedFinding} source={sourceQuery.data ?? null} />
             {selectedFinding !== null ? <div className="run-preview-actions"><button type="button" onClick={handleUnsupported}>{t("run.suppress")}</button><button type="button" onClick={handleUnsupported}>{t("run.acknowledge")}</button><button type="button" onClick={handleUnsupported}><WandSparkles aria-hidden="true" /> {t("run.draftFix")}</button></div> : null}
           </article>
         </section>
@@ -293,20 +299,7 @@ export function ReviewRunPage() {
               </div>
               <span className="run-panel__status">{connectionState}</span>
             </div>
-            <ul className="event-log">
-              {transcriptQuery.data.length > 0 ? (
-                transcriptQuery.data.map((entry) => (
-                  <li className="event-log__item" key={entry.sequence}>
-                    <span className="event-log__type">{entry.kind.replaceAll("_", " ")}</span>
-                    <span className="event-log__id">#{entry.sequence}</span>
-                    <pre>{entry.content}</pre>
-                    {entry.redacted || entry.truncated ? <small>{entry.redacted ? "Credential redacted" : ""}{entry.redacted && entry.truncated ? " · " : ""}{entry.truncated ? "Truncated" : ""}</small> : null}
-                  </li>
-                ))
-              ) : (
-                <li className="event-log__empty">{t("run.waitingEvents")}</li>
-              )}
-            </ul>
+            {transcriptQuery.data.length > 0 ? <ReviewConsole entries={transcriptQuery.data} /> : <p className="event-log__empty">{t("run.waitingEvents")}</p>}
           </article>
         </section>
       ) : null}

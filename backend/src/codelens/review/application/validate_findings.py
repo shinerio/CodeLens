@@ -15,6 +15,7 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
+from codelens.review.application.context_builder import SnapshotFileReaderPort
 from codelens.review.domain.ports import AgentOutputCodecPort
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.workspace.domain.models import ReviewSnapshot
@@ -87,19 +88,23 @@ class FindingValidator:
         snapshot: ReviewSnapshot,
         agent: AgentVersion,
         codec: _DecoderPort,
+        excerpt_reader: SnapshotFileReaderPort | None = None,
     ) -> None:
         self._task_id = task_id
         self._node_key = node_key
         self._snapshot = snapshot
         self._agent = agent
         self._codec = codec
+        self._excerpt_reader = excerpt_reader
 
     async def validate(self, payload: bytes) -> FindingBatch:
         """Apply schema, path, hunk, evidence, and identity checks in stable order."""
 
         try:
             decoded = cast(_BatchCandidate, self._codec.decode(payload))
-            findings = tuple(self._validate_candidate(item) for item in decoded.findings)
+            findings = tuple(
+                [await self._validate_candidate(item) for item in decoded.findings]
+            )
         except FindingValidationError:
             raise
         except (TypeError, ValueError, AttributeError) as error:
@@ -109,13 +114,15 @@ class FindingValidator:
             raise FindingValidationError("Agent output contains duplicate Findings")
         return FindingBatch(schema_version=decoded.schema_version, findings=findings)
 
-    def _validate_candidate(self, candidate: _FindingCandidate) -> Finding:
+    async def _validate_candidate(self, candidate: _FindingCandidate) -> Finding:
         if candidate.reviewer_id != self._agent.agent_id:
             raise FindingValidationError("Finding reviewer does not match the Agent")
         if candidate.confidence < self._agent.confidence_floor:
             raise FindingValidationError("Finding confidence is below the Agent threshold")
-        primary = self._location(candidate.primary_location)
-        related = tuple(self._location(item) for item in candidate.related_locations)
+        primary = await self._location(candidate.primary_location)
+        related = tuple(
+            [await self._location(item) for item in candidate.related_locations]
+        )
         hunk = None
         if candidate.changed_hunk_id is not None:
             hunk = next(
@@ -133,9 +140,22 @@ class FindingValidator:
                 and hunk.side == primary.side
                 and primary.start_line >= hunk.start_line
                 and primary.end_line <= hunk.end_line
-                and hunk.excerpt_hash == primary.excerpt_hash
             ):
                 raise FindingValidationError("Finding location does not match its changed hunk")
+
+        if self._excerpt_reader is not None and primary.side == "new":
+            excerpt = await self._excerpt_reader.read(
+                self._snapshot,
+                primary.path,
+                primary.start_line,
+                primary.end_line,
+                primary.side,
+                64 * 1024,
+            )
+            if excerpt.truncated or excerpt.content_hash != primary.excerpt_hash:
+                raise FindingValidationError("Finding location is not tied to a frozen excerpt")
+        elif hunk is not None and hunk.excerpt_hash != primary.excerpt_hash:
+            raise FindingValidationError("Finding location does not match its changed hunk")
 
         known_hashes = {
             location.excerpt_hash for location in (primary, *related)
@@ -194,7 +214,7 @@ class FindingValidator:
             rule_sources=tuple(rules),
         )
 
-    def _location(self, candidate: _LocationCandidate) -> SourceLocation:
+    async def _location(self, candidate: _LocationCandidate) -> SourceLocation:
         if not self._is_normalized_relative(candidate.path):
             raise FindingValidationError("Finding path is unsafe")
         entry = next(

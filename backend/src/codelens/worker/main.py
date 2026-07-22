@@ -4,6 +4,7 @@ import asyncio
 import signal
 from dataclasses import dataclass
 
+from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.settings import Settings
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.instruction_policy.application.resolver import InstructionResolver
@@ -60,6 +61,9 @@ class WorkerComponents:
 
         await asyncio.to_thread(self.settings.data_dir.mkdir, parents=True, exist_ok=True)
         await self.database.migrate()
+        # Alembic can replace root handlers while loading its migration configuration.
+        # Restore the Worker-owned handler before scheduler failures can occur.
+        configure_process_logging("worker", data_directory=self.settings.data_dir)
         try:
             await self.scheduler.run(stop_event)
         finally:
@@ -125,6 +129,7 @@ def build_worker(
         worktree_recovery=recovery,
         snapshot_service=snapshot_service,
         context_builder=ContextBuilder(context_adapter, context_adapter),
+        excerpt_reader=context_adapter,
         runtime=provider_runtime,
         output_artifacts=FilesystemRunArtifactStore(
             database,

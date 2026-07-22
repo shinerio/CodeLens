@@ -42,6 +42,16 @@ class AgentOutputCodec:
             separators=(",", ":"),
         ).encode("utf-8")
 
+    def json_schema(self) -> str:
+        """Expose the stable envelope schema without coupling runtimes to Pydantic types."""
+
+        return json.dumps(
+            FindingBatchSchema.model_json_schema(),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
     def decode(self, payload: bytes) -> FindingBatchSchema:
         """Revalidate persisted checkpoint bytes before downstream domain validation."""
 

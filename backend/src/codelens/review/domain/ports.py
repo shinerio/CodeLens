@@ -1,7 +1,8 @@
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.models import ReviewTask
@@ -30,6 +31,28 @@ class UnvalidatedAgentOutput:
     input_tokens: int
     output_tokens: int
     diagnostics: tuple[AgentResponseDiagnostic, ...]
+
+
+@dataclass(frozen=True)
+class AgentRuntimeEvent:
+    """One complete observable model or tool event emitted while an Agent is running."""
+
+    kind: Literal[
+        "model_started",
+        "model_reasoning_delta",
+        "model_reasoning_completed",
+        "model_output_delta",
+        "model_output_completed",
+        "model_completed",
+        "tool_call",
+        "tool_result",
+        "lifecycle",
+    ]
+    content: str
+    metadata: dict[str, str]
+
+
+type AgentRuntimeEventSink = Callable[[AgentRuntimeEvent], Awaitable[None]]
 
 
 @dataclass(frozen=True)
@@ -157,6 +180,11 @@ class AgentOutputCodecPort(Protocol):
 
     def encode(self, final_output: object) -> bytes:
         """Revalidate untrusted output and return canonical checkpoint bytes."""
+
+        raise NotImplementedError
+
+    def json_schema(self) -> str:
+        """Return the compact JSON Schema needed by a non-structured provider request."""
 
         raise NotImplementedError
 

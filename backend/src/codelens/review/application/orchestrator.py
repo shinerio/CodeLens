@@ -11,6 +11,8 @@ from codelens.findings.domain.models import FindingBatch
 from codelens.review.application.validate_findings import FindingValidationError
 from codelens.review.domain.ports import (
     AgentRunCompletionPort,
+    AgentRuntimeEvent,
+    AgentRuntimeEventSink,
     AgentRuntimePort,
     RunArtifactPort,
 )
@@ -18,7 +20,18 @@ from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.workspace.domain.models import ReviewSnapshot
 
 type TranscriptKind = Literal[
-    "lifecycle", "prompt", "model_output", "tool_call", "tool_result", "skill_loaded"
+    "lifecycle",
+    "prompt",
+    "model_output",
+    "tool_call",
+    "tool_result",
+    "skill_loaded",
+    "model_started",
+    "model_reasoning_delta",
+    "model_reasoning_completed",
+    "model_output_delta",
+    "model_output_completed",
+    "model_completed",
 ]
 
 
@@ -91,6 +104,16 @@ class _TranscriptPort(Protocol):
         *,
         metadata: Mapping[str, str] | None = None,
     ) -> None: ...
+
+
+class _StreamingRuntimePort(Protocol):
+    async def invoke_stream(
+        self,
+        agent: AgentVersion,
+        input_payload: bytes,
+        snapshot: ReviewSnapshot,
+        sink: AgentRuntimeEventSink,
+    ) -> object: ...
 
 
 class ReviewOrchestrator:
@@ -225,7 +248,16 @@ class ReviewOrchestrator:
         await self._hit("before_model_invocation")
         async with self._review_agent_semaphore:
             async with self._agent_semaphore:
-                output = await self._runtime.invoke(agent, input_payload, prepared.snapshot)
+                stream = getattr(self._runtime, "invoke_stream", None)
+                if stream is None:
+                    output = await self._runtime.invoke(agent, input_payload, prepared.snapshot)
+                else:
+                    output = await stream(
+                        agent,
+                        input_payload,
+                        prepared.snapshot,
+                        lambda event: self._record_runtime_event(task_id, agent, event),
+                    )
         await self._record(
             task_id,
             "model_output",
@@ -294,6 +326,21 @@ class ReviewOrchestrator:
     ) -> None:
         if self._transcript is not None:
             await self._transcript.append(task_id, kind, content, metadata=metadata)
+
+    async def _record_runtime_event(
+        self,
+        task_id: str,
+        agent: AgentVersion,
+        event: AgentRuntimeEvent,
+    ) -> None:
+        """Persist every observable streaming chunk before it reaches the live console."""
+
+        await self._record(
+            task_id,
+            event.kind,
+            event.content,
+            {"agent": self._agent_key(agent), **event.metadata},
+        )
 
     @staticmethod
     def _agent_key(agent: AgentVersion) -> str:

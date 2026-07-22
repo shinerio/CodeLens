@@ -102,7 +102,7 @@ async def test_shutdown_cancels_active_reviews_and_failure_isolated() -> None:
         finally:
             canceled.set()
 
-    async def record_failure(task_id: str, _error_code: str) -> None:
+    async def record_failure(task_id: str, _error: Exception) -> None:
         failures.append(task_id)
         stop.set()
 

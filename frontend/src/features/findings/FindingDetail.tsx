@@ -1,11 +1,11 @@
-import type { FindingRecord } from "./types";
+import type { FindingRecord, FindingSourcePreview } from "./types";
 import { useI18n } from "../../shared/i18n/i18n";
 
 function formatLocation(finding: FindingRecord) {
   return `${finding.primary_location.path}:${finding.primary_location.start_line}-${finding.primary_location.end_line}`;
 }
 
-export function FindingDetail({ finding }: { finding: FindingRecord | null }) {
+export function FindingDetail({ finding, source }: { finding: FindingRecord | null; source: FindingSourcePreview | null }) {
   const { t } = useI18n();
   if (finding === null) {
     return (
@@ -74,6 +74,22 @@ export function FindingDetail({ finding }: { finding: FindingRecord | null }) {
             <li>{t("finding.noRules")}</li>
           )}
         </ul>
+      </section>
+
+      <section className="finding-detail__section finding-detail__source">
+        <h4>Source and review opinion</h4>
+        <p><strong>{finding.primary_location.path}:{finding.primary_location.start_line}-{finding.primary_location.end_line}</strong></p>
+        {source === null ? <p>Loading pinned source excerpt…</p> : (
+          <pre aria-label="Pinned source preview">
+            {source.content.split("\n").map((line, index) => {
+              const lineNumber = source.start_line + index;
+              const highlighted = lineNumber >= source.highlight_start_line && lineNumber <= source.highlight_end_line;
+              return <span className={highlighted ? "finding-detail__source-line finding-detail__source-line--highlight" : "finding-detail__source-line"} key={lineNumber}><b>{String(lineNumber).padStart(4, " ")}</b>{line}{"\n"}</span>;
+            })}
+          </pre>
+        )}
+        <p><strong>Review opinion:</strong> {finding.explanation}</p>
+        <p><strong>Recommended change:</strong> {finding.recommendation}</p>
       </section>
     </article>
   );
