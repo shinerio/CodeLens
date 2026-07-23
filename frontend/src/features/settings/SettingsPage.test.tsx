@@ -66,6 +66,11 @@ it("creates the first persistent model gateway without retaining its API key", a
     api_key: "sk-ui-test-secret",
     model: "gpt-test",
     base_url: "http://model-gateway.example:8080",
+    vendor: "openai",
+    api_type: "chat_completions",
+    max_tokens: 65536,
+    thinking_level: "disabled",
+    agent_timeout: 1800,
   });
   expect(await screen.findByText("Active gateway")).toBeInTheDocument();
   expect(screen.getByLabelText("API Key")).toHaveValue("");

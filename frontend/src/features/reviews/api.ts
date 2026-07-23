@@ -31,6 +31,13 @@ export async function deleteReview(taskId: string): Promise<void> {
   return api<void>(`/reviews/${taskId}`, { method: "DELETE" });
 }
 
+export async function cancelReview(taskId: string): Promise<ReviewResponse> {
+  return api<ReviewResponse>(`/reviews/${taskId}/cancel`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function listFindings(taskId: string): Promise<FindingRecord[]> {
   return api<FindingRecord[]>(`/reviews/${taskId}/findings`);
 }

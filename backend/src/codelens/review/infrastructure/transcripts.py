@@ -324,11 +324,129 @@ class DeferredTranscriptStore:
             )
             writer.write(json.dumps(payload, ensure_ascii=False).encode("utf-8"))
             await asyncio.wait_for(writer.drain(), timeout=0.2)
+            if writer.can_write_eof():
+                writer.write_eof()
+                await asyncio.wait_for(writer.drain(), timeout=0.2)
             await asyncio.wait_for(reader.readexactly(1), timeout=0.2)
             writer.close()
             await writer.wait_closed()
-        except (OSError, TimeoutError):
+        except (OSError, TimeoutError, asyncio.IncompleteReadError):
             return
+
+
+class WorkerTranscriptStore:
+    """Keep active Review transcripts in Worker memory and persist only at completion."""
+
+    def __init__(self, durable_store: ExecutionTranscriptStore) -> None:
+        self._durable_store = durable_store
+        self._entries: dict[str, list[TranscriptEntry]] = {}
+        self._locks: dict[str, asyncio.Lock] = {}
+
+    async def append(
+        self,
+        task_id: str,
+        kind: TranscriptKind,
+        content: str,
+        *,
+        metadata: Mapping[str, str] | None = None,
+    ) -> None:
+        await self.append_many(task_id, ((kind, content, metadata),))
+
+    async def append_many(
+        self, task_id: str, entries: Sequence[tuple[TranscriptKind, str, Mapping[str, str] | None]],
+    ) -> None:
+        lock = self._locks.setdefault(task_id, asyncio.Lock())
+        async with lock:
+            collected = self._entries.setdefault(task_id, [])
+            collected.extend(
+                TranscriptEntry(
+                    sequence=len(collected) + index,
+                    kind=kind,
+                    content=safe_content,
+                    created_at=datetime.now(UTC),
+                    redacted=redacted,
+                    truncated=False,
+                    metadata=dict(metadata or {}),
+                )
+                for index, (kind, content, metadata) in enumerate(entries, start=1)
+                for safe_content, redacted in (_redact(content),)
+            )
+
+    async def list(self, task_id: str) -> tuple[TranscriptEntry, ...]:
+        lock = self._locks.setdefault(task_id, asyncio.Lock())
+        async with lock:
+            return tuple(self._entries.get(task_id, ()))
+
+    async def finalize(self, task_id: str) -> None:
+        lock = self._locks.setdefault(task_id, asyncio.Lock())
+        async with lock:
+            entries = self._entries.pop(task_id, [])
+            if entries:
+                await self._durable_store.replace(task_id, entries)
+
+
+class UnixWorkerTranscriptQueryServer:
+    """Expose only a Worker's active in-memory transcript through a local socket."""
+
+    def __init__(self, socket_path: Path, transcripts: WorkerTranscriptStore) -> None:
+        self._socket_path = socket_path
+        self._transcripts = transcripts
+        self._server: asyncio.AbstractServer | None = None
+
+    async def start(self) -> None:
+        socket_path = _unix_socket_path(self._socket_path)
+        socket_path.parent.mkdir(parents=True, exist_ok=True)
+        socket_path.unlink(missing_ok=True)
+        self._server = await asyncio.start_unix_server(self._handle, path=str(socket_path))
+
+    async def close(self) -> None:
+        if self._server is not None:
+            self._server.close()
+            await self._server.wait_closed()
+        _unix_socket_path(self._socket_path).unlink(missing_ok=True)
+
+    async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
+        try:
+            payload = json.loads((await reader.read(4096)).decode("utf-8"))
+            task_id = payload.get("task_id")
+            if isinstance(task_id, str):
+                entries = await self._transcripts.list(task_id)
+                response = json.dumps([entry.model_dump(mode="json") for entry in entries]).encode()
+                writer.write(response)
+                await writer.drain()
+        except (UnicodeDecodeError, json.JSONDecodeError, OSError, ValueError):
+            return
+        finally:
+            writer.close()
+            await writer.wait_closed()
+
+
+class UnixWorkerTranscriptQueryClient:
+    """Query the independently started Worker without making API requests block on it."""
+
+    def __init__(self, socket_path: Path) -> None:
+        self._socket_path = socket_path
+
+    async def list(self, task_id: str) -> tuple[TranscriptEntry, ...]:
+        try:
+            reader, writer = await asyncio.wait_for(
+                asyncio.open_unix_connection(str(_unix_socket_path(self._socket_path))), timeout=0.2
+            )
+            writer.write(json.dumps({"task_id": task_id}).encode())
+            writer.write_eof()
+            await asyncio.wait_for(writer.drain(), timeout=0.2)
+            raw = await asyncio.wait_for(reader.read(8 * 1024 * 1024), timeout=0.2)
+            writer.close()
+            await writer.wait_closed()
+            return tuple(TranscriptEntry.model_validate(item) for item in json.loads(raw))
+        except (
+            OSError,
+            TimeoutError,
+            asyncio.IncompleteReadError,
+            json.JSONDecodeError,
+            ValueError,
+        ):
+            return ()
 
 
 def _redact(content: str) -> tuple[str, bool]:

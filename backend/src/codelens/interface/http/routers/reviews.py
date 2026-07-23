@@ -129,12 +129,11 @@ async def get_transcript(
 ) -> list[dict[str, object]]:
     """Return the credential-redacted execution conversation for one Review."""
 
-    await components.get_review.handle(task_id)
-    live_entries = await components.live_transcripts.get(task_id)
+    review = await components.get_review.handle(task_id)
     entries = (
-        live_entries
-        if live_entries is not None
-        else await components.transcripts.list(task_id)
+        await components.transcripts.list(task_id)
+        if review.status in {"completed", "partial", "failed", "canceled"}
+        else await components.worker_transcripts.list(task_id)
     )
     return [entry.model_dump(mode="json") for entry in entries]
 

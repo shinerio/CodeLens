@@ -32,7 +32,7 @@
 - 前后端只通过稳定的 HTTP/JSON 和 SSE 契约通信；前端不得直接访问仓库、数据库、Artifact Store 或模型运行时。
 - HTTP 用于命令和查询，SSE 用于可恢复的单向事件推送，并支持 `Last-Event-ID`。
 - API、Worker 和前端必须能够独立启动，不得依赖进程内共享状态或隐式启动顺序。
-- 运行中的执行转录由 Worker 保留在该任务的进程内内存中，并通过本机 Unix Socket 向 API 进程提供只读快照；API 不可用时 Worker 必须继续执行。Review 到达终态后，Worker 才一次性把完整转录写入任务 Artifact，后续查询只读取该持久化内容。
+- 运行中的执行转录由 Worker 保留在该任务的进程内内存中，并通过本机 Unix Socket 提供只读查询接口；API 对非终态 Review 向 Worker 拉取快照，终态 Review 只读取持久化 Artifact。API 不可用时 Worker 必须继续执行。Review 到达终态后，Worker 才一次性把完整转录写入任务 Artifact 并清理内存副本。
 - 当前阶段不实现可替代 Web 的 Review/Fix 业务 CLI；启动、进程管理和诊断命令不属于业务交互入口。架构仅保留未来 CLI 入站适配器的扩展能力。
 - 本机无鉴权模式仅允许绑定 `127.0.0.1`；非回环地址必须配置明确的信任和访问边界。
 

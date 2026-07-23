@@ -10,9 +10,9 @@ Polling a growing Artifact file during model streaming caused repeated disk read
 
 ## Decision
 
-The Worker keeps each active task transcript in memory and sends validated, credential-redacted complete snapshots to the API over a local Unix Socket at a bounded cadence. The API owns an ephemeral cache and serves it while a task is running. Relay transport is best-effort and cannot block model execution or require API-first startup.
+The Worker keeps each active task transcript in memory and exposes validated, credential-redacted snapshots through a local Unix Socket query interface. The API queries that interface only for running tasks; the query is bounded and failure does not affect model execution or require Worker-first startup.
 
-Once a review reaches a terminal state, the Worker atomically writes the complete transcript to the existing task Artifact and tells the API to discard its transient entry. Subsequent HTTP reads use the durable Artifact. A Worker or API restart can lose only the transient display copy; review state, artifacts and final transcripts remain governed by the normal durable workflow.
+Once a review reaches a terminal state, the Worker atomically writes the complete transcript to the existing task Artifact and immediately removes its in-memory copy. Subsequent HTTP reads use the durable Artifact. A Worker restart can lose only the transient display copy; review state, artifacts and final transcripts remain governed by the normal durable workflow.
 
 ## Consequences
 

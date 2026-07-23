@@ -23,8 +23,9 @@ from codelens.review.infrastructure.repositories import (
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.review.infrastructure.snapshot_context import FilesystemSnapshotContextAdapter
 from codelens.review.infrastructure.transcripts import (
-    DeferredTranscriptStore,
     ExecutionTranscriptStore,
+    UnixWorkerTranscriptQueryServer,
+    WorkerTranscriptStore,
 )
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
@@ -62,18 +63,21 @@ class WorkerComponents:
     review_store: SqlReviewStore
     worktree_registry: SqlWorktreeRegistry
     scheduler: ReviewScheduler
+    transcript_query_server: UnixWorkerTranscriptQueryServer
 
     async def run(self, stop_event: asyncio.Event | None = None) -> None:
         """Migrate storage, then let the singleton scheduler recover and claim work."""
 
         await asyncio.to_thread(self.settings.data_dir.mkdir, parents=True, exist_ok=True)
         await self.database.migrate()
+        await self.transcript_query_server.start()
         # Alembic can replace root handlers while loading its migration configuration.
         # Restore the Worker-owned handler before scheduler failures can occur.
         configure_process_logging("worker", data_directory=self.settings.data_dir)
         try:
             await self.scheduler.run(stop_event)
         finally:
+            await self.transcript_query_server.close()
             await self.database.dispose()
 
 
@@ -128,6 +132,9 @@ def build_worker(
         model_limit=settings.max_active_agent_runs,
         tool_limit=settings.max_active_agent_runs,
     )
+    transcripts = WorkerTranscriptStore(
+        ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
+    )
     executor = WorkerReviewExecutor(
         settings=settings,
         review_store=review_store,
@@ -145,10 +152,7 @@ def build_worker(
         checkpoints=SqlCheckpointStore(database),
         codec=codec,
         semaphores=semaphores,
-        transcripts=DeferredTranscriptStore(
-            ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts"),
-            settings.data_dir / "runtime" / "transcript-relay.sock",
-        ),
+        transcripts=transcripts,
         reviewer_prompts=ReviewerPromptSettingsService(
             FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
         ),
@@ -171,6 +175,9 @@ def build_worker(
         review_store=review_store,
         worktree_registry=worktree_registry,
         scheduler=scheduler,
+        transcript_query_server=UnixWorkerTranscriptQueryServer(
+            settings.data_dir / "runtime" / "worker-transcripts.sock", transcripts
+        ),
     )
 
 

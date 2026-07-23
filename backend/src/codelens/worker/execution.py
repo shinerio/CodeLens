@@ -31,7 +31,7 @@ from codelens.review.infrastructure.repositories import (
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
-from codelens.review.infrastructure.transcripts import DeferredTranscriptStore
+from codelens.review.infrastructure.transcripts import WorkerTranscriptStore
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
@@ -156,7 +156,7 @@ class WorkerReviewExecutor:
         checkpoints: SqlCheckpointStore,
         codec: AgentOutputCodec,
         semaphores: WorkerSemaphores,
-        transcripts: DeferredTranscriptStore,
+        transcripts: WorkerTranscriptStore,
         reviewer_prompts: ReviewerPromptSettingsService | None = None,
     ) -> None:
         self._settings = settings

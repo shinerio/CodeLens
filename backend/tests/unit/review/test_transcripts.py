@@ -5,6 +5,9 @@ from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
     LiveTranscriptCache,
     UnixTranscriptRelayServer,
+    UnixWorkerTranscriptQueryClient,
+    UnixWorkerTranscriptQueryServer,
+    WorkerTranscriptStore,
 )
 
 
@@ -118,3 +121,29 @@ async def test_deferred_transcript_is_live_in_api_memory_then_persisted_on_final
         assert [entry.content for entry in await durable.list(task_id)] == ["still reviewing"]
     finally:
         await relay.close()
+
+
+async def test_worker_transcript_query_reads_memory_until_terminal_persistence(
+    tmp_path: Path,
+) -> None:
+    """API reads a running task from Worker memory and terminal data from its Artifact."""
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    socket_path = tmp_path / "runtime" / "worker-transcripts.sock"
+    server = UnixWorkerTranscriptQueryServer(socket_path, worker_store)
+    client = UnixWorkerTranscriptQueryClient(socket_path)
+    await server.start()
+    try:
+        task_id = "review_" + "g" * 32
+        await worker_store.append(task_id, "model_output_delta", "visible while running")
+
+        assert [entry.content for entry in await client.list(task_id)] == ["visible while running"]
+        assert await durable.list(task_id) == ()
+
+        await worker_store.finalize(task_id)
+
+        assert await client.list(task_id) == ()
+        assert [entry.content for entry in await durable.list(task_id)] == ["visible while running"]
+    finally:
+        await server.close()

@@ -15,7 +15,16 @@ Locale = Literal["en", "zh-CN"]
 
 
 def _response(view: ReviewerPromptView) -> ReviewerPromptResponse:
-    return ReviewerPromptResponse(**view.__dict__)
+    """Map the editable system prompt contract without exposing internal phase prompts."""
+
+    return ReviewerPromptResponse(
+        agent_id=view.agent_id,
+        version=view.version,
+        locale=view.locale,
+        system_prompt=view.system_prompt,
+        prompt=view.prompt,
+        is_custom=view.is_custom,
+    )
 
 
 @router.get("/{agent_id}", response_model=ReviewerPromptResponse)

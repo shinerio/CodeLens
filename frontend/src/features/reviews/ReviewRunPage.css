@@ -72,6 +72,9 @@
 
 .run-action,.run-preview-actions button{display:inline-flex;align-items:center;gap:7px;padding:8px 10px;border:1px solid var(--run-line);background:var(--run-paper);color:var(--run-ink);font-size:.76rem;font-weight:700}.run-action svg,.run-preview-actions svg{width:14px;height:14px}.run-action:hover,.run-preview-actions button:hover{border-color:var(--run-accent);color:var(--run-accent)}.run-preview-actions{display:flex;flex-wrap:wrap;gap:8px;margin-top:auto;padding:0 18px 18px}.run-preview-actions button:last-child{border-color:var(--run-accent);background:var(--run-accent);color:#fff}
 
+.run-action--cancel:not(:disabled) { border-color: rgb(179 58 58 / 38%); color: var(--run-failed); }
+.run-action-error { margin: -8px 0 16px; padding: 10px 12px; border: 1px solid rgb(179 58 58 / 30%); background: #fff2f2; color: var(--run-failed); font-size: .82rem; }
+
 .run-chip svg {
   width: 16px;
   height: 16px;

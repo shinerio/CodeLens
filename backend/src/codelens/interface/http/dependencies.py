@@ -20,8 +20,7 @@ from codelens.review.infrastructure.repositories import (
 )
 from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
-    LiveTranscriptCache,
-    UnixTranscriptRelayServer,
+    UnixWorkerTranscriptQueryClient,
 )
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.application.provider_settings import (
@@ -78,8 +77,7 @@ class HttpComponents:
     model_gateways: ModelGatewaySettingsService
     reviewer_prompts: ReviewerPromptSettingsService
     transcripts: ExecutionTranscriptStore
-    live_transcripts: LiveTranscriptCache
-    transcript_relay: UnixTranscriptRelayServer
+    worker_transcripts: UnixWorkerTranscriptQueryClient
     finding_source_preview: FindingSourcePreviewService
 
     async def start(self) -> None:
@@ -87,14 +85,12 @@ class HttpComponents:
 
         await asyncio.to_thread(self.settings.data_dir.mkdir, parents=True, exist_ok=True)
         await self.database.migrate()
-        await self.transcript_relay.start()
         references = await self.review_store.list_input_artifact_references()
         await self.input_artifacts.prune_orphans(references)
 
     async def close(self) -> None:
         """Close database resources after streaming responses and requests stop."""
 
-        await self.transcript_relay.close()
         await self.database.dispose()
 
 
@@ -119,7 +115,6 @@ def build_components(settings: Settings) -> HttpComponents:
         locks=RepositoryLockRegistry(),
     )
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
-    live_transcripts = LiveTranscriptCache()
     return HttpComponents(
         settings=settings,
         database=database,
@@ -150,9 +145,8 @@ def build_components(settings: Settings) -> HttpComponents:
             FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
         ),
         transcripts=ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts"),
-        live_transcripts=live_transcripts,
-        transcript_relay=UnixTranscriptRelayServer(
-            settings.data_dir / "runtime" / "transcript-relay.sock", live_transcripts
+        worker_transcripts=UnixWorkerTranscriptQueryClient(
+            settings.data_dir / "runtime" / "worker-transcripts.sock"
         ),
         finding_source_preview=FindingSourcePreviewService(review_store, git),
     )

@@ -1,4 +1,4 @@
-import { useQuery } from "@tanstack/react-query";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
   CircleCheckBig,
@@ -9,6 +9,7 @@ import {
   ListChecks,
   PanelTop,
   PlayCircle,
+  RefreshCw,
   WandSparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -18,7 +19,7 @@ import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
-import { getFindingSource, getReview, getTranscript, listFindings } from "./api";
+import { cancelReview, getFindingSource, getReview, getTranscript, listFindings } from "./api";
 import { ReviewConsole } from "./ReviewConsole";
 import { useReviewEvents } from "./useReviewEvents";
 import "./ReviewRunPage.css";
@@ -80,6 +81,7 @@ function bannerClass(status: string) {
 
 export function ReviewRunPage() {
   const { t } = useI18n();
+  const queryClient = useQueryClient();
   const params = useParams();
   const taskId = params.taskId;
   const [activeTab, setActiveTab] = useState<TabName>("agent_runs");
@@ -117,6 +119,20 @@ export function ReviewRunPage() {
     refetchInterval: TERMINAL_STATUSES.has(eventStatus) ? false : 1_000,
     initialData: [],
   });
+  const cancelMutation = useMutation({
+    mutationFn: () => cancelReview(taskId ?? ""),
+    onSuccess: async () => {
+      await Promise.all([
+        reviewQuery.refetch(),
+        transcriptQuery.refetch(),
+        queryClient.invalidateQueries({ queryKey: ["reviews"] }),
+      ]);
+    },
+  });
+
+  async function refreshProgress() {
+    await Promise.all([reviewQuery.refetch(), findingsQuery.refetch(), transcriptQuery.refetch()]);
+  }
 
   const currentStatus =
     eventStatus === "loading" ? reviewQuery.data?.status ?? eventStatus : eventStatus;
@@ -184,7 +200,8 @@ export function ReviewRunPage() {
           </p>
         </div>
         <div className="review-run-page__chips">
-          <button className="run-action" type="button" onClick={handleUnsupported}><CircleStop aria-hidden="true" /> {t("run.cancel")}</button>
+          <button className="run-action" type="button" onClick={() => void refreshProgress()} disabled={reviewQuery.isFetching || transcriptQuery.isFetching}><RefreshCw aria-hidden="true" /> {t("runs.refresh")}</button>
+          <button className="run-action run-action--cancel" type="button" disabled={TERMINAL_STATUSES.has(currentStatus) || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}><CircleStop aria-hidden="true" /> {t("run.cancel")}</button>
           <button className="run-action" type="button" onClick={handleUnsupported}><Copy aria-hidden="true" /> {t("run.copyLink")}</button>
           <button className="run-action" type="button" onClick={handleUnsupported}><Download aria-hidden="true" /> {t("run.exportReport")}</button>
           <span className="run-chip">
@@ -205,6 +222,7 @@ export function ReviewRunPage() {
           {currentStatus === "canceled" ? t("run.canceled") : null}
         </div>
       ) : null}
+      {cancelMutation.isError ? <p className="run-action-error" role="alert">{cancelMutation.error instanceof Error ? cancelMutation.error.message : t("run.unableLoad")}</p> : null}
 
       <nav className="review-run-page__tabs" aria-label={t("run.sections")}>
         {TAB_OPTIONS.map((tab) => {
