@@ -254,6 +254,42 @@
   white-space: nowrap;
 }
 
+.gateway-card__test-bar {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+  padding: 8px 15px;
+  border-top: 1px solid #e0e4d8;
+  background: #f0f2ea;
+}
+
+.gateway-card__test-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.6rem;
+  letter-spacing: 0.04em;
+}
+
+.gateway-card__test-result svg {
+  width: 13px;
+  flex-shrink: 0;
+}
+
+.gateway-card__test-result--ok {
+  color: #5f7d24;
+}
+
+.gateway-card__test-result--fail {
+  color: #a45a18;
+}
+
+.gateway-card__test-result--pending {
+  color: var(--settings-muted);
+  font-style: italic;
+}
+
 .gateway-card footer {
   display: flex;
   min-height: 45px;
@@ -274,6 +310,17 @@
   background: #f7f8f3;
   color: #475048;
   cursor: pointer;
+}
+
+.gateway-card footer .gateway-card__test-btn {
+  border-color: #c3c9be;
+  background: #ecf0e6;
+  color: #4a6b2a;
+}
+
+.gateway-card footer .gateway-card__test-btn:disabled {
+  cursor: not-allowed;
+  opacity: 0.5;
 }
 
 .gateway-card footer button svg {

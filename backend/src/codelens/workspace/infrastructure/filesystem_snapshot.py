@@ -49,7 +49,7 @@ def _contained_symlink(path: str, target: str) -> bool:
 type _SnapshotOrigin = Literal["target", "context", "instruction"]
 
 
-def _snapshot_entry(root: Path, path: str, origin: _SnapshotOrigin) -> SnapshotEntry:
+def _snapshot_entry(root: Path, path: str, origin: _SnapshotOrigin) -> SnapshotEntry | None:
     normalized = _normalize_path(path)
     absolute = root / normalized
     try:
@@ -80,7 +80,9 @@ def _snapshot_entry(root: Path, path: str, origin: _SnapshotOrigin) -> SnapshotE
         kind = "file"
         symlink_target = None
     else:
-        raise InvalidRepositoryError("Snapshot path is not a regular file or symlink")
+        # Skip directories (e.g., submodule gitlinks) that git ls-files --cached
+        # reports as entries but have no file content to snapshot.
+        return None
     return SnapshotEntry(
         path=normalized,
         kind=kind,
@@ -170,12 +172,14 @@ class FilesystemSnapshotBuilder:
         origins.update({path: "target" for path in normalized_targets})
         origins.update({path: "instruction" for path in instruction_paths})
         entries = tuple(
-            await asyncio.gather(
+            entry
+            for entry in await asyncio.gather(
                 *(
                     asyncio.to_thread(_snapshot_entry, worktree.root, path, origin)
                     for path, origin in sorted(origins.items())
                 )
             )
+            if entry is not None
         )
         manifest = SnapshotManifest(
             target_paths=normalized_targets,
@@ -210,5 +214,5 @@ class FilesystemSnapshotBuilder:
                 )
             except (OSError, InvalidRepositoryError) as error:
                 raise WorktreeMutatedError("review worktree content changed") from error
-            if actual != expected:
+            if actual is None or actual != expected:
                 raise WorktreeMutatedError("review worktree content changed")

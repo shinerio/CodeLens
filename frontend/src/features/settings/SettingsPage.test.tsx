@@ -132,3 +132,107 @@ it("switches the active gateway without asking for the stored key", async () => 
   });
   expect(await within(secondary).findByText("Active gateway")).toBeInTheDocument();
 });
+
+it("sends a connectivity test request when the test connectivity button is clicked", async () => {
+  const catalog = {
+    active_gateway_id: "gateway_primary",
+    gateways: [
+      {
+        gateway_id: "gateway_primary",
+        name: "Primary gateway",
+        model: "gpt-primary",
+        base_url: "https://primary.example/v1",
+        is_active: true,
+      },
+    ],
+  };
+  fetchMock
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(catalog), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ok: true, latency_ms: 42, detail: "TCP connection succeeded." }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  const user = userEvent.setup();
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  const card = await screen.findByTestId("gateway-gateway_primary");
+  await user.click(
+    within(card).getByRole("button", { name: "Test connectivity Primary gateway" }),
+  );
+
+  const connectivityCall = fetchMock.mock.calls.find(
+    ([url]) =>
+      url ===
+      "/api/settings/model-gateways/gateway_primary/test-connectivity",
+  );
+  expect(connectivityCall?.[1]?.method).toBe("POST");
+  expect(
+    await within(card).findByText("Reachable (42ms)"),
+  ).toBeInTheDocument();
+});
+
+it("sends an availability test request when the test availability button is clicked", async () => {
+  const catalog = {
+    active_gateway_id: "gateway_primary",
+    gateways: [
+      {
+        gateway_id: "gateway_primary",
+        name: "Primary gateway",
+        model: "gpt-primary",
+        base_url: "https://primary.example/v1",
+        is_active: true,
+      },
+    ],
+  };
+  fetchMock
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify(catalog), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({ ok: false, latency_ms: 100, detail: "Connection failed." }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  const user = userEvent.setup();
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  const card = await screen.findByTestId("gateway-gateway_primary");
+  await user.click(
+    within(card).getByRole("button", { name: "Test availability Primary gateway" }),
+  );
+
+  const availabilityCall = fetchMock.mock.calls.find(
+    ([url]) =>
+      url ===
+      "/api/settings/model-gateways/gateway_primary/test-availability",
+  );
+  expect(availabilityCall?.[1]?.method).toBe("POST");
+  expect(
+    await within(card).findByText("LLM not responding"),
+  ).toBeInTheDocument();
+});

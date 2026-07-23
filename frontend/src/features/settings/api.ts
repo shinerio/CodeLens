@@ -1,6 +1,7 @@
 import { api } from "../../shared/api/client";
 import type {
   CreateModelGateway,
+  GatewayTestResult,
   ModelGatewayCatalog,
   OpenAISettings,
   RuntimeLogLevel,
@@ -61,4 +62,18 @@ export async function deleteModelGateway(gatewayId: string): Promise<ModelGatewa
 /** Compatibility query retained for older callers while the UI uses the gateway catalog. */
 export async function getOpenAISettings(): Promise<OpenAISettings> {
   return api<OpenAISettings>("/settings/openai");
+}
+
+export async function testGatewayConnectivity(gatewayId: string): Promise<GatewayTestResult> {
+  return api<GatewayTestResult>(`/settings/model-gateways/${gatewayId}/test-connectivity`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function testGatewayAvailability(gatewayId: string): Promise<GatewayTestResult> {
+  return api<GatewayTestResult>(`/settings/model-gateways/${gatewayId}/test-availability`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
 }

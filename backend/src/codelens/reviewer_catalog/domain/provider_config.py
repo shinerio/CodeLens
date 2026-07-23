@@ -62,6 +62,40 @@ class ModelGatewayCatalog:
         )
 
 
+@dataclass(frozen=True)
+class GatewayConnectivityResult:
+    """Report TCP reachability of a gateway base URL without exposing credentials."""
+
+    ok: bool
+    latency_ms: int | None
+    detail: str
+
+
+@dataclass(frozen=True)
+class GatewayAvailabilityResult:
+    """Report whether the LLM endpoint responds to a minimal ping."""
+
+    ok: bool
+    latency_ms: int | None
+    detail: str
+
+
+class ModelGatewayProbePort(Protocol):
+    """Test gateway reachability without persisting changes or logging secrets."""
+
+    async def test_connectivity(self, base_url: str) -> GatewayConnectivityResult:
+        """Attempt a TCP connection to the host and port parsed from ``base_url``."""
+
+        raise NotImplementedError
+
+    async def test_availability(
+        self, config: ModelProviderConfig
+    ) -> GatewayAvailabilityResult:
+        """Send a minimal chat completion to verify the LLM can respond."""
+
+        raise NotImplementedError
+
+
 class ModelProviderConfigPort(Protocol):
     """Persist model credentials without exposing storage details to callers."""
 

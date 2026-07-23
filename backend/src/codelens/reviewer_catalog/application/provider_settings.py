@@ -4,8 +4,11 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from codelens.reviewer_catalog.domain.provider_config import (
+    GatewayAvailabilityResult,
+    GatewayConnectivityResult,
     ModelGateway,
     ModelGatewayCatalog,
+    ModelGatewayProbePort,
     ModelGatewayStorePort,
     ModelProviderConfig,
     ModelProviderConfigPort,
@@ -92,10 +95,12 @@ class ModelGatewaySettingsService:
     def __init__(
         self,
         store: ModelGatewayStorePort,
+        probe: ModelGatewayProbePort,
         *,
         id_factory: Callable[[], str] | None = None,
     ) -> None:
         self._store = store
+        self._probe = probe
         self._id_factory = id_factory or (lambda: f"gateway_{uuid.uuid4().hex}")
         self._command_lock = asyncio.Lock()
 
@@ -186,6 +191,20 @@ class ModelGatewaySettingsService:
             updated = ModelGatewayCatalog(active_gateway_id, remaining)
             await self._store.save_catalog(updated)
             return self._view(updated)
+
+    async def test_connectivity(self, gateway_id: str) -> GatewayConnectivityResult:
+        """Probe TCP reachability of one gateway without exposing its credential."""
+
+        catalog = await self._store.load_catalog()
+        gateway = self._find(catalog, gateway_id)
+        return await self._probe.test_connectivity(gateway.base_url)
+
+    async def test_availability(self, gateway_id: str) -> GatewayAvailabilityResult:
+        """Send a minimal ping to verify the LLM behind one gateway can respond."""
+
+        catalog = await self._store.load_catalog()
+        gateway = self._find(catalog, gateway_id)
+        return await self._probe.test_availability(gateway.provider_config)
 
     @staticmethod
     def _find(catalog: ModelGatewayCatalog, gateway_id: str) -> ModelGateway:

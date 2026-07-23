@@ -339,3 +339,19 @@ class ModelGatewayCatalogResponse(StrictDto):
 
     active_gateway_id: str | None
     gateways: list[ModelGatewayResponse]
+
+
+class GatewayConnectivityTestResponse(StrictDto):
+    """Report whether the gateway base URL accepts TCP connections."""
+
+    ok: bool
+    latency_ms: int | None
+    detail: str
+
+
+class GatewayAvailabilityTestResponse(StrictDto):
+    """Report whether the LLM endpoint responds to a minimal ping."""
+
+    ok: bool
+    latency_ms: int | None
+    detail: str

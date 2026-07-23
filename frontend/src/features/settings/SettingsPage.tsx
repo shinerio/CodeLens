@@ -1,14 +1,18 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
+  CheckCircle2,
   KeyRound,
   Network,
   Pencil,
   Plus,
+  Plug,
   Power,
   ServerCog,
   ShieldCheck,
   Trash2,
+  XCircle,
+  Zap,
 } from "lucide-react";
 import { useState, type FormEvent } from "react";
 
@@ -19,10 +23,17 @@ import {
   deleteModelGateway,
   getRuntimeLogLevel,
   listModelGateways,
+  testGatewayAvailability,
+  testGatewayConnectivity,
   updateRuntimeLogLevel,
   updateModelGateway,
 } from "./api";
-import type { ModelGateway, ModelGatewayCatalog, RuntimeLogLevel } from "./types";
+import type {
+  GatewayTestResult,
+  ModelGateway,
+  ModelGatewayCatalog,
+  RuntimeLogLevel,
+} from "./types";
 import "./SettingsPage.css";
 
 export const MODEL_GATEWAYS_QUERY_KEY = ["model-gateways"] as const;
@@ -99,6 +110,24 @@ export function SettingsPage() {
       }
     },
   });
+  const [connectivityResults, setConnectivityResults] = useState<
+    Record<string, GatewayTestResult>
+  >({});
+  const [availabilityResults, setAvailabilityResults] = useState<
+    Record<string, GatewayTestResult>
+  >({});
+  const connectivityMutation = useMutation({
+    mutationFn: testGatewayConnectivity,
+    onSuccess: (result, gatewayId) => {
+      setConnectivityResults((prev) => ({ ...prev, [gatewayId]: result }));
+    },
+  });
+  const availabilityMutation = useMutation({
+    mutationFn: testGatewayAvailability,
+    onSuccess: (result, gatewayId) => {
+      setAvailabilityResults((prev) => ({ ...prev, [gatewayId]: result }));
+    },
+  });
 
   const gateways = gatewayQuery.data?.gateways ?? [];
   const isEditing = editingGatewayId !== null;
@@ -131,7 +160,7 @@ export function SettingsPage() {
   }
 
   const mutationError =
-    saveMutation.error ?? activateMutation.error ?? deleteMutation.error ?? gatewayQuery.error ?? logLevelQuery.error ?? logLevelMutation.error;
+    saveMutation.error ?? activateMutation.error ?? deleteMutation.error ?? connectivityMutation.error ?? availabilityMutation.error ?? gatewayQuery.error ?? logLevelQuery.error ?? logLevelMutation.error;
 
   return (
     <section className="settings-page">
@@ -207,6 +236,67 @@ export function SettingsPage() {
                       <dd>{gateway.base_url}</dd>
                     </div>
                   </dl>
+                  {(connectivityResults[gateway.gateway_id] ||
+                    availabilityResults[gateway.gateway_id] ||
+                    connectivityMutation.isPending ||
+                    availabilityMutation.isPending) &&
+                  (connectivityMutation.variables === gateway.gateway_id ||
+                    availabilityMutation.variables === gateway.gateway_id ||
+                    connectivityResults[gateway.gateway_id] ||
+                    availabilityResults[gateway.gateway_id]) ? (
+                    <div className="gateway-card__test-bar">
+                      {connectivityMutation.isPending &&
+                      connectivityMutation.variables === gateway.gateway_id ? (
+                        <span className="gateway-card__test-result gateway-card__test-result--pending">
+                          {t("settings.testing")}
+                        </span>
+                      ) : connectivityResults[gateway.gateway_id] ? (
+                        <span
+                          className={
+                            connectivityResults[gateway.gateway_id].ok
+                              ? "gateway-card__test-result gateway-card__test-result--ok"
+                              : "gateway-card__test-result gateway-card__test-result--fail"
+                          }
+                        >
+                          {connectivityResults[gateway.gateway_id].ok ? (
+                            <CheckCircle2 aria-hidden="true" />
+                          ) : (
+                            <XCircle aria-hidden="true" />
+                          )}
+                          {connectivityResults[gateway.gateway_id].ok
+                            ? t("settings.connectivityOk", {
+                                latency_ms: connectivityResults[gateway.gateway_id].latency_ms ?? 0,
+                              })
+                            : t("settings.connectivityFail")}
+                        </span>
+                      ) : null}
+                      {availabilityMutation.isPending &&
+                      availabilityMutation.variables === gateway.gateway_id ? (
+                        <span className="gateway-card__test-result gateway-card__test-result--pending">
+                          {t("settings.testing")}
+                        </span>
+                      ) : availabilityResults[gateway.gateway_id] ? (
+                        <span
+                          className={
+                            availabilityResults[gateway.gateway_id].ok
+                              ? "gateway-card__test-result gateway-card__test-result--ok"
+                              : "gateway-card__test-result gateway-card__test-result--fail"
+                          }
+                        >
+                          {availabilityResults[gateway.gateway_id].ok ? (
+                            <CheckCircle2 aria-hidden="true" />
+                          ) : (
+                            <XCircle aria-hidden="true" />
+                          )}
+                          {availabilityResults[gateway.gateway_id].ok
+                            ? t("settings.availabilityOk", {
+                                latency_ms: availabilityResults[gateway.gateway_id].latency_ms ?? 0,
+                              })
+                            : t("settings.availabilityFail")}
+                        </span>
+                      ) : null}
+                    </div>
+                  ) : null}
                   <footer>
                     {!gateway.is_active ? (
                       <button
@@ -222,6 +312,26 @@ export function SettingsPage() {
                         <Check aria-hidden="true" /> {t("settings.online")}
                       </span>
                     )}
+                    <button
+                      className="gateway-card__test-btn"
+                      aria-label={`${t("settings.testConnectivity")} ${gateway.name}`}
+                      title={t("settings.testConnectivity")}
+                      type="button"
+                      disabled={connectivityMutation.isPending}
+                      onClick={() => connectivityMutation.mutate(gateway.gateway_id)}
+                    >
+                      <Plug aria-hidden="true" />
+                    </button>
+                    <button
+                      className="gateway-card__test-btn"
+                      aria-label={`${t("settings.testAvailability")} ${gateway.name}`}
+                      title={t("settings.testAvailability")}
+                      type="button"
+                      disabled={availabilityMutation.isPending}
+                      onClick={() => availabilityMutation.mutate(gateway.gateway_id)}
+                    >
+                      <Zap aria-hidden="true" />
+                    </button>
                     <button
                       aria-label={`${t("settings.editGateway")} ${gateway.name}`}
                       title={t("common.edit")}

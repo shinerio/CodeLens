@@ -36,3 +36,9 @@ export type OpenAISettings = {
   model: string | null;
   base_url: string | null;
 };
+
+export type GatewayTestResult = {
+  ok: boolean;
+  latency_ms: number | null;
+  detail: string;
+};

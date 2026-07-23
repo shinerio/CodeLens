@@ -10,6 +10,8 @@ from codelens.interface.http.dependencies import HttpComponents, get_components
 from codelens.interface.http.dto import (
     ActivateModelGatewayRequest,
     CreateModelGatewayRequest,
+    GatewayAvailabilityTestResponse,
+    GatewayConnectivityTestResponse,
     ModelGatewayCatalogResponse,
     ModelGatewayResponse,
     OpenAISettingsResponse,
@@ -136,6 +138,42 @@ async def activate_model_gateway(
     """Switch the active runtime gateway without restarting API or Worker."""
 
     return _catalog_response(await components.model_gateways.activate(request.gateway_id))
+
+
+@router.post(
+    "/model-gateways/{gateway_id}/test-connectivity",
+    response_model=GatewayConnectivityTestResponse,
+)
+async def test_gateway_connectivity(
+    gateway_id: GatewayId,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> GatewayConnectivityTestResponse:
+    """Probe TCP reachability of the gateway base URL without exposing credentials."""
+
+    result = await components.model_gateways.test_connectivity(gateway_id)
+    return GatewayConnectivityTestResponse(
+        ok=result.ok,
+        latency_ms=result.latency_ms,
+        detail=result.detail,
+    )
+
+
+@router.post(
+    "/model-gateways/{gateway_id}/test-availability",
+    response_model=GatewayAvailabilityTestResponse,
+)
+async def test_gateway_availability(
+    gateway_id: GatewayId,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> GatewayAvailabilityTestResponse:
+    """Send a minimal ping to verify the LLM behind the gateway can respond."""
+
+    result = await components.model_gateways.test_availability(gateway_id)
+    return GatewayAvailabilityTestResponse(
+        ok=result.ok,
+        latency_ms=result.latency_ms,
+        detail=result.detail,
+    )
 
 
 @router.get("/openai", response_model=OpenAISettingsResponse)

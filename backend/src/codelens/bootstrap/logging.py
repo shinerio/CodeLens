@@ -145,4 +145,11 @@ def configure_process_logging(
         logger.setLevel(logging.INFO)
         if logger_name != "codelens":
             logger.propagate = True
+
+    # Alembic's fileConfig(disable_existing_loggers=True) disables all codelens.*
+    # child loggers created before migration. Re-enable them so scheduler and
+    # executor tracebacks survive the migration round-trip.
+    for name, obj in logging.Logger.manager.loggerDict.items():
+        if name.startswith("codelens.") and isinstance(obj, logging.Logger):
+            obj.disabled = False
     return log_path

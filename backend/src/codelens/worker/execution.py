@@ -251,10 +251,9 @@ class WorkerReviewExecutor:
         """Record a stable, readable failure without provider response content."""
 
         metadata: dict[str, str] = {"error_type": type(error).__name__}
-        content = "Review execution failed before final aggregation."
+        content = str(error) or "Review execution failed before final aggregation."
         if isinstance(error, AgentRuntimeError):
             metadata.update(error.failure_metadata())
-            content = str(error)
 
         await self._transcripts.append(
             task_id,

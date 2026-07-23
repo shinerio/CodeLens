@@ -27,6 +27,9 @@ from codelens.reviewer_catalog.application.provider_settings import (
 from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
 )
+from codelens.reviewer_catalog.infrastructure.model_gateway_probe import (
+    OpenAIModelGatewayProbeAdapter,
+)
 from codelens.workspace.application.browse_directories import BrowseDirectoriesService
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.inspect_repository import RepositoryInspector
@@ -126,7 +129,9 @@ def build_components(settings: Settings) -> HttpComponents:
         input_artifacts=input_artifacts,
         get_provider_settings=GetProviderSettingsHandler(provider_config),
         update_provider_settings=UpdateProviderSettingsHandler(provider_config),
-        model_gateways=ModelGatewaySettingsService(provider_config),
+        model_gateways=ModelGatewaySettingsService(
+            provider_config, OpenAIModelGatewayProbeAdapter()
+        ),
         transcripts=ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts"),
         finding_source_preview=FindingSourcePreviewService(review_store, git),
     )

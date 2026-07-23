@@ -1,4 +1,6 @@
+import asyncio
 import json
+import socket
 import stat
 from pathlib import Path
 
@@ -122,3 +124,129 @@ def test_model_gateway_update_rejects_unknown_gateway_without_leaking_key(
 
     assert response.status_code == 404
     assert "sk-missing-test-secret" not in response.text
+
+
+def _free_tcp_port() -> int:
+    """Reserve and immediately release a TCP port for test scaffolding."""
+
+    sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+    sock.bind(("127.0.0.1", 0))
+    port = sock.getsockname()[1]
+    sock.close()
+    return port
+
+
+def test_gateway_connectivity_succeeds_for_reachable_host(tmp_path: Path) -> None:
+    async def _noop_handler(
+        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
+    ) -> None:
+        writer.close()
+
+    async def _serve() -> tuple[asyncio.base_events.Server, int]:
+        server = await asyncio.start_server(_noop_handler, "127.0.0.1", 0)
+        port = server.sockets[0].getsockname()[1]
+        return server, port
+
+    loop = asyncio.new_event_loop()
+    server, port = loop.run_until_complete(_serve())
+
+    with _client(tmp_path) as client:
+        created = client.post(
+            "/api/settings/model-gateways",
+            json={
+                "name": "Reachable",
+                "api_key": "sk-reachable-test",
+                "model": "gpt-test",
+                "base_url": f"http://127.0.0.1:{port}/v1",
+            },
+        )
+        gateway_id = created.json()["active_gateway_id"]
+        result = client.post(
+            f"/api/settings/model-gateways/{gateway_id}/test-connectivity",
+            json={},
+        )
+
+    server.close()
+    loop.run_until_complete(server.wait_closed())
+    loop.close()
+
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["ok"] is True
+    assert body["latency_ms"] is not None
+    assert "sk-reachable-test" not in result.text
+
+
+def test_gateway_connectivity_fails_for_closed_port(tmp_path: Path) -> None:
+    closed_port = _free_tcp_port()
+
+    with _client(tmp_path) as client:
+        created = client.post(
+            "/api/settings/model-gateways",
+            json={
+                "name": "Unreachable",
+                "api_key": "sk-unreachable-test",
+                "model": "gpt-test",
+                "base_url": f"http://127.0.0.1:{closed_port}/v1",
+            },
+        )
+        gateway_id = created.json()["active_gateway_id"]
+        result = client.post(
+            f"/api/settings/model-gateways/{gateway_id}/test-connectivity",
+            json={},
+        )
+
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["ok"] is False
+    assert body["detail"]
+
+
+def test_gateway_connectivity_returns_404_for_missing_gateway(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path) as client:
+        result = client.post(
+            "/api/settings/model-gateways/gateway_00000000000000000000000000000000/test-connectivity",
+            json={},
+        )
+
+    assert result.status_code == 404
+
+
+def test_gateway_availability_returns_404_for_missing_gateway(
+    tmp_path: Path,
+) -> None:
+    with _client(tmp_path) as client:
+        result = client.post(
+            "/api/settings/model-gateways/gateway_00000000000000000000000000000000/test-availability",
+            json={},
+        )
+
+    assert result.status_code == 404
+
+
+def test_gateway_availability_fails_for_non_llm_endpoint(tmp_path: Path) -> None:
+    closed_port = _free_tcp_port()
+
+    with _client(tmp_path) as client:
+        created = client.post(
+            "/api/settings/model-gateways",
+            json={
+                "name": "Non-LLM",
+                "api_key": "sk-non-llm-test",
+                "model": "gpt-test",
+                "base_url": f"http://127.0.0.1:{closed_port}/v1",
+            },
+        )
+        gateway_id = created.json()["active_gateway_id"]
+        result = client.post(
+            f"/api/settings/model-gateways/{gateway_id}/test-availability",
+            json={},
+        )
+
+    assert result.status_code == 200, result.text
+    body = result.json()
+    assert body["ok"] is False
+    assert body["detail"]
+    assert "sk-non-llm-test" not in result.text

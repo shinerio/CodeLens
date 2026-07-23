@@ -56,13 +56,14 @@ class InstructionResolver:
             if resolved.stat().st_size > self._max_instruction_bytes:
                 raise ValueError("instruction document exceeds the configured size limit")
 
-            text = resolved.read_text(encoding="utf-8")
+            raw = resolved.read_bytes()
+            text = raw.decode("utf-8")
             parsed = self._parser.parse(text)
             documents.append(
                 InstructionDocument(
                     relative_path=relative.as_posix(),
                     content=text,
-                    content_hash=hashlib.sha256(text.encode("utf-8")).hexdigest(),
+                    content_hash=hashlib.sha256(raw).hexdigest(),
                 )
             )
             base = relative.parent.as_posix()
