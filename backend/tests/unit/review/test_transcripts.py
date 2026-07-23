@@ -1,5 +1,7 @@
 from pathlib import Path
 
+import pytest
+
 from codelens.review.infrastructure.transcripts import (
     DeferredTranscriptStore,
     ExecutionTranscriptStore,
@@ -147,3 +149,46 @@ async def test_worker_transcript_query_reads_memory_until_terminal_persistence(
         assert [entry.content for entry in await durable.list(task_id)] == ["visible while running"]
     finally:
         await server.close()
+
+
+async def test_worker_transcript_query_reads_a_prompt_larger_than_the_socket_buffer(
+    tmp_path: Path,
+) -> None:
+    """The API query waits for EOF instead of parsing an incomplete first socket chunk."""
+
+    socket_path = tmp_path / "runtime" / "worker-transcripts.sock"
+    worker_store = WorkerTranscriptStore(ExecutionTranscriptStore(tmp_path / "artifacts"))
+    server = UnixWorkerTranscriptQueryServer(socket_path, worker_store)
+    await server.start()
+    try:
+        task_id = "review_" + "i" * 32
+        prompt = "prompt-content " * 1_000
+        await worker_store.append(task_id, "prompt", prompt)
+
+        (entry,) = await UnixWorkerTranscriptQueryClient(socket_path).list(task_id)
+
+        assert entry.content == prompt
+    finally:
+        await server.close()
+
+
+async def test_duplicate_worker_query_server_cannot_remove_live_worker_socket(
+    tmp_path: Path,
+) -> None:
+    """A failed second Worker startup leaves the first Worker's query endpoint available."""
+
+    socket_path = tmp_path / "runtime" / "worker-transcripts.sock"
+    first = UnixWorkerTranscriptQueryServer(
+        socket_path, WorkerTranscriptStore(ExecutionTranscriptStore(tmp_path / "first"))
+    )
+    duplicate = UnixWorkerTranscriptQueryServer(
+        socket_path, WorkerTranscriptStore(ExecutionTranscriptStore(tmp_path / "second"))
+    )
+    await first.start()
+    try:
+        with pytest.raises(RuntimeError, match="already running"):
+            await duplicate.start()
+        await duplicate.close()
+        assert await UnixWorkerTranscriptQueryClient(socket_path).list("review_" + "h" * 32) == ()
+    finally:
+        await first.close()

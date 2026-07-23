@@ -254,12 +254,15 @@ class OpenAIAgentRuntime:
                 failure = self._failure(
                     phase, "invalid_model_output", "model returned unusable output", retryable=False
                 )
-        finally:
+        except BaseException:
             await client.close()
+            raise
 
         if failure is not None:
+            await client.close()
             raise failure from None
         if raw_result is None:
+            await client.close()
             raise self._failure(
                 "finalizing",
                 "missing_model_output",
@@ -274,14 +277,14 @@ class OpenAIAgentRuntime:
             canonical_bytes = self._output_codec.encode(self._finalizer_output(result.final_output))
         except AgentOutputParseError as parse_error:
             _LOGGER.warning(
-                "Model output could not be parsed as JSON, saving raw output",
-                extra={"phase": "finalizing", "output_preview": parse_error.raw_output[:500]},
+                "Model output could not be parsed as structured JSON",
+                extra={"phase": "finalizing"},
             )
             if sink is not None:
                 await sink(
                     AgentRuntimeEvent(
                         "model_raw_output",
-                        parse_error.raw_output[:10000],
+                        parse_error.raw_output,
                         {"agent_name": agent.agent_id, "parse_failed": "true"},
                     )
                 )
@@ -291,12 +294,11 @@ class OpenAIAgentRuntime:
                 reason_code="invalid_structured_output",
                 retryable=False,
             )
-        except ValueError as encode_error:
+        except ValueError:
             _LOGGER.warning(
-                "Model output did not match FindingBatch schema, saving raw output",
+                "Model output did not match FindingBatch schema",
                 extra={
                     "phase": "finalizing",
-                    "error": str(encode_error)[:500],
                     "output_type": type(result.final_output).__name__,
                 },
             )
@@ -309,7 +311,7 @@ class OpenAIAgentRuntime:
                 await sink(
                     AgentRuntimeEvent(
                         "model_raw_output",
-                        raw_text[:10000],
+                        raw_text,
                         {"agent_name": agent.agent_id, "parse_failed": "true"},
                     )
                 )
@@ -321,23 +323,40 @@ class OpenAIAgentRuntime:
             )
 
         if output_failure is not None:
-            repaired = await self._run_finalizer(
-                format_repair_agent,
-                self._format_repair_input(result.final_output),
-                run_config,
-                sink,
-            )
             try:
+                if sink is not None:
+                    await sink(
+                        AgentRuntimeEvent(
+                            "lifecycle",
+                            "Final structured output was invalid; requesting strict format repair.",
+                            {
+                                "agent_name": format_repair_agent.name,
+                                "reason_code": "invalid_structured_output",
+                            },
+                        )
+                    )
+                repaired = await self._run_finalizer(
+                    format_repair_agent,
+                    self._format_repair_input(
+                        self._finalizer_input(investigation), result.final_output
+                    ),
+                    run_config,
+                    sink,
+                )
                 repaired_result = cast(RunResult, repaired)
                 canonical_bytes = self._output_codec.encode(
                     self._finalizer_output(repaired_result.final_output)
                 )
             except (AgentOutputParseError, ValueError):
                 canonical_bytes = None
+            except BaseException:
+                await client.close()
+                raise
             else:
                 output_failure = None
 
         if output_failure is not None:
+            await client.close()
             raise output_failure
         if canonical_bytes is None:
             raise AssertionError("structured output encoding must return bytes or fail")
@@ -352,7 +371,7 @@ class OpenAIAgentRuntime:
             )
             for response in result.raw_responses
         )
-        return UnvalidatedAgentOutput(
+        output = UnvalidatedAgentOutput(
             canonical_bytes=canonical_bytes,
             response_ids=tuple(
                 diagnostic.response_id
@@ -364,6 +383,8 @@ class OpenAIAgentRuntime:
             output_tokens=sum(item.output_tokens for item in diagnostics),
             diagnostics=diagnostics,
         )
+        await client.close()
+        return output
 
     async def _run_finalizer(
         self,
@@ -429,30 +450,42 @@ class OpenAIAgentRuntime:
         return template.replace("{{finding_batch_schema}}", schema)
 
     @staticmethod
-    def _format_repair_input(value: object) -> str:
-        """Isolate the rejected final output for one schema-only repair request."""
+    def _format_repair_input(investigation_history: object, rejected_output: object) -> str:
+        """Give the one repair request both rejected text and its controlled evidence history."""
 
-        raw_output = value if isinstance(value, str) else str(value)
-        return json.dumps({"rejected_final_output": raw_output}, ensure_ascii=False)
+        raw_output = rejected_output if isinstance(rejected_output, str) else str(rejected_output)
+        return json.dumps(
+            {
+                "controlled_investigation_history": investigation_history,
+                "rejected_final_output": raw_output,
+            },
+            ensure_ascii=False,
+        )
 
     @staticmethod
     def _finalizer_output(value: object) -> object:
-        """Extract the FindingBatch object from direct JSON, fenced JSON, or surrounding prose."""
+        """Extract the FindingBatch envelope from direct JSON or model-added surrounding text.
+
+        The finalizer contract requires one JSON object, but compatible model gateways can
+        prepend prose, Markdown, or unrelated JSON snippets. Scan every decodable object and
+        select only the envelope-shaped one so unrelated braces never hide valid findings.
+        """
 
         if not isinstance(value, str):
             return value
         text = value.strip()
 
-        # Strategy 1: direct JSON parse
+        # Strategy 1: direct JSON parse, including a gateway wrapper containing JSON text.
         try:
-            return json.loads(text)
+            envelope = OpenAIAgentRuntime._finding_batch_envelope(json.loads(text))
+            if envelope is not None:
+                return envelope
         except json.JSONDecodeError:
             pass
 
         # Strategy 2: scan every object start. JSONDecoder tracks quoted braces correctly and
         # permits a FindingBatch fenced in Markdown or preceded by explanatory prose.
         decoder = json.JSONDecoder()
-        first_object: object | None = None
         for index, character in enumerate(text):
             if character != "{":
                 continue
@@ -460,16 +493,36 @@ class OpenAIAgentRuntime:
                 candidate, _ = decoder.raw_decode(text[index:])
             except json.JSONDecodeError:
                 continue
-            if not isinstance(candidate, dict):
-                continue
-            if "schema_version" in candidate and "findings" in candidate:
-                return candidate
-            if first_object is None:
-                first_object = candidate
-        if first_object is not None:
-            return first_object
+            envelope = OpenAIAgentRuntime._finding_batch_envelope(candidate)
+            if envelope is not None:
+                return envelope
 
         raise AgentOutputParseError(text)
+
+    @staticmethod
+    def _finding_batch_envelope(value: object) -> dict[str, object] | None:
+        """Find a schema envelope inside provider wrappers without accepting arbitrary JSON."""
+
+        if isinstance(value, dict):
+            if "schema_version" in value and "findings" in value:
+                return value
+            children: tuple[object, ...] = tuple(value.values())
+        elif isinstance(value, list):
+            children = tuple(value)
+        elif isinstance(value, str):
+            try:
+                decoded = json.loads(value)
+            except json.JSONDecodeError:
+                return None
+            return OpenAIAgentRuntime._finding_batch_envelope(decoded)
+        else:
+            return None
+
+        for child in children:
+            envelope = OpenAIAgentRuntime._finding_batch_envelope(child)
+            if envelope is not None:
+                return envelope
+        return None
 
     @staticmethod
     def _is_retryable_provider_error(error: Exception) -> bool:

@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, it } from "vitest";
 
 import { ReviewConsole } from "./ReviewConsole";
@@ -115,4 +115,70 @@ it("renders complete system instructions as Markdown", () => {
 
   expect(screen.getByRole("heading", { name: "Review rules", level: 1 })).toBeInTheDocument();
   expect(screen.getByText("auth.py").tagName).toBe("CODE");
+});
+
+it("hides tool calls and results again when the Tools filter is unchecked", () => {
+  const { container } = render(
+    <ReviewConsole
+      entries={[
+        {
+          sequence: 1,
+          kind: "tool_call",
+          content: "get_diff",
+          created_at: "2026-07-22T00:00:00Z",
+          redacted: false,
+          truncated: false,
+          metadata: {},
+        },
+        {
+          sequence: 2,
+          kind: "tool_result",
+          content: "diff output",
+          created_at: "2026-07-22T00:00:01Z",
+          redacted: false,
+          truncated: false,
+          metadata: {},
+        },
+      ]}
+    />,
+  );
+
+  const consoleView = within(container);
+  const tools = consoleView.getByRole("checkbox", { name: "Tools" });
+  expect(consoleView.queryByText("get_diff")).not.toBeInTheDocument();
+  fireEvent.click(tools);
+  expect(consoleView.getByText("get_diff")).toBeInTheDocument();
+  expect(consoleView.getByText("diff output")).toBeInTheDocument();
+  fireEvent.click(tools);
+  expect(consoleView.queryByText("get_diff")).not.toBeInTheDocument();
+  expect(consoleView.queryByText("diff output")).not.toBeInTheDocument();
+});
+
+it("renders streamed Markdown after its agent has completed without a provider done event", () => {
+  render(
+    <ReviewConsole
+      entries={[
+        {
+          sequence: 1,
+          kind: "model_output_delta",
+          content: "# Completed review",
+          created_at: "2026-07-22T00:00:00Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "correctness:v1", message_id: "deepseek-output:0" },
+        },
+        {
+          sequence: 2,
+          kind: "model_completed",
+          content: "",
+          created_at: "2026-07-22T00:00:01Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "correctness:v1" },
+        },
+      ]}
+    />,
+  );
+
+  expect(screen.getByRole("heading", { name: "Completed review", level: 1 })).toBeInTheDocument();
 });

@@ -58,6 +58,7 @@ class ReviewScheduler:
         poll_min_seconds: float,
         poll_max_seconds: float,
         record_failure: Callable[[str, Exception], Awaitable[None]] | None = None,
+        record_claim: Callable[[str], Awaitable[None]] | None = None,
     ) -> None:
         self._queue = queue
         self._execute = execute
@@ -69,6 +70,7 @@ class ReviewScheduler:
         self._poll_min_seconds = poll_min_seconds
         self._poll_max_seconds = poll_max_seconds
         self._record_failure = record_failure
+        self._record_claim = record_claim
         self._stop = asyncio.Event()
         if max_active_reviews < 1:
             raise ValueError("active review limit must be positive")
@@ -115,6 +117,8 @@ class ReviewScheduler:
                     job = await self._queue.next_queued()
                     if job is None:
                         break
+                    if self._record_claim is not None:
+                        await self._record_claim(job.task_id)
                     task = tasks.create_task(self._execute_isolated(job.task_id))
                     _LOGGER.info("Review job claimed", extra={"task_id": job.task_id})
                     active.add(task)

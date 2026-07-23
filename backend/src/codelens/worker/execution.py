@@ -187,6 +187,11 @@ class WorkerReviewExecutor:
         await self._review_store.recover_after_singleton_restart()
         active: dict[str, WorktreeRecoveryInput] = {}
         for record in await self._review_store.list_active_executions():
+            await self._transcripts.append(
+                record.task_id,
+                "lifecycle",
+                "Review execution recovered by Worker",
+            )
             await self._validate_repository(record)
             active[record.task_id] = WorktreeRecoveryInput(
                 repository=record.repository_path,
@@ -197,6 +202,7 @@ class WorkerReviewExecutor:
     async def execute(self, task_id: str) -> None:
         """Execute one claimed task while sharing only bounded Worker semaphores."""
 
+        await self._transcripts.append(task_id, "lifecycle", "Review execution started")
         orchestrator = ReviewOrchestrator(
             workflow=self._review_store,
             prepare=self.prepare,

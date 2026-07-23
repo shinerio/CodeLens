@@ -260,6 +260,15 @@ class DeferredTranscriptStore:
         lock = self._locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             collected = self._entries.setdefault(task_id, [])
+            if (
+                len(entries) == 1
+                and entries[0][0] == "lifecycle"
+                and entries[0][1] == "Review execution started"
+                and collected
+                and collected[-1].kind == "lifecycle"
+                and collected[-1].content == "Review execution started"
+            ):
+                return
             collected.extend(
                 TranscriptEntry(
                     sequence=len(collected) + index,
@@ -392,18 +401,25 @@ class UnixWorkerTranscriptQueryServer:
         self._socket_path = socket_path
         self._transcripts = transcripts
         self._server: asyncio.AbstractServer | None = None
+        self._owns_socket = False
 
     async def start(self) -> None:
         socket_path = _unix_socket_path(self._socket_path)
         socket_path.parent.mkdir(parents=True, exist_ok=True)
-        socket_path.unlink(missing_ok=True)
+        if socket_path.exists():
+            if await _is_unix_socket_accepting_connections(socket_path):
+                raise RuntimeError("worker transcript query server is already running")
+            socket_path.unlink(missing_ok=True)
         self._server = await asyncio.start_unix_server(self._handle, path=str(socket_path))
+        self._owns_socket = True
 
     async def close(self) -> None:
         if self._server is not None:
             self._server.close()
             await self._server.wait_closed()
-        _unix_socket_path(self._socket_path).unlink(missing_ok=True)
+        if self._owns_socket:
+            _unix_socket_path(self._socket_path).unlink(missing_ok=True)
+            self._owns_socket = False
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
@@ -430,14 +446,16 @@ class UnixWorkerTranscriptQueryClient:
     async def list(self, task_id: str) -> tuple[TranscriptEntry, ...]:
         try:
             reader, writer = await asyncio.wait_for(
-                asyncio.open_unix_connection(str(_unix_socket_path(self._socket_path))), timeout=0.2
+                asyncio.open_unix_connection(str(_unix_socket_path(self._socket_path))), timeout=1.0
             )
             writer.write(json.dumps({"task_id": task_id}).encode())
             writer.write_eof()
-            await asyncio.wait_for(writer.drain(), timeout=0.2)
-            raw = await asyncio.wait_for(reader.read(8 * 1024 * 1024), timeout=0.2)
+            await asyncio.wait_for(writer.drain(), timeout=1.0)
+            raw = await asyncio.wait_for(reader.read(), timeout=5.0)
             writer.close()
             await writer.wait_closed()
+            if len(raw) > 8 * 1024 * 1024:
+                return ()
             return tuple(TranscriptEntry.model_validate(item) for item in json.loads(raw))
         except (
             OSError,
@@ -464,3 +482,17 @@ def _unix_socket_path(requested_path: Path) -> Path:
         return normalized
     digest = hashlib.sha256(str(normalized).encode()).hexdigest()[:20]
     return Path(tempfile.gettempdir()) / f"codelens-{digest}.sock"
+
+
+async def _is_unix_socket_accepting_connections(socket_path: Path) -> bool:
+    """Avoid unlinking a live Worker's query socket during a duplicate Worker startup."""
+
+    try:
+        _, writer = await asyncio.wait_for(
+            asyncio.open_unix_connection(str(socket_path)), timeout=0.1
+        )
+        writer.close()
+        await writer.wait_closed()
+    except (OSError, TimeoutError):
+        return False
+    return True

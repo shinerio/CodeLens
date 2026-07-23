@@ -168,6 +168,9 @@ def build_worker(
         poll_min_seconds=0.05,
         poll_max_seconds=1.0,
         record_failure=executor.record_failure,
+        record_claim=lambda task_id: transcripts.append(
+            task_id, "lifecycle", "Review execution started"
+        ),
     )
     return WorkerComponents(
         settings=settings,

@@ -48,10 +48,10 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
       <label className="review-console__search"><Search aria-hidden="true" /><span className="sr-only">Search console</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search complete execution output" /></label>
       <fieldset className="review-console__filters">
         <legend>Output</legend>
-        <FilterOption label="Prompt" checked={visibility.prompt} onChange={() => setVisibility((value) => ({ ...value, prompt: !value.prompt }))} />
-        <FilterOption label="Thinking" checked={visibility.reasoning} onChange={() => setVisibility((value) => ({ ...value, reasoning: !value.reasoning }))} />
-        <FilterOption label="Model output" checked={visibility.output} onChange={() => setVisibility((value) => ({ ...value, output: !value.output }))} />
-        <FilterOption label="Tools" checked={visibility.tools} onChange={() => setVisibility((value) => ({ ...value, tools: !value.tools }))} />
+        <FilterOption label="Prompt" checked={visibility.prompt} onChange={(checked) => setVisibility((value) => ({ ...value, prompt: checked }))} />
+        <FilterOption label="Thinking" checked={visibility.reasoning} onChange={(checked) => setVisibility((value) => ({ ...value, reasoning: checked }))} />
+        <FilterOption label="Model output" checked={visibility.output} onChange={(checked) => setVisibility((value) => ({ ...value, output: checked }))} />
+        <FilterOption label="Tools" checked={visibility.tools} onChange={(checked) => setVisibility((value) => ({ ...value, tools: checked }))} />
       </fieldset>
       <button type="button" onClick={() => setCollapsed(new Set(messages.map((entry) => entry.sequence)))}>Collapse all</button>
       <button type="button" onClick={() => setCollapsed(new Set())}>Expand all</button>
@@ -94,10 +94,15 @@ function coalesceDeltas(entries: TranscriptEntry[]): ConsoleMessage[] {
 }
 
 function completedMessageKeys(entries: TranscriptEntry[]): Set<string> {
+  const completedAgents = new Set(entries.flatMap((entry) => (
+    entry.kind === "model_completed" && entry.metadata.agent !== undefined ? [entry.metadata.agent] : []
+  )));
   return new Set(entries.flatMap((entry) => (
     (entry.kind === "model_reasoning_completed" || entry.kind === "model_output_completed") && entry.metadata.message_id
       ? [entry.metadata.message_id]
-      : []
+      : isDelta(entry) && entry.metadata.message_id && completedAgents.has(entry.metadata.agent)
+        ? [entry.metadata.message_id]
+        : []
   )));
 }
 
@@ -113,8 +118,8 @@ function isDelta(entry: TranscriptEntry) {
   return entry.kind === "model_reasoning_delta" || entry.kind === "model_output_delta";
 }
 
-function FilterOption({ label, checked, onChange }: { label: string; checked: boolean; onChange: () => void }) {
-  return <label><input type="checkbox" checked={checked} onChange={onChange} />{label}</label>;
+function FilterOption({ label, checked, onChange }: { label: string; checked: boolean; onChange: (checked: boolean) => void }) {
+  return <label><input type="checkbox" checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} />{label}</label>;
 }
 
 function labelFor(kind: TranscriptEntry["kind"]) {

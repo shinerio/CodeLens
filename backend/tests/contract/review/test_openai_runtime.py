@@ -271,6 +271,66 @@ async def test_retries_once_with_the_format_repair_prompt_after_invalid_final_ou
     ]
     assert "Repair output:" in runner.calls[2][0].instructions
     assert json.loads(runner.calls[2][1])["rejected_final_output"] == "not a FindingBatch"
+    assert json.loads(runner.calls[2][1])["controlled_investigation_history"] == (
+        "controlled tool history"
+    )
+
+
+async def test_format_repair_uses_an_open_client_and_is_visible_in_the_event_stream(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    class RecordingClient:
+        def __init__(self) -> None:
+            self.is_closed = False
+            self.close_count = 0
+
+        async def close(self) -> None:
+            self.is_closed = True
+            self.close_count += 1
+
+    class ClientAwareRepairRunner(FakeRunner):
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            client = starting_agent.model._client
+            assert client.is_closed is False
+            self.calls.append((starting_agent, input, max_turns))
+            if len(self.calls) == 2:
+                return FakeResult("invalid structured output", ())
+            return FakeResult(FindingBatchSchema(schema_version="1", findings=()), ())
+
+    client = RecordingClient()
+    monkeypatch.setattr(
+        "codelens.review.infrastructure.openai_runtime.AsyncOpenAI",
+        lambda **_: client,
+    )
+    events = []
+
+    async def record_event(event: object) -> None:
+        events.append(event)
+
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        runner=ClientAwareRepairRunner(FakeResult({}, ())),
+    )
+
+    output = await runtime.invoke_stream(
+        _agent(), b"bounded input", _snapshot(), record_event
+    )
+
+    assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
+    assert client.close_count == 1
+    assert [(event.kind, event.metadata.get("agent_name")) for event in events] == [
+        ("model_raw_output", "correctness"),
+        ("lifecycle", "correctness:v1:format-repair"),
+    ]
 
 
 @pytest.mark.parametrize(
@@ -404,6 +464,20 @@ def test_finalizer_extracts_fenced_finding_batch_after_explanatory_prose() -> No
     assert OpenAIAgentRuntime._finalizer_output(final_output) == {
         "schema_version": "1",
         "findings": [{"title": "brace { in text"}],
+    }
+
+
+def test_finalizer_extracts_finding_batch_from_gateway_json_wrapper() -> None:
+    final_output = json.dumps(
+        {
+            "provider_metadata": {"request_id": "gateway-1"},
+            "output_text": json.dumps({"schema_version": "1", "findings": []}),
+        }
+    )
+
+    assert OpenAIAgentRuntime._finalizer_output(final_output) == {
+        "schema_version": "1",
+        "findings": [],
     }
 
 
