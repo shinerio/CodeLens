@@ -33,7 +33,7 @@ class Settings(BaseSettings):
     def validate_single_user_runtime(self) -> Self:
         """Fail closed for remote unauthenticated binds and unsupported Worker counts."""
 
-        if self.host not in {"127.0.0.1", "localhost", "::1"}:
+        if self.host not in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
             raise ValueError("auth=none requires a loopback host")
         if self.max_workers != 1:
             raise ValueError("the first release supports exactly one Worker")

@@ -11,6 +11,7 @@ FRONTEND_PID_FILE="$RUNTIME_DIR/frontend.pid"
 API_PID=""
 WORKER_PID=""
 FRONTEND_PID=""
+HOST=""
 
 fail() {
   printf 'Error: %s\n' "$1" >&2
@@ -18,7 +19,7 @@ fail() {
 }
 
 usage() {
-  printf 'Usage: %s [start|stop|restart]\n' "${0##*/}"
+  printf 'Usage: %s [start|stop|restart] [--host HOST]\n' "${0##*/}"
 }
 
 read_pid() {
@@ -123,7 +124,7 @@ wait_for_http() {
       wait "$process_pid" 2>/dev/null || true
       fail "$name failed to start; inspect the output above"
     fi
-    if curl --fail --silent --show-error --max-time 1 "$url" >/dev/null 2>&1; then
+    if curl --noproxy '*' --fail --silent --show-error --max-time 1 "$url" >/dev/null 2>&1; then
       return 0
     fi
     sleep 0.5
@@ -160,13 +161,14 @@ start_services() {
 
   printf '\n[3/3] Starting CodeLens...\n'
   mkdir -p "$LOG_DIR" || fail "could not create log directory"
-  nohup uv run --project backend codelens-review api >>"$LOG_DIR/api.log" 2>&1 &
+  local host="${HOST:-127.0.0.1}"
+  nohup uv run --project backend codelens-review api --host "$host" >>"$LOG_DIR/api.log" 2>&1 &
   API_PID=$!
   printf '%s\n' "$API_PID" >"$API_PID_FILE"
   nohup uv run --project backend codelens-review worker >>"$LOG_DIR/worker.log" 2>&1 &
   WORKER_PID=$!
   printf '%s\n' "$WORKER_PID" >"$WORKER_PID_FILE"
-  nohup pnpm --dir frontend dev --host 127.0.0.1 --strictPort >>"$LOG_DIR/frontend.log" 2>&1 &
+  nohup pnpm --dir frontend dev --host "$host" --strictPort >>"$LOG_DIR/frontend.log" 2>&1 &
   FRONTEND_PID=$!
   printf '%s\n' "$FRONTEND_PID" >"$FRONTEND_PID_FILE"
 
@@ -174,9 +176,9 @@ start_services() {
   wait_for_http "http://127.0.0.1:5173" "$FRONTEND_PID" "Frontend"
 
   printf '\nCodeLens is ready. Open these addresses:\n'
-  printf '  Frontend:  http://127.0.0.1:5173\n'
-  printf '  Backend:   http://127.0.0.1:8765\n'
-  printf '  OpenAPI:   http://127.0.0.1:8765/docs\n'
+  printf '  Frontend:  http://%s:5173\n' "$host"
+  printf '  Backend:   http://%s:8765\n' "$host"
+  printf '  OpenAPI:   http://%s:8765/docs\n' "$host"
   printf '\nAll locally accessible Git repositories are allowed by default.\n'
   printf 'Choose a repository and configure model gateways in the Web UI.\n'
   printf 'Run ./code-lens stop to stop all services.\n\n'
@@ -189,7 +191,18 @@ start_services() {
 ACTION=${1:-start}
 case "$ACTION" in
   start)
-    [ "$#" -eq 0 ] || [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    shift || true
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --host)
+          [ $# -ge 2 ] || { usage >&2; exit 2; }
+          HOST=$2; shift 2
+          ;;
+        *)
+          usage >&2; exit 2
+          ;;
+      esac
+    done
     cd "$SCRIPT_DIR"
     trap cleanup EXIT
     trap 'exit 130' INT TERM
@@ -200,7 +213,18 @@ case "$ACTION" in
     stop_services
     ;;
   restart)
-    [ "$#" -eq 1 ] || { usage >&2; exit 2; }
+    shift || true
+    while [ $# -gt 0 ]; do
+      case "$1" in
+        --host)
+          [ $# -ge 2 ] || { usage >&2; exit 2; }
+          HOST=$2; shift 2
+          ;;
+        *)
+          usage >&2; exit 2
+          ;;
+      esac
+    done
     stop_services
     cd "$SCRIPT_DIR"
     trap cleanup EXIT

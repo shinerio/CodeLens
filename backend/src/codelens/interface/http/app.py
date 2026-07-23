@@ -27,7 +27,7 @@ from codelens.shared.domain.errors import (
 )
 
 _STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1"}
+_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 _LOGGER = logging.getLogger("uvicorn.error")
 
 
