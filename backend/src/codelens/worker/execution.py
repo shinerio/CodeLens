@@ -1,6 +1,7 @@
 """Worker-side reconstruction and execution of durable review commands."""
 
 import asyncio
+from dataclasses import replace
 
 from codelens.bootstrap.settings import Settings
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
@@ -30,9 +31,13 @@ from codelens.review.infrastructure.repositories import (
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
-from codelens.review.infrastructure.transcripts import ExecutionTranscriptStore
+from codelens.review.infrastructure.transcripts import DeferredTranscriptStore
+from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
+from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
+    FilesystemReviewerPromptStore,
+)
 from codelens.worker.scheduler import ClaimedJob, WorkerSemaphores
 from codelens.workspace.application.create_snapshot import SnapshotService
 from codelens.workspace.application.inspect_repository import RepositoryInspector
@@ -151,7 +156,8 @@ class WorkerReviewExecutor:
         checkpoints: SqlCheckpointStore,
         codec: AgentOutputCodec,
         semaphores: WorkerSemaphores,
-        transcripts: ExecutionTranscriptStore,
+        transcripts: DeferredTranscriptStore,
+        reviewer_prompts: ReviewerPromptSettingsService | None = None,
     ) -> None:
         self._settings = settings
         self._review_store = review_store
@@ -167,6 +173,9 @@ class WorkerReviewExecutor:
         self._codec = codec
         self._semaphores = semaphores
         self._transcripts = transcripts
+        self._reviewer_prompts = reviewer_prompts or ReviewerPromptSettingsService(
+            FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
+        )
         self._repository_inspector = RepositoryInspector(
             GitRepositoryMetadataAdapter(GitCli()),
             settings.repository_roots,
@@ -201,6 +210,7 @@ class WorkerReviewExecutor:
             transcript=self._transcripts,
         )
         await orchestrator.execute(task_id)
+        await self._finalize_if_terminal(task_id)
         await self._cleanup_terminal_worktree(task_id)
 
     async def prepare(self, task_id: str) -> PreparedReview:
@@ -236,7 +246,7 @@ class WorkerReviewExecutor:
             scope_plan,
             instructions,
         )
-        agents = self._agents(record.selected_agent_versions)
+        agents = await self._agents(record.selected_agent_versions, record.prompt_locale)
         payloads: dict[str, bytes] = {}
         for agent in agents:
             agent_input = await self._context_builder.build(
@@ -251,9 +261,10 @@ class WorkerReviewExecutor:
         """Record a stable, readable failure without provider response content."""
 
         metadata: dict[str, str] = {"error_type": type(error).__name__}
-        content = str(error) or "Review execution failed before final aggregation."
+        content = "Review failed before completion. Check the failure details and try again."
         if isinstance(error, AgentRuntimeError):
             metadata.update(error.failure_metadata())
+            content = _failure_summary(error)
 
         await self._transcripts.append(
             task_id,
@@ -265,8 +276,13 @@ class WorkerReviewExecutor:
             await self._review_store.fail(task_id, "review_execution_failed")
         except InvalidAgentRunStateError:
             pass
+        await self._transcripts.finalize(task_id)
         await self._cleanup_terminal_worktree(task_id)
 
+    async def _finalize_if_terminal(self, task_id: str) -> None:
+        record = await self._review_store.get_review(task_id)
+        if record is not None and record.status in _TERMINAL_STATUSES:
+            await self._transcripts.finalize(task_id)
     async def _cleanup_terminal_worktree(self, task_id: str) -> None:
         """Remove a verified checkout only after its durable task becomes terminal."""
 
@@ -299,11 +315,24 @@ class WorkerReviewExecutor:
             overlay_artifact=artifact,
         )
 
-    @staticmethod
-    def _agents(references: tuple[str, ...]) -> tuple[AgentVersion, ...]:
+    async def _agents(self, references: tuple[str, ...], locale: str) -> tuple[AgentVersion, ...]:
         catalog = {"correctness:v1": correctness_agent()}
         try:
-            return tuple(catalog[reference] for reference in references)
+            agents: list[AgentVersion] = []
+            for reference in references:
+                agent = catalog[reference]
+                view = await self._reviewer_prompts.get(
+                    agent.agent_id, "zh-CN" if locale == "zh-CN" else "en"
+                )
+                agents.append(
+                    replace(
+                        agent,
+                        prompt_template=view.prompt,
+                        finalization_prompt=view.finalization_prompt,
+                        format_repair_prompt=view.format_repair_prompt,
+                    )
+                )
+            return tuple(agents)
         except KeyError as error:
             raise ValueError("review references an unavailable Agent version") from error
 
@@ -335,3 +364,29 @@ class WorkerReviewExecutor:
             codec=self._codec,
             excerpt_reader=self._excerpt_reader,
         )
+
+
+def _failure_summary(error: AgentRuntimeError) -> str:
+    """Keep a safe actionable summary in the durable transcript, never provider payload text."""
+
+    summaries = {
+        "provider_server_error": (
+            "The model gateway is temporarily unavailable. Retry the review; if it persists, "
+            "check the gateway service and Base URL."
+        ),
+        "provider_rate_limited": (
+            "The model gateway rate limit was reached. Wait briefly, then retry the review."
+        ),
+        "provider_request_rejected": (
+            "The model gateway rejected the request. Check the model, API type, and gateway "
+            "settings."
+        ),
+        "max_model_turns_exceeded": (
+            "The agent reached its maximum tool-use turns. Narrow the review scope or adjust "
+            "the agent configuration."
+        ),
+    }
+    return summaries.get(
+        error.reason_code,
+        "The model invocation failed. Check the execution details and model gateway settings.",
+    )

@@ -31,3 +31,5 @@ class AgentVersion:
     failure_policy: str
     mode_support: tuple[ReviewMode, ...]
     content_hash: str
+    finalization_prompt: str = ""
+    format_repair_prompt: str = ""

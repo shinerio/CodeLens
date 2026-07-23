@@ -163,6 +163,7 @@ class SqlReviewStore:
                     target_paths_json=_json(task.target_paths),
                     status=task.status.value,
                     selected_agent_versions_json=_json(task.selected_agent_versions),
+                    prompt_locale=task.prompt_locale,
                     worktree_id=task.worktree_id,
                     snapshot_id=task.snapshot_id,
                     cancellation_requested=task.cancellation_requested,
@@ -269,9 +270,7 @@ class SqlReviewStore:
             if row["deleted_at"] is not None:
                 return True
             is_active = str(row["status"]) not in terminal_statuses
-            should_request_cancellation = is_active and not bool(
-                row["cancellation_requested"]
-            )
+            should_request_cancellation = is_active and not bool(row["cancellation_requested"])
             await session.execute(
                 update(review_tasks)
                 .where(review_tasks.c.task_id == task_id)
@@ -334,6 +333,7 @@ class SqlReviewStore:
             ),
             target_paths=tuple(target_paths),
             selected_agent_versions=tuple(selected),
+            prompt_locale=str(row["prompt_locale"] or "en"),
             status=str(row["status"]),
             cancellation_requested=bool(row["cancellation_requested"]),
         )
@@ -345,9 +345,7 @@ class SqlReviewStore:
             task_ids = (
                 await session.execute(
                     select(review_tasks.c.task_id).where(
-                        review_tasks.c.status.not_in(
-                            ("completed", "partial", "failed", "canceled")
-                        )
+                        review_tasks.c.status.not_in(("completed", "partial", "failed", "canceled"))
                     )
                 )
             ).scalars()
@@ -731,7 +729,8 @@ class SqlCheckpointStore:
 
         async def operation(session: AsyncSession) -> None:
             await session.execute(
-                sqlite_insert(dag_checkpoints).values(
+                sqlite_insert(dag_checkpoints)
+                .values(
                     task_id=task_id,
                     node_key=node_key,
                     logical_attempt_group=logical_attempt_group,
@@ -740,7 +739,8 @@ class SqlCheckpointStore:
                     validation_attempts=0,
                     created_at=timestamp,
                     updated_at=timestamp,
-                ).on_conflict_do_nothing(
+                )
+                .on_conflict_do_nothing(
                     index_elements=(dag_checkpoints.c.task_id, dag_checkpoints.c.node_key)
                 )
             )

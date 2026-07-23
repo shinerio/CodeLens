@@ -1,4 +1,5 @@
 import asyncio
+import json
 import logging
 import os
 import traceback
@@ -100,6 +101,7 @@ def _provider_config() -> ModelProviderConfig:
         api_key="sk-contract-secret",
         model="gpt-5.1",
         base_url="http://model-gateway.example:8080",
+        api_type="responses",
     )
 
 
@@ -117,6 +119,8 @@ def _agent() -> AgentVersion:
         failure_policy="fail_task",
         mode_support=(ReviewMode.REVIEW,),
         content_hash="a" * 64,
+        finalization_prompt="Final output: {{finding_batch_schema}}",
+        format_repair_prompt="Repair output: {{finding_batch_schema}}",
     )
 
 
@@ -171,9 +175,12 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     assert isinstance(sdk_agent.model, OpenAIResponsesModel)
     assert sdk_agent.model.model == "gpt-5.1"
     assert str(sdk_agent.model._client.base_url) == "http://model-gateway.example:8080"
+    assert sdk_agent.model_settings.max_tokens == 65_536
+    assert sdk_agent.model_settings.reasoning is None
+    assert sdk_agent.model_settings.extra_body is None
     assert runner.calls[0][1] == source_secret
     assert runner.calls[0][2] == 3
-    assert runner.calls[1][0].output_type is None
+    assert runner.calls[1][0].output_type is FindingBatchSchema
     assert runner.calls[1][0].tools == []
     assert runner.calls[1][2] == 1
     assert '"changed_hunk_id"' in runner.calls[1][0].instructions
@@ -192,6 +199,78 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     assert "sk-contract-secret" not in caplog.text
     assert os.environ["OPENAI_AGENTS_DONT_LOG_MODEL_DATA"] == "1"
     assert os.environ["OPENAI_AGENTS_DONT_LOG_TOOL_DATA"] == "1"
+
+
+async def test_preserves_nonempty_final_structured_findings() -> None:
+    finding = {
+        "reviewer_id": "correctness",
+        "category": "correctness",
+        "title": "Missing bounds check",
+        "severity": "high",
+        "disposition": "blocking",
+        "confidence": 0.9,
+        "primary_location": {
+            "path": "src/example.py",
+            "start_line": 10,
+            "end_line": 10,
+            "side": "new",
+            "excerpt_hash": "a" * 64,
+        },
+        "changed_hunk_id": "hunk-1",
+        "change_origin": "introduced",
+        "evidence": [{"kind": "excerpt", "description": "Input is used unchecked."}],
+        "impact": "An invalid input can reach the protected operation.",
+        "explanation": "The newly added path has no range validation.",
+        "recommendation": "Validate the input before using it.",
+    }
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        runner=FakeRunner(FakeResult({"schema_version": "1", "findings": [finding]}, ())),
+    )
+
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+
+    payload = json.loads(output.canonical_bytes)
+    assert len(payload["findings"]) == 1
+    assert payload["findings"][0]["title"] == "Missing bounds check"
+    assert payload["findings"][0]["primary_location"]["path"] == "src/example.py"
+
+
+async def test_retries_once_with_the_format_repair_prompt_after_invalid_final_output() -> None:
+    class FormatRepairRunner(FakeRunner):
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            self.calls.append((starting_agent, input, max_turns))
+            if len(self.calls) == 2:
+                return FakeResult("not a FindingBatch", ())
+            return FakeResult(FindingBatchSchema(schema_version="1", findings=()), ())
+
+    runner = FormatRepairRunner(FakeResult({}, ()))
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        runner=runner,
+    )
+
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+
+    assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
+    assert [call[0].name for call in runner.calls] == [
+        "correctness:v1",
+        "correctness:v1:finalize",
+        "correctness:v1:format-repair",
+    ]
+    assert "Repair output:" in runner.calls[2][0].instructions
+    assert json.loads(runner.calls[2][1])["rejected_final_output"] == "not a FindingBatch"
 
 
 @pytest.mark.parametrize(
@@ -309,10 +388,23 @@ async def test_retries_a_transient_finalizer_failure_without_repeating_investiga
     ]
 
 
-def test_finalizer_receives_the_compact_investigation_conclusion() -> None:
+def test_finalizer_receives_the_controlled_investigation_history() -> None:
     assert OpenAIAgentRuntime._finalizer_input(FakeResult("compact evidence conclusion", ())) == (
-        "compact evidence conclusion"
+        "controlled tool history"
     )
+
+
+def test_finalizer_extracts_fenced_finding_batch_after_explanatory_prose() -> None:
+    final_output = """已完成审查。以下是最终结果：
+```json
+{"schema_version":"1","findings":[{"title":"brace { in text"}]}
+```
+"""
+
+    assert OpenAIAgentRuntime._finalizer_output(final_output) == {
+        "schema_version": "1",
+        "findings": [{"title": "brace { in text"}],
+    }
 
 
 async def test_does_not_apply_agent_timeout_to_the_whole_review() -> None:

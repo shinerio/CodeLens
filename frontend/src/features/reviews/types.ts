@@ -35,6 +35,7 @@ export type CreateReviewRequest = {
   scope: ScopeRequest;
   selected_agents: string[];
   mode: ReviewMode;
+  prompt_locale: "en" | "zh-CN";
 };
 
 export type ReviewResponse = {

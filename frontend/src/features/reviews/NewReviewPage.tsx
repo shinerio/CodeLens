@@ -112,7 +112,7 @@ function commitLabel(commit: RepositoryCommit): string {
 export function NewReviewPage() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [browserOpen, setBrowserOpen] = useState(false);
   const [repositoryPath, setRepositoryPath] = useState("");
   const [inspection, setInspection] = useState<RepositoryInspectionResponse | null>(null);
@@ -268,6 +268,7 @@ export function NewReviewPage() {
       scope: buildScope(),
       selected_agents: selectedAgents,
       mode,
+      prompt_locale: locale,
     };
     createMutation.mutate(request);
   }

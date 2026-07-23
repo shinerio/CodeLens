@@ -102,9 +102,7 @@ class FindingValidator:
 
         try:
             decoded = cast(_BatchCandidate, self._codec.decode(payload))
-            findings = tuple(
-                [await self._validate_candidate(item) for item in decoded.findings]
-            )
+            findings = tuple([await self._validate_candidate(item) for item in decoded.findings])
         except FindingValidationError:
             raise
         except (TypeError, ValueError, AttributeError) as error:
@@ -120,9 +118,7 @@ class FindingValidator:
         if candidate.confidence < self._agent.confidence_floor:
             raise FindingValidationError("Finding confidence is below the Agent threshold")
         primary = await self._location(candidate.primary_location)
-        related = tuple(
-            [await self._location(item) for item in candidate.related_locations]
-        )
+        related = tuple([await self._location(item) for item in candidate.related_locations])
         hunk = None
         if candidate.changed_hunk_id is not None:
             hunk = next(
@@ -157,9 +153,9 @@ class FindingValidator:
         elif hunk is not None and hunk.excerpt_hash != primary.excerpt_hash:
             raise FindingValidationError("Finding location does not match its changed hunk")
 
-        known_hashes = {
-            location.excerpt_hash for location in (primary, *related)
-        } | {item.excerpt_hash for item in self._snapshot.change_index.hunks}
+        known_hashes = {location.excerpt_hash for location in (primary, *related)} | {
+            item.excerpt_hash for item in self._snapshot.change_index.hunks
+        }
         evidence = tuple(
             Evidence(item.kind, item.description, item.artifact_ref, item.excerpt_hash)
             for item in candidate.evidence

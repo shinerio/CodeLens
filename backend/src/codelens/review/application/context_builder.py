@@ -203,15 +203,11 @@ class ContextPlan:
 
     @property
     def omitted_paths(self) -> tuple[str, ...]:
-        return tuple(
-            decision.path for decision in self.decisions if decision.status == "omitted"
-        )
+        return tuple(decision.path for decision in self.decisions if decision.status == "omitted")
 
     @property
     def truncated_paths(self) -> tuple[str, ...]:
-        return tuple(
-            decision.path for decision in self.decisions if decision.status == "truncated"
-        )
+        return tuple(decision.path for decision in self.decisions if decision.status == "truncated")
 
 
 @dataclass(frozen=True)
@@ -323,8 +319,7 @@ class ContextBuilder:
         )
         visible_paths = tuple(
             dict.fromkeys(
-                excerpt.path
-                for excerpt in (*instruction_excerpts, *changed_hunks, *context)
+                excerpt.path for excerpt in (*instruction_excerpts, *changed_hunks, *context)
             )
         )
         used_tokens = budget.total_tokens - remaining_tokens
@@ -578,9 +573,7 @@ class ContextBuilder:
                     "binary",
                 )
                 continue
-            status: Literal["included", "truncated"] = (
-                "truncated" if truncated else "included"
-            )
+            status: Literal["included", "truncated"] = "truncated" if truncated else "included"
             decision_by_path[candidate.path] = ContextDecision(
                 candidate.path,
                 candidate.estimated_tokens,

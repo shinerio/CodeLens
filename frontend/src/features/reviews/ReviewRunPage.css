@@ -489,6 +489,12 @@
 .review-console__message-head { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; background: transparent; color: inherit; padding: 10px 12px; text-align: left; font: 700 .72rem "SFMono-Regular", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }
 .review-console__message-head svg { width: 15px; }.review-console__avatar { color: #7fd4d0; }.review-console__message-head time { margin-left: auto; color: #91a3a7; }
 .review-console__content { max-height: min(70vh, 900px); overflow: auto; margin: 0; padding: 0 14px 14px 38px; color: #eef6f5; font: .8rem/1.65 "SFMono-Regular", Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; }
+.review-console__failure { display: grid; gap: 7px; margin: 0 14px 14px 38px; padding: 13px 15px; border: 1px solid rgb(242 168 80 / 48%); border-radius: 7px; background: rgb(114 69 18 / 25%); color: #fff3df; }
+.review-console__failure strong { font-size: .86rem; color: #ffd69b; }
+.review-console__failure p { margin: 0; font-size: .81rem; line-height: 1.5; }
+.review-console__failure small { color: #d5e0e4; font-size: .75rem; line-height: 1.45; }
+.review-console__failure code { justify-self: start; padding: 2px 6px; border-radius: 3px; background: rgb(255 255 255 / 10%); color: #ffe2b4; font-size: .7rem; }
+.review-console__failure .review-console__content { padding: 0; color: #d5e0e4; }
 .review-console__content--thinking { color: #b9d6ee; border-left: 2px solid #4c7ca0; margin-left: 38px; padding-left: 12px; }
 .review-console__markdown { max-height: min(70vh, 900px); overflow: auto; padding: 0 14px 14px 38px; color: #eef6f5; line-height: 1.65; overflow-wrap: anywhere; }
 .review-console__markdown > :first-child { margin-top: 0; }.review-console__markdown > :last-child { margin-bottom: 0; }.review-console__markdown :is(h1,h2,h3,h4,h5,h6) { color: #7fd4d0; line-height: 1.25; }.review-console__markdown :is(ul,ol) { padding-left: 1.5rem; }.review-console__markdown pre { overflow: auto; padding: 10px; background: rgba(0,0,0,.22); }.review-console__markdown code { font-family: "SFMono-Regular", Consolas, monospace; }.review-console__markdown :not(pre) > code { padding: 1px 4px; background: rgba(127,212,208,.12); }.review-console__markdown a { color: #7fd4d0; }.review-console__markdown blockquote { margin-left: 0; padding-left: 12px; border-left: 3px solid #466168; color: #b9d6ee; }

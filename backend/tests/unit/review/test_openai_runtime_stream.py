@@ -65,3 +65,16 @@ def test_stream_events_include_message_boundaries_for_markdown_rendering() -> No
         "model_reasoning_completed",
         {"message_id": "reasoning-1:0"},
     )
+
+
+def test_stream_events_ignore_incremental_tool_arguments() -> None:
+    event = _visible_event(
+        RawResponsesStreamEvent(
+            data=SimpleNamespace(
+                type="response.function_call_arguments.delta",
+                delta='{"path":"example.py"}',
+            )
+        )
+    )
+
+    assert event is None

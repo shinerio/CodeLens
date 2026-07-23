@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_prefix="CODELENS_", env_nested_delimiter="__")
 
     data_dir: Path = Path.cwd() / "data"
+    prompt_dir: Path = Path.cwd() / "prompts"
     host: str = "127.0.0.1"
     port: int = 8765
     auth: Literal["none"] = "none"

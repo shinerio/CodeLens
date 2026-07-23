@@ -11,7 +11,11 @@ from codelens.review.application.orchestrator import (
     ReviewOrchestrator,
 )
 from codelens.review.application.validate_findings import FindingValidationError
-from codelens.review.domain.ports import RunOutputArtifact, UnvalidatedAgentOutput
+from codelens.review.domain.ports import (
+    AgentRuntimeEvent,
+    RunOutputArtifact,
+    UnvalidatedAgentOutput,
+)
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
 from codelens.workspace.domain.models import (
     ChangeIndex,
@@ -111,6 +115,29 @@ class RecordingRuntime:
         return UnvalidatedAgentOutput(self.payload, (), "fake", 1, 2, ())
 
 
+class StreamingRuntime(RecordingRuntime):
+    async def invoke_stream(
+        self, agent: object, input_payload: bytes, snapshot: object, sink: object
+    ) -> UnvalidatedAgentOutput:
+        emit = sink
+        await emit(AgentRuntimeEvent("model_started", "", {}))
+        await emit(AgentRuntimeEvent("model_reasoning_delta", "Inspecting the diff", {}))
+        return await self.invoke(agent, input_payload, snapshot)
+
+
+class RecordingTranscript:
+    def __init__(self) -> None:
+        self.batches: list[list[tuple[str, str, object]]] = []
+
+    async def append(
+        self, _task_id: str, kind: str, content: str, *, metadata: object = None
+    ) -> None:
+        self.batches.append([(kind, content, metadata)])
+
+    async def append_many(self, _task_id: str, entries: object) -> None:
+        self.batches.append(list(entries))
+
+
 class CancellingRuntime(RecordingRuntime):
     def __init__(self, payload: bytes, workflow: MemoryWorkflow) -> None:
         super().__init__(payload)
@@ -206,6 +233,7 @@ def _orchestrator(
     artifacts: MemoryArtifacts,
     completion: RecordingCompletion,
     crash: OneShotCrash | None = None,
+    transcript: RecordingTranscript | None = None,
 ) -> ReviewOrchestrator:
     async def prepare(_task_id: str) -> PreparedReview:
         return _prepared()
@@ -221,6 +249,7 @@ def _orchestrator(
         agent_semaphore=asyncio.Semaphore(1),
         max_agent_runs_per_review=1,
         crash_injector=crash,
+        transcript=transcript,
     )
 
 
@@ -245,6 +274,28 @@ async def test_happy_path_persists_the_complete_state_sequence() -> None:
     assert checkpoints.value.status == "succeeded"
     assert runtime.calls == completion.calls == 1
     assert workflow.job_completed
+
+
+async def test_streamed_model_events_publish_the_prompt_before_completion() -> None:
+    workflow = MemoryWorkflow("reviewing")
+    checkpoints = MemoryCheckpoints()
+    runtime = StreamingRuntime(b'{"schema_version":"1","findings":[]}')
+    artifacts = MemoryArtifacts()
+    completion = RecordingCompletion(checkpoints)
+    transcript = RecordingTranscript()
+
+    await _orchestrator(
+        workflow, checkpoints, runtime, artifacts, completion, transcript=transcript
+    ).execute("review-1")
+
+    entries = [entry for batch in transcript.batches for entry in batch]
+    visible = [entry[0] for entry in entries if entry[0] != "lifecycle"]
+    assert visible == [
+        "prompt",
+        "model_started",
+        "model_reasoning_delta",
+        "model_output",
+    ]
 
 
 @pytest.mark.parametrize(

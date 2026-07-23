@@ -40,6 +40,7 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
                 name=gateway.name,
                 model=gateway.model,
                 base_url=gateway.base_url,
+                vendor=gateway.vendor,
                 is_active=gateway.is_active,
                 api_type=gateway.api_type,
                 max_tokens=gateway.max_tokens,
@@ -99,6 +100,7 @@ async def create_model_gateway(
             api_key=request.api_key.get_secret_value(),
             model=request.model,
             base_url=str(request.base_url).rstrip("/"),
+            vendor=request.vendor,
             api_type=request.api_type,
             max_tokens=request.max_tokens,
             thinking_level=request.thinking_level,
@@ -119,11 +121,10 @@ async def update_model_gateway(
         await components.model_gateways.update(
             gateway_id,
             name=request.name,
-            api_key=(
-                request.api_key.get_secret_value() if request.api_key is not None else None
-            ),
+            api_key=(request.api_key.get_secret_value() if request.api_key is not None else None),
             model=request.model,
             base_url=str(request.base_url).rstrip("/"),
+            vendor=request.vendor,
             api_type=request.api_type,
             max_tokens=request.max_tokens,
             thinking_level=request.thinking_level,

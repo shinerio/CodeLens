@@ -114,7 +114,7 @@ export function ReviewRunPage() {
     queryKey: ["review-transcript", taskId],
     queryFn: () => getTranscript(taskId ?? ""),
     enabled: taskId !== undefined,
-    refetchInterval: TERMINAL_STATUSES.has(eventStatus) ? false : 250,
+    refetchInterval: TERMINAL_STATUSES.has(eventStatus) ? false : 1_000,
     initialData: [],
   });
 

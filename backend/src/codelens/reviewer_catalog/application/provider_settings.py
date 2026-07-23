@@ -13,6 +13,8 @@ from codelens.reviewer_catalog.domain.provider_config import (
     ModelGatewayStorePort,
     ModelProviderConfig,
     ModelProviderConfigPort,
+    ModelProviderVendor,
+    ThinkingLevel,
 )
 from codelens.shared.domain.errors import DomainError
 
@@ -53,9 +55,10 @@ class UpdateProviderSettingsHandler:
         api_key: str,
         model: str,
         base_url: str,
+        vendor: ModelProviderVendor = "openai",
         api_type: GatewayApiType = "chat_completions",
         max_tokens: int = 65536,
-        thinking_level: str = "disabled",
+        thinking_level: ThinkingLevel = "disabled",
         agent_timeout: int = 1800,
     ) -> ProviderSettingsView:
         """Persist one complete provider configuration and return its redacted view."""
@@ -64,6 +67,7 @@ class UpdateProviderSettingsHandler:
             api_key=api_key,
             model=model,
             base_url=base_url,
+            vendor=vendor,
             api_type=api_type,
             max_tokens=max_tokens,
             thinking_level=thinking_level,
@@ -87,10 +91,11 @@ class ModelGatewayView:
     name: str
     model: str
     base_url: str
+    vendor: ModelProviderVendor
     is_active: bool
     api_type: GatewayApiType
     max_tokens: int
-    thinking_level: str
+    thinking_level: ThinkingLevel
     agent_timeout: int
 
 
@@ -129,9 +134,10 @@ class ModelGatewaySettingsService:
         api_key: str,
         model: str,
         base_url: str,
+        vendor: ModelProviderVendor = "openai",
         api_type: GatewayApiType = "chat_completions",
         max_tokens: int = 65536,
-        thinking_level: str = "disabled",
+        thinking_level: ThinkingLevel = "disabled",
         agent_timeout: int = 1800,
     ) -> ModelGatewayCatalogView:
         """Append a gateway; the first created gateway becomes active automatically."""
@@ -144,6 +150,7 @@ class ModelGatewaySettingsService:
                 api_key=api_key,
                 model=model,
                 base_url=base_url,
+                vendor=vendor,
                 api_type=api_type,
                 max_tokens=max_tokens,
                 thinking_level=thinking_level,
@@ -164,9 +171,10 @@ class ModelGatewaySettingsService:
         api_key: str | None,
         model: str,
         base_url: str,
+        vendor: ModelProviderVendor = "openai",
         api_type: GatewayApiType = "chat_completions",
         max_tokens: int = 65536,
-        thinking_level: str = "disabled",
+        thinking_level: ThinkingLevel = "disabled",
         agent_timeout: int = 1800,
     ) -> ModelGatewayCatalogView:
         """Replace gateway metadata while retaining an omitted write-only API key."""
@@ -180,6 +188,7 @@ class ModelGatewaySettingsService:
                 api_key=api_key if api_key is not None else existing.api_key,
                 model=model,
                 base_url=base_url,
+                vendor=vendor,
                 api_type=api_type,
                 max_tokens=max_tokens,
                 thinking_level=thinking_level,
@@ -255,6 +264,7 @@ class ModelGatewaySettingsService:
                     name=gateway.name,
                     model=gateway.model,
                     base_url=gateway.base_url,
+                    vendor=gateway.vendor,
                     is_active=gateway.gateway_id == catalog.active_gateway_id,
                     api_type=gateway.api_type,
                     max_tokens=gateway.max_tokens,

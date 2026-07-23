@@ -134,9 +134,7 @@ class WindowsWorkerSingletonAdapter:
 
 
 def _write_diagnostic(file: BinaryIO) -> None:
-    diagnostic = (
-        f"pid={os.getpid()} started_at={datetime.now(UTC).isoformat()}\n".encode("ascii")
-    )
+    diagnostic = f"pid={os.getpid()} started_at={datetime.now(UTC).isoformat()}\n".encode("ascii")
     file.seek(0)
     file.truncate()
     file.write(diagnostic)

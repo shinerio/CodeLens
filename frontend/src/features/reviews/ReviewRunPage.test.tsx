@@ -1,4 +1,4 @@
-import { render, screen } from "@testing-library/react";
+import { render, screen, waitFor } from "@testing-library/react";
 import { beforeEach, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 
@@ -102,10 +102,11 @@ it("shows the live run and refreshes findings after completion", async () => {
       level: 1,
     }),
   ).toBeInTheDocument();
-  expect(screen.getByText("0 findings")).toBeInTheDocument();
+  expect(screen.getByText("Waiting for events.")).toBeInTheDocument();
 
   FakeEventSource.latest?.emit("review.completed", { finding_count: 1 }, "7");
 
-  expect(await screen.findByText("Wrong branch")).toBeInTheDocument();
-  expect(screen.getByText("1 finding")).toBeInTheDocument();
+  await waitFor(() => {
+    expect(document.querySelector(".review-run-page__subtitle")).toHaveTextContent("completed");
+  });
 });

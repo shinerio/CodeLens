@@ -69,6 +69,7 @@ class ReviewTask:
     repository_path: Path
     target_paths: tuple[str, ...]
     selected_agent_versions: tuple[str, ...]
+    prompt_locale: str
     created_at: datetime
     overlay_artifact_ref: str | None = None
     worktree_id: str | None = None
@@ -93,6 +94,7 @@ class ReviewTask:
         selected_agent_versions: tuple[str, ...],
         created_at: datetime,
         overlay_artifact_ref: str | None = None,
+        prompt_locale: str = "en",
     ) -> "ReviewTask":
         """Create a task only when at least one immutable Agent version is selected."""
 
@@ -112,6 +114,7 @@ class ReviewTask:
             repository_path=repository_path.expanduser().resolve(),
             target_paths=target_paths,
             selected_agent_versions=selected_agent_versions,
+            prompt_locale=prompt_locale,
             created_at=created_at,
             overlay_artifact_ref=overlay_artifact_ref,
         )

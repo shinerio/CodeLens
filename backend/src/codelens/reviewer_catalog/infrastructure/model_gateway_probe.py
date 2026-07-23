@@ -71,9 +71,7 @@ class OpenAIModelGatewayProbeAdapter(ModelGatewayProbePort):
             detail=f"TCP connection to {host}:{port} succeeded.",
         )
 
-    async def test_availability(
-        self, config: ModelProviderConfig
-    ) -> GatewayAvailabilityResult:
+    async def test_availability(self, config: ModelProviderConfig) -> GatewayAvailabilityResult:
         """Send a minimal chat completion to verify the LLM can respond."""
 
         client = AsyncOpenAI(

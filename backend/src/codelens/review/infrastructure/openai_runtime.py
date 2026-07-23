@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 from typing import Any, Literal, Protocol, cast
 
@@ -9,15 +10,12 @@ os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_MODEL_DATA", "1")
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
 from agents import Agent, RawResponsesStreamEvent, RunConfig, RunItemStreamEvent, Runner
-from agents.model_settings import ModelSettings, Reasoning
 from agents.exceptions import (
     MaxTurnsExceeded,
     ModelBehaviorError,
     ModelRefusalError,
     UserError,
 )
-from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
-from agents.models.openai_responses import OpenAIResponsesModel
 from agents.result import RunResult
 from openai import (
     APIConnectionError,
@@ -41,6 +39,8 @@ class AgentOutputParseError(ValueError):
     def __init__(self, raw_output: str) -> None:
         self.raw_output = raw_output
         super().__init__("Could not parse model finalizer output as JSON")
+
+
 from codelens.review.domain.ports import (
     AgentOutputCodecPort,
     AgentResponseDiagnostic,
@@ -48,6 +48,7 @@ from codelens.review.domain.ports import (
     AgentRuntimeEventSink,
     UnvalidatedAgentOutput,
 )
+from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
@@ -58,6 +59,7 @@ type _AgentFailure = (
     AgentMaxTurnsExceededError | TransientAgentRuntimeError | PermanentAgentOutputError
 )
 _FINALIZER_MAX_ATTEMPTS = 3
+_LOGGER = logging.getLogger(__name__)
 
 
 class _RunnerPort(Protocol):
@@ -162,43 +164,38 @@ class OpenAIAgentRuntime:
             api_key=provider_config.api_key,
             base_url=provider_config.base_url,
         )
-        model_cls = (
-            OpenAIResponsesModel
-            if provider_config.api_type == "responses"
-            else OpenAIChatCompletionsModel
+        behavior = (
+            ModelProviderAdapterRegistry()
+            .resolve(provider_config.vendor)
+            .request_behavior(provider_config)
         )
-        _THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": 16384}
-        if provider_config.thinking_level == "disabled":
-            thinking_body: dict[str, object] = {"type": "disabled"}
-        else:
-            thinking_body = {"type": "enabled", "budget_tokens": _THINKING_BUDGETS[provider_config.thinking_level]}
-        model_settings = ModelSettings(
-            max_tokens=provider_config.max_tokens,
-            extra_body={"thinking": thinking_body},
-        )
+        finding_batch_schema = self._output_codec.json_schema()
         investigation_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
             instructions=agent.prompt_template,
-            model=model_cls(
+            model=behavior.model_class(
                 model=provider_config.model,
                 openai_client=client,
             ),
-            model_settings=model_settings,
+            model_settings=behavior.model_settings,
             tools=FilesystemReviewTools(snapshot, self._git, max_tool_calls=None).as_agent_tools(),
         )
         final_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}:finalize",
-            instructions=(
-                f"{agent.prompt_template}\nUse the controlled tool evidence in the conversation "
-                "above. Do not call tools. Return exactly one JSON value that validates against "
-                "this JSON Schema. Do not use Markdown fences or omit required fields.\n"
-                f"{self._output_codec.json_schema()}"
-            ),
-            model=model_cls(
+            instructions=self._render_prompt(agent.finalization_prompt, finding_batch_schema),
+            model=behavior.model_class(
                 model=provider_config.model,
                 openai_client=client,
             ),
-            model_settings=model_settings,
+            model_settings=behavior.model_settings,
+            output_type=self._output_codec.output_type,
+        )
+        format_repair_agent: Agent[None] = Agent(
+            name=f"{agent.agent_id}:v{agent.version}:format-repair",
+            instructions=self._render_prompt(agent.format_repair_prompt, finding_batch_schema),
+            model=behavior.model_class(model=provider_config.model, openai_client=client),
+            model_settings=behavior.model_settings,
+            output_type=self._output_codec.output_type,
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
         raw_result: object | None = None
@@ -207,7 +204,11 @@ class OpenAIAgentRuntime:
         try:
             try:
                 investigation = await self._run_observable(
-                    investigation_agent, input_text, agent.max_turns, run_config, sink,
+                    investigation_agent,
+                    input_text,
+                    agent.max_turns,
+                    run_config,
+                    sink,
                     timeout_seconds=provider_config.agent_timeout,
                 )
                 phase = "finalizing"
@@ -251,7 +252,7 @@ class OpenAIAgentRuntime:
                     extra={"phase": phase, "error": str(model_error)[:500]},
                 )
                 failure = self._failure(
-                    phase, "invalid_model_output", "model returned unusable output", retryable=True
+                    phase, "invalid_model_output", "model returned unusable output", retryable=False
                 )
         finally:
             await client.close()
@@ -268,6 +269,7 @@ class OpenAIAgentRuntime:
 
         result = cast(RunResult, raw_result)
         canonical_bytes: bytes | None = None
+        output_failure: PermanentAgentOutputError | None = None
         try:
             canonical_bytes = self._output_codec.encode(self._finalizer_output(result.final_output))
         except AgentOutputParseError as parse_error:
@@ -276,30 +278,69 @@ class OpenAIAgentRuntime:
                 extra={"phase": "finalizing", "output_preview": parse_error.raw_output[:500]},
             )
             if sink is not None:
-                await sink(AgentRuntimeEvent(
-                    "model_raw_output",
-                    parse_error.raw_output[:10000],
-                    {"agent_name": agent.name, "parse_failed": "true"},
-                ))
-            canonical_bytes = self._output_codec.encode(
-                {"schema_version": "1", "findings": []}
+                await sink(
+                    AgentRuntimeEvent(
+                        "model_raw_output",
+                        parse_error.raw_output[:10000],
+                        {"agent_name": agent.agent_id, "parse_failed": "true"},
+                    )
+                )
+            output_failure = PermanentAgentOutputError(
+                "Final structured output failed: model returned invalid JSON.",
+                phase="finalizing",
+                reason_code="invalid_structured_output",
+                retryable=False,
             )
         except ValueError as encode_error:
             _LOGGER.warning(
                 "Model output did not match FindingBatch schema, saving raw output",
-                extra={"phase": "finalizing", "error": str(encode_error)[:500],
-                       "output_type": type(result.final_output).__name__},
+                extra={
+                    "phase": "finalizing",
+                    "error": str(encode_error)[:500],
+                    "output_type": type(result.final_output).__name__,
+                },
             )
-            raw_text = result.final_output if isinstance(result.final_output, str) else str(result.final_output)
+            raw_text = (
+                result.final_output
+                if isinstance(result.final_output, str)
+                else str(result.final_output)
+            )
             if sink is not None:
-                await sink(AgentRuntimeEvent(
-                    "model_raw_output",
-                    raw_text[:10000],
-                    {"agent_name": agent.name, "parse_failed": "true"},
-                ))
-            canonical_bytes = self._output_codec.encode(
-                {"schema_version": "1", "findings": []}
+                await sink(
+                    AgentRuntimeEvent(
+                        "model_raw_output",
+                        raw_text[:10000],
+                        {"agent_name": agent.agent_id, "parse_failed": "true"},
+                    )
+                )
+            output_failure = PermanentAgentOutputError(
+                "Final structured output failed: model output did not match the review schema.",
+                phase="finalizing",
+                reason_code="invalid_structured_output",
+                retryable=False,
             )
+
+        if output_failure is not None:
+            repaired = await self._run_finalizer(
+                format_repair_agent,
+                self._format_repair_input(result.final_output),
+                run_config,
+                sink,
+            )
+            try:
+                repaired_result = cast(RunResult, repaired)
+                canonical_bytes = self._output_codec.encode(
+                    self._finalizer_output(repaired_result.final_output)
+                )
+            except (AgentOutputParseError, ValueError):
+                canonical_bytes = None
+            else:
+                output_failure = None
+
+        if output_failure is not None:
+            raise output_failure
+        if canonical_bytes is None:
+            raise AssertionError("structured output encoding must return bytes or fail")
 
         diagnostics = tuple(
             AgentResponseDiagnostic(
@@ -359,48 +400,74 @@ class OpenAIAgentRuntime:
 
     @staticmethod
     def _finalizer_input(investigation: object) -> Any:
-        """Send the conclusion, not the full SDK/tool-object history, to finalization."""
+        """Send controlled history so finalization can retain exact evidence identifiers."""
 
+        history = getattr(investigation, "to_input_list", None)
+        if callable(history):
+            return history()
         conclusion = getattr(investigation, "final_output", None)
         if isinstance(conclusion, str) and conclusion.strip():
             return conclusion
-        return cast(Any, investigation).to_input_list()
+        raise PermanentAgentOutputError(
+            "Final structured output failed: investigation returned no usable evidence.",
+            phase="finalizing",
+            reason_code="missing_investigation_evidence",
+            retryable=False,
+        )
+
+    @staticmethod
+    def _render_prompt(template: str, schema: str) -> str:
+        """Inject the runtime schema into a versioned prompt asset."""
+
+        if "{{finding_batch_schema}}" not in template:
+            raise PermanentAgentOutputError(
+                "Final structured output failed: prompt template is invalid.",
+                phase="finalizing",
+                reason_code="invalid_finalizer_prompt",
+                retryable=False,
+            )
+        return template.replace("{{finding_batch_schema}}", schema)
+
+    @staticmethod
+    def _format_repair_input(value: object) -> str:
+        """Isolate the rejected final output for one schema-only repair request."""
+
+        raw_output = value if isinstance(value, str) else str(value)
+        return json.dumps({"rejected_final_output": raw_output}, ensure_ascii=False)
 
     @staticmethod
     def _finalizer_output(value: object) -> object:
-        """Decode JSON finalizer text with fallback strategies before validating FindingBatch."""
+        """Extract the FindingBatch object from direct JSON, fenced JSON, or surrounding prose."""
 
         if not isinstance(value, str):
             return value
         text = value.strip()
 
-        # Strategy 1: strip markdown fences
-        if text.startswith("```"):
-            lines = text.split("\n")
-            inner = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
-            text = inner.strip()
-
-        # Strategy 2: direct JSON parse
+        # Strategy 1: direct JSON parse
         try:
             return json.loads(text)
         except json.JSONDecodeError:
             pass
 
-        # Strategy 3: extract the first balanced JSON object from the text
-        start = text.find("{")
-        if start >= 0:
-            depth = 0
-            for i in range(start, len(text)):
-                if text[i] == "{":
-                    depth += 1
-                elif text[i] == "}":
-                    depth -= 1
-                    if depth == 0:
-                        try:
-                            return json.loads(text[start : i + 1])
-                        except json.JSONDecodeError:
-                            pass
-                        break
+        # Strategy 2: scan every object start. JSONDecoder tracks quoted braces correctly and
+        # permits a FindingBatch fenced in Markdown or preceded by explanatory prose.
+        decoder = json.JSONDecoder()
+        first_object: object | None = None
+        for index, character in enumerate(text):
+            if character != "{":
+                continue
+            try:
+                candidate, _ = decoder.raw_decode(text[index:])
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(candidate, dict):
+                continue
+            if "schema_version" in candidate and "findings" in candidate:
+                return candidate
+            if first_object is None:
+                first_object = candidate
+        if first_object is not None:
+            return first_object
 
         raise AgentOutputParseError(text)
 
@@ -526,10 +593,6 @@ def _visible_event(event: object) -> AgentRuntimeEvent | None:
         if getattr(payload, "type", "") == "response.reasoning_summary_text.done":
             return AgentRuntimeEvent(
                 "model_reasoning_completed", "", _message_metadata(payload, "summary_index")
-            )
-        if getattr(payload, "type", "") == "response.function_call_arguments.delta":
-            return AgentRuntimeEvent(
-                "tool_call", _json_value(payload), {"stream": "arguments_delta"}
             )
         return None
     if isinstance(event, RunItemStreamEvent):

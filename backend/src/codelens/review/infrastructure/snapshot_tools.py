@@ -183,9 +183,7 @@ class FilesystemReviewTools:
             raise ValueError("line range is invalid")
         self._entry(path)
         oid = (
-            self._snapshot.target.base_oid
-            if revision == "base"
-            else self._snapshot.target.head_oid
+            self._snapshot.target.base_oid if revision == "base" else self._snapshot.target.head_oid
         )
         result = await self._git.run(
             self._snapshot.worktree.root,

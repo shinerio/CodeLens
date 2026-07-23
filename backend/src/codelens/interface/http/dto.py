@@ -202,6 +202,20 @@ class CreateReviewRequest(StrictDto):
     scope: ScopeRequest
     selected_agents: Annotated[list[AgentReference], Field(min_length=1, max_length=32)]
     mode: Literal["review"] = "review"
+    prompt_locale: Literal["en", "zh-CN"] = "en"
+
+
+class UpdateReviewerPromptRequest(StrictDto):
+    prompt: Annotated[str, Field(min_length=1, max_length=100_000)]
+
+
+class ReviewerPromptResponse(StrictDto):
+    agent_id: str
+    version: int
+    locale: Literal["en", "zh-CN"]
+    system_prompt: str
+    prompt: str
+    is_custom: bool
 
 
 class ReviewResponse(StrictDto):
@@ -286,6 +300,7 @@ class CreateModelGatewayRequest(StrictDto):
     api_key: SecretStr
     model: GatewayModel
     base_url: AnyHttpUrl
+    vendor: Literal["openai", "deepseek"] = "openai"
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
@@ -307,6 +322,7 @@ class UpdateModelGatewayRequest(StrictDto):
     api_key: SecretStr | None = None
     model: GatewayModel
     base_url: AnyHttpUrl
+    vendor: Literal["openai", "deepseek"] = "openai"
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
@@ -339,6 +355,7 @@ class ModelGatewayResponse(StrictDto):
     name: str
     model: str
     base_url: str
+    vendor: Literal["openai", "deepseek"]
     is_active: bool
     api_type: Literal["responses", "chat_completions"]
     max_tokens: int

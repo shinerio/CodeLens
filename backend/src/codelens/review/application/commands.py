@@ -33,6 +33,7 @@ class CreateReviewCommand:
     repository: RepositoryInfo
     scope: ReviewScope
     selected_agent_versions: tuple[str, ...]
+    prompt_locale: str = "en"
 
 
 class CreateReviewHandler:
@@ -76,6 +77,7 @@ class CreateReviewHandler:
             repository_path=command.repository.path,
             target_paths=scope_plan.target_paths,
             selected_agent_versions=command.selected_agent_versions,
+            prompt_locale=command.prompt_locale,
             created_at=self._clock(),
             overlay_artifact_ref=artifact.reference if artifact is not None else None,
         )

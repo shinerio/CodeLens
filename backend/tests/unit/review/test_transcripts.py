@@ -1,6 +1,11 @@
 from pathlib import Path
 
-from codelens.review.infrastructure.transcripts import ExecutionTranscriptStore
+from codelens.review.infrastructure.transcripts import (
+    DeferredTranscriptStore,
+    ExecutionTranscriptStore,
+    LiveTranscriptCache,
+    UnixTranscriptRelayServer,
+)
 
 
 async def test_transcript_redacts_credentials_and_preserves_entry_order(tmp_path: Path) -> None:
@@ -22,6 +27,25 @@ async def test_transcript_redacts_credentials_and_preserves_entry_order(tmp_path
     assert "secret-value" not in entries[1].content
     assert "another-secret" not in entries[1].content
     assert entries[1].metadata == {"agent": "correctness:v1"}
+
+
+async def test_transcript_append_many_reads_and_writes_one_complete_batch(tmp_path: Path) -> None:
+    store = ExecutionTranscriptStore(tmp_path)
+    task_id = "review_" + "e" * 32
+
+    await store.append_many(
+        task_id,
+        (
+            ("model_started", "", {"agent": "correctness:v1"}),
+            ("model_reasoning_delta", "Checking change map", {"agent": "correctness:v1"}),
+            ("model_output_delta", "No defect found", {"agent": "correctness:v1"}),
+        ),
+    )
+
+    entries = await store.list(task_id)
+
+    assert [entry.sequence for entry in entries] == [1, 2, 3]
+    assert [entry.content for entry in entries] == ["", "Checking change map", "No defect found"]
 
 
 async def test_transcript_returns_empty_entries_for_a_review_without_execution(
@@ -62,3 +86,35 @@ async def test_transcript_append_ignores_a_stale_legacy_temporary_file(tmp_path:
 
     (entry,) = await store.list(task_id)
     assert entry.content == "Review execution started"
+
+
+async def test_deferred_transcript_is_live_in_api_memory_then_persisted_on_finalize(
+    tmp_path: Path,
+) -> None:
+    """A running review avoids Artifact I/O while its API transcript stays observable."""
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    cache = LiveTranscriptCache()
+    relay = UnixTranscriptRelayServer(tmp_path / "runtime" / "transcripts.sock", cache)
+    await relay.start()
+    try:
+        task_id = "review_" + "f" * 32
+        deferred = DeferredTranscriptStore(
+            durable,
+            tmp_path / "runtime" / "transcripts.sock",
+            publish_interval=0,
+        )
+
+        await deferred.append(task_id, "model_output_delta", "still reviewing")
+
+        live = await cache.get(task_id)
+        assert live is not None
+        assert [entry.content for entry in live] == ["still reviewing"]
+        assert await durable.list(task_id) == ()
+
+        await deferred.finalize(task_id)
+
+        assert await cache.get(task_id) is None
+        assert [entry.content for entry in await durable.list(task_id)] == ["still reviewing"]
+    finally:
+        await relay.close()

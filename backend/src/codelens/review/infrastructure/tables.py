@@ -30,6 +30,7 @@ review_tasks = Table(
     Column("target_paths_json", Text),
     Column("status", String(32), nullable=False),
     Column("selected_agent_versions_json", Text, nullable=False),
+    Column("prompt_locale", String(8), nullable=False, default="en"),
     Column("worktree_id", String(128)),
     Column("snapshot_id", String(128)),
     Column("cancellation_requested", Boolean, nullable=False, default=False),

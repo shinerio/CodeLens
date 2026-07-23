@@ -10,11 +10,13 @@ from codelens.reviewer_catalog.domain.provider_config import (
     _DEFAULT_API_TYPE,
     _DEFAULT_MAX_TOKENS,
     _DEFAULT_THINKING_LEVEL,
+    GatewayApiType,
     ModelGateway,
     ModelGatewayCatalog,
     ModelProviderConfig,
+    ModelProviderVendor,
+    ThinkingLevel,
 )
-from codelens.reviewer_catalog.domain.provider_config import GatewayApiType
 
 
 class _StoredProviderConfig(TypedDict):
@@ -29,6 +31,8 @@ class _StoredGateway(_StoredProviderConfig):
     max_tokens: int
     thinking_level: str
     agent_timeout: int
+    vendor: ModelProviderVendor
+    api_type: GatewayApiType
 
 
 class _StoredGatewayCatalog(TypedDict):
@@ -66,7 +70,8 @@ class FilesystemModelProviderConfigAdapter:
             name=active.name if active is not None else "Default gateway",
             api_key=config.api_key,
             model=config.model,
-            base_url=config.base_url,
+                base_url=config.base_url,
+                vendor=active.vendor if active is not None else "openai",
             api_type=config.api_type,
             max_tokens=config.max_tokens,
             thinking_level=config.thinking_level,
@@ -148,11 +153,13 @@ class FilesystemModelProviderConfigAdapter:
             if not isinstance(item, dict) or not required_keys.issubset(item):
                 raise ValueError("model gateway catalog is invalid")
             if any(
-                not isinstance(item[key], str) or not item[key].strip()
-                for key in required_keys
+                not isinstance(item[key], str) or not item[key].strip() for key in required_keys
             ):
                 raise ValueError("model gateway catalog is invalid")
             raw_api_type = item.get("api_type", _DEFAULT_API_TYPE)
+            raw_vendor = item.get("vendor", "openai")
+            if raw_vendor not in ("openai", "deepseek"):
+                raise ValueError("model gateway catalog is invalid")
             if raw_api_type not in ("responses", "chat_completions"):
                 raise ValueError("model gateway catalog is invalid")
             raw_max_tokens = item.get("max_tokens", _DEFAULT_MAX_TOKENS)
@@ -176,9 +183,10 @@ class FilesystemModelProviderConfigAdapter:
                     api_key=cast(str, item["api_key"]),
                     model=cast(str, item["model"]),
                     base_url=cast(str, item["base_url"]),
+                    vendor=cast(ModelProviderVendor, raw_vendor),
                     api_type=cast(GatewayApiType, raw_api_type),
                     max_tokens=raw_max_tokens,
-                    thinking_level=raw_thinking_level,
+                    thinking_level=cast(ThinkingLevel, raw_thinking_level),
                     agent_timeout=raw_agent_timeout,
                 )
             )
@@ -197,6 +205,7 @@ class FilesystemModelProviderConfigAdapter:
                     "api_key": gateway.api_key,
                     "model": gateway.model,
                     "base_url": gateway.base_url,
+                    "vendor": gateway.vendor,
                     "api_type": gateway.api_type,
                     "max_tokens": gateway.max_tokens,
                     "thinking_level": gateway.thinking_level,

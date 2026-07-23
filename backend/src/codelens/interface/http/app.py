@@ -14,6 +14,7 @@ from codelens.interface.http.dependencies import (
     build_components,
 )
 from codelens.interface.http.routers.repositories import router as repositories_router
+from codelens.interface.http.routers.reviewer_prompts import router as reviewer_prompts_router
 from codelens.interface.http.routers.reviews import router as reviews_router
 from codelens.interface.http.routers.settings import router as settings_router
 from codelens.review.application.commands import ReviewNotFoundError
@@ -181,4 +182,5 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(repositories_router)
     app.include_router(reviews_router)
     app.include_router(settings_router)
+    app.include_router(reviewer_prompts_router)
     return app

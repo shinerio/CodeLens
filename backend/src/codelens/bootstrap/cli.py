@@ -211,9 +211,7 @@ async def supervise(
     try:
         for command in ("api", "worker"):
             children.append(await spawn_child(_child_arguments(command, settings)))
-        child_waiters = {
-            asyncio.create_task(child.wait()): child for child in children
-        }
+        child_waiters = {asyncio.create_task(child.wait()): child for child in children}
         stop_waiter = asyncio.create_task(requested_stop.wait())
         waiters = {*child_waiters, stop_waiter}
         done, _pending = await asyncio.wait(waiters, return_when=asyncio.FIRST_COMPLETED)

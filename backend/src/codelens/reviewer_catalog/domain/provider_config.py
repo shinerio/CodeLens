@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 type GatewayApiType = Literal["responses", "chat_completions"]
+type ModelProviderVendor = Literal["openai", "deepseek"]
 type ThinkingLevel = Literal["disabled", "low", "medium", "high"]
 _DEFAULT_API_TYPE: GatewayApiType = "chat_completions"
 _DEFAULT_MAX_TOKENS: int = 65536
@@ -16,6 +17,7 @@ class ModelProviderConfig:
     api_key: str
     model: str
     base_url: str
+    vendor: ModelProviderVendor = "openai"
     api_type: GatewayApiType = _DEFAULT_API_TYPE
     max_tokens: int = _DEFAULT_MAX_TOKENS
     thinking_level: ThinkingLevel = _DEFAULT_THINKING_LEVEL
@@ -31,6 +33,7 @@ class ModelGateway:
     api_key: str
     model: str
     base_url: str
+    vendor: ModelProviderVendor = "openai"
     api_type: GatewayApiType = _DEFAULT_API_TYPE
     max_tokens: int = _DEFAULT_MAX_TOKENS
     thinking_level: ThinkingLevel = _DEFAULT_THINKING_LEVEL
@@ -44,6 +47,7 @@ class ModelGateway:
             api_key=self.api_key,
             model=self.model,
             base_url=self.base_url,
+            vendor=self.vendor,
             api_type=self.api_type,
             max_tokens=self.max_tokens,
             thinking_level=self.thinking_level,
@@ -72,11 +76,7 @@ class ModelGatewayCatalog:
         """Return the selected gateway, or ``None`` for an empty catalog."""
 
         return next(
-            (
-                gateway
-                for gateway in self.gateways
-                if gateway.gateway_id == self.active_gateway_id
-            ),
+            (gateway for gateway in self.gateways if gateway.gateway_id == self.active_gateway_id),
             None,
         )
 
@@ -107,9 +107,7 @@ class ModelGatewayProbePort(Protocol):
 
         raise NotImplementedError
 
-    async def test_availability(
-        self, config: ModelProviderConfig
-    ) -> GatewayAvailabilityResult:
+    async def test_availability(self, config: ModelProviderConfig) -> GatewayAvailabilityResult:
         """Send a minimal chat completion to verify the LLM can respond."""
 
         raise NotImplementedError

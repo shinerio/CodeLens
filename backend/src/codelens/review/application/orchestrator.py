@@ -3,7 +3,8 @@
 import asyncio
 import base64
 import json
-from collections.abc import Awaitable, Callable, Mapping
+import time
+from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeVar
 
@@ -32,7 +33,9 @@ type TranscriptKind = Literal[
     "model_output_delta",
     "model_output_completed",
     "model_completed",
+    "model_raw_output",
 ]
+type TranscriptRecord = tuple[TranscriptKind, str, Mapping[str, str] | None]
 
 
 @dataclass(frozen=True)
@@ -104,6 +107,8 @@ class _TranscriptPort(Protocol):
         *,
         metadata: Mapping[str, str] | None = None,
     ) -> None: ...
+
+    async def append_many(self, task_id: str, entries: Sequence[TranscriptRecord]) -> None: ...
 
 
 class _StreamingRuntimePort(Protocol):
@@ -225,19 +230,20 @@ class ReviewOrchestrator:
         if checkpoint.status != "pending":
             raise RuntimeError("interrupted checkpoint was not recovered before execution")
         input_payload = prepared.input_payloads[self._agent_key(agent)]
-        await self._record(
-            task_id,
-            "prompt",
-            json.dumps(
-                {
-                    "system_instructions": agent.prompt_template,
-                    "user_input": input_payload.decode("utf-8", errors="replace"),
-                },
-                ensure_ascii=False,
-                sort_keys=True,
-            ),
-            {"agent": self._agent_key(agent)},
-        )
+        transcript_records: list[TranscriptRecord] = [
+            (
+                "prompt",
+                json.dumps(
+                    {
+                        "system_instructions": agent.prompt_template,
+                        "user_input": input_payload.decode("utf-8", errors="replace"),
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                ),
+                {"agent": self._agent_key(agent)},
+            )
+        ]
         if checkpoint.artifact_ref is not None and checkpoint.artifact_hash is not None:
             invalid_output = await self._artifacts.read_output(
                 checkpoint.artifact_ref,
@@ -246,6 +252,18 @@ class ReviewOrchestrator:
             input_payload = self._repair_payload(input_payload, invalid_output)
         await self._checkpoints.mark_running(task_id, node_key)
         await self._hit("before_model_invocation")
+        await self._record_many(task_id, transcript_records)
+        transcript_records.clear()
+        last_transcript_flush = time.monotonic()
+
+        async def record_stream_event(event: AgentRuntimeEvent) -> None:
+            nonlocal last_transcript_flush
+            await self._buffer_runtime_event(transcript_records, agent, event)
+            if time.monotonic() - last_transcript_flush >= 1.0:
+                await self._record_many(task_id, transcript_records)
+                transcript_records.clear()
+                last_transcript_flush = time.monotonic()
+
         async with self._review_agent_semaphore:
             async with self._agent_semaphore:
                 stream = getattr(self._runtime, "invoke_stream", None)
@@ -256,14 +274,16 @@ class ReviewOrchestrator:
                         agent,
                         input_payload,
                         prepared.snapshot,
-                        lambda event: self._record_runtime_event(task_id, agent, event),
+                        record_stream_event,
                     )
-        await self._record(
-            task_id,
-            "model_output",
-            output.canonical_bytes.decode("utf-8", errors="replace"),
-            {"agent": self._agent_key(agent)},
+        transcript_records.append(
+            (
+                "model_output",
+                output.canonical_bytes.decode("utf-8", errors="replace"),
+                {"agent": self._agent_key(agent)},
+            )
         )
+        await self._record_many(task_id, transcript_records)
         await self._hit("after_model_return")
         artifact = await self._artifacts.write_output(node_key, output.canonical_bytes)
         await self._hit("after_artifact_write")
@@ -329,18 +349,21 @@ class ReviewOrchestrator:
 
     async def _record_runtime_event(
         self,
-        task_id: str,
+        records: list[TranscriptRecord],
         agent: AgentVersion,
         event: AgentRuntimeEvent,
     ) -> None:
-        """Persist every observable streaming chunk before it reaches the live console."""
+        """Keep streamed chunks in memory until the model produces complete output."""
 
-        await self._record(
-            task_id,
-            event.kind,
-            event.content,
-            {"agent": self._agent_key(agent), **event.metadata},
+        records.append(
+            (event.kind, event.content, {"agent": self._agent_key(agent), **event.metadata})
         )
+
+    _buffer_runtime_event = _record_runtime_event
+
+    async def _record_many(self, task_id: str, records: Sequence[TranscriptRecord]) -> None:
+        if self._transcript is not None:
+            await self._transcript.append_many(task_id, records)
 
     @staticmethod
     def _agent_key(agent: AgentVersion) -> str:

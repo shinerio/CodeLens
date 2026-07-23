@@ -33,6 +33,7 @@ import type {
   GatewayTestResult,
   ModelGateway,
   ModelGatewayCatalog,
+  ModelProviderVendor,
   RuntimeLogLevel,
   ThinkingLevel,
 } from "./types";
@@ -53,6 +54,7 @@ export function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [vendor, setVendor] = useState<ModelProviderVendor>("openai");
   const [apiType, setApiType] = useState<GatewayApiType>("chat_completions");
   const [maxTokens, setMaxTokens] = useState(65536);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("disabled");
@@ -81,6 +83,7 @@ export function SettingsPage() {
     setApiKey("");
     setModel("");
     setBaseUrl("");
+    setVendor("openai");
     setApiType("chat_completions");
     setMaxTokens(65536);
     setThinkingLevel("disabled");
@@ -93,6 +96,7 @@ export function SettingsPage() {
         name: name.trim(),
         model: model.trim(),
         base_url: baseUrl.trim(),
+        vendor,
         api_type: apiType,
         max_tokens: maxTokens,
         thinking_level: thinkingLevel,
@@ -158,6 +162,7 @@ export function SettingsPage() {
     setApiKey("");
     setModel(gateway.model);
     setBaseUrl(gateway.base_url);
+    setVendor(gateway.vendor);
     setApiType(gateway.api_type);
     setMaxTokens(gateway.max_tokens);
     setThinkingLevel(gateway.thinking_level);
@@ -383,6 +388,20 @@ export function SettingsPage() {
             <div className="gateway-form__fields">
               <label className="settings-field">
                 <span className="settings-field__label">
+                  <ServerCog aria-hidden="true" /> Provider
+                </span>
+                <select value={vendor} onChange={(event) => {
+                  const next = event.currentTarget.value as ModelProviderVendor;
+                  setVendor(next);
+                  if (next === "deepseek") setApiType("chat_completions");
+                }}>
+                  <option value="openai">OpenAI-compatible</option>
+                  <option value="deepseek">DeepSeek</option>
+                </select>
+                <small>{vendor === "deepseek" ? "Uses DeepSeek thinking and Chat Completions semantics." : "Uses OpenAI SDK request semantics."}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">
                   <ServerCog aria-hidden="true" /> {t("settings.gatewayName")}
                 </span>
                 <input value={name} onChange={(event) => setName(event.currentTarget.value)} />
@@ -424,6 +443,7 @@ export function SettingsPage() {
                 </span>
                 <select
                   value={apiType}
+                  disabled={vendor === "deepseek"}
                   onChange={(event) => setApiType(event.currentTarget.value as GatewayApiType)}
                 >
                   <option value="chat_completions">Chat Completions</option>

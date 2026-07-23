@@ -22,7 +22,14 @@ from codelens.review.infrastructure.repositories import (
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.review.infrastructure.snapshot_context import FilesystemSnapshotContextAdapter
-from codelens.review.infrastructure.transcripts import ExecutionTranscriptStore
+from codelens.review.infrastructure.transcripts import (
+    DeferredTranscriptStore,
+    ExecutionTranscriptStore,
+)
+from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
+from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
+    FilesystemReviewerPromptStore,
+)
 from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
 )
@@ -138,7 +145,13 @@ def build_worker(
         checkpoints=SqlCheckpointStore(database),
         codec=codec,
         semaphores=semaphores,
-        transcripts=ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts"),
+        transcripts=DeferredTranscriptStore(
+            ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts"),
+            settings.data_dir / "runtime" / "transcript-relay.sock",
+        ),
+        reviewer_prompts=ReviewerPromptSettingsService(
+            FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
+        ),
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),

@@ -1,4 +1,5 @@
 export type GatewayApiType = "responses" | "chat_completions";
+export type ModelProviderVendor = "openai" | "deepseek";
 export type ThinkingLevel = "disabled" | "low" | "medium" | "high";
 
 export type ModelGateway = {
@@ -6,6 +7,7 @@ export type ModelGateway = {
   name: string;
   model: string;
   base_url: string;
+  vendor: ModelProviderVendor;
   is_active: boolean;
   api_type: GatewayApiType;
   max_tokens: number;
@@ -29,6 +31,7 @@ export type CreateModelGateway = {
   api_key: string;
   model: string;
   base_url: string;
+  vendor: ModelProviderVendor;
   api_type: GatewayApiType;
   max_tokens: number;
   thinking_level: ThinkingLevel;
@@ -40,6 +43,7 @@ export type UpdateModelGateway = {
   api_key?: string;
   model: string;
   base_url: string;
+  vendor: ModelProviderVendor;
   api_type: GatewayApiType;
   max_tokens: number;
   thinking_level: ThinkingLevel;

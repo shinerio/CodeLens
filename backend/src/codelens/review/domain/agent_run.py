@@ -32,9 +32,7 @@ def _run_id(
     shard_id: str,
     logical_attempt_group: str,
 ) -> str:
-    identity = "\0".join(
-        (task_id, agent_version, str(pass_index), shard_id, logical_attempt_group)
-    )
+    identity = "\0".join((task_id, agent_version, str(pass_index), shard_id, logical_attempt_group))
     return f"run_{hashlib.sha256(identity.encode('utf-8')).hexdigest()}"
 
 

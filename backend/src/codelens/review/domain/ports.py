@@ -44,6 +44,7 @@ class AgentRuntimeEvent:
         "model_output_delta",
         "model_output_completed",
         "model_completed",
+        "model_raw_output",
         "tool_call",
         "tool_result",
         "lifecycle",
@@ -97,6 +98,7 @@ class ReviewExecutionRecord:
     overlay_artifact_ref: str | None
     target_paths: tuple[str, ...]
     selected_agent_versions: tuple[str, ...]
+    prompt_locale: str
     status: str
     cancellation_requested: bool
 

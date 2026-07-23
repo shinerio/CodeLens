@@ -52,6 +52,7 @@ async def create_review(
                 repository=repository,
                 scope=request.scope.to_domain(),
                 selected_agent_versions=tuple(request.selected_agents),
+                prompt_locale=request.prompt_locale,
             )
         )
     except ValueError as error:
@@ -75,10 +76,7 @@ async def list_reviews(
 ) -> list[ReviewResponse]:
     """Return persistent visible Review workspaces in newest-first order."""
 
-    return [
-        ReviewResponse.from_domain(record)
-        for record in await components.list_reviews.handle()
-    ]
+    return [ReviewResponse.from_domain(record) for record in await components.list_reviews.handle()]
 
 
 @router.get("/{task_id}", response_model=ReviewResponse)
@@ -132,7 +130,13 @@ async def get_transcript(
     """Return the credential-redacted execution conversation for one Review."""
 
     await components.get_review.handle(task_id)
-    return [entry.model_dump(mode="json") for entry in await components.transcripts.list(task_id)]
+    live_entries = await components.live_transcripts.get(task_id)
+    entries = (
+        live_entries
+        if live_entries is not None
+        else await components.transcripts.list(task_id)
+    )
+    return [entry.model_dump(mode="json") for entry in entries]
 
 
 @router.get("/{task_id}/findings")

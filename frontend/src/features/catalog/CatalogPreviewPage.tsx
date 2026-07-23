@@ -14,8 +14,10 @@ import {
   Wrench,
 } from "lucide-react";
 import { useState } from "react";
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
+import { getReviewerPrompt, resetReviewerPrompt, updateReviewerPrompt } from "./api";
 import "./CatalogPreviewPage.css";
 
 type PreviewKind = "agents" | "capabilities";
@@ -42,10 +44,15 @@ const capabilityGroups: Readonly<Record<CapabilityGroupKey, readonly Translation
 
 /** Renders a read-only catalog preview until catalog APIs and mutations are available. */
 export function CatalogPreviewPage({ kind }: { kind: PreviewKind }) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [activeGroup, setActiveGroup] = useState<keyof typeof capabilityGroups>("catalog.skills");
   const [searchQuery, setSearchQuery] = useState("");
   const isAgents = kind === "agents";
+  const promptQuery = useQuery({ queryKey: ["reviewer-prompt", locale], queryFn: () => getReviewerPrompt(locale), enabled: isAgents });
+  const queryClient = useQueryClient();
+  const [draft, setDraft] = useState<string | null>(null);
+  const savePrompt = useMutation({ mutationFn: (prompt: string) => updateReviewerPrompt(locale, prompt), onSuccess: () => { setDraft(null); void queryClient.invalidateQueries({ queryKey: ["reviewer-prompt", locale] }); } });
+  const resetPrompt = useMutation({ mutationFn: () => resetReviewerPrompt(locale), onSuccess: () => { setDraft(null); void queryClient.invalidateQueries({ queryKey: ["reviewer-prompt", locale] }); } });
 
   function handleUnsupported() {
     window.alert(t("common.notSupported"));
@@ -71,6 +78,12 @@ export function CatalogPreviewPage({ kind }: { kind: PreviewKind }) {
 
       {isAgents ? (
         <>
+          <article className="catalog-preview-card prompt-editor">
+            <header><span className="catalog-preview-card__icon"><ShieldCheck aria-hidden="true" /></span><div><h2>{t("review.correctness")}</h2><small>correctness:v1</small></div><b>{promptQuery.data?.is_custom ? "Custom" : "System default"}</b></header>
+            <p>{locale === "zh-CN" ? "提示词会随当前桌面语言用于新建评审。" : "This prompt follows the current desktop language for new reviews."}</p>
+            <textarea aria-label="Reviewer prompt" value={draft ?? promptQuery.data?.prompt ?? ""} onChange={(event) => setDraft(event.currentTarget.value)} rows={14} disabled={promptQuery.isLoading} />
+            <footer className="prompt-editor__actions"><button className="prompt-editor__save" type="button" onClick={() => savePrompt.mutate(draft ?? promptQuery.data?.prompt ?? "")}>{locale === "zh-CN" ? "保存" : "Save"}</button><button type="button" onClick={() => resetPrompt.mutate()} disabled={!promptQuery.data?.is_custom}>{locale === "zh-CN" ? "重置" : "Reset"}</button></footer>
+          </article>
           <div className="catalog-preview-toolbar">
             <label><Search aria-hidden="true" /><input aria-label={t("catalog.searchAgents")} placeholder={t("catalog.searchAgents")} value={searchQuery} onChange={(event) => setSearchQuery(event.currentTarget.value)} /></label>
             <button type="button" onClick={handleUnsupported}>{t("catalog.allSources")}</button>
