@@ -6,7 +6,10 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from codelens.reviewer_catalog.domain.provider_config import (
+    _DEFAULT_AGENT_TIMEOUT,
     _DEFAULT_API_TYPE,
+    _DEFAULT_MAX_TOKENS,
+    _DEFAULT_THINKING_LEVEL,
     ModelGateway,
     ModelGatewayCatalog,
     ModelProviderConfig,
@@ -23,6 +26,9 @@ class _StoredProviderConfig(TypedDict):
 class _StoredGateway(_StoredProviderConfig):
     gateway_id: str
     name: str
+    max_tokens: int
+    thinking_level: str
+    agent_timeout: int
 
 
 class _StoredGatewayCatalog(TypedDict):
@@ -62,6 +68,9 @@ class FilesystemModelProviderConfigAdapter:
             model=config.model,
             base_url=config.base_url,
             api_type=config.api_type,
+            max_tokens=config.max_tokens,
+            thinking_level=config.thinking_level,
+            agent_timeout=config.agent_timeout,
         )
         if active is None:
             updated = ModelGatewayCatalog(gateway.gateway_id, (gateway,))
@@ -96,6 +105,9 @@ class FilesystemModelProviderConfigAdapter:
                 api_key=legacy.api_key,
                 model=legacy.model,
                 base_url=legacy.base_url,
+                max_tokens=legacy.max_tokens,
+                thinking_level=legacy.thinking_level,
+                agent_timeout=legacy.agent_timeout,
             )
             return ModelGatewayCatalog(gateway.gateway_id, (gateway,))
         return ModelGatewayCatalog(None, ())
@@ -143,6 +155,20 @@ class FilesystemModelProviderConfigAdapter:
             raw_api_type = item.get("api_type", _DEFAULT_API_TYPE)
             if raw_api_type not in ("responses", "chat_completions"):
                 raise ValueError("model gateway catalog is invalid")
+            raw_max_tokens = item.get("max_tokens", _DEFAULT_MAX_TOKENS)
+            if not isinstance(raw_max_tokens, int) or isinstance(raw_max_tokens, bool):
+                raise ValueError("model gateway catalog is invalid")
+            raw_thinking_level = item.get("thinking_level", _DEFAULT_THINKING_LEVEL)
+            if not isinstance(raw_thinking_level, str) or raw_thinking_level not in (
+                "disabled",
+                "low",
+                "medium",
+                "high",
+            ):
+                raise ValueError("model gateway catalog is invalid")
+            raw_agent_timeout = item.get("agent_timeout", _DEFAULT_AGENT_TIMEOUT)
+            if not isinstance(raw_agent_timeout, int) or isinstance(raw_agent_timeout, bool):
+                raise ValueError("model gateway catalog is invalid")
             gateways.append(
                 ModelGateway(
                     gateway_id=cast(str, item["gateway_id"]),
@@ -151,6 +177,9 @@ class FilesystemModelProviderConfigAdapter:
                     model=cast(str, item["model"]),
                     base_url=cast(str, item["base_url"]),
                     api_type=cast(GatewayApiType, raw_api_type),
+                    max_tokens=raw_max_tokens,
+                    thinking_level=raw_thinking_level,
+                    agent_timeout=raw_agent_timeout,
                 )
             )
         return ModelGatewayCatalog(cast(str | None, active_gateway_id), tuple(gateways))
@@ -169,6 +198,9 @@ class FilesystemModelProviderConfigAdapter:
                     "model": gateway.model,
                     "base_url": gateway.base_url,
                     "api_type": gateway.api_type,
+                    "max_tokens": gateway.max_tokens,
+                    "thinking_level": gateway.thinking_level,
+                    "agent_timeout": gateway.agent_timeout,
                 }
                 for gateway in catalog.gateways
             ],

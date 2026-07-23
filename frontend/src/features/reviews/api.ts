@@ -4,7 +4,7 @@ import type { CreateReviewRequest, ReviewResponse } from "./types";
 
 export interface TranscriptEntry {
   sequence: number;
-  kind: "lifecycle" | "prompt" | "model_output" | "tool_call" | "tool_result" | "skill_loaded" | "model_started" | "model_reasoning_delta" | "model_reasoning_completed" | "model_output_delta" | "model_output_completed" | "model_completed";
+  kind: "lifecycle" | "prompt" | "model_output" | "tool_call" | "tool_result" | "skill_loaded" | "model_started" | "model_reasoning_delta" | "model_reasoning_completed" | "model_output_delta" | "model_output_completed" | "model_completed" | "model_raw_output";
   content: string;
   created_at: string;
   redacted: boolean;

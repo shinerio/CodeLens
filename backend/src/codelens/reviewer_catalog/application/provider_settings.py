@@ -54,6 +54,9 @@ class UpdateProviderSettingsHandler:
         model: str,
         base_url: str,
         api_type: GatewayApiType = "chat_completions",
+        max_tokens: int = 65536,
+        thinking_level: str = "disabled",
+        agent_timeout: int = 1800,
     ) -> ProviderSettingsView:
         """Persist one complete provider configuration and return its redacted view."""
 
@@ -62,6 +65,9 @@ class UpdateProviderSettingsHandler:
             model=model,
             base_url=base_url,
             api_type=api_type,
+            max_tokens=max_tokens,
+            thinking_level=thinking_level,
+            agent_timeout=agent_timeout,
         )
         await self._store.save(config)
         return ProviderSettingsView(True, config.model, config.base_url)
@@ -83,6 +89,9 @@ class ModelGatewayView:
     base_url: str
     is_active: bool
     api_type: GatewayApiType
+    max_tokens: int
+    thinking_level: str
+    agent_timeout: int
 
 
 @dataclass(frozen=True)
@@ -121,6 +130,9 @@ class ModelGatewaySettingsService:
         model: str,
         base_url: str,
         api_type: GatewayApiType = "chat_completions",
+        max_tokens: int = 65536,
+        thinking_level: str = "disabled",
+        agent_timeout: int = 1800,
     ) -> ModelGatewayCatalogView:
         """Append a gateway; the first created gateway becomes active automatically."""
 
@@ -133,6 +145,9 @@ class ModelGatewaySettingsService:
                 model=model,
                 base_url=base_url,
                 api_type=api_type,
+                max_tokens=max_tokens,
+                thinking_level=thinking_level,
+                agent_timeout=agent_timeout,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id or gateway.gateway_id,
@@ -150,6 +165,9 @@ class ModelGatewaySettingsService:
         model: str,
         base_url: str,
         api_type: GatewayApiType = "chat_completions",
+        max_tokens: int = 65536,
+        thinking_level: str = "disabled",
+        agent_timeout: int = 1800,
     ) -> ModelGatewayCatalogView:
         """Replace gateway metadata while retaining an omitted write-only API key."""
 
@@ -163,6 +181,9 @@ class ModelGatewaySettingsService:
                 model=model,
                 base_url=base_url,
                 api_type=api_type,
+                max_tokens=max_tokens,
+                thinking_level=thinking_level,
+                agent_timeout=agent_timeout,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id,
@@ -236,6 +257,9 @@ class ModelGatewaySettingsService:
                     base_url=gateway.base_url,
                     is_active=gateway.gateway_id == catalog.active_gateway_id,
                     api_type=gateway.api_type,
+                    max_tokens=gateway.max_tokens,
+                    thinking_level=gateway.thinking_level,
+                    agent_timeout=gateway.agent_timeout,
                 )
                 for gateway in catalog.gateways
             ),

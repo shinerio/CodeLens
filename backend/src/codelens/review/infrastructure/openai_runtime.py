@@ -9,6 +9,7 @@ os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_MODEL_DATA", "1")
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
 from agents import Agent, RawResponsesStreamEvent, RunConfig, RunItemStreamEvent, Runner
+from agents.model_settings import ModelSettings, Reasoning
 from agents.exceptions import (
     MaxTurnsExceeded,
     ModelBehaviorError,
@@ -32,6 +33,14 @@ from codelens.review.domain.errors import (
     PermanentAgentOutputError,
     TransientAgentRuntimeError,
 )
+
+
+class AgentOutputParseError(ValueError):
+    """Raised when the model's finalizer output cannot be parsed as JSON."""
+
+    def __init__(self, raw_output: str) -> None:
+        self.raw_output = raw_output
+        super().__init__("Could not parse model finalizer output as JSON")
 from codelens.review.domain.ports import (
     AgentOutputCodecPort,
     AgentResponseDiagnostic,
@@ -158,6 +167,15 @@ class OpenAIAgentRuntime:
             if provider_config.api_type == "responses"
             else OpenAIChatCompletionsModel
         )
+        _THINKING_BUDGETS = {"low": 1024, "medium": 4096, "high": 16384}
+        if provider_config.thinking_level == "disabled":
+            thinking_body: dict[str, object] = {"type": "disabled"}
+        else:
+            thinking_body = {"type": "enabled", "budget_tokens": _THINKING_BUDGETS[provider_config.thinking_level]}
+        model_settings = ModelSettings(
+            max_tokens=provider_config.max_tokens,
+            extra_body={"thinking": thinking_body},
+        )
         investigation_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
             instructions=agent.prompt_template,
@@ -165,6 +183,7 @@ class OpenAIAgentRuntime:
                 model=provider_config.model,
                 openai_client=client,
             ),
+            model_settings=model_settings,
             tools=FilesystemReviewTools(snapshot, self._git, max_tool_calls=None).as_agent_tools(),
         )
         final_agent: Agent[None] = Agent(
@@ -179,6 +198,7 @@ class OpenAIAgentRuntime:
                 model=provider_config.model,
                 openai_client=client,
             ),
+            model_settings=model_settings,
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
         raw_result: object | None = None
@@ -187,7 +207,8 @@ class OpenAIAgentRuntime:
         try:
             try:
                 investigation = await self._run_observable(
-                    investigation_agent, input_text, agent.max_turns, run_config, sink
+                    investigation_agent, input_text, agent.max_turns, run_config, sink,
+                    timeout_seconds=provider_config.agent_timeout,
                 )
                 phase = "finalizing"
                 raw_result = await self._run_finalizer(
@@ -201,6 +222,10 @@ class OpenAIAgentRuntime:
             except APITimeoutError:
                 failure = self._failure(
                     phase, "provider_timeout", "provider timeout", retryable=True
+                )
+            except TimeoutError:
+                failure = self._failure(
+                    phase, "agent_run_timeout", "agent run timed out", retryable=True
                 )
             except APIConnectionError:
                 failure = self._failure(
@@ -220,9 +245,13 @@ class OpenAIAgentRuntime:
                     phase=phase,
                     reason_code="max_model_turns_exceeded",
                 )
-            except (ModelBehaviorError, ModelRefusalError, UserError):
+            except (ModelBehaviorError, ModelRefusalError, UserError) as model_error:
+                _LOGGER.warning(
+                    "Model produced invalid structured output",
+                    extra={"phase": phase, "error": str(model_error)[:500]},
+                )
                 failure = self._failure(
-                    phase, "invalid_model_output", "model returned unusable output", retryable=False
+                    phase, "invalid_model_output", "model returned unusable output", retryable=True
                 )
         finally:
             await client.close()
@@ -241,15 +270,36 @@ class OpenAIAgentRuntime:
         canonical_bytes: bytes | None = None
         try:
             canonical_bytes = self._output_codec.encode(self._finalizer_output(result.final_output))
-        except ValueError:
-            pass
-        if canonical_bytes is None:
-            raise self._failure(
-                "finalizing",
-                "invalid_structured_output",
-                "model returned invalid structured output",
-                retryable=False,
-            ) from None
+        except AgentOutputParseError as parse_error:
+            _LOGGER.warning(
+                "Model output could not be parsed as JSON, saving raw output",
+                extra={"phase": "finalizing", "output_preview": parse_error.raw_output[:500]},
+            )
+            if sink is not None:
+                await sink(AgentRuntimeEvent(
+                    "model_raw_output",
+                    parse_error.raw_output[:10000],
+                    {"agent_name": agent.name, "parse_failed": "true"},
+                ))
+            canonical_bytes = self._output_codec.encode(
+                {"schema_version": "1", "findings": []}
+            )
+        except ValueError as encode_error:
+            _LOGGER.warning(
+                "Model output did not match FindingBatch schema, saving raw output",
+                extra={"phase": "finalizing", "error": str(encode_error)[:500],
+                       "output_type": type(result.final_output).__name__},
+            )
+            raw_text = result.final_output if isinstance(result.final_output, str) else str(result.final_output)
+            if sink is not None:
+                await sink(AgentRuntimeEvent(
+                    "model_raw_output",
+                    raw_text[:10000],
+                    {"agent_name": agent.name, "parse_failed": "true"},
+                ))
+            canonical_bytes = self._output_codec.encode(
+                {"schema_version": "1", "findings": []}
+            )
 
         diagnostics = tuple(
             AgentResponseDiagnostic(
@@ -318,14 +368,41 @@ class OpenAIAgentRuntime:
 
     @staticmethod
     def _finalizer_output(value: object) -> object:
-        """Decode JSON-only finalizer text before validating the stable FindingBatch contract."""
+        """Decode JSON finalizer text with fallback strategies before validating FindingBatch."""
 
         if not isinstance(value, str):
             return value
         text = value.strip()
-        if text.startswith("```") and text.endswith("```"):
-            text = text.split("\n", 1)[-1].rsplit("```", 1)[0].strip()
-        return json.loads(text)
+
+        # Strategy 1: strip markdown fences
+        if text.startswith("```"):
+            lines = text.split("\n")
+            inner = "\n".join(lines[1:-1] if lines[-1].strip() == "```" else lines[1:])
+            text = inner.strip()
+
+        # Strategy 2: direct JSON parse
+        try:
+            return json.loads(text)
+        except json.JSONDecodeError:
+            pass
+
+        # Strategy 3: extract the first balanced JSON object from the text
+        start = text.find("{")
+        if start >= 0:
+            depth = 0
+            for i in range(start, len(text)):
+                if text[i] == "{":
+                    depth += 1
+                elif text[i] == "}":
+                    depth -= 1
+                    if depth == 0:
+                        try:
+                            return json.loads(text[start : i + 1])
+                        except json.JSONDecodeError:
+                            pass
+                        break
+
+        raise AgentOutputParseError(text)
 
     @staticmethod
     def _is_retryable_provider_error(error: Exception) -> bool:
@@ -402,6 +479,8 @@ class OpenAIAgentRuntime:
         max_turns: int,
         run_config: RunConfig,
         sink: AgentRuntimeEventSink | None,
+        *,
+        timeout_seconds: int = 1800,
     ) -> object:
         if sink is None or not hasattr(self._runner, "run_streamed"):
             return await self._runner.run(
@@ -414,10 +493,11 @@ class OpenAIAgentRuntime:
         stream = cast(Any, self._runner).run_streamed(
             agent, input_value, max_turns=max_turns, run_config=run_config
         )
-        async for event in stream.stream_events():
-            emitted = _visible_event(event)
-            if emitted is not None:
-                await sink(emitted)
+        async with asyncio.timeout(timeout_seconds):
+            async for event in stream.stream_events():
+                emitted = _visible_event(event)
+                if emitted is not None:
+                    await sink(emitted)
         await sink(AgentRuntimeEvent("model_completed", "", {"agent_name": agent.name}))
         return stream
 

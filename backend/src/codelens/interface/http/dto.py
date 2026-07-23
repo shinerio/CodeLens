@@ -287,6 +287,9 @@ class CreateModelGatewayRequest(StrictDto):
     model: GatewayModel
     base_url: AnyHttpUrl
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
+    max_tokens: int = 65536
+    thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
+    agent_timeout: int = 1800
 
     @field_validator("api_key")
     @classmethod
@@ -305,6 +308,9 @@ class UpdateModelGatewayRequest(StrictDto):
     model: GatewayModel
     base_url: AnyHttpUrl
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
+    max_tokens: int = 65536
+    thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
+    agent_timeout: int = 1800
 
     @field_validator("api_key")
     @classmethod
@@ -335,6 +341,9 @@ class ModelGatewayResponse(StrictDto):
     base_url: str
     is_active: bool
     api_type: Literal["responses", "chat_completions"]
+    max_tokens: int
+    thinking_level: Literal["disabled", "low", "medium", "high"]
+    agent_timeout: int
 
 
 class ModelGatewayCatalogResponse(StrictDto):

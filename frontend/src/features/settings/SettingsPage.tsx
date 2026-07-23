@@ -34,6 +34,7 @@ import type {
   ModelGateway,
   ModelGatewayCatalog,
   RuntimeLogLevel,
+  ThinkingLevel,
 } from "./types";
 import "./SettingsPage.css";
 
@@ -53,6 +54,9 @@ export function SettingsPage() {
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
   const [apiType, setApiType] = useState<GatewayApiType>("chat_completions");
+  const [maxTokens, setMaxTokens] = useState(65536);
+  const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("disabled");
+  const [agentTimeout, setAgentTimeout] = useState(1800);
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
     queryFn: listModelGateways,
@@ -78,6 +82,9 @@ export function SettingsPage() {
     setModel("");
     setBaseUrl("");
     setApiType("chat_completions");
+    setMaxTokens(65536);
+    setThinkingLevel("disabled");
+    setAgentTimeout(1800);
   };
 
   const saveMutation = useMutation({
@@ -87,6 +94,9 @@ export function SettingsPage() {
         model: model.trim(),
         base_url: baseUrl.trim(),
         api_type: apiType,
+        max_tokens: maxTokens,
+        thinking_level: thinkingLevel,
+        agent_timeout: agentTimeout,
       };
       if (editingGatewayId === null) {
         return createModelGateway({ ...common, api_key: apiKey });
@@ -149,6 +159,9 @@ export function SettingsPage() {
     setModel(gateway.model);
     setBaseUrl(gateway.base_url);
     setApiType(gateway.api_type);
+    setMaxTokens(gateway.max_tokens);
+    setThinkingLevel(gateway.thinking_level);
+    setAgentTimeout(gateway.agent_timeout);
   }
 
   function handleDelete(gateway: ModelGateway) {
@@ -416,6 +429,44 @@ export function SettingsPage() {
                   <option value="chat_completions">Chat Completions</option>
                   <option value="responses">Responses</option>
                 </select>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">
+                  <ServerCog aria-hidden="true" /> {t("settings.maxTokens")}
+                </span>
+                <input
+                  type="number"
+                  min={256}
+                  value={maxTokens}
+                  onChange={(event) => setMaxTokens(Number(event.currentTarget.value) || 4096)}
+                />
+                <small>{t("settings.maxTokensHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">
+                  <ServerCog aria-hidden="true" /> {t("settings.thinkingLevel")}
+                </span>
+                <select
+                  value={thinkingLevel}
+                  onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
+                >
+                  <option value="disabled">{t("settings.thinkingDisabled")}</option>
+                  <option value="low">{t("settings.thinkingLow")}</option>
+                  <option value="medium">{t("settings.thinkingMedium")}</option>
+                  <option value="high">{t("settings.thinkingHigh")}</option>
+                </select>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">
+                  <ServerCog aria-hidden="true" /> {t("settings.agentTimeout")}
+                </span>
+                <input
+                  type="number"
+                  min={60}
+                  value={agentTimeout}
+                  onChange={(event) => setAgentTimeout(Number(event.currentTarget.value) || 600)}
+                />
+                <small>{t("settings.agentTimeoutHint")}</small>
               </label>
             </div>
 

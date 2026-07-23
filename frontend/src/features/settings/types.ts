@@ -1,4 +1,5 @@
 export type GatewayApiType = "responses" | "chat_completions";
+export type ThinkingLevel = "disabled" | "low" | "medium" | "high";
 
 export type ModelGateway = {
   gateway_id: string;
@@ -7,6 +8,9 @@ export type ModelGateway = {
   base_url: string;
   is_active: boolean;
   api_type: GatewayApiType;
+  max_tokens: number;
+  thinking_level: ThinkingLevel;
+  agent_timeout: number;
 };
 
 export type ModelGatewayCatalog = {
@@ -26,6 +30,9 @@ export type CreateModelGateway = {
   model: string;
   base_url: string;
   api_type: GatewayApiType;
+  max_tokens: number;
+  thinking_level: ThinkingLevel;
+  agent_timeout: number;
 };
 
 export type UpdateModelGateway = {
@@ -34,6 +41,9 @@ export type UpdateModelGateway = {
   model: string;
   base_url: string;
   api_type: GatewayApiType;
+  max_tokens: number;
+  thinking_level: ThinkingLevel;
+  agent_timeout: number;
 };
 
 export type OpenAISettings = {

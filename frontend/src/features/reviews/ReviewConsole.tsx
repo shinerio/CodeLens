@@ -26,7 +26,12 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
   const [visibility, setVisibility] = useState<ConsoleVisibility>(DEFAULT_VISIBILITY);
   const messages = useMemo(() => coalesceDeltas(entries), [entries]);
   const completedMessages = useMemo(() => completedMessageKeys(entries), [entries]);
-  const visible = messages.filter((entry) => isVisible(entry, visibility) && entry.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()));
+  const visible = messages.filter((entry) =>
+    isVisible(entry, visibility) &&
+    entry.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()) &&
+    !(entry.kind === "model_output_delta" && !entry.content.trim()),
+  );
+  const parseFailed = entries.some((e) => e.kind === "model_raw_output" && e.metadata?.parse_failed === "true");
 
   function toggle(sequence: number) {
     setCollapsed((current) => {
@@ -64,7 +69,7 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
             {isTool ? <Wrench aria-hidden="true" /> : isReasoning ? <Brain aria-hidden="true" /> : <span className="review-console__avatar">{isModel ? "AI" : "SYS"}</span>}
             <span>{labelFor(entry.kind)}</span><time dateTime={entry.created_at}>#{entry.sequence}</time>
           </button>
-          {!isCollapsed ? <ConsoleContent entry={entry} isFinalizedStream={isFinalizedStream} /> : null}
+          {!isCollapsed ? <ConsoleContent entry={entry} isFinalizedStream={isFinalizedStream} parseFailed={parseFailed} /> : null}
           {entry.redacted ? <small>Credential redacted</small> : null}
         </li>;
       })}
@@ -97,7 +102,7 @@ function completedMessageKeys(entries: TranscriptEntry[]): Set<string> {
 function isVisible(entry: ConsoleMessage, visibility: ConsoleVisibility) {
   if (entry.kind === "prompt") return visibility.prompt;
   if (entry.kind === "model_reasoning_delta") return visibility.reasoning;
-  if (entry.kind === "model_output" || entry.kind === "model_output_delta") return visibility.output;
+  if (entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_raw_output") return visibility.output;
   if (entry.kind === "tool_call" || entry.kind === "tool_result") return visibility.tools;
   return false;
 }
@@ -114,12 +119,13 @@ function labelFor(kind: TranscriptEntry["kind"]) {
   if (kind === "model_reasoning_delta") return "AI thinking summary";
   if (kind === "model_output_delta") return "AI output";
   if (kind === "model_output") return "Final structured output";
+  if (kind === "model_raw_output") return "Model raw output (parsing failed)";
   return kind.replaceAll("_", " ");
 }
 
-function ConsoleContent({ entry, isFinalizedStream }: { entry: ConsoleMessage; isFinalizedStream: boolean }) {
+function ConsoleContent({ entry, isFinalizedStream, parseFailed }: { entry: ConsoleMessage; isFinalizedStream: boolean; parseFailed: boolean }) {
   if (entry.kind === "prompt") return <PromptContent content={entry.content} />;
-  if (entry.kind === "model_output") return <ModelOutputContent content={entry.content} />;
+  if (entry.kind === "model_output") return <ModelOutputContent content={entry.content} parseFailed={parseFailed} />;
   if (isDelta(entry) && isFinalizedStream) return <MarkdownContent content={entry.content} />;
   return <pre className={entry.kind === "model_reasoning_delta" ? "review-console__content review-console__content--thinking" : "review-console__content"}>{entry.content}</pre>;
 }
@@ -133,12 +139,16 @@ function PromptContent({ content }: { content: string }) {
   </div>;
 }
 
-function ModelOutputContent({ content }: { content: string }) {
+function ModelOutputContent({ content, parseFailed }: { content: string; parseFailed: boolean }) {
   const output = objectValue(content);
   const findings = Array.isArray(output?.findings) ? output.findings.filter(isRecord) : [];
   if (output === null) return <MarkdownContent content={content} />;
   return <div className="review-console__output">
-    <p className="review-console__output-summary">Final structured result · {findings.length} finding{findings.length === 1 ? "" : "s"}</p>
+    {parseFailed ? (
+      <p className="review-console__output-summary">Review completed but model output parsing failed. Check "Model raw output" above for the model's review opinions.</p>
+    ) : (
+      <p className="review-console__output-summary">Final structured result · {findings.length} finding{findings.length === 1 ? "" : "s"}</p>
+    )}
     {findings.map((finding, index) => <article className="review-console__finding" key={`${stringValue(finding.title)}-${index}`}>
       <header><span>{stringValue(finding.severity).toUpperCase() || "UNSPECIFIED"}</span><strong>{stringValue(finding.title) || "Untitled finding"}</strong></header>
       <p>{stringValue(finding.explanation) || stringValue(finding.impact)}</p>

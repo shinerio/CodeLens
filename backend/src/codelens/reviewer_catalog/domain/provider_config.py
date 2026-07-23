@@ -2,7 +2,11 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 type GatewayApiType = Literal["responses", "chat_completions"]
+type ThinkingLevel = Literal["disabled", "low", "medium", "high"]
 _DEFAULT_API_TYPE: GatewayApiType = "chat_completions"
+_DEFAULT_MAX_TOKENS: int = 65536
+_DEFAULT_THINKING_LEVEL: ThinkingLevel = "disabled"
+_DEFAULT_AGENT_TIMEOUT: int = 1800
 
 
 @dataclass(frozen=True)
@@ -13,6 +17,9 @@ class ModelProviderConfig:
     model: str
     base_url: str
     api_type: GatewayApiType = _DEFAULT_API_TYPE
+    max_tokens: int = _DEFAULT_MAX_TOKENS
+    thinking_level: ThinkingLevel = _DEFAULT_THINKING_LEVEL
+    agent_timeout: int = _DEFAULT_AGENT_TIMEOUT
 
 
 @dataclass(frozen=True)
@@ -25,6 +32,9 @@ class ModelGateway:
     model: str
     base_url: str
     api_type: GatewayApiType = _DEFAULT_API_TYPE
+    max_tokens: int = _DEFAULT_MAX_TOKENS
+    thinking_level: ThinkingLevel = _DEFAULT_THINKING_LEVEL
+    agent_timeout: int = _DEFAULT_AGENT_TIMEOUT
 
     @property
     def provider_config(self) -> ModelProviderConfig:
@@ -35,6 +45,9 @@ class ModelGateway:
             model=self.model,
             base_url=self.base_url,
             api_type=self.api_type,
+            max_tokens=self.max_tokens,
+            thinking_level=self.thinking_level,
+            agent_timeout=self.agent_timeout,
         )
 
 

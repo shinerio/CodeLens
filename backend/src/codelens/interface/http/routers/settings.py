@@ -42,6 +42,9 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
                 base_url=gateway.base_url,
                 is_active=gateway.is_active,
                 api_type=gateway.api_type,
+                max_tokens=gateway.max_tokens,
+                thinking_level=gateway.thinking_level,
+                agent_timeout=gateway.agent_timeout,
             )
             for gateway in view.gateways
         ],
@@ -97,6 +100,9 @@ async def create_model_gateway(
             model=request.model,
             base_url=str(request.base_url).rstrip("/"),
             api_type=request.api_type,
+            max_tokens=request.max_tokens,
+            thinking_level=request.thinking_level,
+            agent_timeout=request.agent_timeout,
         )
     )
 
@@ -119,6 +125,9 @@ async def update_model_gateway(
             model=request.model,
             base_url=str(request.base_url).rstrip("/"),
             api_type=request.api_type,
+            max_tokens=request.max_tokens,
+            thinking_level=request.thinking_level,
+            agent_timeout=request.agent_timeout,
         )
     )
 
