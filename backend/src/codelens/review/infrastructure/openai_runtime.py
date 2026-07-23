@@ -15,6 +15,7 @@ from agents.exceptions import (
     ModelRefusalError,
     UserError,
 )
+from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel
 from agents.result import RunResult
 from openai import (
@@ -152,10 +153,15 @@ class OpenAIAgentRuntime:
             api_key=provider_config.api_key,
             base_url=provider_config.base_url,
         )
+        model_cls = (
+            OpenAIResponsesModel
+            if provider_config.api_type == "responses"
+            else OpenAIChatCompletionsModel
+        )
         investigation_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
             instructions=agent.prompt_template,
-            model=OpenAIResponsesModel(
+            model=model_cls(
                 model=provider_config.model,
                 openai_client=client,
             ),
@@ -169,7 +175,7 @@ class OpenAIAgentRuntime:
                 "this JSON Schema. Do not use Markdown fences or omit required fields.\n"
                 f"{self._output_codec.json_schema()}"
             ),
-            model=OpenAIResponsesModel(
+            model=model_cls(
                 model=provider_config.model,
                 openai_client=client,
             ),

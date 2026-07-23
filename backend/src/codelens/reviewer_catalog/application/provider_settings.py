@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from codelens.reviewer_catalog.domain.provider_config import (
+    GatewayApiType,
     GatewayAvailabilityResult,
     GatewayConnectivityResult,
     ModelGateway,
@@ -52,6 +53,7 @@ class UpdateProviderSettingsHandler:
         api_key: str,
         model: str,
         base_url: str,
+        api_type: GatewayApiType = "chat_completions",
     ) -> ProviderSettingsView:
         """Persist one complete provider configuration and return its redacted view."""
 
@@ -59,6 +61,7 @@ class UpdateProviderSettingsHandler:
             api_key=api_key,
             model=model,
             base_url=base_url,
+            api_type=api_type,
         )
         await self._store.save(config)
         return ProviderSettingsView(True, config.model, config.base_url)
@@ -79,6 +82,7 @@ class ModelGatewayView:
     model: str
     base_url: str
     is_active: bool
+    api_type: GatewayApiType
 
 
 @dataclass(frozen=True)
@@ -116,6 +120,7 @@ class ModelGatewaySettingsService:
         api_key: str,
         model: str,
         base_url: str,
+        api_type: GatewayApiType = "chat_completions",
     ) -> ModelGatewayCatalogView:
         """Append a gateway; the first created gateway becomes active automatically."""
 
@@ -127,6 +132,7 @@ class ModelGatewaySettingsService:
                 api_key=api_key,
                 model=model,
                 base_url=base_url,
+                api_type=api_type,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id or gateway.gateway_id,
@@ -143,6 +149,7 @@ class ModelGatewaySettingsService:
         api_key: str | None,
         model: str,
         base_url: str,
+        api_type: GatewayApiType = "chat_completions",
     ) -> ModelGatewayCatalogView:
         """Replace gateway metadata while retaining an omitted write-only API key."""
 
@@ -155,6 +162,7 @@ class ModelGatewaySettingsService:
                 api_key=api_key if api_key is not None else existing.api_key,
                 model=model,
                 base_url=base_url,
+                api_type=api_type,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id,
@@ -227,6 +235,7 @@ class ModelGatewaySettingsService:
                     model=gateway.model,
                     base_url=gateway.base_url,
                     is_active=gateway.gateway_id == catalog.active_gateway_id,
+                    api_type=gateway.api_type,
                 )
                 for gateway in catalog.gateways
             ),

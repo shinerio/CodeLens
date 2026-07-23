@@ -6,10 +6,12 @@ from pathlib import Path
 from typing import TypedDict, cast
 
 from codelens.reviewer_catalog.domain.provider_config import (
+    _DEFAULT_API_TYPE,
     ModelGateway,
     ModelGatewayCatalog,
     ModelProviderConfig,
 )
+from codelens.reviewer_catalog.domain.provider_config import GatewayApiType
 
 
 class _StoredProviderConfig(TypedDict):
@@ -59,6 +61,7 @@ class FilesystemModelProviderConfigAdapter:
             api_key=config.api_key,
             model=config.model,
             base_url=config.base_url,
+            api_type=config.api_type,
         )
         if active is None:
             updated = ModelGatewayCatalog(gateway.gateway_id, (gateway,))
@@ -128,14 +131,17 @@ class FilesystemModelProviderConfigAdapter:
         if active_gateway_id is not None and not isinstance(active_gateway_id, str):
             raise ValueError("model gateway catalog is invalid")
         gateways: list[ModelGateway] = []
-        expected_keys = {"gateway_id", "name", "api_key", "model", "base_url"}
+        required_keys = {"gateway_id", "name", "api_key", "model", "base_url"}
         for item in payload["gateways"]:
-            if not isinstance(item, dict) or set(item) != expected_keys:
+            if not isinstance(item, dict) or not required_keys.issubset(item):
                 raise ValueError("model gateway catalog is invalid")
             if any(
                 not isinstance(item[key], str) or not item[key].strip()
-                for key in expected_keys
+                for key in required_keys
             ):
+                raise ValueError("model gateway catalog is invalid")
+            raw_api_type = item.get("api_type", _DEFAULT_API_TYPE)
+            if raw_api_type not in ("responses", "chat_completions"):
                 raise ValueError("model gateway catalog is invalid")
             gateways.append(
                 ModelGateway(
@@ -144,6 +150,7 @@ class FilesystemModelProviderConfigAdapter:
                     api_key=cast(str, item["api_key"]),
                     model=cast(str, item["model"]),
                     base_url=cast(str, item["base_url"]),
+                    api_type=cast(GatewayApiType, raw_api_type),
                 )
             )
         return ModelGatewayCatalog(cast(str | None, active_gateway_id), tuple(gateways))
@@ -161,6 +168,7 @@ class FilesystemModelProviderConfigAdapter:
                     "api_key": gateway.api_key,
                     "model": gateway.model,
                     "base_url": gateway.base_url,
+                    "api_type": gateway.api_type,
                 }
                 for gateway in catalog.gateways
             ],

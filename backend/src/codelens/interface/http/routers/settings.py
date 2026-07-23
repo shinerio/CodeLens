@@ -41,6 +41,7 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
                 model=gateway.model,
                 base_url=gateway.base_url,
                 is_active=gateway.is_active,
+                api_type=gateway.api_type,
             )
             for gateway in view.gateways
         ],
@@ -95,6 +96,7 @@ async def create_model_gateway(
             api_key=request.api_key.get_secret_value(),
             model=request.model,
             base_url=str(request.base_url).rstrip("/"),
+            api_type=request.api_type,
         )
     )
 
@@ -116,6 +118,7 @@ async def update_model_gateway(
             ),
             model=request.model,
             base_url=str(request.base_url).rstrip("/"),
+            api_type=request.api_type,
         )
     )
 

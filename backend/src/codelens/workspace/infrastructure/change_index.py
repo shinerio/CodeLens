@@ -16,7 +16,7 @@ _HUNK_HEADER = re.compile(
 def _read_lines(path: Path) -> tuple[str, ...]:
     try:
         return tuple(path.read_text(encoding="utf-8").splitlines(keepends=True))
-    except FileNotFoundError:
+    except (FileNotFoundError, IsADirectoryError):
         return ()
 
 

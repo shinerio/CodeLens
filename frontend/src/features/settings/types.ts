@@ -1,9 +1,12 @@
+export type GatewayApiType = "responses" | "chat_completions";
+
 export type ModelGateway = {
   gateway_id: string;
   name: string;
   model: string;
   base_url: string;
   is_active: boolean;
+  api_type: GatewayApiType;
 };
 
 export type ModelGatewayCatalog = {
@@ -22,6 +25,7 @@ export type CreateModelGateway = {
   api_key: string;
   model: string;
   base_url: string;
+  api_type: GatewayApiType;
 };
 
 export type UpdateModelGateway = {
@@ -29,6 +33,7 @@ export type UpdateModelGateway = {
   api_key?: string;
   model: string;
   base_url: string;
+  api_type: GatewayApiType;
 };
 
 export type OpenAISettings = {

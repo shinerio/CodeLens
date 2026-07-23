@@ -29,6 +29,7 @@ import {
   updateModelGateway,
 } from "./api";
 import type {
+  GatewayApiType,
   GatewayTestResult,
   ModelGateway,
   ModelGatewayCatalog,
@@ -51,6 +52,7 @@ export function SettingsPage() {
   const [apiKey, setApiKey] = useState("");
   const [model, setModel] = useState("");
   const [baseUrl, setBaseUrl] = useState("");
+  const [apiType, setApiType] = useState<GatewayApiType>("chat_completions");
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
     queryFn: listModelGateways,
@@ -75,6 +77,7 @@ export function SettingsPage() {
     setApiKey("");
     setModel("");
     setBaseUrl("");
+    setApiType("chat_completions");
   };
 
   const saveMutation = useMutation({
@@ -83,6 +86,7 @@ export function SettingsPage() {
         name: name.trim(),
         model: model.trim(),
         base_url: baseUrl.trim(),
+        api_type: apiType,
       };
       if (editingGatewayId === null) {
         return createModelGateway({ ...common, api_key: apiKey });
@@ -144,6 +148,7 @@ export function SettingsPage() {
     setApiKey("");
     setModel(gateway.model);
     setBaseUrl(gateway.base_url);
+    setApiType(gateway.api_type);
   }
 
   function handleDelete(gateway: ModelGateway) {
@@ -399,6 +404,18 @@ export function SettingsPage() {
                   <ServerCog aria-hidden="true" /> {t("settings.model")}
                 </span>
                 <input value={model} onChange={(event) => setModel(event.currentTarget.value)} />
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">
+                  <ServerCog aria-hidden="true" /> {t("settings.apiType")}
+                </span>
+                <select
+                  value={apiType}
+                  onChange={(event) => setApiType(event.currentTarget.value as GatewayApiType)}
+                >
+                  <option value="chat_completions">Chat Completions</option>
+                  <option value="responses">Responses</option>
+                </select>
               </label>
             </div>
 

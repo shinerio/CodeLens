@@ -286,6 +286,7 @@ class CreateModelGatewayRequest(StrictDto):
     api_key: SecretStr
     model: GatewayModel
     base_url: AnyHttpUrl
+    api_type: Literal["responses", "chat_completions"] = "chat_completions"
 
     @field_validator("api_key")
     @classmethod
@@ -303,6 +304,7 @@ class UpdateModelGatewayRequest(StrictDto):
     api_key: SecretStr | None = None
     model: GatewayModel
     base_url: AnyHttpUrl
+    api_type: Literal["responses", "chat_completions"] = "chat_completions"
 
     @field_validator("api_key")
     @classmethod
@@ -332,6 +334,7 @@ class ModelGatewayResponse(StrictDto):
     model: str
     base_url: str
     is_active: bool
+    api_type: Literal["responses", "chat_completions"]
 
 
 class ModelGatewayCatalogResponse(StrictDto):

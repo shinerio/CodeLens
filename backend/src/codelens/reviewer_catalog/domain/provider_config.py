@@ -1,5 +1,8 @@
 from dataclasses import dataclass
-from typing import Protocol
+from typing import Literal, Protocol
+
+type GatewayApiType = Literal["responses", "chat_completions"]
+_DEFAULT_API_TYPE: GatewayApiType = "chat_completions"
 
 
 @dataclass(frozen=True)
@@ -9,6 +12,7 @@ class ModelProviderConfig:
     api_key: str
     model: str
     base_url: str
+    api_type: GatewayApiType = _DEFAULT_API_TYPE
 
 
 @dataclass(frozen=True)
@@ -20,6 +24,7 @@ class ModelGateway:
     api_key: str
     model: str
     base_url: str
+    api_type: GatewayApiType = _DEFAULT_API_TYPE
 
     @property
     def provider_config(self) -> ModelProviderConfig:
@@ -29,6 +34,7 @@ class ModelGateway:
             api_key=self.api_key,
             model=self.model,
             base_url=self.base_url,
+            api_type=self.api_type,
         )
 
 
