@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Protocol
 
 from codelens.instruction_policy.domain.models import (
+    InstructionChain,
     InstructionDocument,
     InstructionResolutionPort,
     ResolvedInstructionSet,
@@ -146,6 +147,7 @@ class SnapshotService:
         """Resolve and merge the immutable instruction chain for every target path."""
 
         documents_by_path: dict[str, InstructionDocument] = {}
+        chains_by_target: dict[str, InstructionChain] = {}
         excludes: list[str] = []
         warnings: list[str] = []
         for target_path in target_paths:
@@ -155,11 +157,18 @@ class SnapshotService:
                 target_path,
             )
             for document in resolved.documents:
-                documents_by_path.setdefault(document.relative_path, document)
+                existing_document = documents_by_path.setdefault(document.relative_path, document)
+                if existing_document != document:
+                    raise ValueError("instruction document changed across target resolution")
+            for chain in resolved.chains:
+                existing_chain = chains_by_target.setdefault(chain.target_path, chain)
+                if existing_chain != chain:
+                    raise ValueError("instruction chain changed across target resolution")
             excludes.extend(resolved.excludes)
             warnings.extend(resolved.warnings)
         return ResolvedInstructionSet(
             documents=tuple(documents_by_path.values()),
+            chains=tuple(chains_by_target.values()),
             excludes=tuple(dict.fromkeys(excludes)),
             warnings=tuple(dict.fromkeys(warnings)),
         )

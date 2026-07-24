@@ -260,32 +260,6 @@ class ProblemResponse(StrictDto):
     message: str
 
 
-class UpdateOpenAISettingsRequest(StrictDto):
-    """Validate one complete write-only OpenAI-compatible provider configuration."""
-
-    api_key: SecretStr
-    model: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
-    base_url: AnyHttpUrl
-
-    @field_validator("api_key")
-    @classmethod
-    def validate_api_key(cls, value: SecretStr) -> SecretStr:
-        """Reject empty credentials and normalize accidental surrounding whitespace."""
-
-        normalized = value.get_secret_value().strip()
-        if not normalized:
-            raise ValueError("api_key must not be empty")
-        return SecretStr(normalized)
-
-
-class OpenAISettingsResponse(StrictDto):
-    """Expose provider readiness without ever serializing the API key."""
-
-    is_configured: bool
-    model: str | None
-    base_url: str | None
-
-
 GatewayName = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=80)]
 GatewayModel = Annotated[
     str,

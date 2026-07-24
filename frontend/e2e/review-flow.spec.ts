@@ -57,7 +57,7 @@ test("streams the correctness fixture from inspect to validated findings", async
   await page.getByLabel("Gateway name").fill("E2E fixture");
   await page.getByLabel("API Key").fill("sk-e2e-fixture-secret");
   await page.getByLabel("Base URL").fill("http://127.0.0.1:9999");
-  await page.getByLabel("Model").fill("fixture-model");
+  await page.getByRole("textbox", { name: "Model", exact: true }).fill("fixture-model");
   await page.getByRole("button", { name: "Add gateway", exact: true }).click();
   await expect(page.getByText("Active gateway", { exact: true }).first()).toBeVisible();
 
@@ -73,6 +73,7 @@ test("streams the correctness fixture from inspect to validated findings", async
   await expect(page.locator(".review-run-page__subtitle")).toContainText("completed", {
     timeout: 15000,
   });
+  await page.getByRole("button", { name: /Findings/ }).click();
   await expect(
     page.getByRole("heading", { name: "Inverted transition guard allows invalid states", level: 3 }),
   ).toBeVisible({

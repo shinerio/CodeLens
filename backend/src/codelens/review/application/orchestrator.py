@@ -1,7 +1,6 @@
 """Restart-safe review workflow orchestration."""
 
 import asyncio
-import base64
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
@@ -9,7 +8,6 @@ from dataclasses import dataclass
 from typing import Literal, Protocol, TypeVar
 
 from codelens.findings.domain.models import FindingBatch
-from codelens.review.application.validate_findings import FindingValidationError
 from codelens.review.domain.ports import (
     AgentRunCompletionPort,
     AgentRuntimeEvent,
@@ -72,9 +70,6 @@ class CheckpointView(Protocol):
     @property
     def execution_attempts(self) -> int: ...
 
-    @property
-    def validation_attempts(self) -> int: ...
-
 
 _CheckpointViewT = TypeVar("_CheckpointViewT", bound=CheckpointView, covariant=True)
 
@@ -87,7 +82,6 @@ class _CheckpointPort(Protocol[_CheckpointViewT]):
         self, task_id: str, node_key: str, reference: str, content_hash: str
     ) -> None: ...
     async def mark_validating(self, task_id: str, node_key: str) -> None: ...
-    async def mark_repair_pending(self, task_id: str, node_key: str) -> None: ...
 
 
 class _ValidatorPort(Protocol):
@@ -244,12 +238,6 @@ class ReviewOrchestrator:
                 {"agent": self._agent_key(agent)},
             )
         ]
-        if checkpoint.artifact_ref is not None and checkpoint.artifact_hash is not None:
-            invalid_output = await self._artifacts.read_output(
-                checkpoint.artifact_ref,
-                checkpoint.artifact_hash,
-            )
-            input_payload = self._repair_payload(input_payload, invalid_output)
         await self._checkpoints.mark_running(task_id, node_key)
         await self._hit("before_model_invocation")
         await self._record_many(task_id, transcript_records)
@@ -321,15 +309,7 @@ class ReviewOrchestrator:
             checkpoint.artifact_hash,
         )
         validator = self._validator_factory(task_id, node_key, prepared, agent)
-        try:
-            findings = await validator.validate(payload)
-        except FindingValidationError:
-            if checkpoint.validation_attempts >= 2:
-                raise
-            await self._checkpoints.mark_repair_pending(task_id, node_key)
-            await self._checkpoint_output(task_id, prepared, agent)
-            await self._validate_output(task_id, prepared, agent)
-            return
+        findings = await validator.validate(payload)
         await self._completion.complete_with_findings(task_id, node_key, findings)
         await self._hit("after_finding_completion")
 
@@ -372,17 +352,3 @@ class ReviewOrchestrator:
     @classmethod
     def _node_key(cls, agent: AgentVersion) -> str:
         return f"{cls._agent_key(agent)}:0:root"
-
-    @staticmethod
-    def _repair_payload(review_input: bytes, invalid_output: bytes) -> bytes:
-        """Create an explicit repair attempt without mutating the first Artifact."""
-
-        return json.dumps(
-            {
-                "instruction": "Return a corrected FindingBatch matching the declared schema.",
-                "invalid_output_base64": base64.b64encode(invalid_output).decode("ascii"),
-                "review_input_base64": base64.b64encode(review_input).decode("ascii"),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()

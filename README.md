@@ -18,7 +18,7 @@ CodeLens 是一个本地优先的多 Agent 代码 Review 工作台。它通过 W
 - 通过 SQLite 持久化任务、检查点和事件；Worker 重启后可恢复未完成工作。
 - 通过 SSE 实时展示任务状态和 Agent 事件，并支持断线续传。
 - 校验模型输出的位置、证据和结构，展示严重级别、置信度、影响、解释、复现信息与修改建议。
-- API、Worker 和前端可以分别启动；默认仅允许本机回环地址访问。
+- 后端以统一进程运行 API 和 Worker；默认仅允许本机回环地址访问。
 - 服务启动后可在 Web Settings 页面持久化多个模型网关，随时切换当前激活网关，无需重启。
 
 ## 环境要求
@@ -33,7 +33,7 @@ CodeLens 是一个本地优先的多 Agent 代码 Review 工作台。它通过 W
 
 ### 一键启动（推荐）
 
-脚本会自动安装或同步前后端依赖，同时以独立子进程启动后端、Worker 和前端，并在终端打印所有访问地址。启动时不设置仓库根目录白名单，默认允许选择当前操作系统可访问的任意合法 Git 仓库。
+脚本会自动安装或同步前后端依赖，同时启动统一后端进程和前端，并在终端打印所有访问地址。启动时不设置仓库根目录白名单，默认允许选择当前操作系统可访问的任意合法 Git 仓库。
 
 macOS / Linux：
 
@@ -46,7 +46,7 @@ macOS / Linux：
 Windows PowerShell：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File .\start.ps1
+powershell -ExecutionPolicy Bypass -File .\code-lens.ps1
 ```
 
 启动完成后访问：
@@ -68,9 +68,9 @@ uv sync --project backend
 pnpm --dir frontend install
 ```
 
-#### 2. 启动后端和 Worker
+#### 2. 启动统一后端
 
-`start` 会同时启动一个 FastAPI 进程和一个 Worker。省略位置参数时不限制合法仓库的所在目录：
+`start` 会在同一个后端进程内运行 API 和 Worker。省略位置参数时不限制合法仓库的所在目录：
 
 ```bash
 uv run --project backend codelens-review start
@@ -101,7 +101,7 @@ pnpm --dir frontend dev
 
 可以重复添加多个网关。第一个网关会自动激活；之后可以在网关卡片上点击 **Activate / 激活** 随时切换，新的 Review 会使用当时激活的网关。编辑网关时 API Key 留空会保留原凭证。
 
-后端和 Worker 在未配置模型时也能正常启动。配置保存在仓库之外的应用数据目录，API 不会回传 Key；Worker 在 Review 实际执行时读取当前激活网关。默认路径不会被 Git 跟踪，项目 `.gitignore` 也排除了仓库内的 `.codelens-data/` 兜底目录。
+统一后端在未配置模型时也能正常启动。配置保存在仓库之外的应用数据目录，API 不会回传 Key；Worker 在 Review 实际执行时读取当前激活网关。默认路径不会被 Git 跟踪，项目 `.gitignore` 也排除了仓库内的 `.codelens-data/` 兜底目录。
 
 请勿将 API Key 写入仓库、日志或截图。使用远程 HTTP 地址会以明文传输凭证和 Review 内容，仅应在明确受信任的网络中使用。
 
@@ -189,25 +189,15 @@ uv run --project backend codelens-review --help
 uv run --project backend codelens-review start --help
 ```
 
-## 独立启动 API 与 Worker
+## 后端进程模式
 
-开发或诊断时，可以让 API 和 Worker 使用相同的数据目录分别运行。
-
-终端一：
+后端只支持统一进程入口：
 
 ```bash
-uv run --project backend codelens-review api \
-  --data-dir ./.codelens-data
+uv run --project backend codelens-review start
 ```
 
-终端二：
-
-```bash
-uv run --project backend codelens-review worker \
-  --data-dir ./.codelens-data
-```
-
-同一个 data directory 当前只能运行一个 Worker。API、Worker 和前端不依赖进程内共享状态，可以独立重启。
+不要拆成独立 API 和 Worker 进程运行 Web Review 流程；后端进程内共享内存事件总线和运行中 transcript，拆分后前端可能看不到实时进度并停在等待事件流状态。
 
 > `codelens-review` 目前只提供启动和进程管理命令，不提供创建 Review、读取报告或执行 Fix 的业务 CLI；产品交互入口是 Web/API。
 
@@ -223,7 +213,7 @@ CodeLens/
 ├── frontend/
 │   ├── src/                # React 应用与领域 feature
 │   └── e2e/                # Playwright 端到端流程
-├── docs/superpowers/       # 产品设计与阶段实施计划
+├── docs/adr/               # 架构决策记录
 ├── ARCHITECTURE.md         # 强制架构约束
 └── TODO.md                 # 延期功能与路线图
 ```
@@ -270,5 +260,5 @@ pnpm --dir frontend exec playwright test
 更多背景和后续计划：
 
 - [产品白皮书](./CodeLens-白皮书.md)
-- [首版应用设计](./docs/superpowers/specs/2026-07-17-codelens-review-app-design.md)
+- [架构约束](./ARCHITECTURE.md)
 - [TODO 与延期事项](./TODO.md)

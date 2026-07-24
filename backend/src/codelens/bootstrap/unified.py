@@ -15,6 +15,7 @@ from codelens.instruction_policy.infrastructure.structured_skip import Structure
 from codelens.interface.http.app import create_app_with_components
 from codelens.interface.http.dependencies import HttpComponents
 from codelens.review.application.context_builder import ContextBuilder
+from codelens.review.domain.ports import AgentRuntimePort
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
@@ -109,7 +110,11 @@ class UnifiedBackend:
         await self.components.close()
 
 
-def build_unified_backend(settings: Settings) -> UnifiedBackend:
+def build_unified_backend(
+    settings: Settings,
+    *,
+    runtime: AgentRuntimePort | None = None,
+) -> UnifiedBackend:
     """Compose API and Worker with shared database, event bus, and transcripts."""
 
     database = Database(settings.resolved_database_url)
@@ -156,7 +161,7 @@ def build_unified_backend(settings: Settings) -> UnifiedBackend:
     context_adapter = FilesystemSnapshotContextAdapter()
     codec = AgentOutputCodec("1")
     system_prompts = I18nPromptLoader.load(settings.prompt_dir)
-    provider_runtime = OpenAIAgentRuntime(
+    provider_runtime = runtime or OpenAIAgentRuntime(
         FilesystemModelProviderConfigAdapter(settings.data_dir),
         codec,
         git,
@@ -215,9 +220,7 @@ def build_unified_backend(settings: Settings) -> UnifiedBackend:
     )
     from codelens.review.application.source_preview import FindingSourcePreviewService
     from codelens.reviewer_catalog.application.provider_settings import (
-        GetProviderSettingsHandler,
         ModelGatewaySettingsService,
-        UpdateProviderSettingsHandler,
     )
     from codelens.reviewer_catalog.infrastructure.model_gateway_probe import (
         OpenAIModelGatewayProbeAdapter,
@@ -263,8 +266,6 @@ def build_unified_backend(settings: Settings) -> UnifiedBackend:
         event_bus=event_bus,
         review_store=review_store,
         input_artifacts=input_artifacts,
-        get_provider_settings=GetProviderSettingsHandler(provider_config),
-        update_provider_settings=UpdateProviderSettingsHandler(provider_config),
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()
         ),

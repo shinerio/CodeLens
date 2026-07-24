@@ -32,16 +32,6 @@ from codelens.review.domain.errors import (
     PermanentAgentOutputError,
     TransientAgentRuntimeError,
 )
-
-
-class AgentOutputParseError(ValueError):
-    """Raised when the model's finalizer output cannot be parsed as JSON."""
-
-    def __init__(self, raw_output: str) -> None:
-        self.raw_output = raw_output
-        super().__init__("Could not parse model finalizer output as JSON")
-
-
 from codelens.review.domain.ports import (
     AgentOutputCodecPort,
     AgentResponseDiagnostic,
@@ -60,7 +50,6 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 type _AgentFailure = (
     AgentMaxTurnsExceededError | TransientAgentRuntimeError | PermanentAgentOutputError
 )
-_FINALIZER_MAX_ATTEMPTS = 3
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -162,7 +151,7 @@ class OpenAIAgentRuntime:
         if input_text is None:
             raise PermanentAgentOutputError("Agent input is not valid UTF-8") from None
         prompts = self._prompt_loader.get(self._output_locale(input_text))
-        if agent.output_schema_version != self._output_codec.schema_version:
+        if agent.output_contract_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
         client = AsyncOpenAI(
@@ -186,7 +175,15 @@ class OpenAIAgentRuntime:
         )
         investigation_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
-            instructions=f"{agent.prompt_template}\n\n{prompts.runtime_instruction}",
+            instructions="\n\n".join(
+                (
+                    prompts.platform_policy,
+                    prompts.repository_instruction_policy,
+                    prompts.runtime_instruction,
+                    prompts.output_contract,
+                    f"# Reviewer Policy\n{agent.prompt_template}",
+                )
+            ),
             model=behavior.model_class(
                 model=provider_config.model,
                 openai_client=client,
@@ -202,7 +199,7 @@ class OpenAIAgentRuntime:
         run_config = RunConfig(trace_include_sensitive_data=False)
         investigation: object | None = None
         failure: _AgentFailure | None = None
-        phase: Literal["investigation", "finalizing", "unknown"] = "investigation"
+        phase: Literal["investigation", "unknown"] = "investigation"
         try:
             try:
                 investigation = await self._run_observable(
@@ -237,7 +234,7 @@ class OpenAIAgentRuntime:
                 )
             except MaxTurnsExceeded:
                 failure = AgentMaxTurnsExceededError(
-                    f"{self._phase_label(phase)} failed: model used all allowed turns.",
+                    "Code investigation failed: model used all allowed turns.",
                     phase=phase,
                     reason_code="max_model_turns_exceeded",
                 )
@@ -302,70 +299,6 @@ class OpenAIAgentRuntime:
         await client.close()
         return output
 
-    async def _run_finalizer(
-        self,
-        agent: Agent[None],
-        input_value: Any,
-        run_config: RunConfig,
-        sink: AgentRuntimeEventSink | None,
-    ) -> object:
-        """Retry only the final structured-output request after transient provider failures."""
-
-        for attempt in range(1, _FINALIZER_MAX_ATTEMPTS + 1):
-            try:
-                return await self._run_observable(agent, input_value, 1, run_config, sink)
-            except Exception as error:
-                if (
-                    not self._is_retryable_provider_error(error)
-                    or attempt == _FINALIZER_MAX_ATTEMPTS
-                ):
-                    raise
-                if sink is not None:
-                    await sink(
-                        AgentRuntimeEvent(
-                            "lifecycle",
-                            "Final structured output request failed temporarily; retrying.",
-                            {
-                                "agent_name": agent.name,
-                                "attempt": str(attempt),
-                                "max_attempts": str(_FINALIZER_MAX_ATTEMPTS),
-                            },
-                        )
-                    )
-                await asyncio.sleep(float(attempt))
-        raise AssertionError("finalizer retry loop must return or raise")
-
-    async def _run_finalizer_with_schema_fallback(
-        self,
-        structured_agent: Agent[None],
-        plaintext_agent: Agent[None],
-        input_value: Any,
-        run_config: RunConfig,
-        sink: AgentRuntimeEventSink | None,
-    ) -> object:
-        """Use prompt-constrained JSON only when a compatible gateway rejects native schemas.
-
-        Both paths are revalidated by ``AgentOutputCodec`` before a review checkpoint is
-        written. The fallback is deliberately limited to HTTP 400, which is how OpenAI-
-        compatible gateways report an unsupported ``response_format`` parameter.
-        """
-
-        try:
-            return await self._run_finalizer(structured_agent, input_value, run_config, sink)
-        except APIStatusError as error:
-            if error.status_code != 400:
-                raise
-            if sink is not None:
-                await sink(
-                    AgentRuntimeEvent(
-                        "lifecycle",
-                        "Model gateway does not support native structured output; "
-                        "retrying with JSON validation.",
-                        {"agent_name": plaintext_agent.name, "reason_code": "schema_fallback"},
-                    )
-                )
-            return await self._run_finalizer(plaintext_agent, input_value, run_config, sink)
-
     @staticmethod
     def _output_locale(input_text: str) -> Literal["en", "zh-CN"]:
         """Read the validated locale marker embedded in the canonical Agent input."""
@@ -376,134 +309,17 @@ class OpenAIAgentRuntime:
             return "en"
         return "zh-CN" if payload.get("output_locale") == "zh-CN" else "en"
 
-    @staticmethod
-    def _finalizer_input(investigation: object) -> Any:
-        """Send controlled history so finalization can retain exact evidence identifiers."""
-
-        history = getattr(investigation, "to_input_list", None)
-        if callable(history):
-            return history()
-        conclusion = getattr(investigation, "final_output", None)
-        if isinstance(conclusion, str) and conclusion.strip():
-            return conclusion
-        raise PermanentAgentOutputError(
-            "Final structured output failed: investigation returned no usable evidence.",
-            phase="finalizing",
-            reason_code="missing_investigation_evidence",
-            retryable=False,
-        )
-
-    @staticmethod
-    def _render_prompt(template: str, schema: str) -> str:
-        """Inject the runtime schema into a versioned prompt asset."""
-
-        if "{{finding_batch_schema}}" not in template:
-            raise PermanentAgentOutputError(
-                "Final structured output failed: prompt template is invalid.",
-                phase="finalizing",
-                reason_code="invalid_finalizer_prompt",
-                retryable=False,
-            )
-        return template.replace("{{finding_batch_schema}}", schema)
-
-    @staticmethod
-    def _format_repair_input(investigation_history: object, rejected_output: object) -> str:
-        """Give the one repair request both rejected text and its controlled evidence history."""
-
-        raw_output = rejected_output if isinstance(rejected_output, str) else str(rejected_output)
-        return json.dumps(
-            {
-                "controlled_investigation_history": investigation_history,
-                "rejected_final_output": raw_output,
-            },
-            ensure_ascii=False,
-        )
-
-    @staticmethod
-    def _finalizer_output(value: object) -> object:
-        """Extract the FindingBatch envelope from direct JSON or model-added surrounding text.
-
-        The finalizer contract requires one JSON object, but compatible model gateways can
-        prepend prose, Markdown, or unrelated JSON snippets. Scan every decodable object and
-        select only the envelope-shaped one so unrelated braces never hide valid findings.
-        """
-
-        if not isinstance(value, str):
-            return value
-        text = value.strip()
-
-        # Strategy 1: direct JSON parse, including a gateway wrapper containing JSON text.
-        try:
-            envelope = OpenAIAgentRuntime._finding_batch_envelope(json.loads(text))
-            if envelope is not None:
-                return envelope
-        except json.JSONDecodeError:
-            pass
-
-        # Strategy 2: scan every object start. JSONDecoder tracks quoted braces correctly and
-        # permits a FindingBatch fenced in Markdown or preceded by explanatory prose.
-        decoder = json.JSONDecoder()
-        for index, character in enumerate(text):
-            if character != "{":
-                continue
-            try:
-                candidate, _ = decoder.raw_decode(text[index:])
-            except json.JSONDecodeError:
-                continue
-            envelope = OpenAIAgentRuntime._finding_batch_envelope(candidate)
-            if envelope is not None:
-                return envelope
-
-        raise AgentOutputParseError(text)
-
-    @staticmethod
-    def _finding_batch_envelope(value: object) -> dict[str, object] | None:
-        """Find a schema envelope inside provider wrappers without accepting arbitrary JSON."""
-
-        if isinstance(value, dict):
-            if "schema_version" in value and "findings" in value:
-                return value
-            children: tuple[object, ...] = tuple(value.values())
-        elif isinstance(value, list):
-            children = tuple(value)
-        elif isinstance(value, str):
-            try:
-                decoded = json.loads(value)
-            except json.JSONDecodeError:
-                return None
-            return OpenAIAgentRuntime._finding_batch_envelope(decoded)
-        else:
-            return None
-
-        for child in children:
-            envelope = OpenAIAgentRuntime._finding_batch_envelope(child)
-            if envelope is not None:
-                return envelope
-        return None
-
-    @staticmethod
-    def _is_retryable_provider_error(error: Exception) -> bool:
-        if isinstance(
-            error, (APITimeoutError, APIConnectionError, RateLimitError, InternalServerError)
-        ):
-            return True
-        return isinstance(error, APIStatusError) and error.status_code >= 500
-
-    @staticmethod
-    def _phase_label(phase: Literal["investigation", "finalizing", "unknown"]) -> str:
-        return "Final structured output" if phase == "finalizing" else "Code investigation"
-
     @classmethod
     def _failure(
         cls,
-        phase: Literal["investigation", "finalizing", "unknown"],
+        phase: Literal["investigation", "unknown"],
         reason_code: str,
         reason: str,
         *,
         retryable: bool,
         provider_status_code: int | None = None,
     ) -> TransientAgentRuntimeError | PermanentAgentOutputError:
-        message = f"{cls._phase_label(phase)} failed: {reason}."
+        message = f"Code investigation failed: {reason}."
         if retryable:
             return TransientAgentRuntimeError(
                 f"{message} Retry the review.",
@@ -522,7 +338,7 @@ class OpenAIAgentRuntime:
 
     @classmethod
     def _status_failure(
-        cls, error: APIStatusError, phase: Literal["investigation", "finalizing", "unknown"]
+        cls, error: APIStatusError, phase: Literal["investigation", "unknown"]
     ) -> TransientAgentRuntimeError | PermanentAgentOutputError:
         status_code = error.status_code
         if status_code == 429:

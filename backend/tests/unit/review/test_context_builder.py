@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from codelens.instruction_policy.domain.models import (
+    InstructionChain,
     InstructionDocument,
     ResolvedInstructionSet,
 )
@@ -148,8 +149,12 @@ def _instructions() -> ResolvedInstructionSet:
                 "AGENTS.md",
                 _INSTRUCTION_CONTENT,
                 _hash(_INSTRUCTION_CONTENT.encode()),
+                "agents",
+                "",
+                0,
             ),
         ),
+        chains=(InstructionChain("src/changed.py", ("AGENTS.md",)),),
         excludes=(),
         warnings=(),
     )
@@ -191,7 +196,7 @@ async def test_plans_ten_candidates_then_reads_only_the_two_that_fit() -> None:
             total_tokens=240,
             platform_policy_tokens=30,
             instruction_tokens=20,
-            output_schema_tokens=30,
+            output_contract_tokens=30,
             changed_hunk_tokens=20,
             max_excerpt_bytes=256,
             max_line_chars=120,
@@ -203,7 +208,9 @@ async def test_plans_ten_candidates_then_reads_only_the_two_that_fit() -> None:
         "src/context_0.py",
         "src/context_1.py",
     ]
-    assert [excerpt.path for excerpt in agent_input.instructions] == ["AGENTS.md"]
+    assert [instruction.path for instruction in agent_input.repository_instructions] == [
+        "AGENTS.md"
+    ]
     assert [excerpt.path for excerpt in agent_input.changed_hunks] == ["src/changed.py"]
     assert [excerpt.path for excerpt in agent_input.context] == [
         "src/context_0.py",
@@ -220,6 +227,90 @@ async def test_plans_ten_candidates_then_reads_only_the_two_that_fit() -> None:
     assert agent_input.plan.omitted_paths == context_paths[2:]
     assert agent_input.plan.used_tokens <= agent_input.plan.total_tokens
     assert b"/private/source/repository" not in agent_input.canonical_bytes()
+
+
+async def test_preserves_target_specific_instruction_chains_without_duplicating_documents() -> None:
+    source_rules = "Review source contracts."
+    snapshot = _snapshot(())
+    second_target = SnapshotEntry(
+        "tests/changed_test.py",
+        "file",
+        0o100644,
+        0,
+        _hash(b""),
+        None,
+        "target",
+    )
+    source_instruction = SnapshotEntry(
+        "src/REVIEW.md",
+        "file",
+        0o100644,
+        len(source_rules.encode()),
+        _hash(source_rules.encode()),
+        None,
+        "instruction",
+    )
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            target_paths=("src/changed.py", "tests/changed_test.py"),
+            instruction_paths=("AGENTS.md", "src/REVIEW.md"),
+            entries=(*snapshot.manifest.entries, second_target, source_instruction),
+        ),
+    )
+    instructions = ResolvedInstructionSet(
+        documents=(
+            InstructionDocument(
+                "AGENTS.md",
+                _INSTRUCTION_CONTENT,
+                _hash(_INSTRUCTION_CONTENT.encode()),
+                "agents",
+                "",
+                0,
+            ),
+            InstructionDocument(
+                "src/REVIEW.md",
+                source_rules,
+                _hash(source_rules.encode()),
+                "review",
+                "src",
+                3,
+            ),
+        ),
+        chains=(
+            InstructionChain("src/changed.py", ("AGENTS.md", "src/REVIEW.md")),
+            InstructionChain("tests/changed_test.py", ("AGENTS.md",)),
+        ),
+        excludes=(),
+        warnings=(),
+    )
+    builder = ContextBuilder(FakeContextProvider(()), RecordingReader({}), _PROMPTS)
+
+    agent_input = await builder.build(
+        snapshot,
+        instructions,
+        ContextBudget(
+            total_tokens=400,
+            platform_policy_tokens=30,
+            instruction_tokens=100,
+            output_contract_tokens=30,
+            changed_hunk_tokens=20,
+            max_excerpt_bytes=256,
+            max_line_chars=120,
+            tool_driven=True,
+        ),
+    )
+
+    payload = json.loads(agent_input.canonical_bytes())
+    assert [item["path"] for item in payload["repository_instructions"]] == [
+        "AGENTS.md",
+        "src/REVIEW.md",
+    ]
+    assert payload["repository_instruction_chains"] == [
+        {"rule_paths": ["AGENTS.md", "src/REVIEW.md"], "target_path": "src/changed.py"},
+        {"rule_paths": ["AGENTS.md"], "target_path": "tests/changed_test.py"},
+    ]
 
 
 async def test_tool_driven_input_does_not_preload_changed_or_repository_bodies() -> None:
@@ -256,7 +347,7 @@ async def test_tool_driven_input_does_not_preload_changed_or_repository_bodies()
             total_tokens=240,
             platform_policy_tokens=30,
             instruction_tokens=20,
-            output_schema_tokens=30,
+            output_contract_tokens=30,
             changed_hunk_tokens=20,
             max_excerpt_bytes=256,
             max_line_chars=120,
@@ -268,7 +359,7 @@ async def test_tool_driven_input_does_not_preload_changed_or_repository_bodies()
     assert agent_input.changed_hunks == ()
     assert agent_input.context == ()
     assert agent_input.plan.decisions == ()
-    assert "get_change_map" in agent_input.platform_policy
+    assert "Snapshot" in agent_input.platform_policy
     tool_catalog = json.loads(agent_input.canonical_bytes())["tool_catalog"]
     assert tool_catalog == [
         {
@@ -381,7 +472,7 @@ async def test_binary_deleted_oversized_unicode_and_long_lines_are_bounded() -> 
             total_tokens=210,
             platform_policy_tokens=30,
             instruction_tokens=20,
-            output_schema_tokens=30,
+            output_contract_tokens=30,
             changed_hunk_tokens=20,
             max_excerpt_bytes=128,
             max_line_chars=32,
@@ -461,8 +552,12 @@ async def test_rejects_instructions_that_exceed_their_reservation_before_reading
                 "AGENTS.md",
                 oversized_content,
                 _hash(oversized_content.encode()),
+                "agents",
+                "",
+                0,
             ),
         ),
+        chains=(InstructionChain("src/changed.py", ("AGENTS.md",)),),
         excludes=(),
         warnings=(),
     )
@@ -515,8 +610,12 @@ async def test_rejects_stale_instruction_content_before_reading() -> None:
                 "AGENTS.md",
                 "Changed after the Snapshot was frozen.",
                 _hash(_INSTRUCTION_CONTENT.encode()),
+                "agents",
+                "",
+                0,
             ),
         ),
+        chains=(InstructionChain("src/changed.py", ("AGENTS.md",)),),
         excludes=(),
         warnings=(),
     )

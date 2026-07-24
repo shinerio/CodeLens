@@ -98,10 +98,6 @@ class MemoryCheckpoints:
         self.value.status = "validating"
         self.value.validation_attempts += 1
 
-    async def mark_repair_pending(self, _task_id: str, _node_key: str) -> None:
-        assert self.value.status == "validating"
-        self.value.status = "pending"
-
 
 class RecordingRuntime:
     def __init__(self, payload: bytes) -> None:
@@ -171,15 +167,9 @@ class EmptyValidator:
         return FindingBatch("1", ())
 
 
-class RepairingValidator:
-    def __init__(self) -> None:
-        self.calls = 0
-
+class FailingValidator:
     async def validate(self, _payload: bytes) -> FindingBatch:
-        self.calls += 1
-        if self.calls == 1:
-            raise FindingValidationError("Agent output schema is invalid")
-        return FindingBatch("1", ())
+        raise FindingValidationError("Agent output schema is invalid")
 
 
 class RecordingCompletion:
@@ -351,13 +341,13 @@ async def test_cancellation_after_model_output_stops_before_validation_and_aggre
     assert not aggregation_crash.did_crash
 
 
-async def test_schema_repair_is_a_second_attempt_and_preserves_first_artifact() -> None:
+async def test_finding_validation_failure_does_not_reinvoke_the_model() -> None:
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()
     runtime = RecordingRuntime(b'{"schema_version":"1","findings":[]}')
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
-    validator = RepairingValidator()
+    validator = FailingValidator()
 
     async def prepare(_task_id: str) -> PreparedReview:
         return _prepared()
@@ -374,22 +364,23 @@ async def test_schema_repair_is_a_second_attempt_and_preserves_first_artifact() 
         max_agent_runs_per_review=1,
     )
 
-    await orchestrator.execute("review-1")
+    with pytest.raises(FindingValidationError):
+        await orchestrator.execute("review-1")
 
-    assert runtime.calls == 2
-    assert checkpoints.value.execution_attempts == 2
-    assert checkpoints.value.validation_attempts == 2
-    assert tuple(artifacts.payloads) == ("artifact-1", "artifact-2")
-    assert checkpoints.value.artifact_ref == "artifact-2"
+    assert runtime.calls == 1
+    assert checkpoints.value.execution_attempts == 1
+    assert checkpoints.value.validation_attempts == 1
+    assert tuple(artifacts.payloads) == ("artifact-1",)
+    assert checkpoints.value.artifact_ref == "artifact-1"
+    assert completion.calls == 0
 
 
-async def test_replay_before_output_saved_does_not_burn_schema_repair() -> None:
+async def test_replay_before_output_saved_reinvokes_the_interrupted_model_call() -> None:
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()
-    runtime = RecordingRuntime(b"not-json")
+    runtime = RecordingRuntime(b'{"schema_version":"1","findings":[]}')
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
-    validator = RepairingValidator()
     crash = OneShotCrash("after_model_return")
 
     async def prepare(_task_id: str) -> PreparedReview:
@@ -401,7 +392,7 @@ async def test_replay_before_output_saved_does_not_burn_schema_repair() -> None:
         runtime=runtime,
         artifacts=artifacts,
         checkpoints=checkpoints,
-        validator_factory=lambda *_args: validator,
+        validator_factory=lambda *_args: EmptyValidator(),
         completion=completion,
         agent_semaphore=asyncio.Semaphore(1),
         max_agent_runs_per_review=1,
@@ -416,6 +407,6 @@ async def test_replay_before_output_saved_does_not_burn_schema_repair() -> None:
 
     await orchestrator.execute("review-1")
 
-    assert runtime.calls == 3
-    assert checkpoints.value.validation_attempts == 2
+    assert runtime.calls == 2
+    assert checkpoints.value.validation_attempts == 1
     assert completion.calls == 1

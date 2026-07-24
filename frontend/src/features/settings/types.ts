@@ -50,12 +50,6 @@ export type UpdateModelGateway = {
   agent_timeout: number;
 };
 
-export type OpenAISettings = {
-  is_configured: boolean;
-  model: string | null;
-  base_url: string | null;
-};
-
 export type GatewayTestResult = {
   ok: boolean;
   latency_ms: number | null;

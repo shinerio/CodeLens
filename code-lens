@@ -5,11 +5,9 @@ set -u
 SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd -P)
 RUNTIME_DIR="${TMPDIR:-/tmp}/codelens-review-${UID:-$(id -u)}"
 LOG_DIR="$SCRIPT_DIR/logs"
-API_PID_FILE="$RUNTIME_DIR/api.pid"
-WORKER_PID_FILE="$RUNTIME_DIR/worker.pid"
+BACKEND_PID_FILE="$RUNTIME_DIR/backend.pid"
 FRONTEND_PID_FILE="$RUNTIME_DIR/frontend.pid"
-API_PID=""
-WORKER_PID=""
+BACKEND_PID=""
 FRONTEND_PID=""
 HOST=""
 
@@ -39,7 +37,7 @@ is_running() {
 }
 
 remove_runtime_state() {
-  rm -f "$API_PID_FILE" "$WORKER_PID_FILE" "$FRONTEND_PID_FILE"
+  rm -f "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE"
   rmdir "$RUNTIME_DIR" 2>/dev/null || true
 }
 
@@ -88,7 +86,7 @@ remove_pid_file_if_owned() {
 stop_services() {
   local was_running=false
   local pid_file
-  for pid_file in "$API_PID_FILE" "$WORKER_PID_FILE" "$FRONTEND_PID_FILE"; do
+  for pid_file in "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE"; do
     local pid
     pid=$(read_pid "$pid_file") || continue
     if is_running "$pid"; then
@@ -107,11 +105,9 @@ stop_services() {
 cleanup() {
   trap - EXIT INT TERM
   stop_pid "$FRONTEND_PID"
-  stop_pid "$WORKER_PID"
-  stop_pid "$API_PID"
+  stop_pid "$BACKEND_PID"
   remove_pid_file_if_owned "$FRONTEND_PID_FILE" "$FRONTEND_PID"
-  remove_pid_file_if_owned "$WORKER_PID_FILE" "$WORKER_PID"
-  remove_pid_file_if_owned "$API_PID_FILE" "$API_PID"
+  remove_pid_file_if_owned "$BACKEND_PID_FILE" "$BACKEND_PID"
   rmdir "$RUNTIME_DIR" 2>/dev/null || true
 }
 
@@ -146,7 +142,7 @@ ensure_dependencies() {
 
 start_services() {
   local pid_file
-  for pid_file in "$API_PID_FILE" "$WORKER_PID_FILE" "$FRONTEND_PID_FILE"; do
+  for pid_file in "$BACKEND_PID_FILE" "$FRONTEND_PID_FILE"; do
     local pid
     pid=$(read_pid "$pid_file") || continue
     if is_running "$pid"; then
@@ -162,17 +158,14 @@ start_services() {
   printf '\n[3/3] Starting CodeLens...\n'
   mkdir -p "$LOG_DIR" || fail "could not create log directory"
   local host="${HOST:-127.0.0.1}"
-  nohup uv run --project backend codelens-review api --host "$host" >>"$LOG_DIR/api.log" 2>&1 &
-  API_PID=$!
-  printf '%s\n' "$API_PID" >"$API_PID_FILE"
-  nohup uv run --project backend codelens-review worker >>"$LOG_DIR/worker.log" 2>&1 &
-  WORKER_PID=$!
-  printf '%s\n' "$WORKER_PID" >"$WORKER_PID_FILE"
+  nohup uv run --project backend codelens-review start --host "$host" >>"$LOG_DIR/unified.log" 2>&1 &
+  BACKEND_PID=$!
+  printf '%s\n' "$BACKEND_PID" >"$BACKEND_PID_FILE"
   nohup pnpm --dir frontend dev --host "$host" --strictPort >>"$LOG_DIR/frontend.log" 2>&1 &
   FRONTEND_PID=$!
   printf '%s\n' "$FRONTEND_PID" >"$FRONTEND_PID_FILE"
 
-  wait_for_http "http://127.0.0.1:8765/api/health" "$API_PID" "Backend"
+  wait_for_http "http://127.0.0.1:8765/api/health" "$BACKEND_PID" "Backend"
   wait_for_http "http://127.0.0.1:5173" "$FRONTEND_PID" "Frontend"
 
   printf '\nCodeLens is ready. Open these addresses:\n'

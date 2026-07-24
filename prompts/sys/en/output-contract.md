@@ -1,1 +1,1 @@
-Use comment, call task_done, and do not return FindingBatch JSON.
+Use `comment` for findings. Call `task_done` exactly once when the review is complete. Final text is ignored.

@@ -21,19 +21,27 @@ def upgrade() -> None:
         "review_tasks",
         sa.Column("task_id", sa.String(128), primary_key=True),
         sa.Column("repository_id", sa.String(128), nullable=False),
+        sa.Column("repository_realpath_hash", sa.String(64), nullable=False),
+        sa.Column("git_common_dir_hash", sa.String(64), nullable=False),
+        sa.Column("repository_path", sa.Text(), nullable=True),
         sa.Column("scope_json", sa.Text(), nullable=False),
         sa.Column("base_oid", sa.String(64), nullable=False),
         sa.Column("head_oid", sa.String(64), nullable=False),
         sa.Column("overlay_hash", sa.String(64)),
+        sa.Column("overlay_artifact_ref", sa.String(128), nullable=True),
         sa.Column("status", sa.String(32), nullable=False),
         sa.Column("selected_agent_versions_json", sa.Text(), nullable=False),
+        sa.Column("prompt_locale", sa.String(8), nullable=False, server_default="en"),
+        sa.Column("target_paths_json", sa.Text(), nullable=True),
         sa.Column("worktree_id", sa.String(128)),
         sa.Column("snapshot_id", sa.String(128)),
         sa.Column("cancellation_requested", sa.Boolean(), nullable=False),
         sa.Column("created_at", sa.DateTime(timezone=True), nullable=False),
         sa.Column("updated_at", sa.DateTime(timezone=True), nullable=False),
+        sa.Column("deleted_at", sa.DateTime(timezone=True), nullable=True),
     )
     op.create_index("ix_review_tasks_repository_id", "review_tasks", ["repository_id"])
+    op.create_index("ix_review_tasks_git_common_dir_hash", "review_tasks", ["git_common_dir_hash"])
     op.create_table(
         "task_worktrees",
         sa.Column("worktree_id", sa.String(128), primary_key=True),
@@ -80,6 +88,7 @@ def upgrade() -> None:
         sa.Column("logical_attempt_group", sa.String(128), nullable=False),
         sa.Column("status", sa.String(32), nullable=False),
         sa.Column("execution_attempts", sa.Integer(), nullable=False),
+        sa.Column("validation_attempts", sa.Integer(), nullable=False),
         sa.Column("artifact_ref", sa.String(128)),
         sa.Column("artifact_hash", sa.String(64)),
         sa.Column("error_code", sa.String(128)),
@@ -144,5 +153,6 @@ def downgrade() -> None:
     op.drop_table("jobs")
     op.drop_index("ix_task_worktrees_common_dir_hash", table_name="task_worktrees")
     op.drop_table("task_worktrees")
+    op.drop_index("ix_review_tasks_git_common_dir_hash", table_name="review_tasks")
     op.drop_index("ix_review_tasks_repository_id", table_name="review_tasks")
     op.drop_table("review_tasks")

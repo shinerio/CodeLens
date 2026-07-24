@@ -7,14 +7,13 @@ import time
 from pathlib import Path
 
 from codelens.bootstrap.settings import Settings
-from codelens.interface.http.dependencies import build_components
+from codelens.bootstrap.unified import build_unified_backend
 from codelens.review.application.commands import CreateReviewCommand
-from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
+from codelens.reviewer_catalog.domain.provider_config import ModelGateway, ModelGatewayCatalog
 from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
 )
 from codelens.testing.correctness_fixture import prepare_simple_branch_repository
-from codelens.worker.main import build_worker
 from codelens.workspace.domain.models import UncommittedScope
 
 
@@ -35,20 +34,30 @@ async def _run() -> int:
             data_dir=workspace / "data",
             repository_roots=(fixture.repository,),
         )
-        await FilesystemModelProviderConfigAdapter(settings.data_dir).save(
-            ModelProviderConfig(
-                api_key=api_key,
-                model=model,
-                base_url=os.environ.get("OPENAI_BASE_URL", "https://api.openai.com/v1"),
+        await FilesystemModelProviderConfigAdapter(settings.data_dir).save_catalog(
+            ModelGatewayCatalog(
+                active_gateway_id="gateway_live_smoke",
+                gateways=(
+                    ModelGateway(
+                        gateway_id="gateway_live_smoke",
+                        name="Live smoke gateway",
+                        api_key=api_key,
+                        model=model,
+                        base_url=os.environ.get(
+                            "OPENAI_BASE_URL", "https://api.openai.com/v1"
+                        ),
+                    ),
+                ),
             )
         )
-        components = build_components(settings)
-        worker = build_worker(settings)
+        backend = build_unified_backend(settings)
+        components = backend.components
         stop_event = asyncio.Event()
-        runner = asyncio.create_task(worker.run(stop_event))
+        runner: asyncio.Task[None] | None = None
         started = time.perf_counter()
         try:
-            await components.start()
+            await backend.start()
+            runner = asyncio.create_task(backend.scheduler.run(stop_event))
             repository = await components.repository_inspector.inspect(fixture.repository)
             review = await components.create_review.handle(
                 CreateReviewCommand(
@@ -75,8 +84,9 @@ async def _run() -> int:
             return 0
         finally:
             stop_event.set()
-            await runner
-            await components.close()
+            if runner is not None:
+                await runner
+            await backend.close()
 
 
 def main() -> None:

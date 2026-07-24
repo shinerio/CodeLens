@@ -1,13 +1,24 @@
 import hashlib
+from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
 from codelens.instruction_policy.domain.models import (
+    InstructionChain,
     InstructionDocument,
+    InstructionKind,
     InstructionParserPort,
     ResolvedInstructionSet,
 )
 
 _DEFAULT_MAX_INSTRUCTION_BYTES = 256 * 1024
+
+
+@dataclass(frozen=True)
+class _InstructionCandidate:
+    relative_path: Path
+    kind: InstructionKind
+    scope_path: str
+    precedence: int
 
 
 def _normalize_target_path(target_path: str) -> PurePosixPath:
@@ -17,8 +28,42 @@ def _normalize_target_path(target_path: str) -> PurePosixPath:
     return target
 
 
+def _instruction_directories(target: PurePosixPath) -> tuple[Path, ...]:
+    directories = [Path()]
+    current = Path()
+    for part in target.parent.parts:
+        current /= part
+        directories.append(current)
+    return tuple(directories)
+
+
+def _find_case_insensitive_file(
+    repository_root: Path,
+    relative_directory: Path,
+    logical_name: str,
+) -> Path | None:
+    directory = (repository_root / relative_directory).resolve()
+    if not directory.is_relative_to(repository_root):
+        raise ValueError("instruction directory escapes repository")
+    if not directory.is_dir():
+        return None
+
+    matches = tuple(
+        entry
+        for entry in sorted(directory.iterdir(), key=lambda path: path.name)
+        if entry.name.casefold() == logical_name.casefold() and entry.is_file()
+    )
+    if len(matches) > 1:
+        raise ValueError(
+            f"instruction document name is ambiguous in {relative_directory.as_posix()}"
+        )
+    if not matches:
+        return None
+    return relative_directory / matches[0].name
+
+
 class InstructionResolver:
-    """Resolve root-to-file control inputs in deterministic precedence order."""
+    """Resolve root-to-file control inputs in deterministic scope order."""
 
     def __init__(
         self,
@@ -36,17 +81,49 @@ class InstructionResolver:
 
         repository_root = repository.resolve()
         target = _normalize_target_path(target_path)
-        candidates = [Path("AGENTS.md"), Path("REVIEW.md")]
-        current = Path()
-        for part in target.parent.parts:
-            current /= part
-            candidates.append(current / "REVIEW.md")
-        candidates.append(Path(f"{target.as_posix()}.review.md"))
+        candidates: list[_InstructionCandidate] = []
+        discovery_rules: tuple[tuple[InstructionKind, str, int], ...] = (
+            ("agents", "agents.md", 0),
+            ("review", "review.md", 1),
+        )
+        for directory in _instruction_directories(target):
+            scope_path = "" if directory == Path() else directory.as_posix()
+            depth = len(directory.parts)
+            for kind, logical_name, rank in discovery_rules:
+                instruction = _find_case_insensitive_file(
+                    repository_root,
+                    directory,
+                    logical_name,
+                )
+                if instruction is not None:
+                    candidates.append(
+                        _InstructionCandidate(
+                            instruction,
+                            kind,
+                            scope_path,
+                            depth * 2 + rank,
+                        )
+                    )
+        file_instruction = _find_case_insensitive_file(
+            repository_root,
+            Path(target.parent.as_posix()),
+            f"{target.name}.review.md",
+        )
+        if file_instruction is not None:
+            candidates.append(
+                _InstructionCandidate(
+                    file_instruction,
+                    "file_review",
+                    target.as_posix(),
+                    len(target.parent.parts) * 2 + 2,
+                )
+            )
 
         documents: list[InstructionDocument] = []
         excludes: list[str] = []
         warnings: list[str] = []
-        for relative in dict.fromkeys(candidates):
+        for candidate in candidates:
+            relative = candidate.relative_path
             absolute = repository_root / relative
             if not absolute.is_file():
                 continue
@@ -64,6 +141,9 @@ class InstructionResolver:
                     relative_path=relative.as_posix(),
                     content=text,
                     content_hash=hashlib.sha256(raw).hexdigest(),
+                    kind=candidate.kind,
+                    scope_path=candidate.scope_path,
+                    precedence=candidate.precedence,
                 )
             )
             base = relative.parent.as_posix()
@@ -74,6 +154,12 @@ class InstructionResolver:
             warnings.extend(parsed.warnings)
         return ResolvedInstructionSet(
             documents=tuple(documents),
+            chains=(
+                InstructionChain(
+                    target_path=target.as_posix(),
+                    rule_paths=tuple(document.relative_path for document in documents),
+                ),
+            ),
             excludes=tuple(dict.fromkeys(excludes)),
             warnings=tuple(warnings),
         )

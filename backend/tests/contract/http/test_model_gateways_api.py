@@ -86,7 +86,6 @@ def test_multiple_model_gateways_are_redacted_switchable_and_persistent(
 
     with _client(tmp_path) as restarted_client:
         persisted = restarted_client.get("/api/settings/model-gateways")
-        legacy_active = restarted_client.get("/api/settings/openai")
         deleted = restarted_client.request(
             "DELETE",
             f"/api/settings/model-gateways/{secondary_id}",
@@ -96,11 +95,6 @@ def test_multiple_model_gateways_are_redacted_switchable_and_persistent(
     assert persisted.status_code == 200
     assert persisted.json()["active_gateway_id"] == secondary_id
     assert len(persisted.json()["gateways"]) == 2
-    assert legacy_active.json() == {
-        "is_configured": True,
-        "model": "gpt-secondary",
-        "base_url": "http://secondary.example:8080",
-    }
     assert deleted.status_code == 200, deleted.text
     assert deleted.json()["active_gateway_id"] == primary_id
     assert [gateway["name"] for gateway in deleted.json()["gateways"]] == [

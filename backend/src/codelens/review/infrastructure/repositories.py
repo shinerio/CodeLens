@@ -366,7 +366,7 @@ class SqlReviewStore:
         raw_path = row["repository_path"]
         raw_targets = row["target_paths_json"]
         if raw_path is None or raw_targets is None:
-            raise RuntimeError("legacy review lacks restart-safe execution inputs")
+            raise RuntimeError("review lacks restart-safe execution inputs")
         selected: list[str] = json.loads(str(row["selected_agent_versions_json"]))
         target_paths: list[str] = json.loads(str(raw_targets))
         repository_path = await asyncio.to_thread(_resolve_path, str(raw_path))
@@ -868,32 +868,6 @@ class SqlCheckpointStore:
             )
             if result.rowcount != 1:
                 raise InvalidAgentRunStateError("checkpoint has no saved output")
-
-        await self._database.run_transaction(operation)
-
-    async def mark_repair_pending(self, task_id: str, node_key: str) -> None:
-        """Schedule one repair attempt while retaining the first Artifact reference."""
-
-        async def operation(session: AsyncSession) -> None:
-            result = cast(
-                CursorResult[Any],
-                await session.execute(
-                    update(dag_checkpoints)
-                    .where(
-                        dag_checkpoints.c.task_id == task_id,
-                        dag_checkpoints.c.node_key == node_key,
-                        dag_checkpoints.c.status == "validating",
-                        dag_checkpoints.c.validation_attempts == 1,
-                    )
-                    .values(
-                        status="pending",
-                        error_code="finding_validation_failed",
-                        updated_at=_now(),
-                    )
-                ),
-            )
-            if result.rowcount != 1:
-                raise InvalidAgentRunStateError("checkpoint cannot schedule schema repair")
 
         await self._database.run_transaction(operation)
 

@@ -12,7 +12,7 @@ class AgentRuntimeError(DomainError):
         self,
         message: str,
         *,
-        phase: Literal["investigation", "finalizing", "unknown"] = "unknown",
+        phase: Literal["investigation", "unknown"] = "unknown",
         reason_code: str = "unknown_agent_failure",
         retryable: bool = False,
         provider_status_code: int | None = None,

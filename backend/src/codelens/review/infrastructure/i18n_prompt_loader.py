@@ -101,6 +101,9 @@ class I18nPromptLoader(I18nPromptLoaderPort):
         return LocalizedSystemPrompts(
             locale=directory.name,
             platform_policy=read_markdown("platform-policy.md"),
+            repository_instruction_policy=read_markdown(
+                "repository-instruction-policy.md"
+            ),
             output_contract=read_markdown("output-contract.md"),
             runtime_instruction=read_markdown("runtime-instruction.md"),
             tools=MappingProxyType(tools),

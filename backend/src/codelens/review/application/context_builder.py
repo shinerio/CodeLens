@@ -4,7 +4,11 @@ from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import Literal, Protocol
 
-from codelens.instruction_policy.domain.models import ResolvedInstructionSet
+from codelens.instruction_policy.domain.models import (
+    InstructionDocument,
+    InstructionKind,
+    ResolvedInstructionSet,
+)
 from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
 from codelens.workspace.domain.models import ReviewSnapshot
 
@@ -28,7 +32,7 @@ class ContextBudget:
     total_tokens: int
     platform_policy_tokens: int
     instruction_tokens: int
-    output_schema_tokens: int
+    output_contract_tokens: int
     changed_hunk_tokens: int
     max_excerpt_bytes: int
     max_line_chars: int
@@ -39,7 +43,7 @@ class ContextBudget:
             self.total_tokens,
             self.platform_policy_tokens,
             self.instruction_tokens,
-            self.output_schema_tokens,
+            self.output_contract_tokens,
             self.changed_hunk_tokens,
             self.max_excerpt_bytes,
             self.max_line_chars,
@@ -54,7 +58,7 @@ class ContextBudget:
         return (
             self.platform_policy_tokens
             + self.instruction_tokens
-            + self.output_schema_tokens
+            + self.output_contract_tokens
             + self.changed_hunk_tokens
         )
 
@@ -127,6 +131,27 @@ class ContextExcerpt:
 
 
 @dataclass(frozen=True)
+class RepositoryInstruction:
+    """Expose one deduplicated repository rule with explicit scope and precedence."""
+
+    path: str
+    kind: InstructionKind
+    scope_path: str
+    precedence: int
+    content_hash: str
+    trust_label: Literal["repository_instruction"]
+    content: str
+
+
+@dataclass(frozen=True)
+class RepositoryInstructionChain:
+    """Reference the general-to-specific rules applicable to one changed target."""
+
+    target_path: str
+    rule_paths: tuple[str, ...]
+
+
+@dataclass(frozen=True)
 class ContextDecision:
     """Record why a metadata candidate was included, omitted, or truncated."""
 
@@ -174,9 +199,10 @@ class AgentInput:
     snapshot_id: str
     output_locale: str
     platform_policy: str
-    output_schema: str
+    output_contract: str
     tool_catalog: tuple[dict[str, str], ...]
-    instructions: tuple[ContextExcerpt, ...]
+    repository_instructions: tuple[RepositoryInstruction, ...]
+    repository_instruction_chains: tuple[RepositoryInstructionChain, ...]
     changed_hunks: tuple[ContextExcerpt, ...]
     context: tuple[ContextExcerpt, ...]
     plan: ContextPlan
@@ -248,15 +274,18 @@ class ContextBuilder:
             instructions, budget, prompts.platform_policy, prompts.output_contract
         )
         self._validate_snapshot_controls(snapshot, instructions)
-        instruction_excerpts = self._instruction_excerpts(snapshot, instructions)
+        repository_instructions, instruction_chains = self._repository_instruction_payload(
+            snapshot, instructions
+        )
         if budget.tool_driven:
             return AgentInput(
                 snapshot_id=snapshot.snapshot_id,
                 output_locale=prompts.locale,
                 platform_policy=prompts.platform_policy,
-                output_schema=prompts.output_contract,
+                output_contract=prompts.output_contract,
                 tool_catalog=prompts.tool_catalog,
-                instructions=instruction_excerpts,
+                repository_instructions=repository_instructions,
+                repository_instruction_chains=instruction_chains,
                 changed_hunks=(),
                 context=(),
                 plan=ContextPlan(
@@ -264,7 +293,7 @@ class ContextBuilder:
                     reserved_tokens=budget.fixed_tokens,
                     used_tokens=budget.fixed_tokens,
                     decisions=(),
-                    visible_paths=tuple(excerpt.path for excerpt in instruction_excerpts),
+                    visible_paths=tuple(item.path for item in repository_instructions),
                 ),
             )
         candidates = tuple(
@@ -284,7 +313,10 @@ class ContextBuilder:
         )
         visible_paths = tuple(
             dict.fromkeys(
-                excerpt.path for excerpt in (*instruction_excerpts, *changed_hunks, *context)
+                (
+                    *(item.path for item in repository_instructions),
+                    *(excerpt.path for excerpt in (*changed_hunks, *context)),
+                )
             )
         )
         used_tokens = budget.total_tokens - remaining_tokens
@@ -292,9 +324,10 @@ class ContextBuilder:
             snapshot_id=snapshot.snapshot_id,
             output_locale=prompts.locale,
             platform_policy=prompts.platform_policy,
-            output_schema=prompts.output_contract,
+            output_contract=prompts.output_contract,
             tool_catalog=prompts.tool_catalog,
-            instructions=instruction_excerpts,
+            repository_instructions=repository_instructions,
+            repository_instruction_chains=instruction_chains,
             changed_hunks=changed_hunks,
             context=context,
             plan=ContextPlan(
@@ -311,12 +344,12 @@ class ContextBuilder:
         instructions: ResolvedInstructionSet,
         budget: ContextBudget,
         platform_policy: str,
-        output_schema: str,
+        output_contract: str,
     ) -> None:
         if _estimate_text_tokens(platform_policy) > budget.platform_policy_tokens:
             raise ContextBudgetError("platform policy exceeds its token reservation")
-        if _estimate_text_tokens(output_schema) > budget.output_schema_tokens:
-            raise ContextBudgetError("output schema exceeds its token reservation")
+        if _estimate_text_tokens(output_contract) > budget.output_contract_tokens:
+            raise ContextBudgetError("output contract exceeds its token reservation")
         instruction_tokens = sum(
             _estimate_text_tokens(document.content) for document in instructions.documents
         )
@@ -354,6 +387,9 @@ class ContextBuilder:
                 raise ContextContainmentError("changed hunk is outside the Snapshot targets")
 
         instruction_paths = set(snapshot.manifest.instruction_paths)
+        document_paths = {document.relative_path for document in instructions.documents}
+        if len(document_paths) != len(instructions.documents):
+            raise ContextContainmentError("resolved instructions contain duplicate documents")
         for document in instructions.documents:
             entry = entries.get(document.relative_path)
             if (
@@ -366,6 +402,42 @@ class ContextBuilder:
             actual_hash = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
             if actual_hash != document.content_hash or entry.content_hash != actual_hash:
                 raise ContextIntegrityError("instruction content is stale or corrupted")
+
+        chains_by_target = {chain.target_path: chain for chain in instructions.chains}
+        if len(chains_by_target) != len(instructions.chains):
+            raise ContextContainmentError("resolved instructions contain duplicate target chains")
+        active_targets = set(snapshot.manifest.target_paths)
+        if not active_targets.issubset(chains_by_target):
+            raise ContextContainmentError("Snapshot target has no repository instruction chain")
+        documents_by_path = {
+            document.relative_path: document for document in instructions.documents
+        }
+        for chain in instructions.chains:
+            if not ContextBuilder._is_normalized_relative(chain.target_path):
+                raise ContextContainmentError("instruction chain target path is unsafe")
+            priorities: list[int] = []
+            for rule_path in chain.rule_paths:
+                chain_document = documents_by_path.get(rule_path)
+                if chain_document is None:
+                    raise ContextContainmentError(
+                        "instruction chain references an unknown document"
+                    )
+                if not ContextBuilder._instruction_applies(chain_document, chain.target_path):
+                    raise ContextContainmentError(
+                        "instruction document is outside its target scope"
+                    )
+                priorities.append(chain_document.precedence)
+            if priorities != sorted(priorities) or len(priorities) != len(set(priorities)):
+                raise ContextContainmentError("instruction chain precedence is not deterministic")
+
+    @staticmethod
+    def _instruction_applies(document: InstructionDocument, target_path: str) -> bool:
+        if document.kind == "file_review":
+            return document.scope_path == target_path
+        target_parent = PurePosixPath(target_path).parent
+        return not document.scope_path or target_parent.is_relative_to(
+            PurePosixPath(document.scope_path)
+        )
 
     @staticmethod
     def _validate_candidates(
@@ -439,23 +511,35 @@ class ContextBuilder:
         return tuple(selected), tuple(decisions), remaining
 
     @staticmethod
-    def _instruction_excerpts(
+    def _repository_instruction_payload(
         snapshot: ReviewSnapshot,
         instructions: ResolvedInstructionSet,
-    ) -> tuple[ContextExcerpt, ...]:
-        return tuple(
-            ContextExcerpt(
-                snapshot_id=snapshot.snapshot_id,
+    ) -> tuple[tuple[RepositoryInstruction, ...], tuple[RepositoryInstructionChain, ...]]:
+        chains_by_target = {chain.target_path: chain for chain in instructions.chains}
+        active_chains = tuple(
+            RepositoryInstructionChain(target_path, chains_by_target[target_path].rule_paths)
+            for target_path in snapshot.manifest.target_paths
+        )
+        active_rule_paths = {
+            rule_path for chain in active_chains for rule_path in chain.rule_paths
+        }
+        documents = tuple(
+            RepositoryInstruction(
                 path=document.relative_path,
-                start_line=1,
-                end_line=max(1, len(document.content.splitlines())),
+                kind=document.kind,
+                scope_path=document.scope_path,
+                precedence=document.precedence,
                 content_hash=document.content_hash,
-                selection_reason="applicable_instruction",
                 trust_label="repository_instruction",
                 content=document.content,
             )
-            for document in instructions.documents
+            for document in sorted(
+                instructions.documents,
+                key=lambda item: (item.precedence, item.relative_path),
+            )
+            if document.relative_path in active_rule_paths
         )
+        return documents, active_chains
 
     async def _changed_hunk_excerpts(
         self,

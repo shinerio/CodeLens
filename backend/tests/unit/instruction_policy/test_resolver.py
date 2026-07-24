@@ -9,13 +9,15 @@ def test_resolves_ordered_instruction_chain_even_when_rule_file_is_ignored(
     tmp_path: Path,
 ) -> None:
     (tmp_path / ".gitignore").write_text("REVIEW.md\n", encoding="utf-8")
-    (tmp_path / "AGENTS.md").write_text("Repository conventions", encoding="utf-8")
-    (tmp_path / "REVIEW.md").write_text("Root review", encoding="utf-8")
+    (tmp_path / "aGeNtS.Md").write_text("Repository conventions", encoding="utf-8")
+    (tmp_path / "rEvIeW.mD").write_text("Root review", encoding="utf-8")
     target_dir = tmp_path / "src" / "payments"
     target_dir.mkdir(parents=True)
-    (tmp_path / "src" / "REVIEW.md").write_text("Source rules", encoding="utf-8")
-    (target_dir / "REVIEW.md").write_text("Payment rules", encoding="utf-8")
-    (target_dir / "payment.py.review.md").write_text("File rules", encoding="utf-8")
+    (tmp_path / "src" / "AGENTS.MD").write_text("Source conventions", encoding="utf-8")
+    (tmp_path / "src" / "Review.md").write_text("Source rules", encoding="utf-8")
+    (target_dir / "agents.md").write_text("Payment conventions", encoding="utf-8")
+    (target_dir / "REVIEW.MD").write_text("Payment rules", encoding="utf-8")
+    (target_dir / "payment.py.ReViEw.Md").write_text("File rules", encoding="utf-8")
     (target_dir / "payment.py").write_text("pass\n", encoding="utf-8")
 
     resolved = InstructionResolver(MarkdownInstructionParser()).resolve(
@@ -24,12 +26,38 @@ def test_resolves_ordered_instruction_chain_even_when_rule_file_is_ignored(
     )
 
     assert [document.relative_path for document in resolved.documents] == [
-        "AGENTS.md",
-        "REVIEW.md",
-        "src/REVIEW.md",
-        "src/payments/REVIEW.md",
-        "src/payments/payment.py.review.md",
+        "aGeNtS.Md",
+        "rEvIeW.mD",
+        "src/AGENTS.MD",
+        "src/Review.md",
+        "src/payments/agents.md",
+        "src/payments/REVIEW.MD",
+        "src/payments/payment.py.ReViEw.Md",
     ]
+    assert [document.kind for document in resolved.documents] == [
+        "agents",
+        "review",
+        "agents",
+        "review",
+        "agents",
+        "review",
+        "file_review",
+    ]
+    assert [document.scope_path for document in resolved.documents] == [
+        "",
+        "",
+        "src",
+        "src",
+        "src/payments",
+        "src/payments",
+        "src/payments/payment.py",
+    ]
+    assert [document.precedence for document in resolved.documents] == [0, 1, 2, 3, 4, 5, 6]
+    assert len(resolved.chains) == 1
+    assert resolved.chains[0].target_path == "src/payments/payment.py"
+    assert resolved.chains[0].rule_paths == tuple(
+        document.relative_path for document in resolved.documents
+    )
 
 
 def test_parses_frontmatter_and_skip_heading(tmp_path: Path) -> None:

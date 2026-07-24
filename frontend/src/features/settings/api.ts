@@ -3,7 +3,6 @@ import type {
   CreateModelGateway,
   GatewayTestResult,
   ModelGatewayCatalog,
-  OpenAISettings,
   RuntimeLogLevel,
   RuntimeLogLevelSettings,
   UpdateModelGateway,
@@ -57,11 +56,6 @@ export async function deleteModelGateway(gatewayId: string): Promise<ModelGatewa
     method: "DELETE",
     body: JSON.stringify({}),
   });
-}
-
-/** Compatibility query retained for older callers while the UI uses the gateway catalog. */
-export async function getOpenAISettings(): Promise<OpenAISettings> {
-  return api<OpenAISettings>("/settings/openai");
 }
 
 export async function testGatewayConnectivity(gatewayId: string): Promise<GatewayTestResult> {

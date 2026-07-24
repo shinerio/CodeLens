@@ -2,12 +2,14 @@
 
 ## 后续功能
 
-- 支持用户人工划词 review，并学习用户的 review 意见，放到根目录 `REVIEW.md`、当前文件夹下
-  `REVIEW.md` 或指定文件的 `<filename>.review.md` 中（放到最合适的一处即可）。
-- 支持 `rules/` 目录下每种 Agent 提供一个单独的同名 `.review.md` 文件。
+- 支持用户人工划词 review，并学习用户的 review 意见，放到根目录 `REVIEW.md`、当前文件夹下`REVIEW.md` 或指定文件的 `<filename>.review.md` 中（放到最合适的一处即可）。
+- review.md，支持每个agent定义专属<agent_name>.review.md文件。review.md为所有agent共享约束。
 - 主AGENT输出完整报告前，需要二次确认是否存在误报的REVIEW
-- 支持REVIEW意见的整理，然后输出为长久记忆
-- 每个AGENT支持修改提示词（保留默认提示词，支持重置为默认）
+- 支持REVIEW意见的整理，然后输出为长久记忆·
+- review意见要按照等级分类
+- 检查是否限制每个agents.md和review.md的大小，已经总instructions大小，避免无法输入其他代码内容或其他提示词
+- 工具可用性检测以及windows平台兼容性检测
+- sys prompt提示词优化，无用的结构或者重复的结构
 
 ## 前端预览页待接入功能
 

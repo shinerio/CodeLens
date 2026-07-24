@@ -14,10 +14,8 @@ from codelens.interface.http.dto import (
     GatewayConnectivityTestResponse,
     ModelGatewayCatalogResponse,
     ModelGatewayResponse,
-    OpenAISettingsResponse,
     RuntimeLogLevelResponse,
     UpdateModelGatewayRequest,
-    UpdateOpenAISettingsRequest,
     UpdateRuntimeLogLevelRequest,
 )
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
@@ -186,37 +184,4 @@ async def test_gateway_availability(
         ok=result.ok,
         latency_ms=result.latency_ms,
         detail=result.detail,
-    )
-
-
-@router.get("/openai", response_model=OpenAISettingsResponse)
-async def get_openai_settings(
-    components: Annotated[HttpComponents, Depends(get_components)],
-) -> OpenAISettingsResponse:
-    """Return provider readiness without exposing the stored API key."""
-
-    view = await components.get_provider_settings.handle()
-    return OpenAISettingsResponse(
-        is_configured=view.is_configured,
-        model=view.model,
-        base_url=view.base_url,
-    )
-
-
-@router.put("/openai", response_model=OpenAISettingsResponse)
-async def update_openai_settings(
-    request: UpdateOpenAISettingsRequest,
-    components: Annotated[HttpComponents, Depends(get_components)],
-) -> OpenAISettingsResponse:
-    """Validate and atomically replace the model provider Secret Store entry."""
-
-    view = await components.update_provider_settings.handle(
-        api_key=request.api_key.get_secret_value(),
-        model=request.model,
-        base_url=str(request.base_url).rstrip("/"),
-    )
-    return OpenAISettingsResponse(
-        is_configured=view.is_configured,
-        model=view.model,
-        base_url=view.base_url,
     )

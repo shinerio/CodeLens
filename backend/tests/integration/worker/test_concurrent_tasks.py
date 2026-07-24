@@ -4,12 +4,12 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from codelens.bootstrap.settings import Settings
+from codelens.bootstrap.unified import build_unified_backend
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import UnvalidatedAgentOutput
 from codelens.review.infrastructure.database import Database
-from codelens.review.infrastructure.repositories import SqlReviewStore
-from codelens.worker.main import build_worker
+from codelens.review.infrastructure.repositories import SqlReviewStore, SqlWorktreeRegistry
 from codelens.worker.scheduler import ReviewScheduler, WorkerSemaphores
 from codelens.workspace.domain.models import BranchScope, ReviewSnapshot, ReviewTarget
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -242,12 +242,14 @@ async def test_two_refs_in_one_real_repository_review_in_distinct_worktrees(
     await database.dispose()
 
     runtime = GatedRuntime()
-    worker = build_worker(settings, runtime=runtime)
+    backend = build_unified_backend(settings, runtime=runtime)
+    worktree_registry = SqlWorktreeRegistry(backend.components.database, settings.data_dir)
     stop = asyncio.Event()
-    running = asyncio.create_task(worker.run(stop))
+    await backend.components.start()
+    running = asyncio.create_task(backend.scheduler.run(stop))
     try:
         await asyncio.wait_for(runtime.entered.wait(), timeout=5)
-        worktrees = await worker.worktree_registry.list_all()
+        worktrees = await worktree_registry.list_all()
         assert len(worktrees) == 2
         assert len({item.root for item in worktrees}) == 2
         assert runtime.maximum == 2
@@ -255,7 +257,7 @@ async def test_two_refs_in_one_real_repository_review_in_distinct_worktrees(
         runtime.release.set()
         for _attempt in range(100):
             statuses = [
-                (await worker.review_store.get_review(f"review-{index}")).status  # type: ignore[union-attr]
+                (await backend.components.review_store.get_review(f"review-{index}")).status  # type: ignore[union-attr]
                 for index in (1, 2)
             ]
             if statuses == ["completed", "completed"]:
@@ -263,15 +265,15 @@ async def test_two_refs_in_one_real_repository_review_in_distinct_worktrees(
             await asyncio.sleep(0.01)
         assert statuses == ["completed", "completed"]
         for index, (_, source_path, _) in enumerate(heads, start=1):
-            findings = await worker.review_store.list_findings(f"review-{index}")
+            findings = await backend.components.review_store.list_findings(f"review-{index}")
             assert len(findings) == 1
             assert findings[0].title == "Fixture change needs review"
             assert findings[0].primary_location.path == source_path
         for _attempt in range(100):
-            if not await worker.worktree_registry.list_all():
+            if not await worktree_registry.list_all():
                 break
             await asyncio.sleep(0.01)
-        assert await worker.worktree_registry.list_all() == ()
+        assert await worktree_registry.list_all() == ()
     finally:
         runtime.release.set()
         stop.set()

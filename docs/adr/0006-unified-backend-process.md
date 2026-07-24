@@ -22,7 +22,7 @@ Merge API and Worker into a single unified backend process with shared in-memory
 
 2. **Shared Transcript Store**: Replace Unix Socket IPC with direct `WorkerTranscriptStore` references. Transcripts remain in memory during execution and are persisted to task artifacts only after review completion.
 
-3. **Unified Process**: API and Worker run in the same asyncio event loop, sharing the database connection pool, event bus, and transcript store. The `start` command launches the unified backend; `api` and `worker` commands are deprecated but retained for backward compatibility.
+3. **Unified Process**: API and Worker run in the same asyncio event loop, sharing the database connection pool, event bus, and transcript store. The `start` command is the only backend process command.
 
 ## Consequences
 
@@ -33,7 +33,7 @@ Merge API and Worker into a single unified backend process with shared in-memory
 - Transcripts are immediately available to API without socket relay latency
 
 **Negative:**
-- API and Worker can no longer be started independently (though deprecated commands remain)
+- API and Worker cannot be started independently.
 - Process failure affects both API and Worker simultaneously (mitigated by existing restart recovery)
 
 **Neutral:**

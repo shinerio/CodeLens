@@ -11,70 +11,10 @@ from codelens.reviewer_catalog.domain.provider_config import (
     ModelGatewayCatalog,
     ModelGatewayProbePort,
     ModelGatewayStorePort,
-    ModelProviderConfig,
-    ModelProviderConfigPort,
     ModelProviderVendor,
     ThinkingLevel,
 )
 from codelens.shared.domain.errors import DomainError
-
-
-@dataclass(frozen=True)
-class ProviderSettingsView:
-    """Expose provider readiness without returning its credential."""
-
-    is_configured: bool
-    model: str | None
-    base_url: str | None
-
-
-class GetProviderSettingsHandler:
-    """Read a redacted view of the configured model provider."""
-
-    def __init__(self, store: ModelProviderConfigPort) -> None:
-        self._store = store
-
-    async def handle(self) -> ProviderSettingsView:
-        """Return a read model that never contains the provider credential."""
-
-        config = await self._store.load()
-        if config is None:
-            return ProviderSettingsView(False, None, None)
-        return ProviderSettingsView(True, config.model, config.base_url)
-
-
-class UpdateProviderSettingsHandler:
-    """Replace provider settings through the injected Secret Store port."""
-
-    def __init__(self, store: ModelProviderConfigPort) -> None:
-        self._store = store
-
-    async def handle(
-        self,
-        *,
-        api_key: str,
-        model: str,
-        base_url: str,
-        vendor: ModelProviderVendor = "openai",
-        api_type: GatewayApiType = "chat_completions",
-        max_tokens: int = 65536,
-        thinking_level: ThinkingLevel = "disabled",
-        agent_timeout: int = 1800,
-    ) -> ProviderSettingsView:
-        """Persist one complete provider configuration and return its redacted view."""
-
-        config = ModelProviderConfig(
-            api_key=api_key,
-            model=model,
-            base_url=base_url,
-            vendor=vendor,
-            api_type=api_type,
-            max_tokens=max_tokens,
-            thinking_level=thinking_level,
-            agent_timeout=agent_timeout,
-        )
-        await self._store.save(config)
-        return ProviderSettingsView(True, config.model, config.base_url)
 
 
 class ModelGatewayNotFoundError(DomainError):

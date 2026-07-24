@@ -114,15 +114,10 @@ class ModelGatewayProbePort(Protocol):
 
 
 class ModelProviderConfigPort(Protocol):
-    """Persist model credentials without exposing storage details to callers."""
+    """Load the active model gateway without exposing storage details to callers."""
 
     async def load(self) -> ModelProviderConfig | None:
         """Return the current configuration or ``None`` when it has not been supplied."""
-
-        raise NotImplementedError
-
-    async def save(self, config: ModelProviderConfig) -> None:
-        """Atomically replace the current provider configuration."""
 
         raise NotImplementedError
 

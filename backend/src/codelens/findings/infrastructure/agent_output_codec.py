@@ -20,12 +20,6 @@ class AgentOutputCodec:
         if self.schema_version != "1":
             raise AgentOutputCodecError("unsupported Agent output schema version")
 
-    @property
-    def output_type(self) -> type[object]:
-        """Return the Pydantic boundary type without leaking it through the Port."""
-
-        return FindingBatchSchema
-
     def encode(self, final_output: object) -> bytes:
         """Revalidate SDK output and serialize only the declared envelope."""
 
@@ -41,16 +35,6 @@ class AgentOutputCodec:
             sort_keys=True,
             separators=(",", ":"),
         ).encode("utf-8")
-
-    def json_schema(self) -> str:
-        """Expose the stable envelope schema without coupling runtimes to Pydantic types."""
-
-        return json.dumps(
-            FindingBatchSchema.model_json_schema(),
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
 
     def decode(self, payload: bytes) -> FindingBatchSchema:
         """Revalidate persisted checkpoint bytes before downstream domain validation."""

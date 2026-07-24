@@ -23,7 +23,7 @@ class AgentVersion:
     version: int
     prompt_template: str
     model_profile_id: str
-    output_schema_version: str
+    output_contract_version: str
     timeout_seconds: float
     max_turns: int
     token_budget: int
@@ -31,5 +31,3 @@ class AgentVersion:
     failure_policy: str
     mode_support: tuple[ReviewMode, ...]
     content_hash: str
-    finalization_prompt: str = ""
-    format_repair_prompt: str = ""

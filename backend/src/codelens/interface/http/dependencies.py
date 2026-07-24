@@ -25,9 +25,7 @@ from codelens.review.infrastructure.transcripts import (
 )
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.application.provider_settings import (
-    GetProviderSettingsHandler,
     ModelGatewaySettingsService,
-    UpdateProviderSettingsHandler,
 )
 from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
     FilesystemReviewerPromptStore,
@@ -74,8 +72,6 @@ class HttpComponents:
     event_bus: InMemoryEventBus
     review_store: SqlReviewStore
     input_artifacts: FilesystemInputArtifactStore
-    get_provider_settings: GetProviderSettingsHandler
-    update_provider_settings: UpdateProviderSettingsHandler
     model_gateways: ModelGatewaySettingsService
     reviewer_prompts: ReviewerPromptSettingsService
     transcripts: ExecutionTranscriptStore
@@ -142,8 +138,6 @@ def build_components(settings: Settings) -> HttpComponents:
         event_bus=event_bus,
         review_store=review_store,
         input_artifacts=input_artifacts,
-        get_provider_settings=GetProviderSettingsHandler(provider_config),
-        update_provider_settings=UpdateProviderSettingsHandler(provider_config),
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()
         ),

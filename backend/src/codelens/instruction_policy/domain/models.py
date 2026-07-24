@@ -1,15 +1,28 @@
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
+
+type InstructionKind = Literal["agents", "review", "file_review"]
 
 
 @dataclass(frozen=True)
 class InstructionDocument:
-    """Freeze one ordered control document and its content identity."""
+    """Freeze one scoped control document, its precedence, and content identity."""
 
     relative_path: str
     content: str
     content_hash: str
+    kind: InstructionKind
+    scope_path: str
+    precedence: int
+
+
+@dataclass(frozen=True)
+class InstructionChain:
+    """Order the repository rules applicable to one target from general to specific."""
+
+    target_path: str
+    rule_paths: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -23,9 +36,10 @@ class ParsedInstruction:
 
 @dataclass(frozen=True)
 class ResolvedInstructionSet:
-    """Contain the complete ordered rule chain applicable to one target path."""
+    """Contain deduplicated documents and target-specific ordered rule chains."""
 
     documents: tuple[InstructionDocument, ...]
+    chains: tuple[InstructionChain, ...]
     excludes: tuple[str, ...]
     warnings: tuple[str, ...]
 

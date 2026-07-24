@@ -1,7 +1,5 @@
 """Unit tests for the in-memory event bus."""
 
-import asyncio
-
 from codelens.review.domain.ports import ReviewEvent
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 

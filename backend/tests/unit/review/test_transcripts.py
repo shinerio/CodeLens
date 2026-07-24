@@ -1,7 +1,5 @@
 from pathlib import Path
 
-import pytest
-
 from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
     WorkerTranscriptStore,
@@ -75,7 +73,7 @@ async def test_transcript_keeps_complete_stream_chunks_without_truncation(tmp_pa
     assert not entry.truncated
 
 
-async def test_transcript_append_ignores_a_stale_legacy_temporary_file(tmp_path: Path) -> None:
+async def test_transcript_append_ignores_a_stale_temporary_file(tmp_path: Path) -> None:
     """A previous interrupted write cannot prevent a Worker from resuming a Review."""
 
     store = ExecutionTranscriptStore(tmp_path)
@@ -97,7 +95,9 @@ async def test_worker_transcript_keeps_entries_in_memory_until_finalize(tmp_path
 
     await worker_store.append(task_id, "model_output_delta", "visible while running")
 
-    assert [entry.content for entry in await worker_store.list(task_id)] == ["visible while running"]
+    assert [entry.content for entry in await worker_store.list(task_id)] == [
+        "visible while running"
+    ]
     assert await durable.list(task_id) == ()
 
     await worker_store.finalize(task_id)

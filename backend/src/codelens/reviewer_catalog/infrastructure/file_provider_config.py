@@ -42,16 +42,11 @@ class _StoredGatewayCatalog(TypedDict):
 
 
 class FilesystemModelProviderConfigAdapter:
-    """Persist multiple gateway secrets in one owner-only atomic catalog file.
-
-    The adapter also reads the former single-provider file and migrates it on the
-    next write, so upgrades do not discard an already configured credential.
-    """
+    """Persist multiple gateway secrets in one owner-only atomic catalog file."""
 
     def __init__(self, data_dir: Path) -> None:
         self._directory = data_dir.expanduser().resolve() / "secrets"
         self._path = self._directory / "model-gateways.json"
-        self._legacy_path = self._directory / "openai-provider.json"
 
     async def load(self) -> ModelProviderConfig | None:
         """Load the currently active provider without logging secret contents."""
@@ -59,35 +54,6 @@ class FilesystemModelProviderConfigAdapter:
         catalog = await self.load_catalog()
         gateway = catalog.active_gateway
         return gateway.provider_config if gateway is not None else None
-
-    async def save(self, config: ModelProviderConfig) -> None:
-        """Compatibility write that replaces or creates the active gateway."""
-
-        catalog = await self.load_catalog()
-        active = catalog.active_gateway
-        gateway = ModelGateway(
-            gateway_id=active.gateway_id if active is not None else "gateway_default",
-            name=active.name if active is not None else "Default gateway",
-            api_key=config.api_key,
-            model=config.model,
-                base_url=config.base_url,
-                vendor=active.vendor if active is not None else "openai",
-            api_type=config.api_type,
-            max_tokens=config.max_tokens,
-            thinking_level=config.thinking_level,
-            agent_timeout=config.agent_timeout,
-        )
-        if active is None:
-            updated = ModelGatewayCatalog(gateway.gateway_id, (gateway,))
-        else:
-            updated = ModelGatewayCatalog(
-                catalog.active_gateway_id,
-                tuple(
-                    gateway if item.gateway_id == active.gateway_id else item
-                    for item in catalog.gateways
-                ),
-            )
-        await self.save_catalog(updated)
 
     async def load_catalog(self) -> ModelGatewayCatalog:
         """Load and validate the complete gateway catalog off the event loop."""
@@ -102,39 +68,11 @@ class FilesystemModelProviderConfigAdapter:
     def _load_catalog_sync(self) -> ModelGatewayCatalog:
         if self._path.is_file():
             return self._parse_catalog(self._read_json(self._path))
-        if self._legacy_path.is_file():
-            legacy = self._parse_provider(self._read_json(self._legacy_path))
-            gateway = ModelGateway(
-                gateway_id="gateway_legacy",
-                name="Imported gateway",
-                api_key=legacy.api_key,
-                model=legacy.model,
-                base_url=legacy.base_url,
-                max_tokens=legacy.max_tokens,
-                thinking_level=legacy.thinking_level,
-                agent_timeout=legacy.agent_timeout,
-            )
-            return ModelGatewayCatalog(gateway.gateway_id, (gateway,))
         return ModelGatewayCatalog(None, ())
 
     @staticmethod
     def _read_json(path: Path) -> object:
         return json.loads(path.read_text(encoding="utf-8"))
-
-    @staticmethod
-    def _parse_provider(payload: object) -> ModelProviderConfig:
-        if not isinstance(payload, dict):
-            raise ValueError("provider configuration is invalid")
-        keys = {"api_key", "model", "base_url"}
-        if set(payload) != keys or any(
-            not isinstance(payload[key], str) or not payload[key].strip() for key in keys
-        ):
-            raise ValueError("provider configuration is invalid")
-        return ModelProviderConfig(
-            api_key=cast(str, payload["api_key"]),
-            model=cast(str, payload["model"]),
-            base_url=cast(str, payload["base_url"]),
-        )
 
     @classmethod
     def _parse_catalog(cls, payload: object) -> ModelGatewayCatalog:
@@ -229,7 +167,6 @@ class FilesystemModelProviderConfigAdapter:
                 os.fsync(stream.fileno())
             os.replace(temporary_path, self._path)
             os.chmod(self._path, 0o600)
-            self._legacy_path.unlink(missing_ok=True)
         finally:
             if descriptor >= 0:
                 os.close(descriptor)

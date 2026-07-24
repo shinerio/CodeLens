@@ -123,9 +123,6 @@ class SqlCheckpointPortAdapter:
     async def mark_validating(self, task_id: str, node_key: str) -> None:
         await self._checkpoints.mark_validating(task_id, node_key)
 
-    async def mark_repair_pending(self, task_id: str, node_key: str) -> None:
-        await self._checkpoints.mark_repair_pending(task_id, node_key)
-
 
 class SqlJobQueuePortAdapter:
     """Narrow the concrete SQLite queue to the scheduler claim contract."""
@@ -335,8 +332,6 @@ class WorkerReviewExecutor:
                     replace(
                         agent,
                         prompt_template=view.prompt,
-                        finalization_prompt=view.finalization_prompt,
-                        format_repair_prompt=view.format_repair_prompt,
                     )
                 )
             return tuple(agents)
@@ -349,7 +344,7 @@ class WorkerReviewExecutor:
             total_tokens=agent.token_budget,
             platform_policy_tokens=128,
             instruction_tokens=8_192,
-            output_schema_tokens=128,
+            output_contract_tokens=128,
             changed_hunk_tokens=8_192,
             max_excerpt_bytes=64 * 1024,
             max_line_chars=2_000,

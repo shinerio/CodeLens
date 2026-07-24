@@ -174,19 +174,8 @@ class AgentOutputCodecPort(Protocol):
 
         raise NotImplementedError
 
-    @property
-    def output_type(self) -> type[object]:
-        """Return the boundary model type passed to the structured-output SDK."""
-
-        raise NotImplementedError
-
     def encode(self, final_output: object) -> bytes:
         """Revalidate untrusted output and return canonical checkpoint bytes."""
-
-        raise NotImplementedError
-
-    def json_schema(self) -> str:
-        """Return the compact JSON Schema needed by a non-structured provider request."""
 
         raise NotImplementedError
 

@@ -14,7 +14,7 @@ CodeLens 是绑定回环地址的单用户本机应用。启动时要求仓库�
 - `/api/repositories/browse` 只返回有上限的目录列表和 Git 仓库标记，不返回普通文件或内容；列表逐项验证启动用户的读取/进入权限，无权限或系统特殊目录异常会被跳过，不影响同级可访问目录。
 - `/api/repositories/catalog` 使用固定 Git 命令参数返回全部本地/远程分支，以及每页 10 条的 Commit 元数据。UI 只通过下拉框提交服务端返回的 ref。
 - Review 记录新增创建时间、仓库显示名和 `deleted_at` tombstone。`GET /api/reviews` 只列出可见工作空间；删除活动 Review 时在同一持久化边界内写入取消意图和软删除标记。
-- 前端路由以 `/reviews/new` 和 `/reviews/{task_id}` 表达工作空间；旧 `/runs/{task_id}` 路由暂时兼容。
+- 前端路由以 `/reviews/new` 创建 Review，并以 `/runs` 与 `/runs/{task_id}` 展示执行工作空间。
 
 ## 结果
 

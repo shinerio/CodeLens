@@ -21,6 +21,7 @@ class LocalizedSystemPrompts:
 
     locale: str
     platform_policy: str
+    repository_instruction_policy: str
     output_contract: str
     runtime_instruction: str
     tools: Mapping[str, SystemToolPrompt]

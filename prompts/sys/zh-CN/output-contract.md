@@ -1,1 +1,1 @@
-使用 comment 提交问题，调用 task_done 结束，不要在最终文本中返回 FindingBatch JSON。
+使用 `comment` 提交 Finding。审查完成后只调用一次 `task_done`。最终文本会被忽略。

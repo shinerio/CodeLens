@@ -116,7 +116,7 @@ def _agent() -> AgentVersion:
         version=1,
         prompt_template="PROMPT_SECRET: inspect the bounded Snapshot input.",
         model_profile_id="balanced",
-        output_schema_version="1",
+        output_contract_version="1",
         timeout_seconds=30.0,
         max_turns=3,
         token_budget=8_000,
@@ -124,8 +124,6 @@ def _agent() -> AgentVersion:
         failure_policy="fail_task",
         mode_support=(ReviewMode.REVIEW,),
         content_hash="a" * 64,
-        finalization_prompt="Final output: {{finding_batch_schema}}",
-        format_repair_prompt="Repair output: {{finding_batch_schema}}",
     )
 
 
@@ -167,8 +165,13 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
 
     sdk_agent = runner.calls[0][0]
     assert sdk_agent is not None
-    assert sdk_agent.output_type is None
-    assert sdk_agent.instructions.startswith(_agent().prompt_template)
+    assert sdk_agent.instructions.startswith("Review Snapshot code only")
+    assert "Repository instruction chains are ordered from general to specific" in (
+        sdk_agent.instructions
+    )
+    assert sdk_agent.instructions.index("Review Snapshot code only") < sdk_agent.instructions.index(
+        _agent().prompt_template
+    )
     assert "Submit every concrete finding with the `comment` tool" in sdk_agent.instructions
     assert "call `task_done`" in sdk_agent.instructions
     assert [tool.name for tool in sdk_agent.tools] == [
@@ -244,8 +247,8 @@ async def test_ignores_model_final_text_without_a_comment_tool_call() -> None:
     assert payload["findings"] == []
 
 
-async def test_does_not_run_format_repair_for_model_final_text() -> None:
-    class FormatRepairRunner(FakeRunner):
+async def test_model_final_text_never_triggers_a_second_model_call() -> None:
+    class SecondCallFailingRunner(FakeRunner):
         async def run(
             self,
             starting_agent: Agent[None],
@@ -259,7 +262,7 @@ async def test_does_not_run_format_repair_for_model_final_text() -> None:
                 return FakeResult("not a FindingBatch", ())
             return FakeResult(FindingBatchSchema(schema_version="1", findings=()), ())
 
-    runner = FormatRepairRunner(FakeResult({}, ()))
+    runner = SecondCallFailingRunner(FakeResult({}, ()))
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
@@ -274,8 +277,8 @@ async def test_does_not_run_format_repair_for_model_final_text() -> None:
     assert [call[0].name for call in runner.calls] == ["correctness:v1"]
 
 
-async def test_does_not_request_structured_finalizer_from_gateway() -> None:
-    class SchemaRejectingRunner(FakeRunner):
+async def test_gateway_schema_rejection_is_not_retried_as_plain_json() -> None:
+    class SecondCallSchemaRejectingRunner(FakeRunner):
         async def run(
             self,
             starting_agent: Agent[None],
@@ -296,7 +299,7 @@ async def test_does_not_request_structured_finalizer_from_gateway() -> None:
                 return FakeResult('{"schema_version":"1","findings":[]}', ())
             return FakeResult({}, ())
 
-    runner = SchemaRejectingRunner(FakeResult({}, ()))
+    runner = SecondCallSchemaRejectingRunner(FakeResult({}, ()))
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
@@ -311,7 +314,7 @@ async def test_does_not_request_structured_finalizer_from_gateway() -> None:
     assert [call[0].name for call in runner.calls] == ["correctness:v1"]
 
 
-async def test_does_not_emit_finalizer_events(
+async def test_streaming_investigation_closes_client_without_extra_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RecordingClient:
@@ -323,7 +326,7 @@ async def test_does_not_emit_finalizer_events(
             self.is_closed = True
             self.close_count += 1
 
-    class ClientAwareRepairRunner(FakeRunner):
+    class ClientAwareRunner(FakeRunner):
         async def run(
             self,
             starting_agent: Agent[None],
@@ -354,7 +357,7 @@ async def test_does_not_emit_finalizer_events(
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
         prompt_loader=_prompt_loader(),
-        runner=ClientAwareRepairRunner(FakeResult({}, ())),
+        runner=ClientAwareRunner(FakeResult({}, ())),
     )
 
     output = await runtime.invoke_stream(
@@ -411,8 +414,8 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
     assert captured.value.retryable is True
 
 
-async def test_does_not_make_a_finalizer_request() -> None:
-    class FinalizerFailingRunner(FakeRunner):
+async def test_does_not_make_a_second_model_request() -> None:
+    class SecondRequestFailingRunner(FakeRunner):
         async def run(
             self,
             starting_agent: Agent[None],
@@ -431,15 +434,15 @@ async def test_does_not_make_a_finalizer_request() -> None:
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
         prompt_loader=_prompt_loader(),
-        runner=FinalizerFailingRunner(FakeResult({}, ())),
+        runner=SecondRequestFailingRunner(FakeResult({}, ())),
     )
 
     output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
 
 
-async def test_does_not_retry_a_finalizer_that_is_not_used() -> None:
-    class RetryingFinalizerRunner(FakeRunner):
+async def test_investigation_retry_is_not_hidden_inside_runtime() -> None:
+    class SecondRequestRetryingRunner(FakeRunner):
         async def run(
             self,
             starting_agent: Agent[None],
@@ -459,7 +462,7 @@ async def test_does_not_retry_a_finalizer_that_is_not_used() -> None:
                 )
             return FakeResult(FindingBatchSchema(schema_version="1", findings=()), ())
 
-    runner = RetryingFinalizerRunner(FakeResult({}, ()))
+    runner = SecondRequestRetryingRunner(FakeResult({}, ()))
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
@@ -472,39 +475,6 @@ async def test_does_not_retry_a_finalizer_that_is_not_used() -> None:
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
     assert [call[0].name for call in runner.calls] == ["correctness:v1"]
-
-
-def test_finalizer_receives_the_controlled_investigation_history() -> None:
-    assert OpenAIAgentRuntime._finalizer_input(FakeResult("compact evidence conclusion", ())) == (
-        "controlled tool history"
-    )
-
-
-def test_finalizer_extracts_fenced_finding_batch_after_explanatory_prose() -> None:
-    final_output = """已完成审查。以下是最终结果：
-```json
-{"schema_version":"1","findings":[{"title":"brace { in text"}]}
-```
-"""
-
-    assert OpenAIAgentRuntime._finalizer_output(final_output) == {
-        "schema_version": "1",
-        "findings": [{"title": "brace { in text"}],
-    }
-
-
-def test_finalizer_extracts_finding_batch_from_gateway_json_wrapper() -> None:
-    final_output = json.dumps(
-        {
-            "provider_metadata": {"request_id": "gateway-1"},
-            "output_text": json.dumps({"schema_version": "1", "findings": []}),
-        }
-    )
-
-    assert OpenAIAgentRuntime._finalizer_output(final_output) == {
-        "schema_version": "1",
-        "findings": [],
-    }
 
 
 async def test_does_not_apply_agent_timeout_to_the_whole_review() -> None:
@@ -573,7 +543,7 @@ def test_builtin_correctness_agent_is_immutable_and_content_addressed() -> None:
 
     assert first == second
     assert first.agent_id == "correctness"
-    assert first.output_schema_version == "1"
+    assert first.output_contract_version == "1"
     assert first.prompt_template == "Prompt template is loaded from the prompt catalog at runtime."
     assert ReviewMode.REVIEW in first.mode_support
     assert len(first.content_hash) == 64

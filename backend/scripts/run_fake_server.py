@@ -12,12 +12,14 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from codelens.bootstrap.settings import Settings
+from codelens.bootstrap.unified import build_unified_backend
 from codelens.interface.http.app import (
     LocalHttpSafetyMiddleware,
     _domain_problem,
 )
-from codelens.interface.http.dependencies import HttpProblem, build_components
+from codelens.interface.http.dependencies import HttpProblem
 from codelens.interface.http.routers.repositories import router as repositories_router
+from codelens.interface.http.routers.reviewer_prompts import router as reviewer_prompts_router
 from codelens.interface.http.routers.reviews import router as reviews_router
 from codelens.interface.http.routers.settings import router as settings_router
 from codelens.shared.domain.errors import DomainError
@@ -26,7 +28,6 @@ from codelens.testing.correctness_fixture import (
     load_simple_branch_batch,
     prepare_simple_branch_repository,
 )
-from codelens.worker.main import build_worker
 
 
 def _parser() -> argparse.ArgumentParser:
@@ -65,23 +66,23 @@ async def _build_app(settings: Settings) -> FastAPI:
         repository = fixture.repository
         batch = fixture.batch
         settings = settings.model_copy(update={"repository_roots": (repository,)})
-    components = build_components(settings)
-    worker = build_worker(settings, runtime=FixtureRuntime(batch))
+    backend = build_unified_backend(settings, runtime=FixtureRuntime(batch))
+    components = backend.components
     stop_event = asyncio.Event()
-    worker_task: asyncio.Task[None] | None = None
+    scheduler_task: asyncio.Task[None] | None = None
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        nonlocal worker_task
-        await components.start()
-        worker_task = asyncio.create_task(worker.run(stop_event))
+        nonlocal scheduler_task
+        await backend.start()
+        scheduler_task = asyncio.create_task(backend.scheduler.run(stop_event))
         try:
             yield
         finally:
             stop_event.set()
-            if worker_task is not None:
-                await worker_task
-            await components.close()
+            if scheduler_task is not None:
+                await scheduler_task
+            await backend.close()
 
     app = FastAPI(title="CodeLens Review API", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings
@@ -110,6 +111,7 @@ async def _build_app(settings: Settings) -> FastAPI:
     app.include_router(repositories_router)
     app.include_router(reviews_router)
     app.include_router(settings_router)
+    app.include_router(reviewer_prompts_router)
     return app
 
 
