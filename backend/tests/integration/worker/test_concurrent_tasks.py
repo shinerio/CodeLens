@@ -4,13 +4,14 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from codelens.bootstrap.settings import Settings
+from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import UnvalidatedAgentOutput
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import SqlReviewStore
 from codelens.worker.main import build_worker
 from codelens.worker.scheduler import ReviewScheduler, WorkerSemaphores
-from codelens.workspace.domain.models import BranchScope, ReviewTarget
+from codelens.workspace.domain.models import BranchScope, ReviewSnapshot, ReviewTarget
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
 
@@ -136,9 +137,10 @@ class GatedRuntime:
         self.active = 0
         self.maximum = 0
         self.calls = 0
+        self._codec = AgentOutputCodec("1")
 
     async def invoke(
-        self, _agent: object, _payload: bytes, _snapshot: object
+        self, _agent: object, _payload: bytes, snapshot: ReviewSnapshot
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
         self.active += 1
@@ -147,8 +149,41 @@ class GatedRuntime:
             self.entered.set()
         try:
             await self.release.wait()
+            hunk = snapshot.change_index.hunks[0]
+            payload = {
+                "schema_version": "1",
+                "findings": [
+                    {
+                        "reviewer_id": "correctness",
+                        "category": "correctness",
+                        "title": "Fixture change needs review",
+                        "severity": "high",
+                        "disposition": "blocking",
+                        "confidence": 0.9,
+                        "primary_location": {
+                            "path": hunk.path,
+                            "start_line": hunk.start_line,
+                            "end_line": hunk.end_line,
+                            "side": hunk.side,
+                            "excerpt_hash": hunk.excerpt_hash,
+                        },
+                        "changed_hunk_id": hunk.hunk_id,
+                        "change_origin": "introduced",
+                        "evidence": [
+                            {
+                                "kind": "excerpt",
+                                "description": "The fixture change is within this hunk.",
+                                "excerpt_hash": hunk.excerpt_hash,
+                            }
+                        ],
+                        "impact": "The changed behavior requires inspection.",
+                        "explanation": "This deterministic finding verifies durable output.",
+                        "recommendation": "Review the changed branch behavior.",
+                    }
+                ],
+            }
             return UnvalidatedAgentOutput(
-                b'{"schema_version":"1","findings":[]}', (), "fake", 0, 0, ()
+                self._codec.encode(payload), (), "fake", 0, 0, ()
             )
         finally:
             self.active -= 1
@@ -227,6 +262,11 @@ async def test_two_refs_in_one_real_repository_review_in_distinct_worktrees(
                 break
             await asyncio.sleep(0.01)
         assert statuses == ["completed", "completed"]
+        for index, (_, source_path, _) in enumerate(heads, start=1):
+            findings = await worker.review_store.list_findings(f"review-{index}")
+            assert len(findings) == 1
+            assert findings[0].title == "Fixture change needs review"
+            assert findings[0].primary_location.path == source_path
         for _attempt in range(100):
             if not await worker.worktree_registry.list_all():
                 break
