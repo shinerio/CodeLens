@@ -259,6 +259,7 @@ class WorkerReviewExecutor:
                 snapshot,
                 instructions,
                 self._context_budget(agent),
+                "zh-CN" if record.prompt_locale == "zh-CN" else "en",
             )
             payloads[f"{agent.agent_id}:v{agent.version}"] = agent_input.canonical_bytes()
         return PreparedReview(snapshot=snapshot, agents=agents, input_payloads=payloads)

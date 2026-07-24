@@ -1,0 +1,1 @@
+Submit every concrete finding with the `comment` tool; it accepts a batch of comments. Once every changed file has been inspected, call `task_done` with a short summary and the number of reviewed changed files. Do not emit a FindingBatch in final text. The tool resolves hunk IDs and hashes from the immutable Snapshot; only accepted comments appear in the review report.

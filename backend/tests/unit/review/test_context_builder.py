@@ -18,6 +18,7 @@ from codelens.review.application.context_builder import (
     ContextIntegrityError,
     SnapshotRead,
 )
+from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.workspace.domain.models import (
     ChangedHunk,
     ChangeIndex,
@@ -30,6 +31,7 @@ from codelens.workspace.domain.models import (
 )
 
 _INSTRUCTION_CONTENT = "Review changed behavior and cite evidence."
+_PROMPTS = I18nPromptLoader.load(Path(__file__).parents[4] / "prompts")
 
 
 def _hash(payload: bytes) -> str:
@@ -177,7 +179,7 @@ async def test_plans_ten_candidates_then_reads_only_the_two_that_fit() -> None:
         for index, path in enumerate(context_paths)
     )
     reader = RecordingReader(bodies)
-    builder = ContextBuilder(FakeContextProvider(candidates), reader)
+    builder = ContextBuilder(FakeContextProvider(candidates), reader, _PROMPTS)
 
     agent_input = await builder.build(
         _snapshot(
@@ -244,6 +246,7 @@ async def test_tool_driven_input_does_not_preload_changed_or_repository_bodies()
             )
         ),
         reader,
+        _PROMPTS,
     )
 
     agent_input = await builder.build(
@@ -366,7 +369,7 @@ async def test_binary_deleted_oversized_unicode_and_long_lines_are_bounded() -> 
         ),
     )
     reader = RecordingReader(bodies)
-    builder = ContextBuilder(FakeContextProvider(candidates), reader)
+    builder = ContextBuilder(FakeContextProvider(candidates), reader, _PROMPTS)
 
     agent_input = await builder.build(
         _snapshot(
@@ -413,7 +416,7 @@ async def test_skips_old_side_changed_hunks_that_are_not_readable_from_snapshot(
         ),
     )
     reader = RecordingReader({("src/changed.py", "new"): changed})
-    builder = ContextBuilder(FakeContextProvider(()), reader)
+    builder = ContextBuilder(FakeContextProvider(()), reader, _PROMPTS)
 
     agent_input = await builder.build(
         snapshot,
@@ -438,7 +441,7 @@ async def test_rejects_provider_paths_outside_the_snapshot_before_reading() -> N
         "a" * 64,
     )
     reader = RecordingReader({("src/changed.py", "new"): b"return ready\n"})
-    builder = ContextBuilder(FakeContextProvider((candidate,)), reader)
+    builder = ContextBuilder(FakeContextProvider((candidate,)), reader, _PROMPTS)
 
     with pytest.raises(ContextContainmentError):
         await builder.build(
@@ -464,7 +467,7 @@ async def test_rejects_instructions_that_exceed_their_reservation_before_reading
         warnings=(),
     )
     reader = RecordingReader({("src/changed.py", "new"): b"return ready\n"})
-    builder = ContextBuilder(FakeContextProvider(()), reader)
+    builder = ContextBuilder(FakeContextProvider(()), reader, _PROMPTS)
 
     with pytest.raises(ContextBudgetError, match="instructions"):
         await builder.build(
@@ -493,7 +496,7 @@ async def test_rejects_uncontained_changed_hunk_before_reading() -> None:
         ),
     )
     reader = RecordingReader({("src/changed.py", "new"): b"return ready\n"})
-    builder = ContextBuilder(FakeContextProvider(()), reader)
+    builder = ContextBuilder(FakeContextProvider(()), reader, _PROMPTS)
 
     with pytest.raises(ContextContainmentError, match="hunk"):
         await builder.build(
@@ -518,7 +521,7 @@ async def test_rejects_stale_instruction_content_before_reading() -> None:
         warnings=(),
     )
     reader = RecordingReader({("src/changed.py", "new"): b"return ready\n"})
-    builder = ContextBuilder(FakeContextProvider(()), reader)
+    builder = ContextBuilder(FakeContextProvider(()), reader, _PROMPTS)
 
     with pytest.raises(ContextIntegrityError, match="instruction"):
         await builder.build(

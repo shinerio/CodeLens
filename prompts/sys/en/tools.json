@@ -1,0 +1,11 @@
+{
+  "explore": {"purpose": "List visible Snapshot files under a directory.", "parameters": "path?: relative directory", "description": "List visible Snapshot files below a relative directory."},
+  "glob": {"purpose": "Find visible Snapshot paths matching a pattern.", "parameters": "pattern: POSIX glob", "description": "Find visible Snapshot paths matching a POSIX glob pattern."},
+  "grep": {"purpose": "Search visible Snapshot text.", "parameters": "pattern: regular expression", "description": "Search visible Snapshot text with a regular expression."},
+  "read_file": {"purpose": "Read a bounded range from the current Snapshot file.", "parameters": "path, start_line, end_line", "description": "Read a bounded line range from a visible Snapshot file."},
+  "get_change_map": {"purpose": "List changed paths and hunk locations; call first.", "parameters": "none", "description": "Return changed paths and stable changed-hunk locations."},
+  "get_diff": {"purpose": "Read the fixed base-to-head diff for a changed file.", "parameters": "path", "description": "Read the base-to-head diff for a changed visible file."},
+  "read_revision": {"purpose": "Read a bounded base or head revision of a visible file.", "parameters": "path, revision: base|head, start_line, end_line", "description": "Read a bounded base or head revision of a visible Snapshot path."},
+  "comment": {"purpose": "Submit resolved review findings.", "parameters": "comments", "description": "Submit one or more concrete changed-code comments for deterministic resolution."},
+  "task_done": {"purpose": "Finish the review investigation.", "parameters": "summary, reviewed_changed_files", "description": "Declare that changed-file investigation is complete without creating a Finding."}
+}

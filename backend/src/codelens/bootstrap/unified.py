@@ -17,6 +17,7 @@ from codelens.interface.http.dependencies import HttpComponents
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
+from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.review.infrastructure.repositories import (
     SqlCheckpointStore,
@@ -154,10 +155,12 @@ def build_unified_backend(settings: Settings) -> UnifiedBackend:
     )
     context_adapter = FilesystemSnapshotContextAdapter()
     codec = AgentOutputCodec("1")
+    system_prompts = I18nPromptLoader.load(settings.prompt_dir)
     provider_runtime = OpenAIAgentRuntime(
         FilesystemModelProviderConfigAdapter(settings.data_dir),
         codec,
         git,
+        system_prompts,
     )
     semaphores = WorkerSemaphores.create(
         agent_limit=settings.max_active_agent_runs,
@@ -171,7 +174,7 @@ def build_unified_backend(settings: Settings) -> UnifiedBackend:
         worktree_lifecycle=lifecycle,
         worktree_recovery=recovery,
         snapshot_service=snapshot_service,
-        context_builder=ContextBuilder(context_adapter, context_adapter),
+        context_builder=ContextBuilder(context_adapter, context_adapter, system_prompts),
         excerpt_reader=context_adapter,
         runtime=provider_runtime,
         output_artifacts=FilesystemRunArtifactStore(

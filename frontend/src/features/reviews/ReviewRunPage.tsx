@@ -116,7 +116,11 @@ export function ReviewRunPage() {
     queryKey: ["review-transcript", taskId],
     queryFn: () => getTranscript(taskId ?? ""),
     enabled: taskId !== undefined,
-    refetchInterval: TERMINAL_STATUSES.has(eventStatus) ? false : 1_000,
+    // The terminal SSE event can arrive before the Worker has atomically persisted
+    // its in-memory transcript. Keep polling an empty terminal transcript until it is
+    // available, then stop to avoid polling completed Reviews indefinitely.
+    refetchInterval: (query) =>
+      TERMINAL_STATUSES.has(eventStatus) && (query.state.data?.length ?? 0) > 0 ? false : 1_000,
     initialData: [],
   });
   const cancelMutation = useMutation({

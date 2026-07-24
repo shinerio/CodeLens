@@ -110,3 +110,62 @@ it("shows the live run and refreshes findings after completion", async () => {
     expect(document.querySelector(".review-run-page__subtitle")).toHaveTextContent("completed");
   });
 });
+
+it("keeps polling an empty transcript after completion until the worker persists it", async () => {
+  let transcriptRequests = 0;
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/transcript")) {
+      transcriptRequests += 1;
+      return jsonResponse(
+        transcriptRequests === 1
+          ? []
+          : [
+              {
+                sequence: 1,
+                kind: "model_output_delta",
+                content: "The agent inspected the changed code.",
+                created_at: "2026-07-24T00:00:00Z",
+                redacted: false,
+                truncated: false,
+                metadata: { agent: "correctness:v1", message_id: "message-1" },
+              },
+            ],
+      );
+    }
+    if (url.endsWith("/findings")) return jsonResponse([]);
+    return jsonResponse({
+      task_id: "review_1",
+      status: "reviewing",
+      scope_type: "branch",
+      base_oid: "a".repeat(40),
+      head_oid: "b".repeat(40),
+      selected_agents: ["correctness:v1"],
+      worktree_status: "pending",
+      repository_id: "repository-1",
+      repository_realpath_hash: "c".repeat(64),
+      git_common_dir_hash: "d".repeat(64),
+      cancellation_requested: false,
+    });
+  });
+
+  render(<ReviewRunPage />, {
+    wrapper: ({ children }) => (
+      <TestProviders initialEntries={["/runs/review_1"]}>
+        <Routes>
+          <Route path="/runs/:taskId" element={children} />
+        </Routes>
+      </TestProviders>
+    ),
+  });
+
+  expect(await screen.findAllByText("Waiting for events.")).not.toHaveLength(0);
+  FakeEventSource.latest?.emit("review.completed", {}, "7");
+
+  await waitFor(
+    () => {
+      expect(screen.getByText("The agent inspected the changed code.")).toBeInTheDocument();
+    },
+    { timeout: 2_000 },
+  );
+});

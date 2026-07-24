@@ -26,6 +26,7 @@ from openai import (
     RateLimitError,
 )
 
+from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
 from codelens.review.domain.errors import (
     AgentMaxTurnsExceededError,
     PermanentAgentOutputError,
@@ -48,6 +49,7 @@ from codelens.review.domain.ports import (
     AgentRuntimeEventSink,
     UnvalidatedAgentOutput,
 )
+from codelens.review.infrastructure.comment_collector import ReviewCommentCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.reviewer_catalog.domain.models import AgentVersion
@@ -114,11 +116,13 @@ class OpenAIAgentRuntime:
         config_store: ModelProviderConfigPort,
         output_codec: AgentOutputCodecPort,
         git: GitCli,
+        prompt_loader: I18nPromptLoaderPort,
         runner: _RunnerPort | None = None,
     ) -> None:
         self._config_store = config_store
         self._output_codec = output_codec
         self._git = git
+        self._prompt_loader = prompt_loader
         self._runner = runner or _PublicSdkRunner()
 
     async def invoke(
@@ -157,6 +161,7 @@ class OpenAIAgentRuntime:
             pass
         if input_text is None:
             raise PermanentAgentOutputError("Agent input is not valid UTF-8") from None
+        prompts = self._prompt_loader.get(self._output_locale(input_text))
         if agent.output_schema_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
@@ -169,36 +174,33 @@ class OpenAIAgentRuntime:
             .resolve(provider_config.vendor)
             .request_behavior(provider_config)
         )
-        finding_batch_schema = self._output_codec.json_schema()
+        snapshot_tools = FilesystemReviewTools(snapshot, self._git, max_tool_calls=None)
+        comment_collector = ReviewCommentCollector(
+            snapshot=snapshot,
+            reviewer_id=agent.agent_id,
+            confidence_floor=agent.confidence_floor,
+            tools=snapshot_tools,
+            output_locale="zh-CN" if prompts.locale == "zh-CN" else "en",
+            tool_descriptions={name: tool.description for name, tool in prompts.tools.items()},
+            language_error=prompts.comment_language_error,
+        )
         investigation_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
-            instructions=agent.prompt_template,
+            instructions=f"{agent.prompt_template}\n\n{prompts.runtime_instruction}",
             model=behavior.model_class(
                 model=provider_config.model,
                 openai_client=client,
             ),
             model_settings=behavior.model_settings,
-            tools=FilesystemReviewTools(snapshot, self._git, max_tool_calls=None).as_agent_tools(),
-        )
-        final_agent: Agent[None] = Agent(
-            name=f"{agent.agent_id}:v{agent.version}:finalize",
-            instructions=self._render_prompt(agent.finalization_prompt, finding_batch_schema),
-            model=behavior.model_class(
-                model=provider_config.model,
-                openai_client=client,
-            ),
-            model_settings=behavior.model_settings,
-            output_type=self._output_codec.output_type,
-        )
-        format_repair_agent: Agent[None] = Agent(
-            name=f"{agent.agent_id}:v{agent.version}:format-repair",
-            instructions=self._render_prompt(agent.format_repair_prompt, finding_batch_schema),
-            model=behavior.model_class(model=provider_config.model, openai_client=client),
-            model_settings=behavior.model_settings,
-            output_type=self._output_codec.output_type,
+            tools=[
+                *snapshot_tools.as_agent_tools(
+                    {name: tool.description for name, tool in prompts.tools.items()}
+                ),
+                *comment_collector.as_agent_tools(),
+            ],
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
-        raw_result: object | None = None
+        investigation: object | None = None
         failure: _AgentFailure | None = None
         phase: Literal["investigation", "finalizing", "unknown"] = "investigation"
         try:
@@ -210,13 +212,6 @@ class OpenAIAgentRuntime:
                     run_config,
                     sink,
                     timeout_seconds=provider_config.agent_timeout,
-                )
-                phase = "finalizing"
-                raw_result = await self._run_finalizer(
-                    final_agent,
-                    self._finalizer_input(investigation),
-                    run_config,
-                    sink,
                 )
             except APIStatusError as provider_error:
                 failure = self._status_failure(provider_error, phase)
@@ -261,105 +256,26 @@ class OpenAIAgentRuntime:
         if failure is not None:
             await client.close()
             raise failure from None
-        if raw_result is None:
+        if investigation is None:
             await client.close()
             raise self._failure(
-                "finalizing",
+                "investigation",
                 "missing_model_output",
                 "model returned no structured output",
                 retryable=False,
             )
 
-        result = cast(RunResult, raw_result)
-        canonical_bytes: bytes | None = None
-        output_failure: PermanentAgentOutputError | None = None
+        result = cast(RunResult, investigation)
         try:
-            canonical_bytes = self._output_codec.encode(self._finalizer_output(result.final_output))
-        except AgentOutputParseError as parse_error:
-            _LOGGER.warning(
-                "Model output could not be parsed as structured JSON",
-                extra={"phase": "finalizing"},
-            )
-            if sink is not None:
-                await sink(
-                    AgentRuntimeEvent(
-                        "model_raw_output",
-                        parse_error.raw_output,
-                        {"agent_name": agent.agent_id, "parse_failed": "true"},
-                    )
-                )
-            output_failure = PermanentAgentOutputError(
-                "Final structured output failed: model returned invalid JSON.",
-                phase="finalizing",
-                reason_code="invalid_structured_output",
-                retryable=False,
-            )
-        except ValueError:
-            _LOGGER.warning(
-                "Model output did not match FindingBatch schema",
-                extra={
-                    "phase": "finalizing",
-                    "output_type": type(result.final_output).__name__,
-                },
-            )
-            raw_text = (
-                result.final_output
-                if isinstance(result.final_output, str)
-                else str(result.final_output)
-            )
-            if sink is not None:
-                await sink(
-                    AgentRuntimeEvent(
-                        "model_raw_output",
-                        raw_text,
-                        {"agent_name": agent.agent_id, "parse_failed": "true"},
-                    )
-                )
-            output_failure = PermanentAgentOutputError(
-                "Final structured output failed: model output did not match the review schema.",
-                phase="finalizing",
-                reason_code="invalid_structured_output",
-                retryable=False,
-            )
-
-        if output_failure is not None:
-            try:
-                if sink is not None:
-                    await sink(
-                        AgentRuntimeEvent(
-                            "lifecycle",
-                            "Final structured output was invalid; requesting strict format repair.",
-                            {
-                                "agent_name": format_repair_agent.name,
-                                "reason_code": "invalid_structured_output",
-                            },
-                        )
-                    )
-                repaired = await self._run_finalizer(
-                    format_repair_agent,
-                    self._format_repair_input(
-                        self._finalizer_input(investigation), result.final_output
-                    ),
-                    run_config,
-                    sink,
-                )
-                repaired_result = cast(RunResult, repaired)
-                canonical_bytes = self._output_codec.encode(
-                    self._finalizer_output(repaired_result.final_output)
-                )
-            except (AgentOutputParseError, ValueError):
-                canonical_bytes = None
-            except BaseException:
-                await client.close()
-                raise
-            else:
-                output_failure = None
-
-        if output_failure is not None:
+            canonical_bytes = self._output_codec.encode(comment_collector.finding_batch())
+        except ValueError as error:
             await client.close()
-            raise output_failure
-        if canonical_bytes is None:
-            raise AssertionError("structured output encoding must return bytes or fail")
+            raise PermanentAgentOutputError(
+                "Comment tool produced an invalid review output.",
+                phase="investigation",
+                reason_code="invalid_comment_output",
+                retryable=False,
+            ) from error
 
         diagnostics = tuple(
             AgentResponseDiagnostic(
@@ -418,6 +334,47 @@ class OpenAIAgentRuntime:
                     )
                 await asyncio.sleep(float(attempt))
         raise AssertionError("finalizer retry loop must return or raise")
+
+    async def _run_finalizer_with_schema_fallback(
+        self,
+        structured_agent: Agent[None],
+        plaintext_agent: Agent[None],
+        input_value: Any,
+        run_config: RunConfig,
+        sink: AgentRuntimeEventSink | None,
+    ) -> object:
+        """Use prompt-constrained JSON only when a compatible gateway rejects native schemas.
+
+        Both paths are revalidated by ``AgentOutputCodec`` before a review checkpoint is
+        written. The fallback is deliberately limited to HTTP 400, which is how OpenAI-
+        compatible gateways report an unsupported ``response_format`` parameter.
+        """
+
+        try:
+            return await self._run_finalizer(structured_agent, input_value, run_config, sink)
+        except APIStatusError as error:
+            if error.status_code != 400:
+                raise
+            if sink is not None:
+                await sink(
+                    AgentRuntimeEvent(
+                        "lifecycle",
+                        "Model gateway does not support native structured output; "
+                        "retrying with JSON validation.",
+                        {"agent_name": plaintext_agent.name, "reason_code": "schema_fallback"},
+                    )
+                )
+            return await self._run_finalizer(plaintext_agent, input_value, run_config, sink)
+
+    @staticmethod
+    def _output_locale(input_text: str) -> Literal["en", "zh-CN"]:
+        """Read the validated locale marker embedded in the canonical Agent input."""
+
+        try:
+            payload = json.loads(input_text)
+        except json.JSONDecodeError:
+            return "en"
+        return "zh-CN" if payload.get("output_locale") == "zh-CN" else "en"
 
     @staticmethod
     def _finalizer_input(investigation: object) -> Any:

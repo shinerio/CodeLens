@@ -49,7 +49,22 @@ async def test_source_preview_reads_the_pinned_head_revision_and_highlights_find
     assert preview.revision == "d" * 40
     assert (preview.start_line, preview.end_line) == (1, 5)
     assert (preview.highlight_start_line, preview.highlight_end_line) == (3, 4)
-    assert preview.content == "one\ntwo\nthree\nfour\nfive"
+    assert preview.content == "one\ntwo\nthree\nfour\nfive\n"
+
+
+async def test_source_preview_returns_complete_file_instead_of_an_excerpt() -> None:
+    class FullReader(Reader):
+        async def read_revision(self, repository: Path, revision: str, path: str) -> bytes:
+            assert (repository, revision, path) == (Path("/repo"), "d" * 40, "src/example.py")
+            return "\n".join(f"line {number}" for number in range(1, 31)).encode()
+
+    preview = await FindingSourcePreviewService(Store(), FullReader()).get(
+        "review_" + "a" * 32, "finding-1"
+    )
+
+    assert (preview.start_line, preview.end_line) == (1, 30)
+    assert preview.content.startswith("line 1\nline 2")
+    assert preview.content.endswith("line 30")
 
 
 def _finding() -> Finding:

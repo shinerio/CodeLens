@@ -11,7 +11,7 @@ import pytest
 from agents import Agent, RunConfig
 from agents.exceptions import ModelBehaviorError
 from agents.models.openai_responses import OpenAIResponsesModel
-from openai import APIConnectionError, InternalServerError, RateLimitError
+from openai import APIConnectionError, APIStatusError, InternalServerError, RateLimitError
 
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.findings.infrastructure.model_output import FindingBatchSchema
@@ -19,6 +19,7 @@ from codelens.review.domain.errors import (
     PermanentAgentOutputError,
     TransientAgentRuntimeError,
 )
+from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
@@ -105,6 +106,10 @@ def _provider_config() -> ModelProviderConfig:
     )
 
 
+def _prompt_loader() -> I18nPromptLoader:
+    return I18nPromptLoader.load(Path(__file__).parents[4] / "prompts")
+
+
 def _agent() -> AgentVersion:
     return AgentVersion(
         agent_id="correctness",
@@ -152,6 +157,7 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=runner,
     )
     source_secret = "SOURCE_BODY_SECRET"
@@ -162,7 +168,9 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     sdk_agent = runner.calls[0][0]
     assert sdk_agent is not None
     assert sdk_agent.output_type is None
-    assert sdk_agent.instructions == _agent().prompt_template
+    assert sdk_agent.instructions.startswith(_agent().prompt_template)
+    assert "Submit every concrete finding with the `comment` tool" in sdk_agent.instructions
+    assert "call `task_done`" in sdk_agent.instructions
     assert [tool.name for tool in sdk_agent.tools] == [
         "explore",
         "glob",
@@ -171,6 +179,8 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
         "get_change_map",
         "get_diff",
         "read_revision",
+        "comment",
+        "task_done",
     ]
     assert isinstance(sdk_agent.model, OpenAIResponsesModel)
     assert sdk_agent.model.model == "gpt-5.1"
@@ -180,10 +190,7 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     assert sdk_agent.model_settings.extra_body is None
     assert runner.calls[0][1] == source_secret
     assert runner.calls[0][2] == 3
-    assert runner.calls[1][0].output_type is FindingBatchSchema
-    assert runner.calls[1][0].tools == []
-    assert runner.calls[1][2] == 1
-    assert '"changed_hunk_id"' in runner.calls[1][0].instructions
+    assert len(runner.calls) == 1
     assert runner.run_config is not None
     assert runner.run_config.trace_include_sensitive_data is False
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
@@ -201,7 +208,7 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     assert os.environ["OPENAI_AGENTS_DONT_LOG_TOOL_DATA"] == "1"
 
 
-async def test_preserves_nonempty_final_structured_findings() -> None:
+async def test_ignores_model_final_text_without_a_comment_tool_call() -> None:
     finding = {
         "reviewer_id": "correctness",
         "category": "correctness",
@@ -227,18 +234,17 @@ async def test_preserves_nonempty_final_structured_findings() -> None:
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=FakeRunner(FakeResult({"schema_version": "1", "findings": [finding]}, ())),
     )
 
     output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
 
     payload = json.loads(output.canonical_bytes)
-    assert len(payload["findings"]) == 1
-    assert payload["findings"][0]["title"] == "Missing bounds check"
-    assert payload["findings"][0]["primary_location"]["path"] == "src/example.py"
+    assert payload["findings"] == []
 
 
-async def test_retries_once_with_the_format_repair_prompt_after_invalid_final_output() -> None:
+async def test_does_not_run_format_repair_for_model_final_text() -> None:
     class FormatRepairRunner(FakeRunner):
         async def run(
             self,
@@ -258,25 +264,54 @@ async def test_retries_once_with_the_format_repair_prompt_after_invalid_final_ou
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=runner,
     )
 
     output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
-    assert [call[0].name for call in runner.calls] == [
-        "correctness:v1",
-        "correctness:v1:finalize",
-        "correctness:v1:format-repair",
-    ]
-    assert "Repair output:" in runner.calls[2][0].instructions
-    assert json.loads(runner.calls[2][1])["rejected_final_output"] == "not a FindingBatch"
-    assert json.loads(runner.calls[2][1])["controlled_investigation_history"] == (
-        "controlled tool history"
+    assert [call[0].name for call in runner.calls] == ["correctness:v1"]
+
+
+async def test_does_not_request_structured_finalizer_from_gateway() -> None:
+    class SchemaRejectingRunner(FakeRunner):
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            self.calls.append((starting_agent, input, max_turns))
+            if len(self.calls) == 2:
+                request = httpx.Request("POST", "https://model-gateway.example/v1/chat/completions")
+                raise APIStatusError(
+                    "response_format is not supported",
+                    response=httpx.Response(400, request=request),
+                    body=None,
+                )
+            if len(self.calls) == 3:
+                return FakeResult('{"schema_version":"1","findings":[]}', ())
+            return FakeResult({}, ())
+
+    runner = SchemaRejectingRunner(FakeResult({}, ()))
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
     )
 
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
 
-async def test_format_repair_uses_an_open_client_and_is_visible_in_the_event_stream(
+    assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
+    assert [call[0].name for call in runner.calls] == ["correctness:v1"]
+
+
+async def test_does_not_emit_finalizer_events(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     class RecordingClient:
@@ -318,6 +353,7 @@ async def test_format_repair_uses_an_open_client_and_is_visible_in_the_event_str
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=ClientAwareRepairRunner(FakeResult({}, ())),
     )
 
@@ -327,10 +363,7 @@ async def test_format_repair_uses_an_open_client_and_is_visible_in_the_event_str
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
     assert client.close_count == 1
-    assert [(event.kind, event.metadata.get("agent_name")) for event in events] == [
-        ("model_raw_output", "correctness"),
-        ("lifecycle", "correctness:v1:format-repair"),
-    ]
+    assert events == []
 
 
 @pytest.mark.parametrize(
@@ -360,6 +393,7 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=FakeRunner(failure),
     )
 
@@ -377,7 +411,7 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
     assert captured.value.retryable is True
 
 
-async def test_finalizer_failure_identifies_the_structured_output_phase() -> None:
+async def test_does_not_make_a_finalizer_request() -> None:
     class FinalizerFailingRunner(FakeRunner):
         async def run(
             self,
@@ -396,20 +430,15 @@ async def test_finalizer_failure_identifies_the_structured_output_phase() -> Non
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=FinalizerFailingRunner(FakeResult({}, ())),
     )
 
-    with pytest.raises(TransientAgentRuntimeError) as captured:
-        await runtime.invoke(_agent(), b"bounded input", _snapshot())
-
-    assert str(captured.value) == (
-        "Final structured output failed: provider connection error. Retry the review."
-    )
-    assert captured.value.phase == "finalizing"
-    assert captured.value.reason_code == "provider_connection_error"
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+    assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
 
 
-async def test_retries_a_transient_finalizer_failure_without_repeating_investigation() -> None:
+async def test_does_not_retry_a_finalizer_that_is_not_used() -> None:
     class RetryingFinalizerRunner(FakeRunner):
         async def run(
             self,
@@ -435,17 +464,14 @@ async def test_retries_a_transient_finalizer_failure_without_repeating_investiga
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=runner,
     )
 
     output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
-    assert [call[0].name for call in runner.calls] == [
-        "correctness:v1",
-        "correctness:v1:finalize",
-        "correctness:v1:finalize",
-    ]
+    assert [call[0].name for call in runner.calls] == ["correctness:v1"]
 
 
 def test_finalizer_receives_the_controlled_investigation_history() -> None:
@@ -500,6 +526,7 @@ async def test_does_not_apply_agent_timeout_to_the_whole_review() -> None:
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=SlowRunner(FakeResult({}, ())),
     )
 
@@ -508,18 +535,13 @@ async def test_does_not_apply_agent_timeout_to_the_whole_review() -> None:
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
 
 
-@pytest.mark.parametrize(
-    "result",
-    [
-        FakeResult({"schema_version": "1", "findings": "not-a-list"}, ()),
-        ModelBehaviorError("FULL_PROVIDER_PAYLOAD_SECRET"),
-    ],
-)
-async def test_maps_invalid_output_to_a_permanent_failure(result: FakeResult | Exception) -> None:
+@pytest.mark.parametrize("result", [ModelBehaviorError("FULL_PROVIDER_PAYLOAD_SECRET")])
+async def test_maps_invalid_investigation_to_a_permanent_failure(result: Exception) -> None:
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=FakeRunner(result),
     )
 
@@ -537,6 +559,7 @@ async def test_missing_provider_configuration_fails_only_when_invoked() -> None:
         config_store=StaticProviderConfigStore(),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
+        prompt_loader=_prompt_loader(),
         runner=FakeRunner(FakeResult({}, ())),
     )
 

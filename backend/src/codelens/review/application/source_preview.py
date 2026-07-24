@@ -1,4 +1,4 @@
-"""Read a bounded, pinned source excerpt for one persisted Finding."""
+"""Read complete pinned source for one persisted Finding."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass
@@ -21,7 +21,12 @@ class _RevisionReaderPort(Protocol):
 
 @dataclass(frozen=True)
 class FindingSourcePreview:
-    """One bounded source excerpt anchored to a trusted Finding location."""
+    """One complete source file anchored to a trusted Finding location.
+
+    The content always comes from the review's pinned base or head revision,
+    never from the mutable source workspace. Highlight bounds identify where the
+    client should place the review annotation without replacing source lines.
+    """
 
     path: str
     revision: str
@@ -54,15 +59,12 @@ class FindingSourcePreviewService:
         )
         content = source.decode("utf-8", errors="replace")
         lines = content.splitlines()
-        start_line = max(1, location.start_line - 8)
-        end_line = min(len(lines), location.end_line + 8)
-        excerpt = "\n".join(lines[start_line - 1 : end_line])
         return FindingSourcePreview(
             path=location.path,
             revision=revision,
-            start_line=start_line,
-            end_line=end_line,
+            start_line=1,
+            end_line=len(lines),
             highlight_start_line=location.start_line,
             highlight_end_line=location.end_line,
-            content=excerpt,
+            content=content,
         )

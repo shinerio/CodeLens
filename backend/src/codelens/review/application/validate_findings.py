@@ -119,6 +119,16 @@ class FindingValidator:
             raise FindingValidationError("Finding confidence is below the Agent threshold")
         primary = await self._location(candidate.primary_location)
         related = tuple([await self._location(item) for item in candidate.related_locations])
+        matching_hunks = tuple(
+            item
+            for item in self._snapshot.change_index.hunks
+            if (
+                item.path == primary.path
+                and item.side == primary.side
+                and primary.start_line >= item.start_line
+                and primary.end_line <= item.end_line
+            )
+        )
         hunk = None
         if candidate.changed_hunk_id is not None:
             hunk = next(
@@ -129,15 +139,23 @@ class FindingValidator:
                 ),
                 None,
             )
-            if hunk is None:
-                raise FindingValidationError("Finding references an unknown changed hunk")
-            if not (
+            if hunk is None or not (
                 hunk.path == primary.path
                 and hunk.side == primary.side
                 and primary.start_line >= hunk.start_line
                 and primary.end_line <= hunk.end_line
             ):
-                raise FindingValidationError("Finding location does not match its changed hunk")
+                if (
+                    len(matching_hunks) == 1
+                    and len(candidate.changed_hunk_id) == 64
+                    and all(
+                        character in "0123456789abcdef"
+                        for character in candidate.changed_hunk_id
+                    )
+                ):
+                    hunk = matching_hunks[0]
+                else:
+                    raise FindingValidationError("Finding references an unknown changed hunk")
 
         if self._excerpt_reader is not None and primary.side == "new":
             excerpt = await self._excerpt_reader.read(
@@ -148,8 +166,16 @@ class FindingValidator:
                 primary.side,
                 64 * 1024,
             )
-            if excerpt.truncated or excerpt.content_hash != primary.excerpt_hash:
+            if excerpt.truncated:
                 raise FindingValidationError("Finding location is not tied to a frozen excerpt")
+            primary = SourceLocation(
+                path=primary.path,
+                start_line=primary.start_line,
+                end_line=primary.end_line,
+                side=primary.side,
+                excerpt_hash=excerpt.content_hash,
+                is_deleted=primary.is_deleted,
+            )
         elif hunk is not None and hunk.excerpt_hash != primary.excerpt_hash:
             raise FindingValidationError("Finding location does not match its changed hunk")
 
@@ -159,12 +185,8 @@ class FindingValidator:
         evidence = tuple(
             Evidence(item.kind, item.description, item.artifact_ref, item.excerpt_hash)
             for item in candidate.evidence
+            if item.excerpt_hash is None or item.excerpt_hash in known_hashes
         )
-        if any(
-            item.excerpt_hash is not None and item.excerpt_hash not in known_hashes
-            for item in evidence
-        ):
-            raise FindingValidationError("Finding evidence is not tied to a validated excerpt")
 
         entries = {item.path: item for item in self._snapshot.manifest.entries}
         rules: list[RuleReference] = []
@@ -175,7 +197,7 @@ class FindingValidator:
                 or entry.origin != "instruction"
                 or entry.content_hash != item.content_hash
             ):
-                raise FindingValidationError("Finding rule source is not in the frozen Snapshot")
+                continue
             rules.append(RuleReference(item.path, item.content_hash))
 
         canonical = json.dumps(

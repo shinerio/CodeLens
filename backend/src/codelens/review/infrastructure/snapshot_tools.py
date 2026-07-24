@@ -206,46 +206,67 @@ class FilesystemReviewTools:
             }
         )
 
-    def as_agent_tools(self) -> list[Tool]:
-        """Expose the fixed read-only contract through the Agents SDK."""
+    def as_agent_tools(self, descriptions: dict[str, str]) -> list[Tool]:
+        """Expose the fixed read-only contract using startup-loaded descriptions."""
 
-        @function_tool(name_override="explore")
+        @function_tool(
+            name_override="explore",
+            description_override=descriptions["explore"],
+        )
         async def explore_tool(path: str = "") -> str:
             """List visible Snapshot files below a relative directory."""
 
             return await self.explore(path)
 
-        @function_tool(name_override="glob")
+        @function_tool(
+            name_override="glob",
+            description_override=descriptions["glob"],
+        )
         async def glob_tool(pattern: str) -> str:
             """Find visible Snapshot paths matching a POSIX glob pattern."""
 
             return await self.glob(pattern)
 
-        @function_tool(name_override="grep")
+        @function_tool(
+            name_override="grep",
+            description_override=descriptions["grep"],
+        )
         async def grep_tool(pattern: str) -> str:
             """Search visible Snapshot text with a regular expression."""
 
             return await self.grep(pattern)
 
-        @function_tool(name_override="read_file")
+        @function_tool(
+            name_override="read_file",
+            description_override=descriptions["read_file"],
+        )
         async def read_file_tool(path: str, start_line: int, end_line: int) -> str:
             """Read a bounded line range from a visible Snapshot file."""
 
             return await self.read_file(path, start_line, end_line)
 
-        @function_tool(name_override="get_change_map")
+        @function_tool(
+            name_override="get_change_map",
+            description_override=descriptions["get_change_map"],
+        )
         async def get_change_map_tool() -> str:
             """Return changed paths and stable changed-hunk locations."""
 
             return await self.get_change_map()
 
-        @function_tool(name_override="get_diff")
+        @function_tool(
+            name_override="get_diff",
+            description_override=descriptions["get_diff"],
+        )
         async def get_diff_tool(path: str) -> str:
             """Read the base-to-head diff for a changed visible file."""
 
             return await self.get_diff(path)
 
-        @function_tool(name_override="read_revision")
+        @function_tool(
+            name_override="read_revision",
+            description_override=descriptions["read_revision"],
+        )
         async def read_revision_tool(
             path: str, revision: Literal["base", "head"], start_line: int, end_line: int
         ) -> str:

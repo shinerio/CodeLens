@@ -4,7 +4,11 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_vali
 
 _ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 _LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8000)]
-_Hash = Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+# Hash-like model fields are normalized against the immutable Snapshot by
+# FindingValidator. Keep the transport envelope permissive enough to retain a
+# recoverable model response; the trusted domain object is created only after
+# the validator replaces or rejects these values.
+_Hash = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=128)]
 _Path = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=1024)]
 
 
