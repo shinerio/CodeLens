@@ -25,6 +25,7 @@ class Store:
             overlay_artifact_ref=None,
             target_paths=("src/example.py",),
             selected_agent_versions=("correctness:v1",),
+            prompt_locale="en",
             status="completed",
             cancellation_requested=False,
         )

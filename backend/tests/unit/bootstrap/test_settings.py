@@ -14,7 +14,16 @@ def test_local_settings_allow_empty_repository_roots(tmp_path: Path) -> None:
 
 def test_unauthenticated_remote_bind_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="loopback"):
-        Settings(data_dir=tmp_path, host="0.0.0.0", repository_roots=(tmp_path,))
+        Settings(data_dir=tmp_path, host="192.0.2.1", repository_roots=(tmp_path,))
+
+
+def test_non_loopback_wildcard_bind_requires_repository_roots(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="repository roots"):
+        Settings(data_dir=tmp_path, host="0.0.0.0")
+
+    settings = Settings(data_dir=tmp_path, host="0.0.0.0", repository_roots=(tmp_path,))
+
+    assert settings.repository_roots == (tmp_path.resolve(),)
 
 
 def test_local_bind_normalizes_repository_roots(tmp_path: Path) -> None:
