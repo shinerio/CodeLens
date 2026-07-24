@@ -185,25 +185,50 @@ async def _event_stream(
     after_event_id: int,
     task_is_terminal: bool,
 ) -> AsyncIterator[str]:
-    current_id = after_event_id
-    loop = asyncio.get_running_loop()
-    next_keepalive = loop.time() + 15.0
-    while True:
-        rows = await components.events.list_after(task_id, after_event_id=current_id)
-        for event in rows:
+    queue = await components.event_bus.subscribe(task_id)
+    try:
+        # Replay events from database (catch-up phase)
+        replay_events = await components.events.list_after(task_id, after_event_id=after_event_id)
+        current_id = after_event_id
+        for event in replay_events:
             current_id = event.event_id
             payload = json.dumps(event.payload, sort_keys=True, separators=(",", ":"))
-            yield (f"id: {event.event_id}\nevent: {event.event_type}\ndata: {payload}\n\n")
+            yield f"id: {event.event_id}\nevent: {event.event_type}\ndata: {payload}\n\n"
             if event.event_type in _TERMINAL_EVENTS:
                 return
+
+        # If task is already terminal, we're done
         if task_is_terminal:
             return
-        if await request.is_disconnected():
-            return
-        if loop.time() >= next_keepalive:
-            yield ": keep-alive\n\n"
-            next_keepalive = loop.time() + 15.0
-        await asyncio.sleep(0.1)
+
+        # Stream live events from bus queue
+        loop = asyncio.get_running_loop()
+        next_keepalive = loop.time() + 15.0
+        while True:
+            try:
+                event = await asyncio.wait_for(queue.get(), timeout=1.0)
+                # Skip events we've already seen (from replay)
+                if event.event_id <= current_id:
+                    continue
+                current_id = event.event_id
+                payload = json.dumps(event.payload, sort_keys=True, separators=(",", ":"))
+                yield f"id: {event.event_id}\nevent: {event.event_type}\ndata: {payload}\n\n"
+                if event.event_type in _TERMINAL_EVENTS:
+                    return
+            except TimeoutError:
+                # No event received, check keep-alive
+                pass
+
+            # Send keep-alive if needed
+            if loop.time() >= next_keepalive:
+                yield ": keep-alive\n\n"
+                next_keepalive = loop.time() + 15.0
+
+            # Check if client disconnected
+            if await request.is_disconnected():
+                return
+    finally:
+        await components.event_bus.unsubscribe(task_id, queue)
 
 
 @router.get("/{task_id}/events")

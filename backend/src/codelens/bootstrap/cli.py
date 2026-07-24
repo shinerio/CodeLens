@@ -238,6 +238,10 @@ def main(arguments: Sequence[str] | None = None) -> None:
     command = parse_command(sys.argv[1:] if arguments is None else arguments)
     asyncio.run(prepare_runtime(command.settings))
     if command.name == "api":
+        print(
+            "Warning: 'api' command is deprecated. Use 'start' for unified backend.",
+            file=sys.stderr,
+        )
         configure_process_logging("api", data_directory=command.settings.data_dir)
         run_api(command.settings)
         return
@@ -245,6 +249,10 @@ def main(arguments: Sequence[str] | None = None) -> None:
         from codelens.worker.main import run_worker
         from codelens.worker.singleton import WorkerAlreadyRunningError
 
+        print(
+            "Warning: 'worker' command is deprecated. Use 'start' for unified backend.",
+            file=sys.stderr,
+        )
         # Worker imports construct the provider runtime and may configure third-party
         # loggers. Install the process handler only after those imports so failures
         # from the scheduler always retain the Worker file handler.
@@ -255,10 +263,11 @@ def main(arguments: Sequence[str] | None = None) -> None:
             print(error.code, file=sys.stderr)
             raise SystemExit(2) from None
         return
-    configure_process_logging("supervisor", data_directory=command.settings.data_dir)
-    exit_code = asyncio.run(supervise(command.settings))
-    if exit_code != 0:
-        raise SystemExit(exit_code)
+    # Unified backend (default 'start' command)
+    from codelens.bootstrap.unified import run_unified
+
+    configure_process_logging("unified", data_directory=command.settings.data_dir)
+    asyncio.run(run_unified(command.settings))
 
 
 if __name__ == "__main__":

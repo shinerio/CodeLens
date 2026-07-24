@@ -13,6 +13,7 @@ from codelens.instruction_policy.infrastructure.structured_skip import Structure
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.domain.ports import AgentRuntimePort
 from codelens.review.infrastructure.database import Database
+from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.review.infrastructure.repositories import (
     SqlCheckpointStore,
@@ -24,7 +25,6 @@ from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactSt
 from codelens.review.infrastructure.snapshot_context import FilesystemSnapshotContextAdapter
 from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
-    UnixWorkerTranscriptQueryServer,
     WorkerTranscriptStore,
 )
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
@@ -63,21 +63,18 @@ class WorkerComponents:
     review_store: SqlReviewStore
     worktree_registry: SqlWorktreeRegistry
     scheduler: ReviewScheduler
-    transcript_query_server: UnixWorkerTranscriptQueryServer
 
     async def run(self, stop_event: asyncio.Event | None = None) -> None:
         """Migrate storage, then let the singleton scheduler recover and claim work."""
 
         await asyncio.to_thread(self.settings.data_dir.mkdir, parents=True, exist_ok=True)
         await self.database.migrate()
-        await self.transcript_query_server.start()
         # Alembic can replace root handlers while loading its migration configuration.
         # Restore the Worker-owned handler before scheduler failures can occur.
         configure_process_logging("worker", data_directory=self.settings.data_dir)
         try:
             await self.scheduler.run(stop_event)
         finally:
-            await self.transcript_query_server.close()
             await self.database.dispose()
 
 
@@ -89,7 +86,8 @@ def build_worker(
     """Compose one independent Worker without relying on API-process memory."""
 
     database = Database(settings.resolved_database_url)
-    review_store = SqlReviewStore(database)
+    event_bus = InMemoryEventBus()
+    review_store = SqlReviewStore(database, event_bus=event_bus)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
     git = GitCli()
     input_artifacts = FilesystemInputArtifactStore(settings.data_dir / "artifacts" / "inputs")
@@ -178,9 +176,6 @@ def build_worker(
         review_store=review_store,
         worktree_registry=worktree_registry,
         scheduler=scheduler,
-        transcript_query_server=UnixWorkerTranscriptQueryServer(
-            settings.data_dir / "runtime" / "worker-transcripts.sock", transcripts
-        ),
     )
 
 

@@ -3,12 +3,7 @@ from pathlib import Path
 import pytest
 
 from codelens.review.infrastructure.transcripts import (
-    DeferredTranscriptStore,
     ExecutionTranscriptStore,
-    LiveTranscriptCache,
-    UnixTranscriptRelayServer,
-    UnixWorkerTranscriptQueryClient,
-    UnixWorkerTranscriptQueryServer,
     WorkerTranscriptStore,
 )
 
@@ -93,102 +88,19 @@ async def test_transcript_append_ignores_a_stale_legacy_temporary_file(tmp_path:
     assert entry.content == "Review execution started"
 
 
-async def test_deferred_transcript_is_live_in_api_memory_then_persisted_on_finalize(
-    tmp_path: Path,
-) -> None:
-    """A running review avoids Artifact I/O while its API transcript stays observable."""
-
-    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
-    cache = LiveTranscriptCache()
-    relay = UnixTranscriptRelayServer(tmp_path / "runtime" / "transcripts.sock", cache)
-    await relay.start()
-    try:
-        task_id = "review_" + "f" * 32
-        deferred = DeferredTranscriptStore(
-            durable,
-            tmp_path / "runtime" / "transcripts.sock",
-            publish_interval=0,
-        )
-
-        await deferred.append(task_id, "model_output_delta", "still reviewing")
-
-        live = await cache.get(task_id)
-        assert live is not None
-        assert [entry.content for entry in live] == ["still reviewing"]
-        assert await durable.list(task_id) == ()
-
-        await deferred.finalize(task_id)
-
-        assert await cache.get(task_id) is None
-        assert [entry.content for entry in await durable.list(task_id)] == ["still reviewing"]
-    finally:
-        await relay.close()
-
-
-async def test_worker_transcript_query_reads_memory_until_terminal_persistence(
-    tmp_path: Path,
-) -> None:
-    """API reads a running task from Worker memory and terminal data from its Artifact."""
+async def test_worker_transcript_keeps_entries_in_memory_until_finalize(tmp_path: Path) -> None:
+    """Worker transcripts remain in memory during execution and persist on finalize."""
 
     durable = ExecutionTranscriptStore(tmp_path / "artifacts")
     worker_store = WorkerTranscriptStore(durable)
-    socket_path = tmp_path / "runtime" / "worker-transcripts.sock"
-    server = UnixWorkerTranscriptQueryServer(socket_path, worker_store)
-    client = UnixWorkerTranscriptQueryClient(socket_path)
-    await server.start()
-    try:
-        task_id = "review_" + "g" * 32
-        await worker_store.append(task_id, "model_output_delta", "visible while running")
+    task_id = "review_" + "g" * 32
 
-        assert [entry.content for entry in await client.list(task_id)] == ["visible while running"]
-        assert await durable.list(task_id) == ()
+    await worker_store.append(task_id, "model_output_delta", "visible while running")
 
-        await worker_store.finalize(task_id)
+    assert [entry.content for entry in await worker_store.list(task_id)] == ["visible while running"]
+    assert await durable.list(task_id) == ()
 
-        assert await client.list(task_id) == ()
-        assert [entry.content for entry in await durable.list(task_id)] == ["visible while running"]
-    finally:
-        await server.close()
+    await worker_store.finalize(task_id)
 
-
-async def test_worker_transcript_query_reads_a_prompt_larger_than_the_socket_buffer(
-    tmp_path: Path,
-) -> None:
-    """The API query waits for EOF instead of parsing an incomplete first socket chunk."""
-
-    socket_path = tmp_path / "runtime" / "worker-transcripts.sock"
-    worker_store = WorkerTranscriptStore(ExecutionTranscriptStore(tmp_path / "artifacts"))
-    server = UnixWorkerTranscriptQueryServer(socket_path, worker_store)
-    await server.start()
-    try:
-        task_id = "review_" + "i" * 32
-        prompt = "prompt-content " * 1_000
-        await worker_store.append(task_id, "prompt", prompt)
-
-        (entry,) = await UnixWorkerTranscriptQueryClient(socket_path).list(task_id)
-
-        assert entry.content == prompt
-    finally:
-        await server.close()
-
-
-async def test_duplicate_worker_query_server_cannot_remove_live_worker_socket(
-    tmp_path: Path,
-) -> None:
-    """A failed second Worker startup leaves the first Worker's query endpoint available."""
-
-    socket_path = tmp_path / "runtime" / "worker-transcripts.sock"
-    first = UnixWorkerTranscriptQueryServer(
-        socket_path, WorkerTranscriptStore(ExecutionTranscriptStore(tmp_path / "first"))
-    )
-    duplicate = UnixWorkerTranscriptQueryServer(
-        socket_path, WorkerTranscriptStore(ExecutionTranscriptStore(tmp_path / "second"))
-    )
-    await first.start()
-    try:
-        with pytest.raises(RuntimeError, match="already running"):
-            await duplicate.start()
-        await duplicate.close()
-        assert await UnixWorkerTranscriptQueryClient(socket_path).list("review_" + "h" * 32) == ()
-    finally:
-        await first.close()
+    assert await worker_store.list(task_id) == ()
+    assert [entry.content for entry in await durable.list(task_id)] == ["visible while running"]

@@ -10,6 +10,7 @@ from starlette.types import ASGIApp, Receive, Scope, Send
 
 from codelens.bootstrap.settings import Settings
 from codelens.interface.http.dependencies import (
+    HttpComponents,
     HttpProblem,
     build_components,
 )
@@ -127,10 +128,8 @@ def _domain_problem(error: DomainError) -> tuple[int, str]:
     return 400, "The request violates a domain rule."
 
 
-def create_app(settings: Settings) -> FastAPI:
-    """Compose the HTTP interface from already validated runtime settings."""
-
-    components = build_components(settings)
+def create_app_with_components(settings: Settings, components: HttpComponents) -> FastAPI:
+    """Compose the HTTP interface from pre-built components (for unified backend)."""
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
@@ -184,3 +183,10 @@ def create_app(settings: Settings) -> FastAPI:
     app.include_router(settings_router)
     app.include_router(reviewer_prompts_router)
     return app
+
+
+def create_app(settings: Settings) -> FastAPI:
+    """Compose the HTTP interface from already validated runtime settings."""
+
+    components = build_components(settings)
+    return create_app_with_components(settings, components)

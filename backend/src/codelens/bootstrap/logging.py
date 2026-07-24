@@ -7,7 +7,7 @@ from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Literal
 
-type ProcessName = Literal["api", "worker", "supervisor"]
+type ProcessName = Literal["api", "worker", "supervisor", "unified"]
 type LogLevel = Literal["debug", "info", "warning", "error"]
 
 _LOG_LEVELS: dict[LogLevel, int] = {

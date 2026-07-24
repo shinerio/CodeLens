@@ -13,6 +13,7 @@ from codelens.review.application.commands import (
 )
 from codelens.review.application.source_preview import FindingSourcePreviewService
 from codelens.review.infrastructure.database import Database
+from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
     SqlReviewStore,
@@ -20,7 +21,7 @@ from codelens.review.infrastructure.repositories import (
 )
 from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
-    UnixWorkerTranscriptQueryClient,
+    WorkerTranscriptStore,
 )
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.application.provider_settings import (
@@ -70,6 +71,7 @@ class HttpComponents:
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
     events: SqlEventOutbox
+    event_bus: InMemoryEventBus
     review_store: SqlReviewStore
     input_artifacts: FilesystemInputArtifactStore
     get_provider_settings: GetProviderSettingsHandler
@@ -77,7 +79,7 @@ class HttpComponents:
     model_gateways: ModelGatewaySettingsService
     reviewer_prompts: ReviewerPromptSettingsService
     transcripts: ExecutionTranscriptStore
-    worker_transcripts: UnixWorkerTranscriptQueryClient
+    worker_transcripts: WorkerTranscriptStore
     finding_source_preview: FindingSourcePreviewService
 
     async def start(self) -> None:
@@ -98,6 +100,7 @@ def build_components(settings: Settings) -> HttpComponents:
     """Compose application services with concrete outer adapters."""
 
     database = Database(settings.resolved_database_url)
+    event_bus = InMemoryEventBus()
     git = GitCli()
     repository_inspector = RepositoryInspector(
         GitRepositoryMetadataAdapter(git),
@@ -106,7 +109,7 @@ def build_components(settings: Settings) -> HttpComponents:
     planner = ScopePlanner(GitWorkspaceAdapter(git))
     input_artifacts = FilesystemInputArtifactStore(settings.data_dir / "artifacts" / "inputs")
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
-    review_store = SqlReviewStore(database)
+    review_store = SqlReviewStore(database, event_bus=event_bus)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
     worktree_manager = GitReviewWorktreeManager(
         data_dir=settings.data_dir,
@@ -115,6 +118,8 @@ def build_components(settings: Settings) -> HttpComponents:
         locks=RepositoryLockRegistry(),
     )
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
+    transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
+    worker_transcripts = WorkerTranscriptStore(transcripts)
     return HttpComponents(
         settings=settings,
         database=database,
@@ -133,7 +138,8 @@ def build_components(settings: Settings) -> HttpComponents:
             worktree_manager,
         ),
         cancel_review=CancelReviewHandler(review_store),
-        events=SqlEventOutbox(database),
+        events=SqlEventOutbox(database, event_bus=event_bus),
+        event_bus=event_bus,
         review_store=review_store,
         input_artifacts=input_artifacts,
         get_provider_settings=GetProviderSettingsHandler(provider_config),
@@ -144,10 +150,8 @@ def build_components(settings: Settings) -> HttpComponents:
         reviewer_prompts=ReviewerPromptSettingsService(
             FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
         ),
-        transcripts=ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts"),
-        worker_transcripts=UnixWorkerTranscriptQueryClient(
-            settings.data_dir / "runtime" / "worker-transcripts.sock"
-        ),
+        transcripts=transcripts,
+        worker_transcripts=worker_transcripts,
         finding_source_preview=FindingSourcePreviewService(review_store, git),
     )
 

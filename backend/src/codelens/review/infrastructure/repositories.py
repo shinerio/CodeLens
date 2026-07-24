@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
@@ -26,6 +27,7 @@ from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import ReviewEvent, ReviewExecutionRecord, ReviewRecord
 from codelens.review.infrastructure.database import Database
+from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.tables import (
     dag_checkpoints,
     events,
@@ -35,6 +37,8 @@ from codelens.review.infrastructure.tables import (
     task_worktrees,
 )
 from codelens.workspace.domain.models import TaskWorktree
+
+_LOGGER = logging.getLogger("codelens.review.infrastructure.repositories")
 
 
 @dataclass(frozen=True)
@@ -138,14 +142,32 @@ class SqlReviewStore:
         database: Database,
         *,
         completion_hook: Callable[[str], Awaitable[None]] | None = None,
+        event_bus: InMemoryEventBus | None = None,
     ) -> None:
         self._database = database
         self._completion_hook = completion_hook
+        self._event_bus = event_bus
+
+    async def _publish_events(self, captured: list[ReviewEvent]) -> None:
+        """Publish committed events to the in-memory bus; never raises."""
+
+        if self._event_bus is None:
+            return
+        for event in captured:
+            try:
+                await self._event_bus.publish(event)
+            except Exception:
+                _LOGGER.warning(
+                    "Failed to publish event to bus",
+                    extra={"event_type": event.event_type, "task_id": event.task_id},
+                    exc_info=True,
+                )
 
     async def create_with_job(self, task: ReviewTask) -> None:
         """Insert task, singleton job, and review.created event in one transaction."""
 
         timestamp = task.created_at
+        captured: list[ReviewEvent] = []
 
         async def operation(session: AsyncSession) -> None:
             await session.execute(
@@ -179,8 +201,9 @@ class SqlReviewStore:
                     updated_at=timestamp,
                 )
             )
-            await session.execute(
-                insert(events).values(
+            event_id = await session.scalar(
+                insert(events)
+                .values(
                     **_event_values(
                         task.task_id,
                         "review.created",
@@ -191,9 +214,24 @@ class SqlReviewStore:
                         },
                     )
                 )
+                .returning(events.c.event_id)
             )
+            if event_id is not None:
+                captured.append(
+                    ReviewEvent(
+                        event_id=int(event_id),
+                        task_id=task.task_id,
+                        event_type="review.created",
+                        payload={
+                            "status": task.status.value,
+                            "base_oid": task.target.base_oid,
+                            "head_oid": task.target.head_oid,
+                        },
+                    )
+                )
 
         await self._database.run_transaction(operation)
+        await self._publish_events(captured)
 
     async def count_tasks(self) -> int:
         """Return the number of durable ReviewTasks."""
@@ -254,6 +292,7 @@ class SqlReviewStore:
         """Hide one workspace and atomically request cancellation if it is active."""
 
         terminal_statuses = {"completed", "partial", "failed", "canceled"}
+        captured: list[ReviewEvent] = []
 
         async def operation(session: AsyncSession) -> bool:
             row = (
@@ -283,18 +322,31 @@ class SqlReviewStore:
                 )
             )
             if should_request_cancellation:
-                await session.execute(
-                    insert(events).values(
+                event_id = await session.scalar(
+                    insert(events)
+                    .values(
                         **_event_values(
                             task_id,
                             "review.cancel_requested",
                             {"cancellation_requested": True},
                         )
                     )
+                    .returning(events.c.event_id)
                 )
+                if event_id is not None:
+                    captured.append(
+                        ReviewEvent(
+                            event_id=int(event_id),
+                            task_id=task_id,
+                            event_type="review.cancel_requested",
+                            payload={"cancellation_requested": True},
+                        )
+                    )
             return True
 
-        return await self._database.run_transaction(operation)
+        result = await self._database.run_transaction(operation)
+        await self._publish_events(captured)
+        return result
 
     async def get_execution(self, task_id: str) -> ReviewExecutionRecord | None:
         """Return private executable inputs only to the Worker composition boundary."""
@@ -386,6 +438,8 @@ class SqlReviewStore:
         if expected is None:
             raise InvalidAgentRunStateError("unknown review workflow transition")
 
+        captured: list[ReviewEvent] = []
+
         async def operation(session: AsyncSession) -> None:
             result = cast(
                 CursorResult[Any],
@@ -411,13 +465,23 @@ class SqlReviewStore:
                     .where(jobs.c.task_id == task_id, jobs.c.status.in_(("running", "queued")))
                     .values(status="completed", finished_at=_now(), updated_at=_now())
                 )
-            await session.execute(
-                insert(events).values(
-                    **_event_values(task_id, f"review.{status}", {"status": status})
-                )
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, f"review.{status}", {"status": status}))
+                .returning(events.c.event_id)
             )
+            if event_id is not None:
+                captured.append(
+                    ReviewEvent(
+                        event_id=int(event_id),
+                        task_id=task_id,
+                        event_type=f"review.{status}",
+                        payload={"status": status},
+                    )
+                )
 
         await self._database.run_transaction(operation)
+        await self._publish_events(captured)
 
     async def cancel(self, task_id: str) -> None:
         await self._finish_unsuccessfully(task_id, "canceled", "review.canceled", None)
@@ -432,6 +496,8 @@ class SqlReviewStore:
         event_type: str,
         error_code: str | None,
     ) -> None:
+        captured: list[ReviewEvent] = []
+
         async def operation(session: AsyncSession) -> None:
             current = await session.scalar(
                 select(review_tasks.c.status).where(review_tasks.c.task_id == task_id)
@@ -450,17 +516,27 @@ class SqlReviewStore:
                 .where(jobs.c.task_id == task_id)
                 .values(status=status, finished_at=_now(), updated_at=_now())
             )
-            await session.execute(
-                insert(events).values(
-                    **_event_values(
-                        task_id,
-                        event_type,
-                        {"status": status, **({"error_code": error_code} if error_code else {})},
+            event_payload: dict[str, object] = {
+                "status": status,
+                **({"error_code": error_code} if error_code else {}),
+            }
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, event_type, event_payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is not None:
+                captured.append(
+                    ReviewEvent(
+                        event_id=int(event_id),
+                        task_id=task_id,
+                        event_type=event_type,
+                        payload=event_payload,
                     )
                 )
-            )
 
         await self._database.run_transaction(operation)
+        await self._publish_events(captured)
 
     async def interrupt(self, task_id: str) -> None:
         """Persist active RUNNING nodes/jobs as resumable without discarding output."""
@@ -502,6 +578,8 @@ class SqlReviewStore:
     async def request_cancellation(self, task_id: str) -> ReviewRecord | None:
         """Set cancellation intent and append its outbox event in one transaction."""
 
+        captured: list[ReviewEvent] = []
+
         async def operation(session: AsyncSession) -> ReviewRecord | None:
             row = (
                 (
@@ -531,15 +609,26 @@ class SqlReviewStore:
             )
             if result.rowcount != 1:
                 raise InvalidAgentRunStateError("review cancellation state changed concurrently")
-            await session.execute(
-                insert(events).values(
+            event_id = await session.scalar(
+                insert(events)
+                .values(
                     **_event_values(
                         task_id,
                         "review.cancel_requested",
                         {"cancellation_requested": True},
                     )
                 )
+                .returning(events.c.event_id)
             )
+            if event_id is not None:
+                captured.append(
+                    ReviewEvent(
+                        event_id=int(event_id),
+                        task_id=task_id,
+                        event_type="review.cancel_requested",
+                        payload={"cancellation_requested": True},
+                    )
+                )
             updated = (
                 (
                     await session.execute(
@@ -551,7 +640,9 @@ class SqlReviewStore:
             )
             return _review_record(updated)
 
-        return await self._database.run_transaction(operation)
+        record = await self._database.run_transaction(operation)
+        await self._publish_events(captured)
+        return record
 
     async def recover_after_singleton_restart(self) -> None:
         """Requeue only interrupted jobs/nodes while preserving saved and terminal output."""
@@ -581,6 +672,7 @@ class SqlReviewStore:
         """Insert Findings, mark SUCCEEDED, and append its event atomically."""
 
         timestamp = _now()
+        captured: list[ReviewEvent] = []
 
         async def operation(session: AsyncSession) -> None:
             status = await session.scalar(
@@ -622,17 +714,24 @@ class SqlReviewStore:
             )
             if result.rowcount != 1:
                 raise InvalidAgentRunStateError("AgentRun completion lost its expected state")
-            await session.execute(
-                insert(events).values(
-                    **_event_values(
-                        task_id,
-                        "agent.succeeded",
-                        {"node_key": node_key, "finding_count": len(batch.findings)},
+            event_payload = {"node_key": node_key, "finding_count": len(batch.findings)}
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, "agent.succeeded", event_payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is not None:
+                captured.append(
+                    ReviewEvent(
+                        event_id=int(event_id),
+                        task_id=task_id,
+                        event_type="agent.succeeded",
+                        payload=event_payload,
                     )
                 )
-            )
 
         await self._database.run_transaction(operation)
+        await self._publish_events(captured)
 
     async def complete_with_findings(
         self,
@@ -887,18 +986,47 @@ class SqlCheckpointStore:
 class SqlEventOutbox:
     """Append and query ordered durable events for resumable SSE."""
 
-    def __init__(self, database: Database) -> None:
+    def __init__(
+        self,
+        database: Database,
+        *,
+        event_bus: InMemoryEventBus | None = None,
+    ) -> None:
         self._database = database
+        self._event_bus = event_bus
 
     async def append(self, task_id: str, event_type: str, payload: dict[str, object]) -> None:
         """Append one redacted event in its own transaction."""
 
+        captured: list[ReviewEvent] = []
+
         async def operation(session: AsyncSession) -> None:
-            await session.execute(
-                insert(events).values(**_event_values(task_id, event_type, payload))
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, event_type, payload))
+                .returning(events.c.event_id)
             )
+            if event_id is not None:
+                captured.append(
+                    ReviewEvent(
+                        event_id=int(event_id),
+                        task_id=task_id,
+                        event_type=event_type,
+                        payload=payload,
+                    )
+                )
 
         await self._database.run_transaction(operation)
+        if self._event_bus is not None and captured:
+            for event in captured:
+                try:
+                    await self._event_bus.publish(event)
+                except Exception:
+                    _LOGGER.warning(
+                        "Failed to publish event to bus",
+                        extra={"event_type": event.event_type, "task_id": event.task_id},
+                        exc_info=True,
+                    )
 
     async def list_after(self, task_id: str, *, after_event_id: int) -> tuple[ReviewEvent, ...]:
         """Return task events strictly after a supplied SSE event ID."""
