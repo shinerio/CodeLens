@@ -7,6 +7,10 @@ from typing import Annotated, Literal
 from agents import Tool, function_tool
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from codelens.review.infrastructure.line_resolver import (
+    resolve_from_file_content,
+    resolve_from_hunk,
+)
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.workspace.domain.models import ReviewSnapshot
 
@@ -19,13 +23,13 @@ class ReviewCommentSubmission(BaseModel):
 
     The model is deliberately not allowed to provide hunk IDs, hashes, or trusted
     locations. Those values are derived from the task's frozen Snapshot only.
+    Line numbers are resolved deterministically from the quoted existing_code.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: _ShortText
-    start_line: int = Field(ge=1)
-    end_line: int = Field(ge=1)
+    existing_code: _LongText
     title: _ShortText
     content: _LongText
     recommendation: _LongText
@@ -92,8 +96,6 @@ class ReviewCommentCollector:
     async def submit(self, submission: ReviewCommentSubmission) -> str:
         """Resolve one candidate or return a bounded tool error without retaining it."""
 
-        if submission.end_line < submission.start_line:
-            raise ValueError("comment line range is invalid")
         self._validate_output_language(
             submission.title,
             submission.content,
@@ -101,20 +103,28 @@ class ReviewCommentCollector:
         )
         if submission.confidence < self.confidence_floor:
             raise ValueError("comment confidence is below this reviewer's threshold")
+
+        # Resolve line numbers from quoted code
+        start_line, end_line = await self._resolve_line_numbers(
+            submission.path, submission.existing_code
+        )
+
         hunks = tuple(
             hunk
             for hunk in self.snapshot.change_index.hunks
             if (
                 hunk.path == submission.path
                 and hunk.side == "new"
-                and submission.start_line >= hunk.start_line
-                and submission.end_line <= hunk.end_line
+                and start_line >= hunk.start_line
+                and end_line <= hunk.end_line
             )
         )
         if len(hunks) != 1:
-            raise ValueError("comment must be fully contained in exactly one changed new-side hunk")
+            raise ValueError(
+                "existing_code must be fully contained in exactly one changed new-side hunk"
+            )
         excerpt = json.loads(
-            await self.tools.read_file(submission.path, submission.start_line, submission.end_line)
+            await self.tools.read_file(submission.path, start_line, end_line)
         )
         if not isinstance(excerpt, dict) or excerpt.get("truncated") is True:
             raise ValueError("comment location cannot be resolved to a complete frozen excerpt")
@@ -136,8 +146,8 @@ class ReviewCommentCollector:
                 "confidence": submission.confidence,
                 "primary_location": {
                     "path": submission.path,
-                    "start_line": submission.start_line,
-                    "end_line": submission.end_line,
+                    "start_line": start_line,
+                    "end_line": end_line,
                     "side": "new",
                     "excerpt_hash": excerpt_hash,
                 },
@@ -209,6 +219,24 @@ class ReviewCommentCollector:
         """Return whether the model explicitly ended this investigation."""
 
         return self._completion is not None
+
+    async def _resolve_line_numbers(self, path: str, existing_code: str) -> tuple[int, int]:
+        """Resolve line numbers from quoted code via diff hunk or file content matching."""
+
+        # Tier 1: Try hunk matching
+        diff_result = json.loads(await self.tools.get_diff(path))
+        diff_text = diff_result.get("content", "")
+        resolved = resolve_from_hunk(diff_text, existing_code)
+        if resolved is not None:
+            return resolved
+
+        # Tier 2: Try full file content matching
+        file_content = await self.tools.read_full_file(path)
+        resolved = resolve_from_file_content(file_content, existing_code)
+        if resolved is not None:
+            return resolved
+
+        raise ValueError("existing_code cannot be resolved to a line range")
 
     def _validate_output_language(self, *values: str) -> None:
         """Reject non-Chinese user-facing output when this run selected Chinese.

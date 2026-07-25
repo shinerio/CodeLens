@@ -106,12 +106,14 @@ class FilesystemReviewTools:
         if b"\0" in payload:
             raise ValueError("Snapshot file is binary")
         selected = b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])
+        raw_content = selected[:_MAX_READ_BYTES].decode("utf-8", errors="replace")
+        content = self._add_line_prefixes(raw_content, start_line)
         return self._json(
             {
                 "path": path,
                 "start_line": start_line,
                 "end_line": end_line,
-                "content": selected[:_MAX_READ_BYTES].decode("utf-8", errors="replace"),
+                "content": content,
                 "content_hash": hashlib.sha256(selected).hexdigest(),
                 "truncated": len(selected) > _MAX_READ_BYTES,
             }
@@ -194,13 +196,15 @@ class FilesystemReviewTools:
         if result.returncode != 0:
             raise ValueError("path is unavailable in revision")
         selected = b"".join(result.stdout.splitlines(keepends=True)[start_line - 1 : end_line])
+        raw_content = selected[:_MAX_READ_BYTES].decode("utf-8", errors="replace")
+        content = self._add_line_prefixes(raw_content, start_line)
         return self._json(
             {
                 "path": path,
                 "revision": revision,
                 "start_line": start_line,
                 "end_line": end_line,
-                "content": selected[:_MAX_READ_BYTES].decode("utf-8", errors="replace"),
+                "content": content,
                 "content_hash": hashlib.sha256(selected).hexdigest(),
                 "truncated": len(selected) > _MAX_READ_BYTES,
             }
@@ -331,3 +335,22 @@ class FilesystemReviewTools:
     @staticmethod
     def _json(value: object) -> str:
         return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+    @staticmethod
+    def _add_line_prefixes(content: str, start_line: int) -> str:
+        """Add line number prefixes to content in format: 'linenum|content'."""
+        lines = content.split("\n")
+        prefixed = [f"{start_line + i}|{line}" for i, line in enumerate(lines) if line]
+        return "\n".join(prefixed)
+
+    async def read_full_file(self, path: str) -> str:
+        """Read entire new-side file content for line resolution fallback.
+
+        Unlike read_file, this has no line range limits and is not exposed as an agent tool.
+        Used internally by the line resolver when hunk matching fails.
+        """
+        entry = self._entry(path)
+        payload = await self._payload(entry)
+        if b"\0" in payload:
+            raise ValueError("Snapshot file is binary")
+        return payload.decode("utf-8", errors="replace")

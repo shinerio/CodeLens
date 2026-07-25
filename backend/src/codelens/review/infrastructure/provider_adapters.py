@@ -60,11 +60,32 @@ class DeepSeekProviderAdapter:
         )
 
 
+class ZhipuProviderAdapter:
+    """Follow Zhipu GLM's Chat Completions thinking controls."""
+
+    vendor = "zhipu"
+
+    def request_behavior(self, config: ModelProviderConfig) -> ProviderRequestBehavior:
+        enabled = config.thinking_level != "disabled"
+        return ProviderRequestBehavior(
+            OpenAIChatCompletionsModel,
+            ModelSettings(
+                max_tokens=config.max_tokens,
+                reasoning=Reasoning(effort=config.thinking_level) if enabled else None,
+                extra_body={"thinking": {"type": "enabled" if enabled else "disabled"}},
+            ),
+        )
+
+
 class ModelProviderAdapterRegistry:
     """Open registry so new vendors do not change review orchestration."""
 
     def __init__(self, adapters: tuple[ModelProviderAdapter, ...] | None = None) -> None:
-        resolved = adapters or (OpenAIProviderAdapter(), DeepSeekProviderAdapter())
+        resolved = adapters or (
+            OpenAIProviderAdapter(),
+            DeepSeekProviderAdapter(),
+            ZhipuProviderAdapter(),
+        )
         self._adapters = {adapter.vendor: adapter for adapter in resolved}
 
     def resolve(self, vendor: str) -> ModelProviderAdapter:

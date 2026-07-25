@@ -85,7 +85,7 @@ async def test_exposes_only_hash_verified_snapshot_content(tmp_path: Path) -> No
         {"line": 2, "path": "src/service.py", "text": "    return 'new'"},
     ]
     read = json.loads(await tools.read_file("src/service.py", 1, 2))
-    assert read["content"] == "def original() -> str:\n    return 'new'\n"
+    assert read["content"] == "1|def original() -> str:\n2|    return 'new'"
     assert read["content_hash"] == _hash(b"def original() -> str:\n    return 'new'\n")
 
     (tmp_path / "src" / "helper.py").write_text("tampered\n")
@@ -114,7 +114,7 @@ async def test_provides_change_evidence_diff_and_bounded_base_revision_reads(
     assert "-    return 'old'" in json.loads(await tools.get_diff("src/service.py"))["content"]
     assert "+    return 'new'" in json.loads(await tools.get_diff("src/service.py"))["content"]
     base_content = json.loads(await tools.read_revision("src/service.py", "base", 1, 2))["content"]
-    assert base_content.endswith("'old'\n")
+    assert "2|    return 'old'" in base_content
     with pytest.raises(ValueError, match="revision"):
         await tools.read_revision("src/service.py", "arbitrary", 1, 2)
 
@@ -142,8 +142,7 @@ async def test_comment_collector_derives_finding_location_from_frozen_snapshot(
         await collector.submit(
             ReviewCommentSubmission(
                 path="src/service.py",
-                start_line=2,
-                end_line=2,
+                existing_code="    return 'new'\n",
                 title="Missing upgrade migration",
                 content="Existing databases do not receive the new field.",
                 recommendation="Add an idempotent migration for existing installations.",
@@ -173,8 +172,7 @@ async def test_comment_collector_rejects_location_outside_changed_hunk(tmp_path:
         await collector.submit(
             ReviewCommentSubmission(
                 path="src/service.py",
-                start_line=1,
-                end_line=1,
+                existing_code="def original() -> str:\n",
                 title="Unchanged location",
                 content="This is outside the changed hunk.",
                 recommendation="Do not report this location.",
@@ -198,8 +196,7 @@ async def test_chinese_comment_collector_rejects_english_finding_text(tmp_path: 
         await collector.submit(
             ReviewCommentSubmission(
                 path="src/service.py",
-                start_line=2,
-                end_line=2,
+                existing_code="    return 'new'\n",
                 title="Missing migration",
                 content="Existing databases cannot read the new column.",
                 recommendation="Add an ALTER TABLE statement.",
@@ -222,8 +219,7 @@ async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_pa
             [
                 ReviewCommentSubmission(
                     path="src/service.py",
-                    start_line=2,
-                    end_line=2,
+                    existing_code="    return 'new'\n",
                     title="Concurrent upgrade issue",
                     content="The new path misses existing installations.",
                     recommendation="Add an idempotent migration.",
