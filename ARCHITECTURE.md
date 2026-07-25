@@ -2,9 +2,9 @@
 
 ## 1. 文档定位
 
-本文档是 CodeLens 项目的架构约束唯一权威来源，适用于后端、Worker、前端、数据库迁移、API 契约、测试夹具和部署入口。所有新增功能、缺陷修复与重构都必须先确定所属业务边界和架构层，再开始实现。
+本文档是 CodeLens 项目架构事实与约束的唯一权威来源，适用于后端、Worker、前端、数据库、外部能力、稳定契约和部署入口。本文只回答系统由什么组成、边界在哪里、依赖如何流动，以及哪些契约和安全属性必须长期成立。
 
-架构调整必须同时更新本文档；涉及稳定契约、依赖方向、数据所有权、安全边界或部署拓扑的决策，还必须新增或更新 ADR。实现、测试和其他说明文档与本文档冲突时，以本文档为准。
+修改稳定契约、依赖方向、数据所有权、安全边界、限界上下文或部署拓扑时，必须同步更新本文档，并新增或更新 ADR。实现和其他说明文档与本文档冲突时，以本文档为准。
 
 ## 2. 技术栈
 
@@ -14,11 +14,13 @@
 - FastAPI 提供 HTTP API 和 SSE 事件流；Pydantic v2 负责边界数据校验。
 - SQLAlchemy 2 负责持久化适配，Alembic 管理数据库迁移。
 - SQLite 使用 WAL 模式；大对象写入 Artifact Store，数据库仅保存元数据、内容哈希和不透明引用。
-- OpenAI Agents SDK、Git、文件系统、Skill、MCP、沙箱、代码检索和 Secret Store 均作为外部能力，通过 Port/Adapter 接入。MVP 的代码检索仅由 CodeLens 内置、只读的 Snapshot 工具提供，不依赖本机预装的第三方代码图、LSP 或 MCP 工具。
+- OpenAI Agents SDK、Git、文件系统、Skill、MCP、沙箱、代码检索和 Secret Store 均作为外部能力，通过 Port/Adapter 接入。MVP 的代码检索仅由 CodeLens 内置、只读的 Snapshot 工具提供，不依赖本机预装的第三方CodeGraph、LSP 或 MCP 工具。
 - 所有模型可见的平台系统提示词、仓库规则优先级、通用 Review 工作流、输出约束与工具说明必须存放在 `prompts/sys/<locale>/`；组合根在启动时通过 `I18nPromptLoader` 完整校验并加载为不可变语言包。Review Runtime 按“平台边界、仓库规则策略、通用工作流、输出契约、Agent 专属策略”的固定顺序组成系统指令；设置页面只能覆盖 `prompts/<agent_id>/<locale>.md` 对应的 Agent 专属策略，不能覆盖通用系统层。Review 运行时只按任务 `prompt_locale` 读取已加载语言包，未知语言回退至配置的默认语言；新增语言不得要求在模型 Runtime 中拼接或硬编码自然语言提示词。
 - 模型 Provider 配置由本机 Web Settings API 在运行期写入 Secret Store；API Key 是只写字段，不进入普通配置、数据库、日志、事件或 API 响应。
-- 异步 I/O 使用 `asyncio`；Git 和外部进程使用参数数组调用，禁止 `shell=True`。
-- pytest、Ruff 和 mypy 是后端的基础质量门禁。
+- 后端运行日志统一写入项目根目录 `logs/` 并由 `.gitignore` 排除。统一后端进程按职责拆分：HTTP、Uvicorn 和 API 应用日志写入 `logs/api.log`，Worker 调度和模型 Runtime 诊断写入 `logs/worker.log`；Supervisor 使用独立的 `logs/supervisor.log`。拆分由 logger 命名空间和独立 Handler 完成，不得依赖消息正文分类；各日志独立限量轮转，互不传播和重复写入。
+- 运行日志和日志级别变更使用结构化字段。日志级别只使用 `debug`、`info`、`warning`、`error`；默认级别和当前级别必须明确。未处理异常记录异常堆栈和最小必要的任务或请求标识，不得记录密钥等敏感信息。当前级别通过稳定的 Settings HTTP/JSON 契约读取和更新，持久化到项目 `data/` 目录；API、Worker 和 Supervisor 必须无需重启即可采用新级别。前端不得直接读写日志文件或数据目录。
+- 完整的模型可见输入、provider raw response 和工具交互仅允许在 Review 终态转录持久化时写入项目根目录 `logs/model.log`，不得在流式事件路径逐 delta 写日志。写入前必须执行与 Transcript 相同的凭证脱敏；当前文件和 gzip 备份都必须使用 owner-only `0600` 权限。`model.log` 单文件上限为 10 MiB，最多保留当前文件和一个压缩备份。普通 API、Worker 和 Supervisor 日志仍不得包含完整 Prompt、模型原始输出或源码正文。
+- 后端异步运行模型基于 `asyncio`。
 
 ### 2.2 前端
 
@@ -53,22 +55,18 @@
 - JSON 字段、错误码、事件名称和状态值属于稳定契约。变更时必须考虑向后兼容、幂等、迁移和失败恢复。
 - `/api/settings/model-gateways` 是本地模型网关集合契约，支持创建、列出、更新和删除；`PUT /api/settings/active-model-gateway` 原子切换当前网关。读取只返回网关 ID、名称、模型 ID、Base URL 和激活状态，API Key 永不通过读取契约返回。
 - `/api/repositories/browse` 只返回系统根目录、目录项和 Git 仓库标记；`/api/repositories/catalog` 返回全部可选分支以及分页 Commit 元数据。两者都不能返回文件正文。
+- `GET /api/repositories/recent` 返回最多 6 个由未删除 Review 确定的去重仓库目录、名称和最近 Review 时间，用于本机仓库快捷选择。该列表不读取文件系统；选中路径后仍必须通过既有 inspect/catalog 契约重新执行允许根目录、Git 仓库和身份校验。
 - `GET /api/reviews/{task_id}/findings/{finding_id}/source` 只返回该 Finding 所在文件在 Review 固定 base/head revision 的完整正文及高亮行范围；不得读取可变原始工作区，也不得用模型输出决定文件路径或 revision。
 - `GET /api/reviews/{task_id}/process-report` 仅在 Review 到达终态后返回由完整脱敏转录确定性聚合的执行指标，包括 LLM 调用与 token、Agent、工具 call/result、时长和 Finding 数；旧转录或失败执行缺少供应商 usage 时必须通过 `usage_is_complete=false` 显式表达，不得估算为精确用量。
 - `GET /api/reviews` 返回未删除的持久化 Review 工作空间；`DELETE /api/reviews/{task_id}` 使用软删除语义，活动任务必须同时持久化取消意图。
 - SSE 事件必须来自持久化 outbox；部分成功、超时和失败必须显式表达，不能伪装为完整成功。
 - 前端类型应从经过验证的契约生成或集中维护，不得通过 `any`、非空断言或未校验的类型转换绕过边界。
 
+稳定契约统一使用以下命名：HTTP 路径使用小写、复数资源名和 `kebab-case`，普通 CRUD 不使用动词路径；JSON 字段使用 `snake_case`，枚举和状态值使用小写 `snake_case`；事件名称使用已发生的领域事实并显式版本化，载荷遵循 JSON 命名规则。未来 CLI 的命令和选项使用小写 `kebab-case` 并复用领域词汇，机器可读输出使用稳定、版本化的 JSON schema。
+
 ### 3.4 CLI 可扩展约束
 
-当前产品交互入口是 Web，当前交付范围不包含用于创建 Review、查看进度与报告或执行 Fix 的业务 CLI。未来新增 CLI 时，它必须作为 Interface 层的薄入站适配器，不得形成独立的业务实现：
-
-- 独立进程 CLI 优先复用稳定的 HTTP/SSE 契约；与后端同进程的 CLI 只能通过组合根调用 Application 层用例。
-- CLI 不得直接访问 ORM、数据库、Git、文件系统、Artifact Store、供应商 SDK 或领域对象的内部可变状态。
-- CLI 与 Web 必须遵循相同的输入校验、权限、安全、幂等、任务状态、错误语义和失败恢复规则。
-- 长时间任务必须复用既有任务模型，返回任务标识并通过轮询或事件流观察进度，不得另建同步执行管线。
-- CLI 的加入不得要求修改 Domain 层；只有新增真实业务能力时，才能先扩展领域和应用契约。
-- 本节只约束未来扩展，不构成当前阶段的 CLI 实现要求或验收条件。
+当前产品交互入口是 Web，当前交付范围不包含用于创建 Review的 CLI，模型设计必须保证前后端分离，支持通过API调用或者CLI调用的方式完整替代Web入口
 
 ## 4. DDD 领域分层
 
@@ -142,11 +140,11 @@ Interface 层当前包含 FastAPI 路由、请求/响应 DTO、SSE 端点和 Wor
 
 仓库审查规则按目标文件独立解析。从仓库根目录到目标文件所在目录的每一级，都以大小写不敏感方式同时发现 `AGENTS.md` 与 `REVIEW.md`，最后发现大小写不敏感的 `<target-file>.review.md`；同一目录出现仅大小写不同的同名规则文件属于歧义并必须拒绝。每个目标的规则链按通用到具体排列：更深目录高于上级目录，同一目录 `REVIEW.md` 高于 `AGENTS.md`，文件专属规则最高。结构化 exclude 为累积并集，不允许下级规则重新包含已排除路径。
 
-多目标 Review 必须分别保留每个目标的规则链，不得把规则正文合并成失去适用范围的全局指令。模型输入使用去重的 `repository_instructions` 文档表和逐目标 `repository_instruction_chains` 引用；每份文档携带 kind、scope path、precedence 和内容哈希。仓库规则只能约束其目标链内的审查偏好，不能覆盖平台、工具、Snapshot 范围或输出契约。
+多目标 Review 必须分别保留每个目标的规则链，不得把规则正文合并成失去适用范围的全局指令。模型输入使用去重的 `repository_instructions` 文档表、去重的 `repository_instruction_chains` 规则链表，以及逐目标的 `repository_instruction_targets` 规则链 ID 映射；每份文档携带 kind、scope path、precedence 和内容哈希。仓库规则只能约束其目标链内的审查偏好，不能覆盖平台、工具、Snapshot 范围或输出契约。
 
 ### 5.1 MVP 内置 Review 工具
 
-MVP 为每个 Agent Run 提供 CodeLens 自身实现的只读证据工具：`explore`、`glob`、`grep`、`read_file`、`get_change_map`、`get_diff` 与 `read_revision`。这些工具的唯一数据源是该任务冻结后的 `ReviewSnapshot`；工具驱动的 Agent 初始 Prompt 只包含平台工具指引、适用规则、输出契约和 Snapshot 标识，禁止预先拼入变更 hunk 或完整仓库正文。Agent 必须先通过 `get_change_map` 建立调查计划，再按需读取证据。
+MVP 为每个 Agent Run 提供 CodeLens 自身实现的只读证据工具：`explore`、`glob`、`grep`、`read_file`、`get_change_map`、`get_diff` 与 `read_revision`。这些工具的唯一数据源是该任务冻结后的 `ReviewSnapshot`；工具驱动的 Agent 系统指令承载平台工具指引和输出契约，用户输入只包含 Snapshot 标识、输出语言和去重后的适用仓库规则映射。用户输入不得重复系统指令或工具描述，不得包含内部上下文计划、预算或 token 估算，也不得预先拼入变更 hunk、上下文 excerpt 或完整仓库正文。Agent 必须先通过 `get_change_map` 建立调查计划，再按需读取证据。
 
 除证据工具外，Review Runtime 还提供任务内有状态的 `comment` 与 `task_done` 工具。`comment` 可批量收集候选评论；`task_done` 只记录调查完成声明及已检查变更文件数。它们不读写持久化数据、不执行文件写入、Shell 或网络操作，也不访问原始工作区。模型仅可提交路径、行范围与评论内容；适配器必须以冻结 Snapshot 重新解析范围，确认其完整位于唯一的新侧变更 hunk，并派生 hunk ID 与 excerpt hash。无法解析、越界或未变更位置的候选评论必须丢弃，不得进入最终报告。运行结束后，最终 FindingBatch 只能由已解析评论确定性生成，模型的最终文本和模型提供的 hunk ID、哈希均不得作为输出依据。
 
@@ -186,82 +184,21 @@ frontend/src/
 - 默认本地部署不设置仓库根目录白名单，目录浏览从 POSIX `/` 或 Windows 现有盘符开始；因此操作系统用户可读的全部目录构成本地信任边界。该模式只能绑定回环地址。显式传入允许根目录时，后端仍必须在每次仓库访问时执行真实路径边界校验。
 - 目录浏览只能列出当前启动用户具备读取和进入权限的目录及必要的 Git 仓库标记，无权限或无法解析的目录项必须逐项跳过且不得阻断同级列表，并设置数量上限；分支和 Commit 列表由后端通过受限 Git 参数数组读取，前端不得接收任意 Git 参数或自由文本 ref。
 - 仓库内容、规则文件、Skill、MCP 输出和模型输出全部视为不可信数据，不能扩大 Agent、进程或工具权限。
-- Secret（包括 API Key、Authorization、Cookie 和会话凭证）不得进入数据库、日志、事件、Artifact、Prompt、RunContext 或错误响应。为本机操作者提供可审计执行过程时，系统可以将已脱敏的 Prompt、模型可见输出、工具调用和 Skill 生命周期写入任务专属 Artifact，并仅通过稳定的 HTTP/JSON 与可恢复 SSE 契约读取；Transcript 对内容不做截断，折叠仅是前端呈现能力。任务级存储配额和删除策略负责保留边界；超限必须显式失败，不得静默丢弃内容，且不得包含凭证。
+- Secret（包括 API Key、Authorization、Cookie 和会话凭证）不得进入数据库、日志、事件、Artifact、Prompt、RunContext 或错误响应。为本机操作者提供可审计执行过程时，系统可以将已脱敏的 Prompt、模型可见输出、工具调用和 Skill 生命周期写入任务专属 Artifact，并仅通过稳定的 HTTP/JSON 与可恢复 SSE 契约读取；Transcript 对内容不做截断，折叠仅是前端呈现能力。经本地操作者明确启用的 `logs/model.log` 是唯一允许记录完整已脱敏模型交换的日志，不得包含凭证，也不得把正文复制到其他运行日志。任务级存储配额和删除策略负责 Artifact 保留边界；模型日志按固定大小和数量轮转，不得通过静默截断单条记录控制容量。
 - 本地 Web 写入的多网关 Secret Catalog 保存在 data directory 的 `secrets/model-gateways.json`；目录和文件分别使用 owner-only `0700`/`0600` 权限并原子替换。API 与 Worker 只通过 Secret Store Port 共享，Worker 在实际模型调用时读取当前激活网关，进程启动不得依赖网关已配置。Secret Store 默认位于源码仓库之外。
 - Review 工作空间删除使用数据库 tombstone，不级联删除 Finding、事件、快照或审计数据；读取单个已删除 Review 与列表查询都不得重新暴露 tombstone 记录。
 - 非 HTTPS 的远程模型 Base URL 会明文传输凭证和 Review 内容，界面必须显式警告；是否使用该受信任网络边界由本机操作者决定。
 - 数据库结构只能通过 Alembic migration 演进；持久化任务和事件必须支持幂等、重启恢复及部分失败。
 
-## 7. 命名规范
+## 7. 架构治理
 
-所有代码标识符使用英文，名称必须表达业务含义和所属边界。禁止使用含义不明的缩写、单字母业务变量、`data`、`info`、`manager`、`helper` 等无法说明职责的泛化名称。
-
-### 7.1 Python
-
-- 包、模块、函数、方法和变量使用 `snake_case`。
-- 类、协议、枚举、领域事件和异常使用 `PascalCase`。
-- 常量使用 `UPPER_SNAKE_CASE`；私有成员以单下划线开头。
-- Port 使用职责名加 `Port`，例如 `ReviewWorktreePort`；具体实现使用能力或供应商名加 `Adapter`，例如 `GitCliWorktreeAdapter`。
-- Repository 接口使用聚合名加 `Repository`；实现类必须体现持久化技术，例如 `SqlAlchemyReviewTaskRepository`。
-- Command 使用祈使动作命名，Query 使用查询意图命名，Handler 使用对应消息名加 `Handler`。
-- 领域事件使用已经发生的事实命名，例如 `ReviewTaskCreated`；异常以 `Error` 结尾；布尔值使用 `is_`、`has_`、`can_` 或 `should_` 前缀。
-- 测试文件使用 `test_<subject>.py`，测试名称描述条件和预期行为。
-
-### 7.2 TypeScript 与 React
-
-- 变量、函数和普通模块导出使用 `camelCase`；类型、接口、枚举和 React 组件使用 `PascalCase`；常量使用 `UPPER_SNAKE_CASE`。
-- React 组件文件使用 `PascalCase.tsx`；Hook 以 `use` 开头；其他文件和目录使用 `kebab-case`。
-- 事件处理函数使用 `handle<Action>`，回调属性使用 `on<Action>`；布尔值使用 `is`、`has`、`can` 或 `should` 前缀。
-- Feature 名称必须对应用户可识别的业务能力；禁止用页面位置或临时实现细节命名共享业务模块。
-- 测试文件使用 `<subject>.test.ts` 或 `<subject>.test.tsx`；端到端测试使用 `<flow>.spec.ts`。
-
-### 7.3 HTTP、CLI、事件与数据库
-
-- HTTP 路径使用小写、复数资源名和 `kebab-case`，不在路径中使用动词表达普通 CRUD。
-- JSON 字段使用 `snake_case`；枚举和状态的序列化值使用小写 `snake_case`。
-- 未来 CLI 的命令和选项使用小写 `kebab-case`，并复用领域词汇；机器可读输出使用稳定、版本化的 JSON schema，标准输出、诊断输出和退出码必须有明确契约。
-- 事件名称使用已经发生的领域事实，并进行显式版本控制；事件载荷字段遵循 JSON 命名规则。
-- 数据库表使用复数 `snake_case`，列使用单数 `snake_case`；外键使用 `<entity>_id`，时间字段使用 `<event>_at`。
-- Alembic revision 名称必须描述实际结构变化，不使用 `update`、`changes` 等空泛名称。
-
-### 7.4 文件与通用名称
-
-- 文件名应与其主要职责或公开类型一致；一个文件只承担一个可清晰描述的职责。
-- 同一业务概念在领域模型、API、事件、数据库和前端中使用一致词汇。需要转换命名时，必须在边界适配器中显式完成。
-- 禁止创建无业务边界的 `utils.py`、`services.py`、`models.py`、`common.ts` 或全局状态容器。
-
-## 8. 注释完整性
-
-注释完整性是指关键意图和契约可被维护者理解，不是为每行代码添加复述性注释。代码应先通过清晰命名和小型结构自解释，注释用于补充代码无法表达的信息。
-
-以下内容必须具有完整且与实现同步的 docstring、TSDoc 或邻近注释：
-
-- 对外公开的 Port、Adapter、应用用例、领域服务、API/SSE 契约和可复用前端组件。
-- 聚合不变量、状态机转换、幂等策略、事务边界和失败恢复规则。
-- 并发控制、锁顺序、超时、重试、取消和资源清理语义。
-- REVIEW/FIX 隔离、权限、信任、Secret 处理和 Prompt Injection 防护等安全边界。
-- 不直观的算法、性能权衡、兼容性处理以及供应商限制或临时绕行。
-
-完整注释至少应按适用情况说明：用途、输入与输出约束、关键不变量、副作用、可能失败、并发或安全注意事项。Python 公共 API 使用 docstring；TypeScript 公共契约在名称和类型不能完整表达语义时使用 TSDoc。
-
-禁止以下注释：
-
-- 逐字复述代码、保留已经失效的历史说明或注释掉的代码。
-- 用注释掩盖过大的函数、错误的命名或不清晰的领域边界。
-- 无追踪信息的 `TODO`、`FIXME` 或永久性临时方案。确需保留时，格式为 `TODO(<issue-or-owner>): <原因与移除条件>`。
-- 包含 API Key、访问凭证、完整 Prompt、完整模型原始输出或不必要源码正文的示例和日志说明。
-
-修改行为时必须同步更新关联注释、docstring、契约示例和架构文档；过期注释视为缺陷。
-
-## 9. 架构变更检查清单
-
-提交实现前至少确认：
+架构设计或调整完成前至少确认：
 
 - 变更位于正确的限界上下文和分层，没有出现反向依赖或跨上下文基础设施访问。
 - 外部能力通过 Port/Adapter 接入，供应商类型没有进入领域或应用契约。
 - 前后端只通过经过校验的 HTTP/SSE 契约通信，业务规则没有只存在于 UI。
 - 新增 CLI 或其他入站适配器时，只复用稳定契约或 Application 用例，没有复制业务流程或绕过安全边界。
 - API、事件、数据库和持久化任务变更已覆盖兼容、迁移、幂等及恢复。
-- 命名遵循统一领域词汇，没有新增泛化公共模块或无实际需求的抽象。
-- 关键契约、不变量、并发和安全边界具有完整且最新的注释。
-- 行为变更具有相应层级的测试；架构调整已同步更新本文档和必要的 ADR。
+- 数据所有权、Secret、仓库访问和执行隔离没有突破既有安全与信任边界。
+- 进程职责、启动关系、事件传递和持久化策略与既定运行拓扑一致。
+- 架构调整已同步更新本文档和必要的 ADR；实施与验证要求交由 `AGENTS.md` 维护。
