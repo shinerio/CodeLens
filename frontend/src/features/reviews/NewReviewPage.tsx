@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpenText,
   Check,
-  CirclePlay,
   FileCode2,
   FolderSearch,
   FolderGit2,
@@ -17,6 +16,7 @@ import {
 import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
+import { formatUserDateTime } from "../../shared/i18n/format-user-date-time";
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import {
   getRepositoryCatalog,
@@ -135,7 +135,6 @@ export function NewReviewPage() {
   const [commitTargetRef, setCommitTargetRef] = useState("");
   const [fullTargetRef, setFullTargetRef] = useState("");
   const [correctnessEnabled, setCorrectnessEnabled] = useState(true);
-  const mode = "review" as const;
 
   const gatewayQuery = useQuery({
     queryKey: ["model-gateways"],
@@ -278,7 +277,6 @@ export function NewReviewPage() {
       repository_path: repositoryPath,
       scope: buildScope(),
       selected_agents: selectedAgents,
-      mode,
       prompt_locale: locale,
     };
     createMutation.mutate(request);
@@ -502,26 +500,6 @@ export function NewReviewPage() {
 
           <section className="panel">
             <div className="panel__heading">
-              <CirclePlay aria-hidden="true" />
-              <h2>{t("review.mode")}</h2>
-            </div>
-            <div className="mode-toggle-grid" role="radiogroup" aria-label={t("review.mode")}>
-              <button
-                className={mode === "review" ? "mode-toggle mode-toggle--active" : "mode-toggle"}
-                type="button"
-              >
-                <span className="mode-toggle__label">{t("review.reviewMode")}</span>
-                <span className="mode-toggle__note">{t("review.enabledNow")}</span>
-              </button>
-              <button className="mode-toggle" type="button" onClick={handleUnsupported}>
-                <span className="mode-toggle__label">{t("review.fixMode")}</span>
-                <span className="mode-toggle__note">{t("review.availablePhase5")}</span>
-              </button>
-            </div>
-          </section>
-
-          <section className="panel">
-            <div className="panel__heading">
               <ShieldCheck aria-hidden="true" />
               <h2>{t("review.reviewers")}</h2>
             </div>
@@ -617,7 +595,7 @@ export function NewReviewPage() {
                     <strong>{repository.repository_name}</strong>
                     <code title={repository.repository_path}>{repository.repository_path}</code>
                     <time dateTime={repository.last_reviewed_at}>
-                      {new Date(repository.last_reviewed_at).toLocaleString(locale)}
+                      {formatUserDateTime(repository.last_reviewed_at, locale)}
                     </time>
                   </span>
                   {isSelected ? <Check aria-hidden="true" className="recent-repository__check" /> : null}

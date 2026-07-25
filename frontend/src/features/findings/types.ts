@@ -39,7 +39,6 @@ export type FindingRecord = {
   explanation: string;
   reproduction: string | null;
   recommendation: string;
-  suggested_patch: string | null;
   rule_sources: RuleReferenceRecord[];
 };
 

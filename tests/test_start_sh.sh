@@ -31,6 +31,8 @@ exit 0
 EOF
 chmod +x "$TEST_DIR/bin/uv" "$TEST_DIR/bin/pnpm" "$TEST_DIR/bin/curl"
 export PATH="$TEST_DIR/bin:$PATH"
+mkdir -p "$PROJECT_DIR/logs"
+: >"$PROJECT_DIR/logs/unified.log"
 
 "$PROJECT_DIR/code-lens" >"$TEST_DIR/start.log" 2>&1
 state_dir="$TMPDIR/codelens-review-${UID}"
@@ -41,6 +43,9 @@ fi
 first_backend_pid=$(<"$state_dir/backend.pid")
 [ -n "$first_backend_pid" ]
 kill -0 "$first_backend_pid"
+[ -f "$PROJECT_DIR/logs/supervisor.log" ]
+[ -f "$PROJECT_DIR/logs/frontend.log" ]
+[ ! -e "$PROJECT_DIR/logs/unified.log" ]
 
 "$PROJECT_DIR/code-lens" restart >"$TEST_DIR/restart.log" 2>&1
 second_backend_pid=$(<"$state_dir/backend.pid")

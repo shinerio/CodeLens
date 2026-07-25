@@ -75,7 +75,6 @@ it("shows the live run and refreshes findings after completion", async () => {
           explanation: "This is a stored contract fixture.",
           reproduction: null,
           recommendation: "Review the correct branch target.",
-          suggested_patch: null,
           rule_sources: [
             {
               path: "rules/review.md",
@@ -171,6 +170,67 @@ it("keeps polling an empty transcript after completion until the worker persists
     },
     { timeout: 2_000 },
   );
+});
+
+it("shows the actionable failure reason in the page banner", async () => {
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/findings")) return jsonResponse([]);
+    if (url.endsWith("/transcript")) {
+      return jsonResponse([
+        {
+          sequence: 8,
+          kind: "lifecycle",
+          content: "CodeLens could not connect to the model gateway.",
+          created_at: "2026-07-25T00:00:05Z",
+          redacted: false,
+          truncated: false,
+          metadata: {
+            error_code: "transient_agent_runtime_error",
+            error_type: "TransientAgentRuntimeError",
+            phase: "investigation",
+            provider_status_code: "503",
+            reason_code: "provider_connection_error",
+            retryable: "true",
+          },
+        },
+      ]);
+    }
+    if (url.endsWith("/process-report")) {
+      return jsonResponse({ code: "process_report_not_ready", message: "not ready" }, 409);
+    }
+    return jsonResponse({
+      task_id: "review_failed",
+      status: "failed",
+      scope_type: "commit",
+      base_oid: "a".repeat(40),
+      head_oid: "b".repeat(40),
+      selected_agents: ["correctness:v1"],
+      worktree_status: "pending",
+      repository_id: "repository-1",
+      repository_realpath_hash: "c".repeat(64),
+      git_common_dir_hash: "d".repeat(64),
+      cancellation_requested: false,
+    });
+  });
+
+  render(<ReviewRunPage />, {
+    wrapper: ({ children }) => (
+      <TestProviders initialEntries={["/runs/review_failed"]}>
+        <Routes>
+          <Route path="/runs/:taskId" element={children} />
+        </Routes>
+      </TestProviders>
+    ),
+  });
+
+  expect(await screen.findByRole("heading", { name: "Correctness Reviewer" })).toBeInTheDocument();
+  FakeEventSource.latest?.emit("review.failed", {}, "9");
+
+  expect(await screen.findByRole("alert")).toHaveTextContent("Cannot connect to the model gateway");
+  expect(screen.getByRole("alert")).toHaveTextContent("Check the Base URL and network access");
+  expect(screen.getByRole("alert")).toHaveTextContent("HTTP 503");
+  expect(screen.queryByText("The run failed before synthesis completed.")).not.toBeInTheDocument();
 });
 
 it("shows the process report after a review has completed", async () => {

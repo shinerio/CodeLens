@@ -1,3 +1,4 @@
+import io
 import json
 import logging
 from pathlib import Path
@@ -43,6 +44,25 @@ def test_configure_process_logging_writes_worker_exception_stacks(tmp_path: Path
     assert payload["task_id"] == "task-1"
     assert payload["error_type"] == "RuntimeError"
     assert "RuntimeError: worktree creation failed" in payload["exception"]
+
+
+def test_api_runtime_logs_do_not_propagate_to_supervisor_streams(tmp_path: Path) -> None:
+    supervisor_output = io.StringIO()
+    supervisor_handler = logging.StreamHandler(supervisor_output)
+    root_logger = logging.getLogger()
+    root_logger.addHandler(supervisor_handler)
+    try:
+        log_path = configure_process_logging("api", log_directory=tmp_path)
+
+        logging.getLogger("uvicorn.access").info("GET /api/health 200")
+
+        assert supervisor_output.getvalue() == ""
+        payload = json.loads(log_path.read_text(encoding="utf-8"))
+        assert payload["logger"] == "uvicorn.access"
+        assert payload["message"] == "GET /api/health 200"
+    finally:
+        root_logger.removeHandler(supervisor_handler)
+        supervisor_handler.close()
 
 
 def test_runtime_log_level_is_persisted_for_other_processes(tmp_path: Path) -> None:

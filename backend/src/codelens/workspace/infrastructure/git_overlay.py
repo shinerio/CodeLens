@@ -149,7 +149,7 @@ class GitReviewInputCaptureAdapter:
         )
 
     async def capture_overlay(self, repository: Path, target_paths: tuple[str, ...]) -> bytes:
-        """Serialize tracked patch, allowed untracked files, and ignored control inputs."""
+        """Serialize the tracked diff, allowed untracked files, and ignored control inputs."""
 
         tracked = await self._git.run(repository, "diff", "--binary", "HEAD", "--")
         untracked = await self._git.run(

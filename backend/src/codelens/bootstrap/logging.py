@@ -134,8 +134,9 @@ def configure_process_logging(
 ) -> Path:
     """Configure bounded JSON logs in ``logs/`` relative to the launch directory.
 
-    The handler is process-local and replaces only prior CodeLens file handlers, so API,
-    Worker, and supervisor logs remain isolated while repeated test or startup setup is safe.
+    The handler is process-local and replaces prior CodeLens file handlers plus inherited
+    root console handlers. The launcher owns process stdout, so allowing runtime records to
+    propagate there would duplicate API or Worker events in ``supervisor.log``.
     """
 
     directory = (log_directory or Path.cwd() / "logs").resolve()
@@ -147,7 +148,10 @@ def configure_process_logging(
     root_logger = logging.getLogger()
     root_logger.setLevel(logging.INFO)
     for existing_handler in tuple(root_logger.handlers):
-        if isinstance(existing_handler, _CodeLensFileHandler):
+        is_inherited_console = isinstance(
+            existing_handler, logging.StreamHandler
+        ) and not isinstance(existing_handler, logging.FileHandler)
+        if isinstance(existing_handler, _CodeLensFileHandler) or is_inherited_console:
             root_logger.removeHandler(existing_handler)
             existing_handler.close()
     runtime_handler = _file_handler(log_path, runtime_process, level_directory)

@@ -23,7 +23,7 @@ CodeLens 对 OCR 的参考分为两类：
 CodeLens 没有复制 OCR 的 CLI、Prompt 模板、规则库、MCP、并发调度、二次定位或评论过滤实现。改编后的定位器被接入 CodeLens 自己的冻结 Snapshot 和 Finding 验证链路，并增加以下约束：
 
 - 工具只能读取 Snapshot Manifest 可见路径，每次读取重新验证内容哈希；
-- 评论前必须为目标文件完成 `instruction_loader`；
+- 首次输入已包含目标文件适用的完整冻结仓库规则；
 - 定位结果必须完整落在且只落在一个新侧变更 hunk；
 - hunk ID 和 excerpt hash 由后端从 Snapshot 派生，模型不能提交；
 - 无法定位或不满足约束的评论直接拒绝，不进入最终 FindingBatch。
@@ -37,10 +37,8 @@ CodeLens 没有复制 OCR 的 CLI、Prompt 模板、规则库、MCP、并发调�
   -> 校验并加载 prompts/sys/<locale> 与 Reviewer Prompt
   -> 用户选择仓库和 Review 范围
   -> 创建隔离 detached worktree，冻结 Snapshot、Manifest、diff 范围和规则链
-  -> ContextBuilder 生成完整且仅含 review_files 的首次用户输入
-  -> 宿主预取根 AGENTS.md/REVIEW.md 到系统指令
+  -> ContextBuilder 生成包含 review_files 与去重 repository_instructions 的首次用户输入
   -> 单个 Reviewer Run 调查全部目标
-       -> 每个目标先 instruction_loader
        -> 按需 get_diff/read_file/grep/... 获取证据
        -> comment 提交候选 Finding
        -> task_done 显式结束
@@ -79,19 +77,19 @@ CLI 启动
 | Review 范围 | 分支差异、Commit、未提交改动、全仓；可冻结 overlay | workspace、range、commit、全文件 `scan`，另有 delegate | 范围接近；OCR 的 scan、delegate 与 CI 使用更成熟 |
 | 执行粒度 | 一个 Agent Run 查看完整 `review_files` | 每个文件独立 plan/main subtask，并发执行 | OCR 对大变更吞吐和覆盖更有优势；CodeLens 更利于跨文件统一推理，但容易受单一上下文和回合预算影响 |
 | 输入一致性 | 任务专属 detached worktree + immutable Snapshot + Manifest/hash | 按运行模式读取 Git 对象或当前工作区；有路径约束，但没有等价的内容哈希 Snapshot | CodeLens 的复现、隔离和证据完整性更强；OCR workspace 模式更轻但运行中工作区变化的影响更大 |
-| 首次提示 | 用户消息只含完整、排序后的 `review_files` 与新侧变更范围；不含完整 diff、规则正文和内部 ID | 每文件的 plan/main 用户消息直接含完整 diff、当前路径、其他变更文件、规则、背景和可选计划 | CodeLens 首包更小且避免重复上下文；OCR 首轮即可直接分析，调用更少但大 diff 成本更高 |
-| Prompt 加载 | 启动时完整校验本地化 `review-policy`、`review-workflow` 和工具说明，再组合根规则与 Reviewer 策略 | 编译期嵌入 task manifest 和 Markdown Prompt，启动时解析；语言指令追加到 system 消息 | 两者都避免运行中散乱拼接；CodeLens 的本地化完整性校验更严格，OCR 的多阶段模板更丰富 |
-| 仓库指令 | 冻结每个目标的 `AGENTS.md`、`REVIEW.md`、文件级规则链；根规则宿主预取，非根规则按目标加载 | 内嵌语言规则库，叠加命令行、项目和全局 `.opencodereview/rule.json`，按路径匹配且可合并系统规则 | CodeLens 更适合仓库原生、层级化规则并可审计适用范围；OCR 内建规则覆盖和集中配置成熟度更高 |
-| 规则强制 | 未加载目标规则时拒绝该目标的 `comment`，全部目标未加载完时拒绝 `task_done` | 规则正文直接进入当前文件 Prompt，不需要加载工具 | CodeLens 可机器验证流程覆盖；OCR 链路简单、少一次工具调用 |
-| 内置调查工具 | `explore`、`glob`、`grep`、`read_file`、`instruction_loader`、`get_diff`、`read_revision` | `file_read`、`code_search`、`file_read_diff`、`file_find` | CodeLens 支持固定 base/head 版本读取和规则加载；OCR 的代码搜索参数、Git pathspec 与跨文件 diff 批量读取更强 |
+| 首次提示 | 用户消息包含完整、排序后的 `review_files`，以及正文去重并带精确目标映射的 `repository_instructions`；不含完整 diff 和内部 ID | 每文件的 plan/main 用户消息直接含完整 diff、当前路径、其他变更文件、规则、背景和可选计划 | CodeLens 规则首轮可用且避免逐文件工具往返；OCR 首轮还包含当前完整 diff，可直接分析但大 diff 成本更高 |
+| Prompt 加载 | 启动时完整校验本地化 `review-policy`、`review-workflow` 和工具说明，再组合 Reviewer 策略；仓库规则由 Context Builder 放入首次用户输入 | 编译期嵌入 task manifest 和 Markdown Prompt，启动时解析；语言指令追加到 system 消息 | 两者都避免运行中散乱拼接；CodeLens 的本地化完整性校验更严格，OCR 的多阶段模板更丰富 |
+| 仓库指令 | 冻结每个目标的 `AGENTS.md`、`REVIEW.md`、文件级规则链；宿主按规则正文去重并附带精确 `applies_to` 目标映射 | 内嵌语言规则库，叠加命令行、项目和全局 `.opencodereview/rule.json`，按路径匹配且可合并系统规则 | CodeLens 更适合仓库原生、层级化规则并可审计适用范围；OCR 内建规则覆盖和集中配置成熟度更高 |
+| 规则强制 | Context Builder 在模型调用前确定性校验并完整注入所有适用规则，模型不参与规则加载 | 规则正文直接进入当前文件 Prompt，不需要加载工具 | 两者都避免规则加载工具往返；CodeLens 额外保留 Snapshot 哈希与多目标作用域校验 |
+| 内置调查工具 | `explore`、`glob`、`grep`、`read_file`、`get_diff`、`read_revision` | `file_read`、`code_search`、`file_read_diff`、`file_find` | CodeLens 支持固定 base/head 版本读取；OCR 的代码搜索参数、Git pathspec 与跨文件 diff 批量读取更强 |
 | 输出工具 | `comment`、`task_done` | `code_comment`、`task_done` | 核心模式一致；CodeLens 的提交 schema 和后端拒绝规则更严格 |
 | 外部工具 | 当前明确不启用 MCP、Skills、LSP 或代码图 | 支持 stdio MCP，动态工具同时加入 plan/main 阶段，可配置 allowlist | OCR 扩展性显著领先，但 MCP 子进程、环境变量和工具结果扩大了信任面；CodeLens 当前能力较窄但边界清晰 |
-| 工具选择 | 九个工具固定暴露给整个 Run，由模型按需选择；平台未做阶段裁剪 | plan 阶段只描述搜索/查找/diff/MCP 工具并生成建议，不实际执行；main 阶段暴露六个内置工具和 MCP | OCR 的阶段化工具集降低无关选择并让大变更先规划；CodeLens 链路更短，但所有工具常驻会增加选择噪声 |
+| 工具选择 | 八个工具固定暴露给整个 Run，由模型按需选择；平台未做阶段裁剪 | plan 阶段只描述搜索/查找/diff/MCP 工具并生成建议，不实际执行；main 阶段暴露六个内置工具和 MCP | OCR 的阶段化工具集降低无关选择并让大变更先规划；CodeLens 链路更短，但所有工具常驻会增加选择噪声 |
 | 工具限制 | Snapshot allowlist/hash、路径规范化、单次输出上限、模型回合上限和取消；当前工具次数不另设上限 | 路径 containment、Git 参数约束、输出上限、每文件最多 30 个工具回合，可设并发任务超时 | CodeLens 对“读到什么版本的什么内容”保证更强；OCR 对每文件资源上限更明确 |
 | 上下文管理 | 按需读取，超出完整 scope 上限则在模型调用前失败，不静默截断；目前无模型上下文压缩 | 超大 diff 预过滤，循环中支持 memory compression | CodeLens 不会把跳过误作完整覆盖，但大任务可用性偏弱；OCR 更能跑完超长会话，但过滤文件会损失覆盖 |
 | 并发与恢复 | Worker 有持久任务、租约、重启恢复和 SSE 续传；当前单 Reviewer Run 内不按文件并发 | 文件 subtask 并发、单文件失败隔离、session resume 和异步评论后处理 | OCR 的 Review 计算吞吐更成熟；CodeLens 的 Web 任务状态、事件和数据生命周期更系统化 |
 | 评论质量后处理 | 确定性 schema/位置/证据校验、置信度门槛、去重；不再用第二次模型输出决定结果 | 确定性定位 + LLM re-location + diff-only REVIEW_FILTER；scan 另有批次 dedup 和项目总结 | OCR 以额外模型调用提高召回和过滤误报；CodeLens 的最终信任链更短、更可解释，但缺少反思层 |
-| Finding 数据 | 标题、类别、严重性、置信度、影响、解释、建议、证据、hunk/excerpt 身份 | 内容、建议代码、existing code、类别、严重性、行范围 | CodeLens 结构更适合治理、审计和后续 FIX；OCR 更贴近直接发布代码评论 |
+| Finding 数据 | 标题、类别、严重性、置信度、影响、解释、建议、证据、hunk/excerpt 身份 | 内容、建议代码、existing code、类别、严重性、行范围 | CodeLens 结构更适合只读治理和审计；OCR 更贴近直接发布代码评论 |
 | 可观测性 | 完整脱敏 transcript、模型交换日志、过程报告、HTTP/SSE 事件 | JSONL session、token/tool 统计、OpenTelemetry、viewer | 两者都较完整；CodeLens 更偏产品工作区与稳定 API，OCR 更偏 CLI/工程遥测 |
 | Provider | 当前通过 OpenAI Agents SDK 接 OpenAI-compatible 网关，可保存并切换多个网关 | 原生支持 Anthropic、OpenAI Chat Completions、OpenAI Responses 和自定义 Provider | OCR 协议覆盖更广；CodeLens 的本地 Secret Store 和只写 Key API 边界更完整 |
 | 公开评测 | 只有小型 correctness fixture，尚不能证明跨语言整体质量 | 公布 50 个仓库、200 个 PR、10 种语言的基准与精度/召回/token 取舍 | OCR 的效果证据成熟度明显领先；双方必须在同一数据集和模型上实测后才能给出直接质量排名 |
@@ -100,18 +98,18 @@ CLI 启动
 
 ### 5.1 CodeLens
 
-CodeLens 在进程启动时由 `I18nPromptLoader` 校验每个 locale 的固定语言包：合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md` 和九个工具说明。运行时按固定顺序组合 `review-policy`、宿主预取的根规则上下文、`review-workflow` 和 Reviewer 专属策略。首次用户消息只序列化 `review_files`：路径、变化类型、可选旧路径和允许 Finding 的新侧范围。
+CodeLens 在进程启动时由 `I18nPromptLoader` 校验每个 locale 的固定语言包：合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md` 和八个工具说明。运行时按固定顺序组合 `review-policy`、`review-workflow` 和 Reviewer 专属策略。Context Builder 在模型调用前验证冻结规则并构造首次用户消息：`review_files` 提供路径、变化类型、可选旧路径和允许 Finding 的新侧范围；`repository_instructions` 提供正文去重的完整规则和精确 `applies_to` 目标映射。
 
 优点：
 
 - 不把完整 diff 对所有后续轮次预加载，首包与变更正文解耦；
-- 根规则只预取一次，非根规则按目标去重返回；
+- 所有适用规则在首包中按正文去重，模型无需逐文件加载；
 - Snapshot ID、hash 和内部规则链不暴露给模型，缩小 Prompt Injection 和伪造内部标识的空间；
 - 宿主先验证完整 scope，超过上限直接失败，结果不会悄悄漏审文件。
 
 缺点：
 
-- 模型必须先为每个文件调用 `instruction_loader`，再调用 `get_diff`，小变更也有固定工具往返；
+- 首包会携带全部适用规则；规则很多时首轮 token 成本高于按需加载；
 - 一个 Run 承担全部文件，文件很多时可能在达到模型回合上限前无法完成；
 - 当前没有基于风险的宿主分片、并发和上下文压缩；
 - `review_files` 只给范围而不含变更摘要，首轮工具选择完全依赖模型遵循工作流。
@@ -165,11 +163,11 @@ OCR 的原则是“阶段裁剪、面向代码审查优化、允许扩展”：p
 - 仍无行号的意见可降级出现在 summary，而不是作为行内评论丢失；
 - `REVIEW_FILTER_TASK` 还能删除被当前 diff 直接反证的意见。
 
-这套方案偏向召回率和最终可交付性：定位失败不必丢评论，二次模型能修复部分格式漂移。代价是二次定位与过滤都由模型参与，增加 token、延迟和非确定性；未定位评论的质量边界也弱于行内评论。
+这套方案偏向召回率和最终可交付性：定位失败不必丢评论，二次模型能纠正部分格式漂移。代价是二次定位与过滤都由模型参与，增加 token、延迟和非确定性；未定位评论的质量边界也弱于行内评论。
 
 ### 7.3 CodeLens 的定位链路
 
-- 模型可在已加载规则的 Review 目标中提交规范化相对路径；路径必须存在于 Snapshot Manifest；
+- 模型可在首包已声明适用规则的 Review 目标中提交规范化相对路径；路径必须存在于 Snapshot Manifest；
 - 后端先按相同两级文本算法定位，再要求结果完整位于唯一的新侧 changed hunk；
 - 后端从冻结文件字节派生 excerpt hash，并从 ChangeIndex 取得 hunk ID；
 - 任何无法定位、越界、跨 hunk、正文被修改、二进制或 excerpt 截断都会拒绝；
@@ -195,7 +193,7 @@ CodeLens 应优先修正上述四点：仅匹配新侧可评论行；返回全�
 - Snapshot、Manifest、内容哈希、固定 revision 和隔离 worktree 形成完整证据链；
 - 首次输入最小化，规则与源码按需读取，内部身份不交给模型；
 - 仓库指令按目标和目录层级冻结，流程完成度可由后端强制；
-- Finding 结构丰富，适合后续治理、审计、反馈评测和安全 FIX；
+- Finding 结构丰富，适合只读治理、审计和反馈评测；
 - Web 工作区、持久状态、SSE、终态 transcript 和 Secret Store 构成较完整的本地产品底座。
 
 不足：
@@ -256,6 +254,6 @@ CodeLens 应优先修正上述四点：仅匹配新侧可评论行；返回全�
 
 在当前固定版本上，**OCR 的实际能力广度、规模化吞吐、工具扩展、规则积累、交付集成和公开评测成熟度明显领先**。它更适合直接进入 CLI/CI 流水线，对大量文件并发审查，并通过 plan、re-location、filter 和 dedup 在成本、召回与误报之间做工程化平衡。
 
-**CodeLens 的优势不在功能数量，而在 Review 输入和 Finding 证据的可信链路**：冻结 Snapshot、内容哈希、逐目标规则、最小首次输入、唯一新侧 hunk 门禁、后端派生身份和稳定 Web/API 工作区，使结果更可复现、更适合审计，也为未来安全 FIX 打下了更扎实的边界。
+**CodeLens 的优势不在功能数量，而在 Review 输入和 Finding 证据的可信链路**：冻结 Snapshot、内容哈希、逐目标规则、最小首次输入、唯一新侧 hunk 门禁、后端派生身份和稳定 Web/API 工作区，使结果更可复现、更适合审计，并保持清晰的只读边界。
 
 如果以“今天谁能覆盖更多真实使用场景”为标准，OCR 更强；如果以“每条进入系统的 Finding 是否能确定回到同一份冻结证据，且模型不能扩大权限或伪造内部身份”为标准，CodeLens 的设计更严格。CodeLens 下一阶段最有价值的方向不是照搬 OCR 全部链路，而是**保留现有证据与安全边界，吸收 OCR 的确定性分片并发、阶段化工具选择、定位恢复、误报反证和大规模评测方法**。这样才能补足覆盖率、吞吐和产品集成，而不牺牲当前最有差异化价值的可验证性。

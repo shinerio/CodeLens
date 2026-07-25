@@ -227,7 +227,6 @@ class CreateReviewRequest(StrictDto):
     repository_path: Path
     scope: ScopeRequest
     selected_agents: Annotated[list[AgentReference], Field(min_length=1, max_length=32)]
-    mode: Literal["review"] = "review"
     prompt_locale: Literal["en", "zh-CN"] = "en"
 
 

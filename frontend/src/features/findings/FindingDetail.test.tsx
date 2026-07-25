@@ -29,7 +29,6 @@ const finding: FindingRecord = {
   explanation: "**Existing installations fail** when the new field is read.",
   reproduction: null,
   recommendation: "Add `ALTER TABLE` after the create statement.",
-  suggested_patch: null,
   evidence: [
     {
       kind: "excerpt",

@@ -1,14 +1,6 @@
 from dataclasses import dataclass
-from enum import StrEnum
 from pathlib import Path
 from typing import Literal
-
-
-class ReviewMode(StrEnum):
-    """Stable execution modes shared across review task boundaries."""
-
-    REVIEW = "review"
-    FIX = "fix"
 
 
 @dataclass(frozen=True)

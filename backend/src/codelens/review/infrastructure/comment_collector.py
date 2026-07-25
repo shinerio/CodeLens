@@ -89,10 +89,6 @@ class ReviewCommentCollector:
     async def submit(self, submission: ReviewCommentSubmission) -> str:
         """Resolve one candidate or return a bounded tool error without retaining it."""
 
-        if not self.tools.instructions_loaded_for(submission.path):
-            raise ValueError(
-                "instruction_loader must be called for the complete target path before comment"
-            )
         if submission.confidence < self.confidence_floor:
             raise ValueError("comment confidence is below this reviewer's threshold")
 
@@ -186,10 +182,6 @@ class ReviewCommentCollector:
 
         if self._completion is not None:
             raise ValueError("task_done has already been called")
-        if self.tools.unloaded_instruction_paths:
-            raise ValueError(
-                "instruction_loader must be called for every changed target before task_done"
-            )
         self._completion = submission
         return json.dumps(
             {

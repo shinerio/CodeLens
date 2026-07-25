@@ -6,7 +6,6 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 import { App } from "./app/App";
 import { CatalogPreviewPage } from "./features/catalog/CatalogPreviewPage";
 import { NewReviewPage } from "./features/reviews/NewReviewPage";
-import { FixPreviewPage } from "./features/reviews/FixPreviewPage";
 import { RunListPage } from "./features/reviews/RunListPage";
 import { ReviewRunPage } from "./features/reviews/ReviewRunPage";
 import { SettingsPage } from "./features/settings/SettingsPage";
@@ -33,7 +32,6 @@ const router = createBrowserRouter([
       { path: "runs", element: <RunListPage /> },
       { path: "reviews/:taskId", element: <ReviewRunPage /> },
       { path: "runs/:taskId", element: <ReviewRunPage /> },
-      { path: "fix/:fixId", element: <FixPreviewPage /> },
       { path: "agents", element: <CatalogPreviewPage kind="agents" /> },
       { path: "capabilities", element: <CatalogPreviewPage kind="capabilities" /> },
       { path: "settings", element: <SettingsPage /> },

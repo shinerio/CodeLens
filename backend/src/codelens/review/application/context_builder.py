@@ -36,16 +36,40 @@ class ReviewScopeLimits:
 
 
 @dataclass(frozen=True)
+class RepositoryInstructionInput:
+    """Expose one deduplicated frozen rule body and its exact Review targets."""
+
+    path: str
+    content: str
+    applies_to: tuple[str, ...]
+
+    def as_payload(self) -> dict[str, object]:
+        """Return the stable model-visible repository rule shape."""
+
+        return {
+            "path": self.path,
+            "content": self.content,
+            "applies_to": list(self.applies_to),
+        }
+
+
+@dataclass(frozen=True)
 class AgentInput:
-    """Carry the complete, minimal first user input for one Review Agent."""
+    """Carry complete Review scope and frozen repository rules for one Agent."""
 
     review_files: tuple[ReviewFileInput, ...]
+    repository_instructions: tuple[RepositoryInstructionInput, ...]
 
     def canonical_bytes(self) -> bytes:
-        """Serialize only model-visible Review scope in deterministic form."""
+        """Serialize model-visible Review scope and rules in deterministic form."""
 
         return json.dumps(
-            {"review_files": [item.as_payload() for item in self.review_files]},
+            {
+                "review_files": [item.as_payload() for item in self.review_files],
+                "repository_instructions": [
+                    item.as_payload() for item in self.repository_instructions
+                ],
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -63,12 +87,47 @@ class ContextBuilder:
     ) -> AgentInput:
         resolved_limits = limits or ReviewScopeLimits()
         self._validate_snapshot_controls(snapshot, instructions)
+        review_files = build_review_files(
+            snapshot,
+            max_files=resolved_limits.max_review_files,
+            max_ranges=resolved_limits.max_review_ranges,
+        )
         return AgentInput(
-            review_files=build_review_files(
-                snapshot,
-                max_files=resolved_limits.max_review_files,
-                max_ranges=resolved_limits.max_review_ranges,
+            review_files=review_files,
+            repository_instructions=self._repository_instruction_inputs(
+                instructions,
+                tuple(item.path for item in review_files),
+            ),
+        )
+
+    @staticmethod
+    def _repository_instruction_inputs(
+        instructions: ResolvedInstructionSet,
+        review_file_paths: tuple[str, ...],
+    ) -> tuple[RepositoryInstructionInput, ...]:
+        """Deduplicate rule bodies while preserving exact target scope and precedence."""
+
+        chains_by_target = {chain.target_path: chain for chain in instructions.chains}
+        applies_to_by_rule: dict[str, list[str]] = {}
+        for target_path in review_file_paths:
+            for rule_path in chains_by_target[target_path].rule_paths:
+                applies_to_by_rule.setdefault(rule_path, []).append(target_path)
+
+        active_documents = sorted(
+            (
+                document
+                for document in instructions.documents
+                if document.relative_path in applies_to_by_rule
+            ),
+            key=lambda document: (document.precedence, document.relative_path),
+        )
+        return tuple(
+            RepositoryInstructionInput(
+                path=document.relative_path,
+                content=document.content,
+                applies_to=tuple(applies_to_by_rule[document.relative_path]),
             )
+            for document in active_documents
         )
 
     @staticmethod

@@ -4,7 +4,7 @@ import asyncio
 import json
 import logging
 import os
-from dataclasses import asdict, is_dataclass
+from dataclasses import fields, is_dataclass
 from typing import Any, Literal, Protocol, cast
 
 import httpx
@@ -177,7 +177,6 @@ class OpenAIAgentRuntime:
             .request_behavior(provider_config)
         )
         snapshot_tools = FilesystemReviewTools(snapshot, self._git, max_tool_calls=None)
-        initial_instruction_context = await snapshot_tools.initial_instruction_context()
         comment_collector = ReviewCommentCollector(
             snapshot=snapshot,
             reviewer_id=agent.agent_id,
@@ -202,7 +201,6 @@ class OpenAIAgentRuntime:
             instructions="\n\n".join(
                 (
                     prompts.review_policy,
-                    initial_instruction_context,
                     prompts.review_workflow,
                     f"# Reviewer Policy\n{agent.prompt_template}",
                 )
@@ -457,11 +455,15 @@ def _visible_event(event: object) -> AgentRuntimeEvent | None:
     if isinstance(event, RunItemStreamEvent):
         if event.name == "tool_called":
             return AgentRuntimeEvent(
-                "tool_call", _json_value(event.item), _tool_metadata(event.item, include_name=True)
+                "tool_call",
+                _json_value(getattr(event.item, "raw_item", event.item)),
+                _tool_metadata(event.item, include_name=True),
             )
         if event.name == "tool_output":
             return AgentRuntimeEvent(
-                "tool_result", _json_value(event.item), _tool_metadata(event.item)
+                "tool_result",
+                _json_value(getattr(event.item, "output", event.item)),
+                _tool_metadata(event.item),
             )
     return None
 
@@ -485,7 +487,11 @@ def _json_compatible(value: object) -> object:
     if callable(dump):
         return dump(mode="json")
     if is_dataclass(value) and not isinstance(value, type):
-        return asdict(value)
+        return {
+            field.name: _json_compatible(getattr(value, field.name))
+            for field in fields(value)
+            if not field.name.startswith("_")
+        }
     if isinstance(value, dict):
         return {str(key): _json_compatible(item) for key, item in value.items()}
     if isinstance(value, (list, tuple)):

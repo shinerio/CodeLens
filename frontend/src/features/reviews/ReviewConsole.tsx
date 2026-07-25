@@ -4,6 +4,7 @@ import ReactMarkdown from "react-markdown";
 
 import { useI18n } from "../../shared/i18n/i18n";
 import type { TranscriptEntry } from "./api";
+import { failureDetails } from "./failure-details";
 
 type ConsoleMessage = TranscriptEntry & { content: string; messageKey: string; sequence: number };
 type ConsoleVisibility = {
@@ -146,19 +147,8 @@ function ConsoleContent({ entry, locale, isFinalizedStream, parseFailed }: { ent
 }
 
 function FailureContent({ metadata, fallback, locale }: { metadata: Record<string, string>; fallback: string; locale: "en" | "zh-CN" }) {
-  const details = failureDetails(metadata.reason_code, locale);
-  return <div className="review-console__failure"><strong>{details.title}</strong><p>{details.description}</p><small>{details.action}</small>{metadata.provider_status_code !== undefined ? <code>HTTP {metadata.provider_status_code}</code> : null}{details.unknown ? <pre className="review-console__content">{fallback}</pre> : null}</div>;
-}
-
-function failureDetails(reasonCode: string | undefined, locale: "en" | "zh-CN"): { title: string; description: string; action: string; unknown?: boolean } {
-  const zh = locale === "zh-CN";
-  const known: Record<string, { title: string; description: string; action: string }> = {
-    provider_server_error: zh ? { title: "模型网关暂时不可用", description: "模型服务返回了服务器错误，评审尚未完成。", action: "请稍后重试；若持续出现，请在设置中检查网关服务状态和 Base URL。" } : { title: "Model gateway is temporarily unavailable", description: "The model service returned a server error before the review completed.", action: "Retry shortly. If it persists, check gateway availability and Base URL in Settings." },
-    provider_rate_limited: zh ? { title: "模型网关触发限流", description: "当前请求被服务端限流。", action: "请稍候重试，或降低并发评审数量。" } : { title: "Model gateway rate limited", description: "The provider temporarily limited this request.", action: "Wait briefly and retry, or reduce concurrent reviews." },
-    provider_request_rejected: zh ? { title: "模型网关拒绝了请求", description: "当前模型或网关配置不接受该请求。", action: "请检查设置中的模型名称、API 类型和网关地址。" } : { title: "Model gateway rejected the request", description: "The current model or gateway configuration did not accept this request.", action: "Check the model name, API type, and gateway URL in Settings." },
-    max_model_turns_exceeded: zh ? { title: "Agent 达到最大执行轮次", description: "在完成审查前已用尽工具调用轮次。", action: "请缩小评审范围，或调整 Agent 的轮次设置。" } : { title: "Agent reached the maximum number of turns", description: "It used all tool-call turns before completing the review.", action: "Narrow the review scope or adjust the Agent turn limit." },
-  };
-  return known[reasonCode ?? ""] ?? (zh ? { title: "评审执行失败", description: "执行过程中发生了未分类错误。", action: "请检查本条执行详情和相关设置后重试。", unknown: true } : { title: "Review execution failed", description: "An unclassified error occurred during execution.", action: "Check this execution detail and settings, then retry.", unknown: true });
+  const details = failureDetails(metadata, locale);
+  return <div className="review-console__failure"><strong>{details.title}</strong><p>{details.description}</p><small>{details.action}</small>{metadata.provider_status_code !== undefined ? <code>HTTP {metadata.provider_status_code}</code> : null}{details.isUnknown ? <pre className="review-console__content">{fallback}</pre> : null}</div>;
 }
 
 function PromptContent({ content }: { content: string }) {

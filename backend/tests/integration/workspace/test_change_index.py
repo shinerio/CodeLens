@@ -17,6 +17,7 @@ async def test_builds_typed_file_changes_and_all_new_ranges_from_real_git_diff(
     await _git(tmp_path, "init")
     await _git(tmp_path, "config", "user.email", "review@example.test")
     await _git(tmp_path, "config", "user.name", "Review Test")
+    await _git(tmp_path, "config", "commit.gpgSign", "false")
     (tmp_path / "deleted.py").write_text("removed = True\n", encoding="utf-8")
     (tmp_path / "modified.py").write_text(
         "".join(f"line_{line} = {line}\n" for line in range(1, 13)),
@@ -64,6 +65,42 @@ async def test_builds_typed_file_changes_and_all_new_ranges_from_real_git_diff(
         ("deleted.py", 1, 1, "old"),
         ("modified.py", 2, 2, "new"),
         ("modified.py", 10, 10, "new"),
+    ]
+
+
+async def test_builds_hunks_for_git_c_quoted_utf8_paths(tmp_path: Path) -> None:
+    await _git(tmp_path, "init")
+    await _git(tmp_path, "config", "user.email", "review@example.test")
+    await _git(tmp_path, "config", "user.name", "Review Test")
+    await _git(tmp_path, "config", "commit.gpgSign", "false")
+    path = "review-白皮书.md"
+    (tmp_path / path).write_text("before\n", encoding="utf-8")
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "base")
+    base_oid = await _git(tmp_path, "rev-parse", "HEAD")
+    (tmp_path / path).write_text("after\n", encoding="utf-8")
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "head")
+    head_oid = await _git(tmp_path, "rev-parse", "HEAD")
+    worktree = TaskWorktree(
+        "worktree-quoted-path",
+        "review-quoted-path",
+        "a" * 64,
+        tmp_path,
+        head_oid,
+        "b" * 64,
+    )
+
+    index = await GitChangeIndexBuilder(GitCli()).build(
+        worktree,
+        base_oid,
+        (path,),
+        "commit",
+    )
+
+    assert index.files == (ReviewFileChange(path, "modified"),)
+    assert [(hunk.path, hunk.start_line, hunk.end_line, hunk.side) for hunk in index.hunks] == [
+        (path, 1, 1, "new")
     ]
 
 

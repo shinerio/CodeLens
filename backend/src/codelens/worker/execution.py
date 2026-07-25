@@ -1,7 +1,7 @@
 """Worker-side reconstruction and execution of durable review commands."""
 
 import asyncio
-from dataclasses import replace
+from dataclasses import dataclass, replace
 
 from codelens.bootstrap.settings import Settings
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
@@ -35,6 +35,7 @@ from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_
 from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
     FilesystemReviewerPromptStore,
 )
+from codelens.shared.domain.errors import DomainError
 from codelens.worker.scheduler import ClaimedJob, WorkerSemaphores
 from codelens.workspace.application.create_snapshot import SnapshotService
 from codelens.workspace.application.inspect_repository import RepositoryInspector
@@ -54,6 +55,14 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
 
 _TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled"}
+
+
+@dataclass(frozen=True)
+class _FailureDiagnostic:
+    """Carry one credential-safe user diagnostic into the durable transcript."""
+
+    content: str
+    metadata: dict[str, str]
 
 
 class _ModelLimitedRuntime:
@@ -264,17 +273,13 @@ class WorkerReviewExecutor:
     async def record_failure(self, task_id: str, error: Exception) -> None:
         """Record a stable, readable failure without provider response content."""
 
-        metadata: dict[str, str] = {"error_type": type(error).__name__}
-        content = "Review failed before completion. Check the failure details and try again."
-        if isinstance(error, AgentRuntimeError):
-            metadata.update(error.failure_metadata())
-            content = _failure_summary(error)
+        diagnostic = _failure_diagnostic(error)
 
         await self._transcripts.append(
             task_id,
             "lifecycle",
-            content,
-            metadata=metadata,
+            diagnostic.content,
+            metadata=diagnostic.metadata,
         )
         try:
             await self._review_store.fail(task_id, "review_execution_failed")
@@ -370,6 +375,18 @@ def _failure_summary(error: AgentRuntimeError) -> str:
         "provider_rate_limited": (
             "The model gateway rate limit was reached. Wait briefly, then retry the review."
         ),
+        "provider_timeout": (
+            "The model gateway did not respond before its request timeout. Check the gateway "
+            "service, then retry the review."
+        ),
+        "agent_run_timeout": (
+            "The Agent did not finish within the configured timeout. Narrow the review scope "
+            "or increase the gateway timeout."
+        ),
+        "provider_connection_error": (
+            "CodeLens could not connect to the model gateway. Check its Base URL and network "
+            "availability, then retry."
+        ),
         "provider_request_rejected": (
             "The model gateway rejected the request. Check the model, API type, and gateway "
             "settings."
@@ -378,8 +395,79 @@ def _failure_summary(error: AgentRuntimeError) -> str:
             "The agent reached its maximum tool-use turns. Narrow the review scope or adjust "
             "the agent configuration."
         ),
+        "invalid_model_output": (
+            "The model returned a response that could not be used by the review workflow. "
+            "Check model compatibility and retry."
+        ),
+        "missing_model_output": (
+            "The model finished without a usable review result. Check model compatibility and "
+            "retry."
+        ),
+        "invalid_comment_output": (
+            "The model submitted review comments that could not be validated against the frozen "
+            "Snapshot. Retry or narrow the review scope."
+        ),
     }
     return summaries.get(
         error.reason_code,
         "The model invocation failed. Check the execution details and model gateway settings.",
+    )
+
+
+def _failure_diagnostic(error: Exception) -> _FailureDiagnostic:
+    """Classify every Worker failure without copying exception messages into user artifacts."""
+
+    metadata = {"error_type": type(error).__name__}
+    if isinstance(error, AgentRuntimeError):
+        metadata.update(error.failure_metadata())
+        return _FailureDiagnostic(_failure_summary(error), metadata)
+
+    if isinstance(error, DomainError):
+        reason_code = {
+            "invalid_repository": "repository_validation_failed",
+            "snapshot_stale": "repository_changed_during_review",
+            "worktree_ownership": "review_worktree_ownership_failed",
+            "worktree_mutated": "review_worktree_mutated",
+        }.get(error.code, "domain_execution_error")
+        metadata.update(
+            {
+                "error_code": error.code,
+                "reason_code": reason_code,
+                "retryable": "false",
+            }
+        )
+        content = {
+            "repository_validation_failed": (
+                "CodeLens could not create a trusted Snapshot from the selected repository. "
+                "Verify the repository and selected revisions, then retry."
+            ),
+            "repository_changed_during_review": (
+                "The repository changed while CodeLens was freezing its Snapshot. Retry from a "
+                "stable repository state."
+            ),
+            "review_worktree_ownership_failed": (
+                "CodeLens could not verify ownership of the isolated Review worktree. Remove "
+                "stale task data or restart CodeLens, then retry."
+            ),
+            "review_worktree_mutated": (
+                "The isolated Review worktree changed after it was frozen. Restart the Review "
+                "from a clean task."
+            ),
+        }.get(
+            reason_code,
+            "A review domain rule prevented execution from completing. Check the task details.",
+        )
+        return _FailureDiagnostic(content, metadata)
+
+    metadata.update(
+        {
+            "error_code": "unexpected_review_error",
+            "reason_code": "internal_review_error",
+            "retryable": "false",
+        }
+    )
+    return _FailureDiagnostic(
+        "CodeLens encountered an unexpected internal error. Use the task ID to inspect "
+        "worker.log, then retry after correcting the reported cause.",
+        metadata,
     )

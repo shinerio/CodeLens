@@ -71,7 +71,6 @@ class FindingCandidateSchema(BaseModel):
     explanation: _LongText
     reproduction: _LongText | None = None
     recommendation: _LongText
-    suggested_patch: Annotated[str, StringConstraints(max_length=20_000)] | None = None
     rule_sources: tuple[RuleReferenceSchema, ...] = Field(default=(), max_length=20)
 
     @model_validator(mode="after")

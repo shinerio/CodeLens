@@ -59,21 +59,29 @@ try {
 
     Write-Host "`n[3/3] Starting CodeLens..."
 
+    $logRoot = Join-Path $scriptRoot "logs"
+    $supervisorLog = Join-Path $logRoot "supervisor.log"
+    $frontendLog = Join-Path $logRoot "frontend.log"
+    New-Item -ItemType Directory -Path $logRoot -Force | Out-Null
+    Remove-Item -LiteralPath (Join-Path $logRoot "unified.log") -Force -ErrorAction SilentlyContinue
+
     # 清理占用端口的旧进程
     Stop-ExistingPortProcess -Port 5173
     Stop-ExistingPortProcess -Port 8800
 
     # 通过 cmd /c 启动以保持进程树连接（解决 uv.exe 包装器立即退出的问题）
     # pnpm 是 .ps1 文件，也需要通过 cmd /c 调用
+    $backendCommand = "`"$($uvCommand.Source)`" run --project backend codelens-review start 1>>`"$supervisorLog`" 2>&1"
     $backendProcess = Start-Process `
         -FilePath "cmd.exe" `
-        -ArgumentList @("/c", "`"$($uvCommand.Source)`" run --project backend codelens-review start") `
+        -ArgumentList @("/d", "/s", "/c", $backendCommand) `
         -WorkingDirectory $scriptRoot `
         -NoNewWindow `
         -PassThru
+    $frontendCommand = "powershell.exe -NoProfile -ExecutionPolicy Bypass -File `"$($pnpmCommand.Source)`" --dir frontend dev --host 127.0.0.1 --strictPort 1>>`"$frontendLog`" 2>&1"
     $frontendProcess = Start-Process `
-        -FilePath "powershell.exe" `
-        -ArgumentList @("-File", $pnpmCommand.Source, "--dir", "frontend", "dev", "--host", "127.0.0.1", "--strictPort") `
+        -FilePath "cmd.exe" `
+        -ArgumentList @("/d", "/s", "/c", $frontendCommand) `
         -WorkingDirectory $scriptRoot `
         -NoNewWindow `
         -PassThru

@@ -3,7 +3,7 @@
 CodeLens 是一个本地优先的多 Agent 代码 Review 工作台。它通过 Web 界面固定 Git 审查范围，在任务专属的隔离 worktree 中运行 Reviewer，并将模型输出转换为可定位、可验证的结构化 Findings。
 
 > [!IMPORTANT]
-> 项目目前处于早期可用阶段（Phase 0–2）。当前可用的是 **REVIEW 模式下的 `correctness:v1` Reviewer**；多 Reviewer、完整报告、Artifact 浏览和 FIX 流程仍在开发中。
+> 项目目前处于早期可用阶段（Phase 0–2）。当前可用的是 `correctness:v1` Reviewer；多 Reviewer、完整报告和 Artifact 浏览仍在开发中。
 
 ## 当前功能
 
@@ -12,7 +12,7 @@ CodeLens 是一个本地优先的多 Agent 代码 Review 工作台。它通过 W
 - 支持分支差异、指定 Commit、未提交改动和全仓扫描四种 Review 范围；分支和 Commit 均从 Git 下拉列表选择。
 - Commit 默认显示最近 10 条，包含缩略 Commit ID、提交者和 Message 概要，并可继续加载。
 - 左侧 Review 列表持久化展示所有 Review 工作空间，支持创建、重新打开和删除。
-- 每个任务创建独立的 detached worktree，Reviewer 不直接读取或修改用户原始工作区。
+- 每个任务创建独立的 detached worktree 并冻结只读 Snapshot，Reviewer 不直接访问用户原始工作区。
 - 冻结提交、工作区改动、`.gitignore` 结果和仓库 Review 指令，保证一次任务使用一致输入。
 - 使用 OpenAI Agents SDK 运行内置的正确性 Reviewer。
 - 通过 SQLite 持久化任务、检查点和事件；Worker 重启后可恢复未完成工作。
@@ -129,14 +129,9 @@ Branch 和 Full repository 的引用通过分支下拉框选择。Commit diff �
 
 对于 Branch、Commit 和 Full repository，只有目标指向当前 checkout 的 `HEAD` 时，工作区改动才会作为不可变 overlay 被捕获。所有范围都会排除当前 `.gitignore` 命中的路径，包括已经被 Git 跟踪的文件。
 
-### 3. 选择模式和 Reviewer
+### 3. 选择 Reviewer
 
-当前只能使用：
-
-- 模式：`REVIEW`
-- Reviewer：`correctness:v1`
-
-页面中的其他 Reviewer 和 `FIX` 模式用于展示后续产品方向，目前不可选择。
+当前可用的 Reviewer 是 `correctness:v1`。页面中的其他 Reviewer 用于展示后续产品方向，目前不可选择。
 
 ### 4. 启动并查看结果
 
@@ -199,7 +194,7 @@ uv run --project backend codelens-review start
 
 不要拆成独立 API 和 Worker 进程运行 Web Review 流程；后端进程内共享内存事件总线和运行中 transcript，拆分后前端可能看不到实时进度并停在等待事件流状态。
 
-> `codelens-review` 目前只提供启动和进程管理命令，不提供创建 Review、读取报告或执行 Fix 的业务 CLI；产品交互入口是 Web/API。
+> `codelens-review` 目前只提供启动和进程管理命令；产品交互入口是 Web/API。
 
 ## 项目结构
 
@@ -252,7 +247,6 @@ pnpm --dir frontend exec playwright test
 
 - Security、Performance、Maintainability、Testing、Docs & Style 和 Cross-file Reviewer。
 - 多 Reviewer 并发汇总和完整 Review Report。
-- FIX 模式、补丁验证、人工审批和安全应用。
 - Artifact 浏览和 Reviewer 管理页面。
 - 多用户身份认证、权限、远程部署和同一数据目录的多 Worker 调度。
 

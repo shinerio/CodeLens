@@ -157,8 +157,9 @@ start_services() {
 
   printf '\n[3/3] Starting CodeLens...\n'
   mkdir -p "$LOG_DIR" || fail "could not create log directory"
+  rm -f "$LOG_DIR/unified.log"
   local host="${HOST:-127.0.0.1}"
-  nohup uv run --project backend codelens-review start --host "$host" >>"$LOG_DIR/unified.log" 2>&1 &
+  nohup uv run --project backend codelens-review start --host "$host" >>"$LOG_DIR/supervisor.log" 2>&1 &
   BACKEND_PID=$!
   printf '%s\n' "$BACKEND_PID" >"$BACKEND_PID_FILE"
   nohup pnpm --dir frontend dev --host "$host" --strictPort >>"$LOG_DIR/frontend.log" 2>&1 &

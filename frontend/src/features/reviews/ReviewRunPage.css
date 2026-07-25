@@ -113,6 +113,58 @@
   background: rgba(255, 235, 227, 0.78);
 }
 
+.run-failure__summary {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+}
+
+.run-failure__summary > svg {
+  width: 20px;
+  height: 20px;
+  color: var(--run-failed);
+}
+
+.run-failure__summary strong {
+  display: block;
+  color: #812727;
+  font-size: 0.94rem;
+}
+
+.run-failure__summary p,
+.run-failure__action p {
+  margin: 4px 0 0;
+  line-height: 1.5;
+}
+
+.run-failure__action {
+  margin: 12px 0 0 33px;
+  padding-left: 11px;
+  border-left: 2px solid rgba(179, 58, 58, 0.38);
+}
+
+.run-failure__action span {
+  color: var(--run-failed);
+  font: 800 0.65rem "SFMono-Regular", Consolas, monospace;
+  text-transform: uppercase;
+}
+
+.run-failure__metadata {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 12px 0 0 33px;
+}
+
+.run-failure__metadata code {
+  padding: 3px 6px;
+  border: 1px solid rgba(129, 39, 39, 0.2);
+  background: rgba(255, 255, 255, 0.58);
+  color: #812727;
+  font-size: 0.68rem;
+}
+
 .run-banner--canceled {
   border-color: rgba(79, 90, 99, 0.28);
   background: rgba(229, 233, 236, 0.8);

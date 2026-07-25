@@ -38,6 +38,7 @@ async def _snapshot(tmp_path: Path) -> ReviewSnapshot:
     await _git(tmp_path, "init")
     await _git(tmp_path, "config", "user.email", "review@example.test")
     await _git(tmp_path, "config", "user.name", "Review Test")
+    await _git(tmp_path, "config", "commit.gpgSign", "false")
     source = b"def original() -> str:\n    return 'old'\n"
     helper = b"def helper() -> str:\n    return 'helper'\n"
     root_rules = b"Follow repository-wide rules.\n"
@@ -338,112 +339,12 @@ async def test_snapshot_symlink_payload_uses_frozen_link_target_text(tmp_path: P
     assert result["content"] == "1|service.py"
 
 
-async def test_instruction_loader_returns_only_hash_verified_rules_for_complete_target_path(
-    tmp_path: Path,
-) -> None:
-    snapshot = await _snapshot(tmp_path)
-    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-
-    initial = json.loads(await tools.initial_instruction_context())
-    result = json.loads(await tools.instruction_loader("src/service.py"))
-
-    assert initial == {
-        "available_instruction_paths": [
-            "src/REVIEW.md",
-            "src/service.py.review.md",
-        ],
-        "root_instructions": [
-            {"content": "Follow repository-wide rules.\n", "path": "AGENTS.md"},
-            {"content": "Review all public contracts.\n", "path": "REVIEW.md"},
-        ],
-    }
-    assert result == {
-        "new_instructions": [
-            {"content": "Review source compatibility.\n", "path": "src/REVIEW.md"},
-            {"content": "Check service migrations.\n", "path": "src/service.py.review.md"},
-        ],
-        "path": "src/service.py",
-        "reused_instruction_paths": ["AGENTS.md", "REVIEW.md"],
-        "rule_paths": [
-            "AGENTS.md",
-            "REVIEW.md",
-            "src/REVIEW.md",
-            "src/service.py.review.md",
-        ],
-    }
-    assert tools.instructions_loaded_for("src/service.py") is True
-    with pytest.raises(ValueError, match="complete repository-relative target path"):
-        await tools.instruction_loader("/src/service.py")
-    with pytest.raises(ValueError, match="complete repository-relative target path"):
-        await tools.instruction_loader("../src/service.py")
-    with pytest.raises(ValueError, match="complete repository-relative target path"):
-        await tools.instruction_loader("src/helper.py")
-
-    nested_tampered_tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-    await nested_tampered_tools.initial_instruction_context()
-    (tmp_path / "src" / "REVIEW.md").write_text("tampered\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="changed"):
-        await nested_tampered_tools.instruction_loader("src/service.py")
-
-    tampered_tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-    (tmp_path / "AGENTS.md").write_text("tampered\n", encoding="utf-8")
-    with pytest.raises(ValueError, match="changed"):
-        await tampered_tools.initial_instruction_context()
-
-
-async def test_instruction_loader_reuses_rule_bodies_for_targets_in_the_same_directory(
-    tmp_path: Path,
-) -> None:
-    snapshot = await _snapshot(tmp_path)
-    snapshot = replace(
-        snapshot,
-        manifest=replace(
-            snapshot.manifest,
-            target_paths=("src/service.py", "src/helper.py"),
-            context_paths=(),
-            entries=tuple(
-                replace(entry, origin="target") if entry.path == "src/helper.py" else entry
-                for entry in snapshot.manifest.entries
-            ),
-        ),
-        change_index=replace(
-            snapshot.change_index,
-            files=(
-                *snapshot.change_index.files,
-                ReviewFileChange("src/helper.py", "modified"),
-            ),
-        ),
-    )
-    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-
-    await tools.initial_instruction_context()
-    await tools.instruction_loader("src/service.py")
-    result = json.loads(await tools.instruction_loader("src/helper.py"))
-
-    assert result == {
-        "new_instructions": [],
-        "path": "src/helper.py",
-        "reused_instruction_paths": ["AGENTS.md", "REVIEW.md", "src/REVIEW.md"],
-        "rule_paths": ["AGENTS.md", "REVIEW.md", "src/REVIEW.md"],
-    }
-
-
 async def test_rejects_unbounded_tool_use(tmp_path: Path) -> None:
     tools = FilesystemReviewTools(await _snapshot(tmp_path), GitCli(), max_tool_calls=1)
 
     await tools.explore("src")
     with pytest.raises(ValueError, match="budget"):
         await tools.glob("**/*.py")
-
-
-async def test_initial_instruction_prefetch_does_not_consume_tool_budget(tmp_path: Path) -> None:
-    tools = FilesystemReviewTools(await _snapshot(tmp_path), GitCli(), max_tool_calls=1)
-
-    await tools.initial_instruction_context()
-    await tools.instruction_loader("src/service.py")
-
-    with pytest.raises(ValueError, match="budget"):
-        await tools.explore("src")
 
 
 async def test_comment_collector_derives_finding_location_from_frozen_snapshot(
@@ -456,8 +357,6 @@ async def test_comment_collector_derives_finding_location_from_frozen_snapshot(
         confidence_floor=0.7,
         tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
     )
-    await collector.tools.instruction_loader("src/service.py")
-
     acknowledgement = json.loads(
         await collector.submit(
             ReviewCommentSubmission(
@@ -487,8 +386,6 @@ async def test_comment_collector_rejects_location_outside_changed_hunk(tmp_path:
         confidence_floor=0.7,
         tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
     )
-    await collector.tools.instruction_loader("src/service.py")
-
     with pytest.raises(ValueError, match="changed new-side hunk"):
         await collector.submit(
             ReviewCommentSubmission(
@@ -511,8 +408,6 @@ async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_pa
         confidence_floor=0.7,
         tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
     )
-    await collector.tools.instruction_loader("src/service.py")
-
     acknowledgement = json.loads(
         await collector.submit_many(
             [
@@ -546,35 +441,4 @@ async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_pa
     with pytest.raises(ValueError, match="already"):
         collector.complete(
             ReviewCompletionSubmission(summary="Repeated completion.", reviewed_changed_files=1)
-        )
-
-
-async def test_comment_collector_requires_instruction_loader_before_output(
-    tmp_path: Path,
-) -> None:
-    snapshot = await _snapshot(tmp_path)
-    collector = ReviewCommentCollector(
-        snapshot=snapshot,
-        reviewer_id="correctness",
-        confidence_floor=0.7,
-        tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
-    )
-
-    with pytest.raises(ValueError, match="instruction_loader"):
-        await collector.submit(
-            ReviewCommentSubmission(
-                path="src/service.py",
-                existing_code="    return 'new'\n",
-                title="Missing upgrade migration",
-                content="Existing databases do not receive the new field.",
-                recommendation="Add an idempotent migration.",
-                confidence=0.9,
-            )
-        )
-    with pytest.raises(ValueError, match="instruction_loader"):
-        collector.complete(
-            ReviewCompletionSubmission(
-                summary="Reviewed the changed service file.",
-                reviewed_changed_files=1,
-            )
         )

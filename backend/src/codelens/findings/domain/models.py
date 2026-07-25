@@ -80,7 +80,6 @@ class Finding:
     explanation: str
     reproduction: str | None
     recommendation: str
-    suggested_patch: str | None
     rule_sources: tuple[RuleReference, ...]
 
 

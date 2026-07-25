@@ -128,12 +128,24 @@ def _snapshot() -> tuple[ReviewSnapshot, ResolvedInstructionSet]:
     return snapshot, instructions
 
 
-def test_serializes_complete_sorted_review_files_and_nothing_else() -> None:
+def test_serializes_complete_review_files_and_active_repository_instructions() -> None:
     snapshot, instructions = _snapshot()
 
     agent_input = ContextBuilder().build(snapshot, instructions)
 
     assert json.loads(agent_input.canonical_bytes()) == {
+        "repository_instructions": [
+            {
+                "applies_to": [
+                    "src/added.py",
+                    "src/changed.py",
+                    "src/deleted.py",
+                    "src/renamed.py",
+                ],
+                "content": "Follow the repository rules.\n",
+                "path": "AGENTS.md",
+            }
+        ],
         "review_files": [
             {
                 "change_type": "added",
@@ -166,12 +178,77 @@ def test_serializes_complete_sorted_review_files_and_nothing_else() -> None:
         b"content_hash",
         b"excerpt_hash",
         b"Inactive rule body",
-        b"Follow the repository rules",
         b"plan",
         b"changed_hunks",
         b"context",
     ):
         assert forbidden not in serialized
+
+
+def test_serializes_each_repository_instruction_once_with_its_exact_targets() -> None:
+    snapshot, instructions = _snapshot()
+    file_rule = "Check added-file migrations.\n"
+    rule_path = "src/added.py.review.md"
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            instruction_paths=("AGENTS.md", rule_path),
+            entries=(
+                *snapshot.manifest.entries,
+                SnapshotEntry(
+                    rule_path,
+                    "file",
+                    0o644,
+                    len(file_rule.encode()),
+                    _hash(file_rule.encode()),
+                    None,
+                    "instruction",
+                ),
+            ),
+        ),
+    )
+    instructions = replace(
+        instructions,
+        documents=(
+            instructions.documents[0],
+            InstructionDocument(
+                rule_path,
+                file_rule,
+                _hash(file_rule.encode()),
+                "file_review",
+                "src/added.py",
+                4,
+            ),
+            instructions.documents[1],
+        ),
+        chains=tuple(
+            replace(chain, rule_paths=(*chain.rule_paths, rule_path))
+            if chain.target_path == "src/added.py"
+            else chain
+            for chain in instructions.chains
+        ),
+    )
+
+    payload = json.loads(ContextBuilder().build(snapshot, instructions).canonical_bytes())
+
+    assert payload["repository_instructions"] == [
+        {
+            "applies_to": [
+                "src/added.py",
+                "src/changed.py",
+                "src/deleted.py",
+                "src/renamed.py",
+            ],
+            "content": "Follow the repository rules.\n",
+            "path": "AGENTS.md",
+        },
+        {
+            "applies_to": ["src/added.py"],
+            "content": file_rule,
+            "path": rule_path,
+        },
+    ]
 
 
 def test_same_snapshot_produces_identical_bytes_regardless_of_metadata_order() -> None:

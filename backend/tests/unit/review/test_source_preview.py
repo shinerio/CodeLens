@@ -87,6 +87,5 @@ def _finding() -> Finding:
         explanation="explanation",
         reproduction=None,
         recommendation="recommendation",
-        suggested_patch=None,
         rule_sources=(),
     )

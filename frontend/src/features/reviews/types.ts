@@ -28,13 +28,10 @@ export type ScopeRequest =
   | UncommittedScopeRequest
   | FullRepositoryScopeRequest;
 
-export type ReviewMode = "review" | "fix";
-
 export type CreateReviewRequest = {
   repository_path: string;
   scope: ScopeRequest;
   selected_agents: string[];
-  mode: ReviewMode;
   prompt_locale: "en" | "zh-CN";
 };
 

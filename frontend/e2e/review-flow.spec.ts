@@ -77,15 +77,9 @@ test("streams the correctness fixture from inspect to validated findings", async
     timeout: 15000,
   });
 
-  const consoleView = page.getByRole("region", { name: "Review execution console" });
-  const tools = consoleView.getByRole("checkbox", { name: "Tools" });
-  await expect(consoleView.locator(".review-console__message--tool:visible")).toHaveCount(0);
-  await tools.click();
-  await expect(tools).toBeChecked();
-  await expect(consoleView.locator(".review-console__message--tool:visible")).toHaveCount(2);
-  await tools.click();
-  await expect(tools).not.toBeChecked();
-  await expect(consoleView.locator(".review-console__message--tool:visible")).toHaveCount(0);
+  await expect(page.getByRole("region", { name: "Tool usage" })).toContainText(
+    "No tools were called.",
+  );
 
   await page.getByRole("button", { name: /Findings/ }).click();
   await expect(

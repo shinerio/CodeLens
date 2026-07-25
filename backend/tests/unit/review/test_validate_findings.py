@@ -101,7 +101,6 @@ def _payload(path: str = "src/state.py", hunk_id: str = "hunk-1") -> bytes:
                     "explanation": "The changed branch returns the inverse.",
                     "reproduction": None,
                     "recommendation": "Return the intended value.",
-                    "suggested_patch": None,
                     "rule_sources": [],
                 }
             ],

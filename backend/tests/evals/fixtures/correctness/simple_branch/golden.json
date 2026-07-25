@@ -31,7 +31,6 @@
       "explanation": "The guard was inverted, so the intended state machine no longer fails closed.",
       "reproduction": null,
       "recommendation": "Restore the draft-only guard before allowing the reviewing transition.",
-      "suggested_patch": null,
       "rule_sources": [
         {
           "path": "REVIEW.md",

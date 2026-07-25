@@ -27,7 +27,6 @@ from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_
 from codelens.workspace.domain.models import (
     ChangeIndex,
     RepositoryFingerprint,
-    ReviewMode,
     ReviewSnapshot,
     ReviewTarget,
     SnapshotManifest,
@@ -121,7 +120,6 @@ def _agent() -> AgentVersion:
         max_turns=3,
         confidence_floor=0.7,
         failure_policy="fail_task",
-        mode_support=(ReviewMode.REVIEW,),
         content_hash="a" * 64,
     )
 
@@ -165,9 +163,8 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     sdk_agent = runner.calls[0][0]
     assert sdk_agent is not None
     assert sdk_agent.instructions.startswith("Review Snapshot code only")
-    assert "repository_instructions" not in sdk_agent.instructions
-    assert "instruction_loader" in sdk_agent.instructions
-    assert "exact repository-relative path" in sdk_agent.instructions
+    assert sdk_agent.instructions.count("repository_instructions") == 1
+    assert "instruction_loader" not in sdk_agent.instructions
     assert "repository_instruction_chains" not in sdk_agent.instructions
     assert "repository_instruction_targets" not in sdk_agent.instructions
     assert sdk_agent.instructions.index("Review Snapshot code only") < sdk_agent.instructions.index(
@@ -180,7 +177,6 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
         "glob",
         "grep",
         "read_file",
-        "instruction_loader",
         "get_diff",
         "read_revision",
         "comment",
@@ -264,7 +260,6 @@ def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_lo
         "glob",
         "grep",
         "read_file",
-        "instruction_loader",
         "get_diff",
         "read_revision",
         "comment",
@@ -610,5 +605,4 @@ def test_builtin_correctness_agent_is_immutable_and_content_addressed() -> None:
     assert first.agent_id == "correctness"
     assert first.output_contract_version == "1"
     assert first.prompt_template == "Prompt template is loaded from the prompt catalog at runtime."
-    assert ReviewMode.REVIEW in first.mode_support
     assert len(first.content_hash) == 64

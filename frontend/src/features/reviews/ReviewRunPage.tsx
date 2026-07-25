@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  CircleAlert,
   CircleCheckBig,
   CircleStop,
   Copy,
@@ -10,7 +11,6 @@ import {
   PanelTop,
   PlayCircle,
   RefreshCw,
-  WandSparkles,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "react-router-dom";
@@ -19,7 +19,8 @@ import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
-import { cancelReview, getFindingSource, getProcessReport, getReview, getTranscript, listFindings } from "./api";
+import { cancelReview, getFindingSource, getProcessReport, getReview, getTranscript, listFindings, type TranscriptEntry } from "./api";
+import { failureDetails } from "./failure-details";
 import { ReviewConsole } from "./ReviewConsole";
 import { ReviewProcessReport } from "./ReviewProcessReport";
 import { useReviewEvents } from "./useReviewEvents";
@@ -81,7 +82,7 @@ function bannerClass(status: string) {
 }
 
 export function ReviewRunPage() {
-  const { t } = useI18n();
+  const { locale, t } = useI18n();
   const queryClient = useQueryClient();
   const params = useParams();
   const taskId = params.taskId;
@@ -141,6 +142,8 @@ export function ReviewRunPage() {
 
   const currentStatus =
     eventStatus === "loading" ? reviewQuery.data?.status ?? eventStatus : eventStatus;
+  const failureEntry = latestFailureEntry(transcriptQuery.data);
+  const failure = failureEntry === undefined ? undefined : failureDetails(failureEntry.metadata, locale);
   const processReportQuery = useQuery({
     queryKey: ["review-process-report", taskId],
     queryFn: () => getProcessReport(taskId ?? ""),
@@ -231,9 +234,26 @@ export function ReviewRunPage() {
       </header>
 
       {TERMINAL_STATUSES.has(currentStatus) && currentStatus !== "completed" ? (
-        <div className={bannerClass(currentStatus)} role="status">
+        <div className={bannerClass(currentStatus)} role={currentStatus === "failed" ? "alert" : "status"}>
           {currentStatus === "partial" ? t("run.partial") : null}
-          {currentStatus === "failed" ? t("run.failed") : null}
+          {currentStatus === "failed" && failure !== undefined && failureEntry !== undefined ? (
+            <>
+              <div className="run-failure__summary">
+                <CircleAlert aria-hidden="true" />
+                <div><strong>{failure.title}</strong><p>{failure.description}</p></div>
+              </div>
+              <div className="run-failure__action">
+                <span>{locale === "zh-CN" ? "下一步" : "Next step"}</span>
+                <p>{failure.action}</p>
+              </div>
+              <div className="run-failure__metadata">
+                <code>{failureEntry.metadata.reason_code ?? failureEntry.metadata.error_type ?? "unknown"}</code>
+                {failureEntry.metadata.phase !== undefined ? <code>{failureEntry.metadata.phase}</code> : null}
+                {failureEntry.metadata.provider_status_code !== undefined ? <code>HTTP {failureEntry.metadata.provider_status_code}</code> : null}
+              </div>
+            </>
+          ) : null}
+          {currentStatus === "failed" && failure === undefined ? t("run.failed") : null}
           {currentStatus === "canceled" ? t("run.canceled") : null}
         </div>
       ) : null}
@@ -317,7 +337,7 @@ export function ReviewRunPage() {
           </article>
           <article className="run-panel run-panel--detail">
             <FindingDetail finding={selectedFinding} source={sourceQuery.data ?? null} />
-            {selectedFinding !== null ? <div className="run-preview-actions"><button type="button" onClick={handleUnsupported}>{t("run.suppress")}</button><button type="button" onClick={handleUnsupported}>{t("run.acknowledge")}</button><button type="button" onClick={handleUnsupported}><WandSparkles aria-hidden="true" /> {t("run.draftFix")}</button></div> : null}
+            {selectedFinding !== null ? <div className="run-preview-actions"><button type="button" onClick={handleUnsupported}>{t("run.suppress")}</button><button type="button" onClick={handleUnsupported}>{t("run.acknowledge")}</button></div> : null}
           </article>
         </section>
       ) : null}
@@ -354,4 +374,14 @@ export function ReviewRunPage() {
       ) : null}
     </section>
   );
+}
+
+function latestFailureEntry(entries: TranscriptEntry[]): TranscriptEntry | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (entry?.kind === "lifecycle" && (entry.metadata.error_code !== undefined || entry.metadata.error_type !== undefined)) {
+      return entry;
+    }
+  }
+  return undefined;
 }

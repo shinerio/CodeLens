@@ -1,4 +1,4 @@
-from codelens.workspace.domain.models import BranchScope, ReviewMode, SnapshotManifest
+from codelens.workspace.domain.models import BranchScope, SnapshotManifest
 
 
 def test_branch_scope_carries_base_and_target_refs() -> None:
@@ -22,7 +22,3 @@ def test_manifest_separates_targets_from_context() -> None:
     assert manifest.is_target("src/payment.py")
     assert not manifest.is_target("tests/test_payment.py")
     assert manifest.is_context("tests/test_payment.py")
-
-
-def test_review_mode_value_is_stable() -> None:
-    assert ReviewMode.REVIEW.value == "review"

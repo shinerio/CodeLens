@@ -18,7 +18,6 @@ _REQUIRED_TOOL_NAMES = frozenset(
         "glob",
         "grep",
         "read_file",
-        "instruction_loader",
         "get_diff",
         "read_revision",
         "comment",

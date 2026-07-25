@@ -35,7 +35,6 @@ def _valid_finding() -> dict[str, object]:
         "explanation": "The changed boolean expression reverses the intended transition.",
         "reproduction": None,
         "recommendation": "Return value without negation.",
-        "suggested_patch": None,
         "rule_sources": [{"path": "REVIEW.md", "content_hash": "b" * 64}],
     }
 

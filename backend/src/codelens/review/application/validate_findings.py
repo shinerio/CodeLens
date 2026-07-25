@@ -61,7 +61,6 @@ class _FindingCandidate(Protocol):
     explanation: str
     reproduction: str | None
     recommendation: str
-    suggested_patch: str | None
     rule_sources: tuple[_RuleCandidate, ...]
 
     def model_dump(self, *, mode: str) -> dict[str, object]: ...
@@ -207,7 +206,6 @@ class FindingValidator:
             explanation=candidate.explanation,
             reproduction=candidate.reproduction,
             recommendation=candidate.recommendation,
-            suggested_patch=candidate.suggested_patch,
             rule_sources=tuple(rules),
         )
 

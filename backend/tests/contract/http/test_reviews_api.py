@@ -50,7 +50,6 @@ def _request(repository: Path, scope: dict[str, object]) -> dict[str, object]:
         "repository_path": str(repository),
         "scope": scope,
         "selected_agents": ["correctness:v1"],
-        "mode": "review",
     }
 
 
@@ -243,7 +242,6 @@ def test_repository_inspection_and_same_repository_reviews_are_independent(
     "mutation",
     [
         {"selected_agents": []},
-        {"mode": "fix"},
         {"artifact_id": "/tmp/provider-output.json"},
         {"worktree_id": "/tmp/owned-checkout"},
     ],
@@ -491,6 +489,7 @@ def test_review_findings_endpoint_returns_empty_then_saved_findings(
     _run_git_safe("init", "-b", "main", str(git_repository))
     _run_git_safe("-C", str(git_repository), "config", "user.email", "test@example.com")
     _run_git_safe("-C", str(git_repository), "config", "user.name", "Test User")
+    _run_git_safe("-C", str(git_repository), "config", "commit.gpgSign", "false")
     (git_repository / "README.md").write_text("# fixture\n", encoding="utf-8")
     _run_git_safe("-C", str(git_repository), "add", "README.md")
     _run_git_safe("-C", str(git_repository), "commit", "-m", "initial")
@@ -550,7 +549,6 @@ def test_review_findings_endpoint_returns_empty_then_saved_findings(
             explanation="This is a stored contract fixture.",
             reproduction=None,
             recommendation="Review the correct branch target.",
-            suggested_patch=None,
             rule_sources=(RuleReference("rules/review.md", "f" * 64),),
         )
         batch = FindingBatch("1", (finding,))

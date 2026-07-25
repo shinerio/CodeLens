@@ -16,6 +16,17 @@ from codelens.workspace.domain.models import (
 from codelens.workspace.infrastructure.git_cli import GitCli
 
 _HUNK_HEADER = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
+_GIT_PATH_ESCAPES = {
+    "a": b"\a",
+    "b": b"\b",
+    "t": b"\t",
+    "n": b"\n",
+    "v": b"\v",
+    "f": b"\f",
+    "r": b"\r",
+    "\\": b"\\",
+    '"': b'"',
+}
 
 
 def _read_payload(path: Path) -> bytes | None:
@@ -49,11 +60,45 @@ def _normalize_path(raw_path: bytes) -> str:
     return path
 
 
+def _decode_git_quoted_path(raw_path: str) -> bytes:
+    """Decode Git's documented C-style path quoting before trust-boundary validation."""
+
+    if not raw_path.startswith('"'):
+        return raw_path.encode("utf-8")
+    if len(raw_path) < 2 or not raw_path.endswith('"'):
+        raise InvalidRepositoryError("Git returned a malformed quoted change path")
+
+    decoded = bytearray()
+    body = raw_path[1:-1]
+    offset = 0
+    while offset < len(body):
+        character = body[offset]
+        if character != "\\":
+            decoded.extend(character.encode("utf-8"))
+            offset += 1
+            continue
+        if offset + 1 >= len(body):
+            raise InvalidRepositoryError("Git returned a malformed quoted change path")
+        escape = body[offset + 1]
+        escaped_byte = _GIT_PATH_ESCAPES.get(escape)
+        if escaped_byte is not None:
+            decoded.extend(escaped_byte)
+            offset += 2
+            continue
+        octal = body[offset + 1 : offset + 4]
+        if len(octal) != 3 or any(digit not in "01234567" for digit in octal):
+            raise InvalidRepositoryError("Git returned an unsupported quoted change path")
+        decoded.append(int(octal, 8))
+        offset += 4
+    return bytes(decoded)
+
+
 def _diff_header_path(raw_path: str) -> str | None:
-    if raw_path == "/dev/null":
+    decoded = _decode_git_quoted_path(raw_path)
+    if decoded == b"/dev/null":
         return None
-    value = raw_path[2:] if raw_path.startswith(("a/", "b/")) else raw_path
-    return _normalize_path(value.encode("utf-8"))
+    value = decoded[2:] if decoded.startswith((b"a/", b"b/")) else decoded
+    return _normalize_path(value)
 
 
 def _parse_name_status(output: bytes) -> tuple[ReviewFileChange, ...]:

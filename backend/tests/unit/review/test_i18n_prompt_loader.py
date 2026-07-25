@@ -19,21 +19,23 @@ def test_system_prompt_locales_use_the_minimal_bundle_file_set() -> None:
         assert bundle_files == EXPECTED_BUNDLE_FILES
 
 
-def test_repository_policy_describes_prefetched_root_rules_without_duplication() -> None:
+def test_repository_policy_describes_complete_prefetched_rules_without_loader_tool() -> None:
     loader = I18nPromptLoader.load(PROMPT_ROOT)
     english = loader.get("en")
     chinese = loader.get("zh-CN")
 
-    assert "Root-level `AGENTS.md` and `REVIEW.md`, when present, are already loaded" in (
-        english.review_policy
-    )
-    assert "No other repository rules are preloaded" in english.review_policy
-    assert "根目录中存在的 `AGENTS.md` 和 `REVIEW.md` 已默认加载" in chinese.review_policy
-    assert "其他仓库规则均未预加载" in chinese.review_policy
-    assert english.review_policy.count("`instruction_loader`") == 1
-    assert chinese.review_policy.count("`instruction_loader`") == 1
+    assert "repository_instructions" in english.review_policy
+    assert "complete frozen repository rules" in english.review_policy
+    assert "repository_instructions" in chinese.review_policy
+    assert "完整冻结仓库规则" in chinese.review_policy
+    assert "instruction_loader" not in english.review_policy
+    assert "instruction_loader" not in chinese.review_policy
     assert "instruction_loader" not in english.review_workflow
     assert "instruction_loader" not in chinese.review_workflow
+    assert "Apply the rules mapped to each file" in english.review_workflow
+    assert "直接应用映射到每个文件的规则" in chinese.review_workflow
+    assert "never request a shell or invent another tool" in english.review_workflow
+    assert "不得请求 Shell，也不得发明其他工具" in chinese.review_workflow
     assert "get_diff" not in english.review_workflow
     assert "get_diff" not in chinese.review_workflow
     assert english.review_workflow.count("`task_done`") == 1

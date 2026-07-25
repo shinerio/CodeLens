@@ -1,7 +1,5 @@
 from dataclasses import dataclass
 
-from codelens.workspace.domain.models import ReviewMode
-
 
 @dataclass(frozen=True)
 class ModelProfile:
@@ -28,5 +26,4 @@ class AgentVersion:
     max_turns: int
     confidence_floor: float
     failure_policy: str
-    mode_support: tuple[ReviewMode, ...]
     content_hash: str

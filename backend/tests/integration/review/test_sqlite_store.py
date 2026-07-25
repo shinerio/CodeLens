@@ -71,7 +71,6 @@ def _finding(finding_id: str) -> Finding:
         explanation="The changed expression negates the intended value.",
         reproduction=None,
         recommendation="Remove the negation.",
-        suggested_patch=None,
         rule_sources=(RuleReference("REVIEW.md", "b" * 64),),
     )
 

@@ -14,7 +14,7 @@ from codelens.workspace.domain.ports import (
 
 @dataclass(frozen=True)
 class WorktreeRecoveryInput:
-    """Provide the immutable target and trusted repository metadata needed for repair."""
+    """Provide the immutable target and trusted repository metadata for recovery."""
 
     repository: Path
     captured: CapturedReviewInput

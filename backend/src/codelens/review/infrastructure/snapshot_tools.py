@@ -51,20 +51,11 @@ class FilesystemReviewTools:
             for entry in snapshot.manifest.entries
             if entry.origin in {"target", "context"}
         }
-        instruction_paths = set(snapshot.manifest.instruction_paths)
-        self._instruction_entries = {
-            entry.path: entry
-            for entry in snapshot.manifest.entries
-            if entry.origin == "instruction" and entry.path in instruction_paths
-        }
-        self._instruction_loaded_paths: set[str] = set()
-        self._emitted_instruction_paths: set[str] = set()
         review_files = build_review_files(
             snapshot,
             max_files=max(1, len(snapshot.change_index.files)),
             max_ranges=max(1, len(snapshot.change_index.hunks)),
         )
-        self._review_file_paths = tuple(item.path for item in review_files)
         self._review_files_by_path = {item.path: item for item in review_files}
 
     async def explore(self, path: str = "") -> str:
@@ -141,111 +132,6 @@ class FilesystemReviewTools:
 
         selected = await self._selected_file_lines(path, start_line, end_line)
         return hashlib.sha256(selected).hexdigest(), len(selected) > _MAX_READ_BYTES
-
-    async def initial_instruction_context(self) -> str:
-        """Prefetch root rules and list non-root rule paths without consuming a tool call."""
-
-        applicable_paths = {
-            rule_path
-            for target_path in self._review_file_paths
-            for rule_path in self._instruction_entries
-            if self._instruction_order(target_path, rule_path) is not None
-        }
-        root_entries = tuple(
-            sorted(
-                (
-                    entry
-                    for entry in self._instruction_entries.values()
-                    if entry.path in applicable_paths
-                    if PurePosixPath(entry.path).parent == PurePosixPath(".")
-                    and entry.path.casefold() in {"agents.md", "review.md"}
-                ),
-                key=lambda entry: (0 if entry.path.casefold() == "agents.md" else 1, entry.path),
-            )
-        )
-        root_instructions: list[dict[str, str]] = []
-        for entry in root_entries:
-            payload = await self._payload(entry)
-            if b"\0" in payload:
-                raise ValueError("repository instruction is binary")
-            root_instructions.append(
-                {"path": entry.path, "content": payload.decode("utf-8", errors="strict")}
-            )
-        self._emitted_instruction_paths.update(entry.path for entry in root_entries)
-        root_paths = {entry.path for entry in root_entries}
-        return self._json(
-            {
-                "root_instructions": root_instructions,
-                "available_instruction_paths": sorted(
-                    path for path in applicable_paths if path not in root_paths
-                ),
-            }
-        )
-
-    async def instruction_loader(self, path: str) -> str:
-        """Load the ordered repository rules for one complete Review target path."""
-
-        self._consume()
-        if (
-            not self._is_normalized_relative(path)
-            or path not in self._review_file_paths
-        ):
-            raise ValueError(
-                "instruction_loader requires a complete repository-relative target path"
-            )
-        applicable = sorted(
-            (
-                (order, entry)
-                for rule_path, entry in self._instruction_entries.items()
-                if (order := self._instruction_order(path, rule_path)) is not None
-            ),
-            key=lambda item: item[0],
-        )
-        rule_paths = [entry.path for _, entry in applicable]
-        new_entries = [
-            entry for _, entry in applicable if entry.path not in self._emitted_instruction_paths
-        ]
-        reused_instruction_paths = [
-            entry.path
-            for _, entry in applicable
-            if entry.path in self._emitted_instruction_paths
-        ]
-        new_instructions: list[dict[str, str]] = []
-        for entry in new_entries:
-            payload = await self._payload(entry)
-            if b"\0" in payload:
-                raise ValueError("repository instruction is binary")
-            new_instructions.append(
-                {
-                    "path": entry.path,
-                    "content": payload.decode("utf-8", errors="strict"),
-                }
-            )
-        self._emitted_instruction_paths.update(entry.path for entry in new_entries)
-        self._instruction_loaded_paths.add(path)
-        return self._json(
-            {
-                "path": path,
-                "rule_paths": rule_paths,
-                "new_instructions": new_instructions,
-                "reused_instruction_paths": reused_instruction_paths,
-            }
-        )
-
-    def instructions_loaded_for(self, path: str) -> bool:
-        """Return whether repository rules were loaded successfully for one target."""
-
-        return path in self._instruction_loaded_paths
-
-    @property
-    def unloaded_instruction_paths(self) -> tuple[str, ...]:
-        """Return Review targets whose repository rules have not been loaded."""
-
-        return tuple(
-            path
-            for path in self._review_file_paths
-            if path not in self._instruction_loaded_paths
-        )
 
     async def get_diff(self, path: str) -> str:
         """Read the bounded base-to-head diff for one changed, visible file."""
@@ -329,7 +215,7 @@ class FilesystemReviewTools:
         )
 
     def as_agent_tools(self, descriptions: dict[str, str]) -> list[Tool]:
-        """Expose the fixed read-only contract using startup-loaded descriptions."""
+        """Expose the stable read-only contract using startup-loaded descriptions."""
 
         @function_tool(
             name_override="explore",
@@ -368,15 +254,6 @@ class FilesystemReviewTools:
             return await self.read_file(path, start_line, end_line)
 
         @function_tool(
-            name_override="instruction_loader",
-            description_override=descriptions["instruction_loader"],
-        )
-        async def instruction_loader_tool(path: str) -> str:
-            """Load applicable repository rules for a complete target path."""
-
-            return await self.instruction_loader(path)
-
-        @function_tool(
             name_override="get_diff",
             description_override=descriptions["get_diff"],
         )
@@ -401,7 +278,6 @@ class FilesystemReviewTools:
             glob_tool,
             grep_tool,
             read_file_tool,
-            instruction_loader_tool,
             get_diff_tool,
             read_revision_tool,
         ]
@@ -475,21 +351,6 @@ class FilesystemReviewTools:
             and ".." not in candidate.parts
             and candidate.as_posix() == path
         )
-
-    @staticmethod
-    def _instruction_order(target_path: str, rule_path: str) -> tuple[int, int, str] | None:
-        target = PurePosixPath(target_path)
-        rule = PurePosixPath(rule_path)
-        rule_name = rule.name.casefold()
-        if (
-            rule.parent == target.parent
-            and rule_name == f"{target.name}.review.md".casefold()
-        ):
-            return (len(rule.parent.parts), 2, rule_path)
-        kind_order = {"agents.md": 0, "review.md": 1}.get(rule_name)
-        if kind_order is None or not target.parent.is_relative_to(rule.parent):
-            return None
-        return (len(rule.parent.parts), kind_order, rule_path)
 
     @classmethod
     def _directory_prefix(cls, path: str) -> str:
