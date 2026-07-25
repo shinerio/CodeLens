@@ -268,7 +268,14 @@ class ReviewOrchestrator:
             (
                 "model_output",
                 output.canonical_bytes.decode("utf-8", errors="replace"),
-                {"agent": self._agent_key(agent)},
+                {
+                    "agent": self._agent_key(agent),
+                    "model_name": output.model_name,
+                    "llm_call_count": str(len(output.diagnostics)),
+                    "input_tokens": str(output.input_tokens),
+                    "output_tokens": str(output.output_tokens),
+                    "total_tokens": str(output.input_tokens + output.output_tokens),
+                },
             )
         )
         await self._record_many(task_id, transcript_records)

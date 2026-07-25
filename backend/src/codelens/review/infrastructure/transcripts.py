@@ -169,9 +169,10 @@ class WorkerTranscriptStore:
         lock = self._locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             collected = self._entries.setdefault(task_id, [])
+            start_sequence = len(collected)
             collected.extend(
                 TranscriptEntry(
-                    sequence=len(collected) + index,
+                    sequence=start_sequence + index,
                     kind=kind,
                     content=safe_content,
                     created_at=datetime.now(UTC),
@@ -201,5 +202,4 @@ def _redact(content: str) -> tuple[str, bool]:
 
     safe, count = _SECRET_PATTERN.subn("[REDACTED_CREDENTIAL]", content)
     return safe, count > 0
-
 

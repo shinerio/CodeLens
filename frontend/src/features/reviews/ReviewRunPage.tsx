@@ -19,8 +19,9 @@ import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
-import { cancelReview, getFindingSource, getReview, getTranscript, listFindings } from "./api";
+import { cancelReview, getFindingSource, getProcessReport, getReview, getTranscript, listFindings } from "./api";
 import { ReviewConsole } from "./ReviewConsole";
+import { ReviewProcessReport } from "./ReviewProcessReport";
 import { useReviewEvents } from "./useReviewEvents";
 import "./ReviewRunPage.css";
 
@@ -140,6 +141,16 @@ export function ReviewRunPage() {
 
   const currentStatus =
     eventStatus === "loading" ? reviewQuery.data?.status ?? eventStatus : eventStatus;
+  const processReportQuery = useQuery({
+    queryKey: ["review-process-report", taskId],
+    queryFn: () => getProcessReport(taskId ?? ""),
+    enabled:
+      taskId !== undefined &&
+      TERMINAL_STATUSES.has(currentStatus) &&
+      transcriptQuery.data.length > 0,
+    retry: 5,
+    retryDelay: 1_000,
+  });
   const reviewTitle = useMemo(() => {
     const selectedAgents = reviewQuery.data?.selected_agents ?? [];
     if (selectedAgents.length === 0) {
@@ -156,8 +167,8 @@ export function ReviewRunPage() {
       return;
     }
     terminalRef.current = currentStatus;
-    void findingsQuery.refetch();
-  }, [currentStatus, findingsQuery]);
+    void Promise.all([findingsQuery.refetch(), transcriptQuery.refetch()]);
+  }, [currentStatus, findingsQuery, transcriptQuery]);
 
   useEffect(() => {
     if (findingsQuery.data.length > 0 && selectedFindingId === null) {
@@ -313,6 +324,13 @@ export function ReviewRunPage() {
 
       {activeTab === "agent_runs" ? (
         <section className="run-layout">
+          {processReportQuery.data !== undefined ? (
+            <ReviewProcessReport report={processReportQuery.data} />
+          ) : TERMINAL_STATUSES.has(currentStatus) && transcriptQuery.data.length > 0 ? (
+            <article className="run-panel run-panel--wide process-report__state" role={processReportQuery.isError ? "alert" : "status"}>
+              {processReportQuery.isError ? t("run.processReportError") : t("run.processReportLoading")}
+            </article>
+          ) : null}
           <article className="run-panel run-panel--wide">
             <div className="run-panel__heading">
               <div>

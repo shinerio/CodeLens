@@ -12,6 +12,7 @@ from codelens.review.application.orchestrator import (
 )
 from codelens.review.application.validate_findings import FindingValidationError
 from codelens.review.domain.ports import (
+    AgentResponseDiagnostic,
     AgentRuntimeEvent,
     RunOutputArtifact,
     UnvalidatedAgentOutput,
@@ -108,7 +109,17 @@ class RecordingRuntime:
         self, _agent: object, _input_payload: bytes, _snapshot: object
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
-        return UnvalidatedAgentOutput(self.payload, (), "fake", 1, 2, ())
+        return UnvalidatedAgentOutput(
+            self.payload,
+            ("response-1", "response-2"),
+            "fake-model",
+            11,
+            4,
+            (
+                AgentResponseDiagnostic("response-1", "request-1", 6, 2, 1),
+                AgentResponseDiagnostic("response-2", "request-2", 5, 2, 1),
+            ),
+        )
 
 
 class StreamingRuntime(RecordingRuntime):
@@ -286,6 +297,15 @@ async def test_streamed_model_events_publish_the_prompt_before_completion() -> N
         "model_reasoning_delta",
         "model_output",
     ]
+    model_output = next(entry for entry in entries if entry[0] == "model_output")
+    assert model_output[2] == {
+        "agent": "correctness:v1",
+        "model_name": "fake-model",
+        "llm_call_count": "2",
+        "input_tokens": "11",
+        "output_tokens": "4",
+        "total_tokens": "15",
+    }
 
 
 @pytest.mark.parametrize(

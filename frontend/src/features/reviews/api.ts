@@ -12,6 +12,46 @@ export interface TranscriptEntry {
   metadata: Record<string, string>;
 }
 
+export interface ToolUsageSummary {
+  tool_name: string;
+  call_count: number;
+  result_count: number;
+}
+
+export interface AgentProcessSummary {
+  agent: string;
+  model_name: string | null;
+  llm_call_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  tool_call_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number | null;
+}
+
+export interface ReviewProcessReport {
+  task_id: string;
+  status: string;
+  usage_is_complete: boolean;
+  agent_run_count: number;
+  llm_call_count: number;
+  input_tokens: number;
+  output_tokens: number;
+  total_tokens: number;
+  tool_call_count: number;
+  tool_result_count: number;
+  unmatched_tool_result_count: number;
+  finding_count: number;
+  transcript_entry_count: number;
+  started_at: string | null;
+  completed_at: string | null;
+  duration_ms: number | null;
+  tools: ToolUsageSummary[];
+  agents: AgentProcessSummary[];
+}
+
 export async function getReview(taskId: string): Promise<ReviewResponse> {
   return api<ReviewResponse>(`/reviews/${taskId}`);
 }
@@ -48,4 +88,8 @@ export async function getFindingSource(taskId: string, findingId: string): Promi
 
 export async function getTranscript(taskId: string): Promise<TranscriptEntry[]> {
   return api<TranscriptEntry[]>(`/reviews/${taskId}/transcript`);
+}
+
+export async function getProcessReport(taskId: string): Promise<ReviewProcessReport> {
+  return api<ReviewProcessReport>(`/reviews/${taskId}/process-report`);
 }

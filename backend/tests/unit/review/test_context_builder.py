@@ -241,6 +241,15 @@ async def test_preserves_target_specific_instruction_chains_without_duplicating_
         None,
         "target",
     )
+    third_target = SnapshotEntry(
+        "tests/other_test.py",
+        "file",
+        0o100644,
+        0,
+        _hash(b""),
+        None,
+        "target",
+    )
     source_instruction = SnapshotEntry(
         "src/REVIEW.md",
         "file",
@@ -254,9 +263,14 @@ async def test_preserves_target_specific_instruction_chains_without_duplicating_
         snapshot,
         manifest=replace(
             snapshot.manifest,
-            target_paths=("src/changed.py", "tests/changed_test.py"),
+            target_paths=("src/changed.py", "tests/changed_test.py", "tests/other_test.py"),
             instruction_paths=("AGENTS.md", "src/REVIEW.md"),
-            entries=(*snapshot.manifest.entries, second_target, source_instruction),
+            entries=(
+                *snapshot.manifest.entries,
+                second_target,
+                third_target,
+                source_instruction,
+            ),
         ),
     )
     instructions = ResolvedInstructionSet(
@@ -281,6 +295,7 @@ async def test_preserves_target_specific_instruction_chains_without_duplicating_
         chains=(
             InstructionChain("src/changed.py", ("AGENTS.md", "src/REVIEW.md")),
             InstructionChain("tests/changed_test.py", ("AGENTS.md",)),
+            InstructionChain("tests/other_test.py", ("AGENTS.md",)),
         ),
         excludes=(),
         warnings=(),
@@ -308,8 +323,13 @@ async def test_preserves_target_specific_instruction_chains_without_duplicating_
         "src/REVIEW.md",
     ]
     assert payload["repository_instruction_chains"] == [
-        {"rule_paths": ["AGENTS.md", "src/REVIEW.md"], "target_path": "src/changed.py"},
-        {"rule_paths": ["AGENTS.md"], "target_path": "tests/changed_test.py"},
+        {"chain_id": "chain_1", "rule_paths": ["AGENTS.md", "src/REVIEW.md"]},
+        {"chain_id": "chain_2", "rule_paths": ["AGENTS.md"]},
+    ]
+    assert payload["repository_instruction_targets"] == [
+        {"chain_id": "chain_1", "target_path": "src/changed.py"},
+        {"chain_id": "chain_2", "target_path": "tests/changed_test.py"},
+        {"chain_id": "chain_2", "target_path": "tests/other_test.py"},
     ]
 
 
@@ -360,44 +380,14 @@ async def test_tool_driven_input_does_not_preload_changed_or_repository_bodies()
     assert agent_input.context == ()
     assert agent_input.plan.decisions == ()
     assert "Snapshot" in agent_input.platform_policy
-    tool_catalog = json.loads(agent_input.canonical_bytes())["tool_catalog"]
-    assert tool_catalog == [
-        {
-            "name": "explore",
-            "parameters": "path?: relative directory",
-            "purpose": "List visible Snapshot files under a directory.",
-        },
-        {
-            "name": "glob",
-            "parameters": "pattern: POSIX glob",
-            "purpose": "Find visible Snapshot paths matching a pattern.",
-        },
-        {
-            "name": "grep",
-            "parameters": "pattern: regular expression",
-            "purpose": "Search visible Snapshot text.",
-        },
-        {
-            "name": "read_file",
-            "parameters": "path, start_line, end_line",
-            "purpose": "Read a bounded range from the current Snapshot file.",
-        },
-        {
-            "name": "get_change_map",
-            "parameters": "none",
-            "purpose": "List changed paths and hunk locations; call first.",
-        },
-        {
-            "name": "get_diff",
-            "parameters": "path",
-            "purpose": "Read the fixed base-to-head diff for a changed file.",
-        },
-        {
-            "name": "read_revision",
-            "parameters": "path, revision: base|head, start_line, end_line",
-            "purpose": "Read a bounded base or head revision of a visible file.",
-        },
-    ]
+    payload = json.loads(agent_input.canonical_bytes())
+    assert set(payload) == {
+        "output_locale",
+        "repository_instruction_chains",
+        "repository_instruction_targets",
+        "repository_instructions",
+        "snapshot_id",
+    }
     assert b"return ready" not in agent_input.canonical_bytes()
     assert b"return context" not in agent_input.canonical_bytes()
 

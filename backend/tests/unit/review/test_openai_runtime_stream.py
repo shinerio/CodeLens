@@ -1,6 +1,6 @@
 from types import SimpleNamespace
 
-from agents import RawResponsesStreamEvent
+from agents import RawResponsesStreamEvent, RunItemStreamEvent
 
 from codelens.review.infrastructure.openai_runtime import _visible_event
 
@@ -78,3 +78,24 @@ def test_stream_events_ignore_incremental_tool_arguments() -> None:
     )
 
     assert event is None
+
+
+def test_stream_tool_events_include_stable_name_and_call_identity() -> None:
+    raw_call = SimpleNamespace(name="read_file", call_id="call-1")
+    tool_call = _visible_event(
+        RunItemStreamEvent(
+            name="tool_called",
+            item=SimpleNamespace(raw_item=raw_call),
+        )
+    )
+    tool_result = _visible_event(
+        RunItemStreamEvent(
+            name="tool_output",
+            item=SimpleNamespace(raw_item=SimpleNamespace(call_id="call-1")),
+        )
+    )
+
+    assert tool_call is not None
+    assert tool_result is not None
+    assert tool_call.metadata == {"tool_call_id": "call-1", "tool_name": "read_file"}
+    assert tool_result.metadata == {"tool_call_id": "call-1"}

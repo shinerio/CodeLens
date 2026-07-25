@@ -9,7 +9,12 @@ from pathlib import Path
 
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.findings.infrastructure.model_output import FindingBatchSchema
-from codelens.review.domain.ports import UnvalidatedAgentOutput
+from codelens.review.domain.ports import (
+    AgentResponseDiagnostic,
+    AgentRuntimeEvent,
+    AgentRuntimeEventSink,
+    UnvalidatedAgentOutput,
+)
 from codelens.workspace.domain.models import TaskWorktree
 from codelens.workspace.infrastructure.change_index import GitChangeIndexBuilder
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -157,5 +162,35 @@ class FixtureRuntime:
             model_name=self.model_name,
             input_tokens=0,
             output_tokens=0,
-            diagnostics=(),
+            diagnostics=(
+                AgentResponseDiagnostic("fixture-response", "fixture-request", 0, 0, 1),
+            ),
         )
+
+    async def invoke_stream(
+        self,
+        agent: object,
+        payload: bytes,
+        snapshot: object,
+        sink: AgentRuntimeEventSink,
+    ) -> UnvalidatedAgentOutput:
+        """Emit one deterministic tool exchange for browser-level transcript coverage."""
+
+        await sink(AgentRuntimeEvent("model_started", "", {}))
+        await sink(
+            AgentRuntimeEvent(
+                "tool_call",
+                '{"name":"get_change_map"}',
+                {"tool_name": "get_change_map", "tool_call_id": "fixture-call"},
+            )
+        )
+        await sink(
+            AgentRuntimeEvent(
+                "tool_result",
+                '{"changed_files":1}',
+                {"tool_call_id": "fixture-call"},
+            )
+        )
+        output = await self.invoke(agent, payload, snapshot)
+        await sink(AgentRuntimeEvent("model_completed", "", {}))
+        return output

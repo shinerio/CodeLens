@@ -1,3 +1,4 @@
+from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
 from typing import Annotated, Literal
@@ -12,6 +13,7 @@ from pydantic import (
     field_validator,
 )
 
+from codelens.review.application.process_report import ReviewProcessReport
 from codelens.review.domain.ports import ReviewRecord
 from codelens.workspace.domain.models import (
     BranchScope,
@@ -249,6 +251,58 @@ class ReviewResponse(StrictDto):
             repository_name=review.repository_name,
             created_at=review.created_at,
         )
+
+
+class ToolUsageResponse(StrictDto):
+    """Expose one tool's invocation and matched-result totals."""
+
+    tool_name: str
+    call_count: Annotated[int, Field(ge=0)]
+    result_count: Annotated[int, Field(ge=0)]
+
+
+class AgentProcessResponse(StrictDto):
+    """Expose provider usage and tool activity for one Agent version."""
+
+    agent: str
+    model_name: str | None
+    llm_call_count: Annotated[int, Field(ge=0)]
+    input_tokens: Annotated[int, Field(ge=0)]
+    output_tokens: Annotated[int, Field(ge=0)]
+    total_tokens: Annotated[int, Field(ge=0)]
+    tool_call_count: Annotated[int, Field(ge=0)]
+    started_at: datetime | None
+    completed_at: datetime | None
+    duration_ms: Annotated[int, Field(ge=0)] | None
+
+
+class ReviewProcessReportResponse(StrictDto):
+    """Expose terminal Review metrics derived from its credential-safe transcript."""
+
+    task_id: str
+    status: str
+    usage_is_complete: bool
+    agent_run_count: Annotated[int, Field(ge=0)]
+    llm_call_count: Annotated[int, Field(ge=0)]
+    input_tokens: Annotated[int, Field(ge=0)]
+    output_tokens: Annotated[int, Field(ge=0)]
+    total_tokens: Annotated[int, Field(ge=0)]
+    tool_call_count: Annotated[int, Field(ge=0)]
+    tool_result_count: Annotated[int, Field(ge=0)]
+    unmatched_tool_result_count: Annotated[int, Field(ge=0)]
+    finding_count: Annotated[int, Field(ge=0)]
+    transcript_entry_count: Annotated[int, Field(ge=0)]
+    started_at: datetime | None
+    completed_at: datetime | None
+    duration_ms: Annotated[int, Field(ge=0)] | None
+    tools: list[ToolUsageResponse]
+    agents: list[AgentProcessResponse]
+
+    @classmethod
+    def from_application(
+        cls, report: ReviewProcessReport
+    ) -> "ReviewProcessReportResponse":
+        return cls.model_validate(asdict(report))
 
 
 class CancelReviewRequest(StrictDto):

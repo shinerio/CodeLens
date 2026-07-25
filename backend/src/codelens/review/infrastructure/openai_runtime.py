@@ -426,9 +426,13 @@ def _visible_event(event: object) -> AgentRuntimeEvent | None:
         return None
     if isinstance(event, RunItemStreamEvent):
         if event.name == "tool_called":
-            return AgentRuntimeEvent("tool_call", _json_value(event.item), {})
+            return AgentRuntimeEvent(
+                "tool_call", _json_value(event.item), _tool_metadata(event.item, include_name=True)
+            )
         if event.name == "tool_output":
-            return AgentRuntimeEvent("tool_result", _json_value(event.item), {})
+            return AgentRuntimeEvent(
+                "tool_result", _json_value(event.item), _tool_metadata(event.item)
+            )
     return None
 
 
@@ -444,3 +448,18 @@ def _json_value(value: object) -> str:
     dump = getattr(value, "model_dump", None)
     payload = dump(mode="json") if callable(dump) else {"value": str(value)}
     return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _tool_metadata(value: object, *, include_name: bool = False) -> dict[str, str]:
+    """Extract stable tool identity without exposing SDK item types past this adapter."""
+
+    raw_item = getattr(value, "raw_item", None)
+    metadata: dict[str, str] = {}
+    call_id = getattr(raw_item, "call_id", None)
+    if isinstance(call_id, str) and call_id:
+        metadata["tool_call_id"] = call_id
+    if include_name:
+        name = getattr(raw_item, "name", None)
+        if isinstance(name, str) and name:
+            metadata["tool_name"] = name
+    return metadata

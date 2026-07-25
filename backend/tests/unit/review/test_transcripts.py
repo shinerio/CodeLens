@@ -104,3 +104,31 @@ async def test_worker_transcript_keeps_entries_in_memory_until_finalize(tmp_path
 
     assert await worker_store.list(task_id) == ()
     assert [entry.content for entry in await durable.list(task_id)] == ["visible while running"]
+
+
+async def test_worker_transcript_assigns_contiguous_sequences_across_batches(
+    tmp_path: Path,
+) -> None:
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    task_id = "review_" + "h" * 32
+
+    await worker_store.append_many(
+        task_id,
+        (
+            ("model_output_delta", "first", None),
+            ("tool_call", "second", None),
+            ("tool_result", "third", None),
+        ),
+    )
+    await worker_store.append_many(
+        task_id,
+        (
+            ("tool_call", "fourth", None),
+            ("tool_result", "fifth", None),
+        ),
+    )
+
+    entries = await worker_store.list(task_id)
+
+    assert [entry.sequence for entry in entries] == [1, 2, 3, 4, 5]

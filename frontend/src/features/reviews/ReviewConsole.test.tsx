@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { expect, it } from "vitest";
+import { expect, it, vi } from "vitest";
 
 import { ReviewConsole } from "./ReviewConsole";
 
@@ -118,7 +118,7 @@ it("renders complete system instructions as Markdown", () => {
 });
 
 it("hides tool calls and results again when the Tools filter is unchecked", () => {
-  const { container } = render(
+  const { container, rerender } = render(
     <ReviewConsole
       entries={[
         {
@@ -145,13 +145,84 @@ it("hides tool calls and results again when the Tools filter is unchecked", () =
 
   const consoleView = within(container);
   const tools = consoleView.getByRole("checkbox", { name: "Tools" });
-  expect(consoleView.queryByText("get_diff")).not.toBeInTheDocument();
+  expect(consoleView.getByText("get_diff").closest("li")).not.toBeVisible();
   fireEvent.click(tools);
   expect(consoleView.getByText("get_diff")).toBeInTheDocument();
   expect(consoleView.getByText("diff output")).toBeInTheDocument();
   fireEvent.click(tools);
-  expect(consoleView.queryByText("get_diff")).not.toBeInTheDocument();
-  expect(consoleView.queryByText("diff output")).not.toBeInTheDocument();
+  expect(consoleView.getByText("get_diff").closest("li")).not.toBeVisible();
+  expect(consoleView.getByText("diff output").closest("li")).not.toBeVisible();
+
+  rerender(
+    <ReviewConsole
+      entries={[
+        {
+          sequence: 1,
+          kind: "tool_call",
+          content: "get_diff",
+          created_at: "2026-07-22T00:00:00Z",
+          redacted: false,
+          truncated: false,
+          metadata: {},
+        },
+        {
+          sequence: 2,
+          kind: "tool_result",
+          content: "diff output",
+          created_at: "2026-07-22T00:00:01Z",
+          redacted: false,
+          truncated: false,
+          metadata: {},
+        },
+        {
+          sequence: 3,
+          kind: "tool_result",
+          content: "late tool output",
+          created_at: "2026-07-22T00:00:02Z",
+          redacted: false,
+          truncated: false,
+          metadata: {},
+        },
+      ]}
+    />,
+  );
+
+  expect(consoleView.getByText("get_diff").closest("li")).not.toBeVisible();
+  expect(consoleView.getByText("diff output").closest("li")).not.toBeVisible();
+  expect(consoleView.getByText("late tool output").closest("li")).not.toBeVisible();
+});
+
+it("uses unique message identities when a legacy transcript repeats sequences", () => {
+  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
+  render(
+    <ReviewConsole
+      entries={[
+        {
+          sequence: 65,
+          kind: "tool_result",
+          content: "first legacy result",
+          created_at: "2026-07-25T12:19:47Z",
+          redacted: false,
+          truncated: false,
+          metadata: {},
+        },
+        {
+          sequence: 65,
+          kind: "tool_call",
+          content: "second legacy call",
+          created_at: "2026-07-25T12:19:48Z",
+          redacted: false,
+          truncated: false,
+          metadata: {},
+        },
+      ]}
+    />,
+  );
+
+  expect(
+    consoleError.mock.calls.some((call) => String(call[0]).includes("same key")),
+  ).toBe(false);
+  consoleError.mockRestore();
 });
 
 it("renders streamed Markdown after its agent has completed without a provider done event", () => {

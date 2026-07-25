@@ -5,7 +5,7 @@ import ReactMarkdown from "react-markdown";
 import { useI18n } from "../../shared/i18n/i18n";
 import type { TranscriptEntry } from "./api";
 
-type ConsoleMessage = TranscriptEntry & { content: string; sequence: number };
+type ConsoleMessage = TranscriptEntry & { content: string; messageKey: string; sequence: number };
 type ConsoleVisibility = {
   prompt: boolean;
   reasoning: boolean;
@@ -24,21 +24,22 @@ const DEFAULT_VISIBILITY: ConsoleVisibility = {
 export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
   const { locale } = useI18n();
   const [query, setQuery] = useState("");
-  const [collapsed, setCollapsed] = useState<Set<number>>(new Set());
+  const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [visibility, setVisibility] = useState<ConsoleVisibility>(DEFAULT_VISIBILITY);
   const messages = useMemo(() => coalesceDeltas(entries), [entries]);
   const completedMessages = useMemo(() => completedMessageKeys(entries), [entries]);
-  const visible = messages.filter((entry) =>
-    isVisible(entry, visibility) &&
+  const filtered = messages.filter((entry) =>
+    (isToolEntry(entry) || isVisible(entry, visibility)) &&
     entry.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()) &&
     !(entry.kind === "model_output_delta" && !entry.content.trim()),
   );
+  const visibleCount = filtered.filter((entry) => !isToolEntry(entry) || visibility.tools).length;
   const parseFailed = entries.some((e) => e.kind === "model_raw_output" && e.metadata?.parse_failed === "true");
 
-  function toggle(sequence: number) {
+  function toggle(messageKey: string) {
     setCollapsed((current) => {
       const next = new Set(current);
-      if (next.has(sequence)) next.delete(sequence); else next.add(sequence);
+      if (next.has(messageKey)) next.delete(messageKey); else next.add(messageKey);
       return next;
     });
   }
@@ -53,20 +54,20 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
         <FilterOption label="Model output" checked={visibility.output} onChange={(checked) => setVisibility((value) => ({ ...value, output: checked }))} />
         <FilterOption label="Tools" checked={visibility.tools} onChange={(checked) => setVisibility((value) => ({ ...value, tools: checked }))} />
       </fieldset>
-      <button type="button" onClick={() => setCollapsed(new Set(messages.map((entry) => entry.sequence)))}>Collapse all</button>
+      <button type="button" onClick={() => setCollapsed(new Set(messages.map((entry) => entry.messageKey)))}>Collapse all</button>
       <button type="button" onClick={() => setCollapsed(new Set())}>Expand all</button>
     </div>
     <ol className="review-console__messages">
-      {visible.map((entry) => {
-        const isCollapsed = collapsed.has(entry.sequence);
-        const isTool = entry.kind === "tool_call" || entry.kind === "tool_result";
+      {filtered.map((entry) => {
+        const isCollapsed = collapsed.has(entry.messageKey);
+        const isTool = isToolEntry(entry);
         const isReasoning = entry.kind === "model_reasoning_delta";
         const isModel = isReasoning || entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_completed";
         const isFinalizedStream = isDelta(entry)
           && entry.metadata.message_id !== undefined
           && completedMessages.has(entry.metadata.message_id);
-        return <li className={`review-console__message review-console__message--${isTool ? "tool" : isModel ? "model" : "system"}`} key={entry.sequence}>
-          <button className="review-console__message-head" type="button" onClick={() => toggle(entry.sequence)} aria-expanded={!isCollapsed}>
+        return <li className={`review-console__message review-console__message--${isTool ? "tool" : isModel ? "model" : "system"}`} hidden={isTool && !visibility.tools} key={entry.messageKey}>
+          <button className="review-console__message-head" type="button" onClick={() => toggle(entry.messageKey)} aria-expanded={!isCollapsed}>
             {isCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
             {isTool ? <Wrench aria-hidden="true" /> : isReasoning ? <Brain aria-hidden="true" /> : <span className="review-console__avatar">{isModel ? "AI" : "SYS"}</span>}
             <span>{labelFor(entry.kind)}</span><time dateTime={entry.created_at}>#{entry.sequence}</time>
@@ -75,20 +76,23 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
           {entry.redacted ? <small>Credential redacted</small> : null}
         </li>;
       })}
-      {visible.length === 0 ? <li className="event-log__empty">No matching execution output.</li> : null}
+      {visibleCount === 0 ? <li className="event-log__empty">No matching execution output.</li> : null}
     </ol>
   </section>;
 }
 
 function coalesceDeltas(entries: TranscriptEntry[]): ConsoleMessage[] {
   const result: ConsoleMessage[] = [];
-  for (const entry of entries) {
+  for (const [index, entry] of entries.entries()) {
     const previous = result.at(-1);
     if (isDelta(entry) && previous !== undefined && previous.kind === entry.kind && previous.metadata.message_id === entry.metadata.message_id) {
       previous.content += entry.content;
       continue;
     }
-    result.push({ ...entry });
+    result.push({
+      ...entry,
+      messageKey: `${entry.sequence}:${entry.created_at}:${entry.kind}:${index}`,
+    });
   }
   return result;
 }
@@ -110,8 +114,11 @@ function isVisible(entry: ConsoleMessage, visibility: ConsoleVisibility) {
   if (entry.kind === "prompt") return visibility.prompt;
   if (entry.kind === "model_reasoning_delta") return visibility.reasoning;
   if (entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_raw_output") return visibility.output;
-  if (entry.kind === "tool_call" || entry.kind === "tool_result") return visibility.tools;
   return false;
+}
+
+function isToolEntry(entry: TranscriptEntry) {
+  return entry.kind === "tool_call" || entry.kind === "tool_result";
 }
 
 function isDelta(entry: TranscriptEntry) {

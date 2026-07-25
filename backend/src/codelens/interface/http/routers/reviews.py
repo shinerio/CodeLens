@@ -18,9 +18,11 @@ from codelens.interface.http.dto import (
     CancelReviewRequest,
     CreateReviewRequest,
     FindingSourcePreviewResponse,
+    ReviewProcessReportResponse,
     ReviewResponse,
 )
 from codelens.review.application.commands import CreateReviewCommand
+from codelens.review.application.process_report import ProcessTranscriptEntry, build_process_report
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 _LOGGER = logging.getLogger("codelens.reviews")
@@ -35,6 +37,7 @@ _TERMINAL_EVENTS = {
     "review.failed",
     "review.canceled",
 }
+_TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled"}
 
 
 @router.post("", response_model=ReviewResponse, status_code=202)
@@ -136,6 +139,46 @@ async def get_transcript(
         else await components.worker_transcripts.list(task_id)
     )
     return [entry.model_dump(mode="json") for entry in entries]
+
+
+@router.get("/{task_id}/process-report", response_model=ReviewProcessReportResponse)
+async def get_process_report(
+    task_id: TaskId,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ReviewProcessReportResponse:
+    """Return deterministic usage and tool metrics after one Review reaches a terminal state."""
+
+    review = await components.get_review.handle(task_id)
+    if review.status not in _TERMINAL_STATUSES:
+        raise HttpProblem(
+            409,
+            "process_report_not_ready",
+            "The review process report is available after execution finishes.",
+        )
+    entries = await components.transcripts.list(task_id)
+    if not entries:
+        raise HttpProblem(
+            409,
+            "process_report_not_ready",
+            "The terminal review transcript has not been persisted yet.",
+        )
+    findings = await components.review_store.list_findings(task_id)
+    report = build_process_report(
+        task_id=task_id,
+        status=review.status,
+        entries=tuple(
+            ProcessTranscriptEntry(
+                sequence=entry.sequence,
+                kind=entry.kind,
+                content=entry.content,
+                created_at=entry.created_at,
+                metadata=entry.metadata,
+            )
+            for entry in entries
+        ),
+        finding_count=len(findings),
+    )
+    return ReviewProcessReportResponse.from_application(report)
 
 
 @router.get("/{task_id}/findings")

@@ -617,3 +617,90 @@ def test_review_transcript_contract_returns_empty_history_before_worker_executio
     assert created.status_code == 202, created.text
     assert transcript.status_code == 200, transcript.text
     assert transcript.json() == []
+
+
+def test_terminal_review_process_report_returns_usage_and_tool_totals(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    _prepared_repository(git_repository)
+    app = create_app(_settings(tmp_path, tmp_path))
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        task_id = created.json()["task_id"]
+        active_report = client.get(f"/api/reviews/{task_id}/process-report")
+        review_store = app.state.components.review_store
+        for status in (
+            "provisioning_worktree",
+            "snapshotting",
+            "preparing",
+            "reviewing",
+            "validating",
+            "synthesizing",
+            "completed",
+        ):
+            client.portal.call(review_store.transition, task_id, status)
+        pending_persistence_report = client.get(f"/api/reviews/{task_id}/process-report")
+        transcripts = app.state.components.transcripts
+        client.portal.call(
+            transcripts.append_many,
+            task_id,
+            (
+                ("model_started", "", {"agent": "correctness:v1"}),
+                (
+                    "tool_call",
+                    "{}",
+                    {
+                        "agent": "correctness:v1",
+                        "tool_name": "read_file",
+                        "tool_call_id": "call-1",
+                    },
+                ),
+                (
+                    "tool_result",
+                    "{}",
+                    {"agent": "correctness:v1", "tool_call_id": "call-1"},
+                ),
+                (
+                    "model_output",
+                    "{}",
+                    {
+                        "agent": "correctness:v1",
+                        "model_name": "gpt-5.1",
+                        "llm_call_count": "2",
+                        "input_tokens": "80",
+                        "output_tokens": "20",
+                        "total_tokens": "100",
+                    },
+                ),
+            ),
+        )
+        report = client.get(f"/api/reviews/{task_id}/process-report")
+
+    assert active_report.status_code == 409
+    assert active_report.json()["code"] == "process_report_not_ready"
+    assert pending_persistence_report.status_code == 409
+    assert pending_persistence_report.json()["code"] == "process_report_not_ready"
+    assert report.status_code == 200, report.text
+    body = report.json()
+    assert body["task_id"] == task_id
+    assert body["status"] == "completed"
+    assert body["llm_call_count"] == 2
+    assert body["total_tokens"] == 100
+    assert body["tool_call_count"] == 1
+    assert body["tools"] == [
+        {"tool_name": "read_file", "call_count": 1, "result_count": 1}
+    ]
+    assert body["usage_is_complete"] is True
