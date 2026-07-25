@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import Literal, Protocol
 
 type GatewayApiType = Literal["responses", "chat_completions"]
-type ModelProviderVendor = Literal["openai", "deepseek"]
+type ModelProviderVendor = Literal["openai", "deepseek", "zhipu"]
 type ThinkingLevel = Literal["disabled", "low", "medium", "high"]
 _DEFAULT_API_TYPE: GatewayApiType = "chat_completions"
 _DEFAULT_MAX_TOKENS: int = 65536

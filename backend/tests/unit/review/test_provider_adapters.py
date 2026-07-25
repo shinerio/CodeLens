@@ -36,3 +36,24 @@ def test_deepseek_adapter_uses_chat_and_documented_thinking_extension() -> None:
     assert behavior.model_class is OpenAIChatCompletionsModel
     assert behavior.model_settings.reasoning is None
     assert behavior.model_settings.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_zhipu_adapter_uses_chat_and_disables_thinking_via_extra_body() -> None:
+    behavior = ModelProviderAdapterRegistry().resolve("zhipu").request_behavior(
+        _config(vendor="zhipu")
+    )
+
+    assert behavior.model_class is OpenAIChatCompletionsModel
+    assert behavior.model_settings.reasoning is None
+    assert behavior.model_settings.extra_body == {"thinking": {"type": "disabled"}}
+
+
+def test_zhipu_adapter_enables_thinking_with_configured_effort() -> None:
+    behavior = ModelProviderAdapterRegistry().resolve("zhipu").request_behavior(
+        _config(vendor="zhipu", thinking="low")
+    )
+
+    assert behavior.model_class is OpenAIChatCompletionsModel
+    assert behavior.model_settings.reasoning is not None
+    assert behavior.model_settings.reasoning.effort == "low"
+    assert behavior.model_settings.extra_body == {"thinking": {"type": "enabled"}}

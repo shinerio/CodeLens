@@ -393,12 +393,13 @@ export function SettingsPage() {
                 <select value={vendor} onChange={(event) => {
                   const next = event.currentTarget.value as ModelProviderVendor;
                   setVendor(next);
-                  if (next === "deepseek") setApiType("chat_completions");
+                  if (next === "deepseek" || next === "zhipu") setApiType("chat_completions");
                 }}>
                   <option value="openai">OpenAI-compatible</option>
                   <option value="deepseek">DeepSeek</option>
+                  <option value="zhipu">Zhipu (GLM)</option>
                 </select>
-                <small>{vendor === "deepseek" ? "Uses DeepSeek thinking and Chat Completions semantics." : "Uses OpenAI SDK request semantics."}</small>
+                <small>{vendor === "deepseek" ? "Uses DeepSeek thinking and Chat Completions semantics." : vendor === "zhipu" ? "Uses GLM thinking and Chat Completions semantics." : "Uses OpenAI SDK request semantics."}</small>
               </label>
               <label className="settings-field">
                 <span className="settings-field__label">
@@ -443,7 +444,7 @@ export function SettingsPage() {
                 </span>
                 <select
                   value={apiType}
-                  disabled={vendor === "deepseek"}
+                  disabled={vendor === "deepseek" || vendor === "zhipu"}
                   onChange={(event) => setApiType(event.currentTarget.value as GatewayApiType)}
                 >
                   <option value="chat_completions">Chat Completions</option>

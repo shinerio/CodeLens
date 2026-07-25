@@ -96,7 +96,7 @@ class FilesystemModelProviderConfigAdapter:
                 raise ValueError("model gateway catalog is invalid")
             raw_api_type = item.get("api_type", _DEFAULT_API_TYPE)
             raw_vendor = item.get("vendor", "openai")
-            if raw_vendor not in ("openai", "deepseek"):
+            if raw_vendor not in ("openai", "deepseek", "zhipu"):
                 raise ValueError("model gateway catalog is invalid")
             if raw_api_type not in ("responses", "chat_completions"):
                 raise ValueError("model gateway catalog is invalid")
