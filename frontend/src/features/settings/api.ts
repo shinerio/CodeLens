@@ -3,6 +3,7 @@ import type {
   CreateModelGateway,
   GatewayTestResult,
   ModelGatewayCatalog,
+  RecentRepositorySettings,
   RuntimeLogLevel,
   RuntimeLogLevelSettings,
   UpdateModelGateway,
@@ -22,6 +23,19 @@ export async function updateRuntimeLogLevel(
   return api<RuntimeLogLevelSettings>("/settings/logging", {
     method: "PUT",
     body: JSON.stringify({ level }),
+  });
+}
+
+export async function getRecentRepositorySettings(): Promise<RecentRepositorySettings> {
+  return api<RecentRepositorySettings>("/settings/repositories");
+}
+
+export async function updateRecentRepositoryLimit(
+  recentRepositoryLimit: number,
+): Promise<RecentRepositorySettings> {
+  return api<RecentRepositorySettings>("/settings/repositories", {
+    method: "PUT",
+    body: JSON.stringify({ recent_repository_limit: recentRepositoryLimit }),
   });
 }
 

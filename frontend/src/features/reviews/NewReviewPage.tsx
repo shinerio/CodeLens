@@ -1,12 +1,15 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   BookOpenText,
+  Check,
   CirclePlay,
   FileCode2,
   FolderSearch,
+  FolderGit2,
   Gauge,
   GitBranch,
   GitCommitVertical,
+  History,
   Lock,
   ShieldCheck,
   Wrench,
@@ -15,7 +18,11 @@ import { useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
-import { getRepositoryCatalog, inspectRepository } from "../repositories/api";
+import {
+  getRepositoryCatalog,
+  inspectRepository,
+  listRecentRepositories,
+} from "../repositories/api";
 import { RepositoryBrowser } from "../repositories/RepositoryBrowser";
 import type {
   RepositoryCatalog,
@@ -133,6 +140,10 @@ export function NewReviewPage() {
   const gatewayQuery = useQuery({
     queryKey: ["model-gateways"],
     queryFn: listModelGateways,
+  });
+  const recentRepositoriesQuery = useQuery({
+    queryKey: ["recent-repositories"],
+    queryFn: listRecentRepositories,
   });
 
   const inspectMutation = useMutation({
@@ -568,20 +579,52 @@ export function NewReviewPage() {
 
         <aside className="panel panel--aside">
           <div className="panel__heading">
-            <FileCode2 aria-hidden="true" />
-            <h2>{t("review.summary")}</h2>
+            <History aria-hidden="true" />
+            <h2>{t("review.recentRepositories")}</h2>
           </div>
-          {inspection === null ? <p className="hint">{t("review.summaryEmpty")}</p> : (
-            <dl className="inspector-card">
-              <div><dt>{t("repository.branch")}</dt><dd>{inspection.current_branch ?? t("repository.detached")}</dd></div>
-              <div><dt>{t("repository.head")}</dt><dd>{inspection.head_oid}</dd></div>
-              <div><dt>{t("repository.dirty")}</dt><dd>{inspection.is_dirty ? t("common.yes") : t("common.no")}</dd></div>
-              <div><dt>{t("review.repositoryId")}</dt><dd>{inspection.repository_id}</dd></div>
-              <div><dt>{t("review.realpathHash")}</dt><dd>{inspection.repository_realpath_hash}</dd></div>
-              <div><dt>{t("review.commonDirHash")}</dt><dd>{inspection.git_common_dir_hash}</dd></div>
-            </dl>
-          )}
-          <div className="aside-note">{t("review.phaseNote")}</div>
+          {recentRepositoriesQuery.isLoading ? (
+            <p className="hint">{t("common.loading")}</p>
+          ) : null}
+          {recentRepositoriesQuery.isError ? (
+            <p className="hint">{t("review.recentRepositoriesLoadError")}</p>
+          ) : null}
+          {!recentRepositoriesQuery.isLoading &&
+          !recentRepositoriesQuery.isError &&
+          recentRepositoriesQuery.data?.length === 0 ? (
+            <p className="hint">{t("review.recentRepositoriesEmpty")}</p>
+          ) : null}
+          <div className="recent-repository-list">
+            {recentRepositoriesQuery.data?.map((repository) => {
+              const isSelected = repositoryPath === repository.repository_path;
+              return (
+                <button
+                  aria-label={t("review.selectRecentRepository", {
+                    name: repository.repository_name,
+                  })}
+                  className={
+                    isSelected
+                      ? "recent-repository recent-repository--selected"
+                      : "recent-repository"
+                  }
+                  key={repository.repository_path}
+                  type="button"
+                  onClick={() => selectRepository(repository.repository_path)}
+                >
+                  <span className="recent-repository__icon">
+                    <FolderGit2 aria-hidden="true" />
+                  </span>
+                  <span className="recent-repository__content">
+                    <strong>{repository.repository_name}</strong>
+                    <code title={repository.repository_path}>{repository.repository_path}</code>
+                    <time dateTime={repository.last_reviewed_at}>
+                      {new Date(repository.last_reviewed_at).toLocaleString(locale)}
+                    </time>
+                  </span>
+                  {isSelected ? <Check aria-hidden="true" className="recent-repository__check" /> : null}
+                </button>
+              );
+            })}
+          </div>
         </aside>
       </div>
     </section>

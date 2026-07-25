@@ -119,7 +119,6 @@ def _agent() -> AgentVersion:
         output_contract_version="1",
         timeout_seconds=30.0,
         max_turns=3,
-        token_budget=8_000,
         confidence_floor=0.7,
         failure_policy="fail_task",
         mode_support=(ReviewMode.REVIEW,),
@@ -158,17 +157,19 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
         prompt_loader=_prompt_loader(),
         runner=runner,
     )
-    source_secret = "SOURCE_BODY_SECRET"
+    input_payload = b'{"review_files":[]}'
 
     with caplog.at_level(logging.DEBUG):
-        output = await runtime.invoke(_agent(), source_secret.encode(), _snapshot())
+        output = await runtime.invoke(_agent(), input_payload, _snapshot(), "en")
 
     sdk_agent = runner.calls[0][0]
     assert sdk_agent is not None
     assert sdk_agent.instructions.startswith("Review Snapshot code only")
-    assert "Repository instruction chains are ordered from general to specific" in (
-        sdk_agent.instructions
-    )
+    assert "repository_instructions" not in sdk_agent.instructions
+    assert "instruction_loader" in sdk_agent.instructions
+    assert "exact repository-relative path" in sdk_agent.instructions
+    assert "repository_instruction_chains" not in sdk_agent.instructions
+    assert "repository_instruction_targets" not in sdk_agent.instructions
     assert sdk_agent.instructions.index("Review Snapshot code only") < sdk_agent.instructions.index(
         _agent().prompt_template
     )
@@ -179,19 +180,43 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
         "glob",
         "grep",
         "read_file",
-        "get_change_map",
+        "instruction_loader",
         "get_diff",
         "read_revision",
         "comment",
         "task_done",
     ]
+    serialized_tools = json.dumps(
+        [
+            {
+                "name": tool.name,
+                "description": tool.description,
+                "parameters": tool.params_json_schema,
+            }
+            for tool in sdk_agent.tools
+        ],
+        sort_keys=True,
+    ).casefold()
+    for forbidden in (
+        "snapshot_id",
+        "hunk_id",
+        "content_hash",
+        "excerpt_hash",
+        "instruction chain",
+        "instruction_chain",
+        "context plan",
+        "context_plan",
+        "precedence",
+    ):
+        assert forbidden not in serialized_tools
     assert isinstance(sdk_agent.model, OpenAIResponsesModel)
     assert sdk_agent.model.model == "gpt-5.1"
     assert str(sdk_agent.model._client.base_url) == "http://model-gateway.example:8080"
     assert sdk_agent.model_settings.max_tokens == 65_536
     assert sdk_agent.model_settings.reasoning is None
     assert sdk_agent.model_settings.extra_body is None
-    assert runner.calls[0][1] == source_secret
+    assert runner.calls[0][1] == input_payload.decode()
+    assert json.loads(str(runner.calls[0][1])) == {"review_files": []}
     assert runner.calls[0][2] == 3
     assert len(runner.calls) == 1
     assert runner.run_config is not None
@@ -204,11 +229,50 @@ async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
     assert [diagnostic.output_item_count for diagnostic in output.diagnostics] == [1, 1]
     assert provider_secret not in repr(output.diagnostics)
     assert _agent().prompt_template not in caplog.text
-    assert source_secret not in caplog.text
     assert provider_secret not in caplog.text
     assert "sk-contract-secret" not in caplog.text
     assert os.environ["OPENAI_AGENTS_DONT_LOG_MODEL_DATA"] == "1"
     assert os.environ["OPENAI_AGENTS_DONT_LOG_TOOL_DATA"] == "1"
+
+
+async def test_uses_explicit_prompt_locale_without_a_locale_field_in_model_input() -> None:
+    runner = FakeRunner(
+        FakeResult(
+            final_output=FindingBatchSchema(schema_version="1", findings=()),
+            raw_responses=(FakeResponse("resp_1", "req_1", FakeUsage(1, 1), ()),),
+        )
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    await runtime.invoke(_agent(), b'{"review_files":[]}', _snapshot(), "zh-CN")
+
+    assert runner.starting_agent is not None
+    assert runner.starting_agent.instructions.startswith("只审查 Snapshot 代码")
+    assert runner.input_payload == '{"review_files":[]}'
+
+
+def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_locale() -> None:
+    loader = _prompt_loader()
+    expected = {
+        "explore",
+        "glob",
+        "grep",
+        "read_file",
+        "instruction_loader",
+        "get_diff",
+        "read_revision",
+        "comment",
+        "task_done",
+    }
+
+    assert set(loader.get("en").tools) == expected
+    assert set(loader.get("zh-CN").tools) == expected
 
 
 async def test_ignores_model_final_text_without_a_comment_tool_call() -> None:
@@ -241,7 +305,7 @@ async def test_ignores_model_final_text_without_a_comment_tool_call() -> None:
         runner=FakeRunner(FakeResult({"schema_version": "1", "findings": [finding]}, ())),
     )
 
-    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
 
     payload = json.loads(output.canonical_bytes)
     assert payload["findings"] == []
@@ -271,7 +335,7 @@ async def test_model_final_text_never_triggers_a_second_model_call() -> None:
         runner=runner,
     )
 
-    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
     assert [call[0].name for call in runner.calls] == ["correctness:v1"]
@@ -308,7 +372,7 @@ async def test_gateway_schema_rejection_is_not_retried_as_plain_json() -> None:
         runner=runner,
     )
 
-    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
     assert [call[0].name for call in runner.calls] == ["correctness:v1"]
@@ -361,12 +425,13 @@ async def test_streaming_investigation_closes_client_without_extra_events(
     )
 
     output = await runtime.invoke_stream(
-        _agent(), b"bounded input", _snapshot(), record_event
+        _agent(), b"bounded input", _snapshot(), "en", record_event
     )
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
     assert client.close_count == 1
-    assert events == []
+    assert len(events) == 1
+    assert events[0].kind == "prompt"
 
 
 @pytest.mark.parametrize(
@@ -401,7 +466,7 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
     )
 
     with pytest.raises(TransientAgentRuntimeError) as captured:
-        await runtime.invoke(_agent(), b"bounded input", _snapshot())
+        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
 
     assert "rate limited" not in str(captured.value)
     assert "server failed" not in str(captured.value)
@@ -437,7 +502,7 @@ async def test_does_not_make_a_second_model_request() -> None:
         runner=SecondRequestFailingRunner(FakeResult({}, ())),
     )
 
-    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
 
 
@@ -471,7 +536,7 @@ async def test_investigation_retry_is_not_hidden_inside_runtime() -> None:
         runner=runner,
     )
 
-    output = await runtime.invoke(_agent(), b"bounded input", _snapshot())
+    output = await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
     assert [call[0].name for call in runner.calls] == ["correctness:v1"]
@@ -500,7 +565,7 @@ async def test_does_not_apply_agent_timeout_to_the_whole_review() -> None:
         runner=SlowRunner(FakeResult({}, ())),
     )
 
-    output = await runtime.invoke(short_timeout_agent, b"bounded input", _snapshot())
+    output = await runtime.invoke(short_timeout_agent, b"bounded input", _snapshot(), "en")
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
 
@@ -516,7 +581,7 @@ async def test_maps_invalid_investigation_to_a_permanent_failure(result: Excepti
     )
 
     with pytest.raises(PermanentAgentOutputError) as captured:
-        await runtime.invoke(_agent(), b"bounded input", _snapshot())
+        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
 
     assert "FULL_PROVIDER_PAYLOAD_SECRET" not in str(captured.value)
     formatted = "".join(traceback.format_exception(captured.value))
@@ -534,7 +599,7 @@ async def test_missing_provider_configuration_fails_only_when_invoked() -> None:
     )
 
     with pytest.raises(PermanentAgentOutputError, match="not configured"):
-        await runtime.invoke(_agent(), b"bounded input", _snapshot())
+        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
 
 
 def test_builtin_correctness_agent_is_immutable_and_content_addressed() -> None:

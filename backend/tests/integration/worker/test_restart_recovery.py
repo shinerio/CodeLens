@@ -33,7 +33,7 @@ class Runtime:
         self.calls = 0
 
     async def invoke(
-        self, _agent: object, _payload: bytes, _snapshot: object
+        self, _agent: object, _payload: bytes, _snapshot: object, _prompt_locale: str
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
         return UnvalidatedAgentOutput(
@@ -85,7 +85,7 @@ def _prepared(tmp_path: Path) -> PreparedReview:
         ChangeIndex(()),
     )
     agent = correctness_agent()
-    return PreparedReview(snapshot, (agent,), {"correctness:v1": b"{}"})
+    return PreparedReview(snapshot, (agent,), {"correctness:v1": b"{}"}, "en")
 
 
 def _orchestrator(

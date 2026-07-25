@@ -1,7 +1,6 @@
 """Restart-safe review workflow orchestration."""
 
 import asyncio
-import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -43,6 +42,7 @@ class PreparedReview:
     snapshot: ReviewSnapshot
     agents: tuple[AgentVersion, ...]
     input_payloads: dict[str, bytes]
+    prompt_locale: str
 
 
 class _WorkflowPort(Protocol):
@@ -111,6 +111,7 @@ class _StreamingRuntimePort(Protocol):
         agent: AgentVersion,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
+        prompt_locale: str,
         sink: AgentRuntimeEventSink,
     ) -> object: ...
 
@@ -224,24 +225,9 @@ class ReviewOrchestrator:
         if checkpoint.status != "pending":
             raise RuntimeError("interrupted checkpoint was not recovered before execution")
         input_payload = prepared.input_payloads[self._agent_key(agent)]
-        transcript_records: list[TranscriptRecord] = [
-            (
-                "prompt",
-                json.dumps(
-                    {
-                        "system_instructions": agent.prompt_template,
-                        "user_input": input_payload.decode("utf-8", errors="replace"),
-                    },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                ),
-                {"agent": self._agent_key(agent)},
-            )
-        ]
+        transcript_records: list[TranscriptRecord] = []
         await self._checkpoints.mark_running(task_id, node_key)
         await self._hit("before_model_invocation")
-        await self._record_many(task_id, transcript_records)
-        transcript_records.clear()
         last_transcript_flush = time.monotonic()
 
         async def record_stream_event(event: AgentRuntimeEvent) -> None:
@@ -256,12 +242,18 @@ class ReviewOrchestrator:
             async with self._agent_semaphore:
                 stream = getattr(self._runtime, "invoke_stream", None)
                 if stream is None:
-                    output = await self._runtime.invoke(agent, input_payload, prepared.snapshot)
+                    output = await self._runtime.invoke(
+                        agent,
+                        input_payload,
+                        prepared.snapshot,
+                        prepared.prompt_locale,
+                    )
                 else:
                     output = await stream(
                         agent,
                         input_payload,
                         prepared.snapshot,
+                        prepared.prompt_locale,
                         record_stream_event,
                     )
         transcript_records.append(

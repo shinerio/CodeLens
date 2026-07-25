@@ -14,8 +14,10 @@ from codelens.interface.http.dto import (
     GatewayConnectivityTestResponse,
     ModelGatewayCatalogResponse,
     ModelGatewayResponse,
+    RecentRepositorySettingsResponse,
     RuntimeLogLevelResponse,
     UpdateModelGatewayRequest,
+    UpdateRecentRepositorySettingsRequest,
     UpdateRuntimeLogLevelRequest,
 )
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
@@ -70,6 +72,29 @@ async def update_runtime_log_level_setting(
     await asyncio.to_thread(set_runtime_log_level, components.settings.data_dir, request.level)
     _LOGGER.info("Runtime log level updated", extra={"log_level": request.level})
     return RuntimeLogLevelResponse(level=request.level)
+
+
+@router.get("/repositories", response_model=RecentRepositorySettingsResponse)
+async def get_recent_repository_settings(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> RecentRepositorySettingsResponse:
+    """Return the persisted recent repository LRU capacity."""
+
+    limit = await components.get_recent_repository_settings.handle()
+    return RecentRepositorySettingsResponse(recent_repository_limit=limit)
+
+
+@router.put("/repositories", response_model=RecentRepositorySettingsResponse)
+async def update_recent_repository_settings(
+    request: UpdateRecentRepositorySettingsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> RecentRepositorySettingsResponse:
+    """Persist the recent repository capacity and prune overflow immediately."""
+
+    limit = await components.update_recent_repository_settings.handle(
+        request.recent_repository_limit
+    )
+    return RecentRepositorySettingsResponse(recent_repository_limit=limit)
 
 
 @router.get("/model-gateways", response_model=ModelGatewayCatalogResponse)

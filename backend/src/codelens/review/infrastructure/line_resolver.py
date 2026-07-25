@@ -4,7 +4,12 @@ Resolves model-quoted code snippets (existing_code) to accurate line ranges
 by matching against unified diff hunks or full file content. This avoids
 relying on the model to count line numbers, which is error-prone.
 
-The algorithm is adapted from open-code-review's resolver implementation.
+Portions are adapted from Alibaba Open Code Review's resolver implementation:
+https://github.com/alibaba/open-code-review/blob/c9b145635c6b6343b108941c2a627ac636836c6b/internal/diff/resolver.go
+
+Copyright 2026 Alibaba. Licensed under the Apache License, Version 2.0.
+CodeLens rewrote the implementation in Python and changed its integration and
+validation behavior for immutable ReviewSnapshot inputs. See LICENSE and NOTICE.
 """
 
 from __future__ import annotations

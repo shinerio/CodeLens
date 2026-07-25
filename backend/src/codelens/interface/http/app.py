@@ -128,16 +128,28 @@ def _domain_problem(error: DomainError) -> tuple[int, str]:
     return 400, "The request violates a domain rule."
 
 
-def create_app_with_components(settings: Settings, components: HttpComponents) -> FastAPI:
-    """Compose the HTTP interface from pre-built components (for unified backend)."""
+def create_app_with_components(
+    settings: Settings,
+    components: HttpComponents,
+    *,
+    manage_components: bool = True,
+) -> FastAPI:
+    """Compose HTTP routes around pre-built components.
+
+    Standalone API applications own component startup and shutdown. The unified backend passes
+    ``manage_components=False`` because its outer lifecycle also owns the Worker and must avoid
+    running migrations twice or closing shared resources while the scheduler is active.
+    """
 
     @asynccontextmanager
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
-        await components.start()
+        if manage_components:
+            await components.start()
         try:
             yield
         finally:
-            await components.close()
+            if manage_components:
+                await components.close()
 
     app = FastAPI(title="CodeLens Review API", version="0.1.0", lifespan=lifespan)
     app.state.settings = settings

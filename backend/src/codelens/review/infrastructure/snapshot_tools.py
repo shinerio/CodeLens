@@ -5,15 +5,18 @@ manifest entry and validates its content hash before returning repository text.
 """
 
 import asyncio
+import difflib
 import fnmatch
 import hashlib
 import json
+import os
 import re
 from pathlib import PurePosixPath
 from typing import Literal
 
 from agents import Tool, function_tool
 
+from codelens.review.application.review_scope import build_review_files
 from codelens.workspace.domain.models import ReviewSnapshot, SnapshotEntry
 from codelens.workspace.infrastructure.git_cli import GitCli
 
@@ -48,6 +51,21 @@ class FilesystemReviewTools:
             for entry in snapshot.manifest.entries
             if entry.origin in {"target", "context"}
         }
+        instruction_paths = set(snapshot.manifest.instruction_paths)
+        self._instruction_entries = {
+            entry.path: entry
+            for entry in snapshot.manifest.entries
+            if entry.origin == "instruction" and entry.path in instruction_paths
+        }
+        self._instruction_loaded_paths: set[str] = set()
+        self._emitted_instruction_paths: set[str] = set()
+        review_files = build_review_files(
+            snapshot,
+            max_files=max(1, len(snapshot.change_index.files)),
+            max_ranges=max(1, len(snapshot.change_index.hunks)),
+        )
+        self._review_file_paths = tuple(item.path for item in review_files)
+        self._review_files_by_path = {item.path: item for item in review_files}
 
     async def explore(self, path: str = "") -> str:
         """List visible Snapshot files beneath one normalized relative directory."""
@@ -100,12 +118,7 @@ class FilesystemReviewTools:
         """Read a bounded new-side line range from one visible Snapshot file."""
 
         self._consume()
-        if start_line < 1 or end_line < start_line or end_line - start_line >= _MAX_LINES:
-            raise ValueError("line range is invalid")
-        payload = await self._payload(self._entry(path))
-        if b"\0" in payload:
-            raise ValueError("Snapshot file is binary")
-        selected = b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])
+        selected = await self._selected_file_lines(path, start_line, end_line)
         raw_content = selected[:_MAX_READ_BYTES].decode("utf-8", errors="replace")
         content = self._add_line_prefixes(raw_content, start_line)
         return self._json(
@@ -114,41 +127,139 @@ class FilesystemReviewTools:
                 "start_line": start_line,
                 "end_line": end_line,
                 "content": content,
-                "content_hash": hashlib.sha256(selected).hexdigest(),
                 "truncated": len(selected) > _MAX_READ_BYTES,
             }
         )
 
-    async def get_change_map(self) -> str:
-        """Return bounded, location-stable evidence for this review's changed hunks."""
+    async def excerpt_identity(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+    ) -> tuple[str, bool]:
+        """Derive a bounded excerpt identity for backend Finding resolution only."""
 
-        self._consume()
-        hunks = [
-            {
-                "hunk_id": hunk.hunk_id,
-                "path": hunk.path,
-                "start_line": hunk.start_line,
-                "end_line": hunk.end_line,
-                "side": hunk.side,
-            }
-            for hunk in self._snapshot.change_index.hunks[:_MAX_RESULTS]
-        ]
+        selected = await self._selected_file_lines(path, start_line, end_line)
+        return hashlib.sha256(selected).hexdigest(), len(selected) > _MAX_READ_BYTES
+
+    async def initial_instruction_context(self) -> str:
+        """Prefetch root rules and list non-root rule paths without consuming a tool call."""
+
+        applicable_paths = {
+            rule_path
+            for target_path in self._review_file_paths
+            for rule_path in self._instruction_entries
+            if self._instruction_order(target_path, rule_path) is not None
+        }
+        root_entries = tuple(
+            sorted(
+                (
+                    entry
+                    for entry in self._instruction_entries.values()
+                    if entry.path in applicable_paths
+                    if PurePosixPath(entry.path).parent == PurePosixPath(".")
+                    and entry.path.casefold() in {"agents.md", "review.md"}
+                ),
+                key=lambda entry: (0 if entry.path.casefold() == "agents.md" else 1, entry.path),
+            )
+        )
+        root_instructions: list[dict[str, str]] = []
+        for entry in root_entries:
+            payload = await self._payload(entry)
+            if b"\0" in payload:
+                raise ValueError("repository instruction is binary")
+            root_instructions.append(
+                {"path": entry.path, "content": payload.decode("utf-8", errors="strict")}
+            )
+        self._emitted_instruction_paths.update(entry.path for entry in root_entries)
+        root_paths = {entry.path for entry in root_entries}
         return self._json(
             {
-                "snapshot_id": self._snapshot.snapshot_id,
-                "target_paths": list(self._snapshot.manifest.target_paths[:_MAX_RESULTS]),
-                "hunks": hunks,
-                "truncated": len(self._snapshot.change_index.hunks) > _MAX_RESULTS,
+                "root_instructions": root_instructions,
+                "available_instruction_paths": sorted(
+                    path for path in applicable_paths if path not in root_paths
+                ),
             }
+        )
+
+    async def instruction_loader(self, path: str) -> str:
+        """Load the ordered repository rules for one complete Review target path."""
+
+        self._consume()
+        if (
+            not self._is_normalized_relative(path)
+            or path not in self._review_file_paths
+        ):
+            raise ValueError(
+                "instruction_loader requires a complete repository-relative target path"
+            )
+        applicable = sorted(
+            (
+                (order, entry)
+                for rule_path, entry in self._instruction_entries.items()
+                if (order := self._instruction_order(path, rule_path)) is not None
+            ),
+            key=lambda item: item[0],
+        )
+        rule_paths = [entry.path for _, entry in applicable]
+        new_entries = [
+            entry for _, entry in applicable if entry.path not in self._emitted_instruction_paths
+        ]
+        reused_instruction_paths = [
+            entry.path
+            for _, entry in applicable
+            if entry.path in self._emitted_instruction_paths
+        ]
+        new_instructions: list[dict[str, str]] = []
+        for entry in new_entries:
+            payload = await self._payload(entry)
+            if b"\0" in payload:
+                raise ValueError("repository instruction is binary")
+            new_instructions.append(
+                {
+                    "path": entry.path,
+                    "content": payload.decode("utf-8", errors="strict"),
+                }
+            )
+        self._emitted_instruction_paths.update(entry.path for entry in new_entries)
+        self._instruction_loaded_paths.add(path)
+        return self._json(
+            {
+                "path": path,
+                "rule_paths": rule_paths,
+                "new_instructions": new_instructions,
+                "reused_instruction_paths": reused_instruction_paths,
+            }
+        )
+
+    def instructions_loaded_for(self, path: str) -> bool:
+        """Return whether repository rules were loaded successfully for one target."""
+
+        return path in self._instruction_loaded_paths
+
+    @property
+    def unloaded_instruction_paths(self) -> tuple[str, ...]:
+        """Return Review targets whose repository rules have not been loaded."""
+
+        return tuple(
+            path
+            for path in self._review_file_paths
+            if path not in self._instruction_loaded_paths
         )
 
     async def get_diff(self, path: str) -> str:
         """Read the bounded base-to-head diff for one changed, visible file."""
 
         self._consume()
-        self._entry(path)
-        if path not in {hunk.path for hunk in self._snapshot.change_index.hunks}:
-            raise ValueError("path has no changed hunk")
+        entry = self._entry(path)
+        review_file = self._review_files_by_path.get(path)
+        if review_file is None:
+            raise ValueError("path is not a Review file")
+        diff_paths = (
+            (review_file.old_path, path)
+            if review_file.old_path is not None
+            else (path,)
+        )
         result = await self._git.run(
             self._snapshot.worktree.root,
             "diff",
@@ -157,15 +268,17 @@ class FilesystemReviewTools:
             "--unified=3",
             self._snapshot.target.base_oid,
             "--",
-            path,
+            *diff_paths,
         )
-        content = result.stdout[:_MAX_READ_BYTES]
+        output = result.stdout
+        if not output and review_file.change_type == "added":
+            output = await self._added_file_diff(entry)
+        content = output[:_MAX_READ_BYTES]
         return self._json(
             {
                 "path": path,
                 "content": content.decode("utf-8", errors="replace"),
-                "content_hash": hashlib.sha256(result.stdout).hexdigest(),
-                "truncated": len(result.stdout) > _MAX_READ_BYTES,
+                "truncated": len(output) > _MAX_READ_BYTES,
             }
         )
 
@@ -184,6 +297,12 @@ class FilesystemReviewTools:
         if start_line < 1 or end_line < start_line or end_line - start_line >= _MAX_LINES:
             raise ValueError("line range is invalid")
         self._entry(path)
+        review_file = self._review_files_by_path.get(path)
+        if review_file is not None and (
+            (review_file.change_type == "added" and revision == "base")
+            or (review_file.change_type == "deleted" and revision == "head")
+        ):
+            raise ValueError("path is unavailable in revision")
         oid = (
             self._snapshot.target.base_oid if revision == "base" else self._snapshot.target.head_oid
         )
@@ -205,7 +324,6 @@ class FilesystemReviewTools:
                 "start_line": start_line,
                 "end_line": end_line,
                 "content": content,
-                "content_hash": hashlib.sha256(selected).hexdigest(),
                 "truncated": len(selected) > _MAX_READ_BYTES,
             }
         )
@@ -250,13 +368,13 @@ class FilesystemReviewTools:
             return await self.read_file(path, start_line, end_line)
 
         @function_tool(
-            name_override="get_change_map",
-            description_override=descriptions["get_change_map"],
+            name_override="instruction_loader",
+            description_override=descriptions["instruction_loader"],
         )
-        async def get_change_map_tool() -> str:
-            """Return changed paths and stable changed-hunk locations."""
+        async def instruction_loader_tool(path: str) -> str:
+            """Load applicable repository rules for a complete target path."""
 
-            return await self.get_change_map()
+            return await self.instruction_loader(path)
 
         @function_tool(
             name_override="get_diff",
@@ -283,7 +401,7 @@ class FilesystemReviewTools:
             glob_tool,
             grep_tool,
             read_file_tool,
-            get_change_map_tool,
+            instruction_loader_tool,
             get_diff_tool,
             read_revision_tool,
         ]
@@ -303,13 +421,48 @@ class FilesystemReviewTools:
         if entry.kind == "deleted":
             return b""
         absolute = self._snapshot.worktree.root / entry.path
-        resolved = absolute.resolve()
-        if not resolved.is_relative_to(self._snapshot.worktree.root):
-            raise ValueError("Snapshot context path escapes its worktree")
-        payload = await asyncio.to_thread(absolute.read_bytes)
+        if entry.kind == "symlink":
+            target = await asyncio.to_thread(os.readlink, absolute)
+            payload = target.encode("utf-8")
+        else:
+            resolved = absolute.resolve()
+            if not resolved.is_relative_to(self._snapshot.worktree.root):
+                raise ValueError("Snapshot context path escapes its worktree")
+            payload = await asyncio.to_thread(absolute.read_bytes)
         if hashlib.sha256(payload).hexdigest() != entry.content_hash:
             raise ValueError("Snapshot context content changed")
         return payload
+
+    async def _added_file_diff(self, entry: SnapshotEntry) -> bytes:
+        payload = await self._payload(entry)
+        mode = "120000" if entry.kind == "symlink" else f"100{entry.mode:o}"
+        header = f"diff --git a/{entry.path} b/{entry.path}\nnew file mode {mode}\n"
+        if b"\0" in payload:
+            return (
+                header + f"Binary files /dev/null and b/{entry.path} differ\n"
+            ).encode("utf-8")
+        lines = payload.decode("utf-8", errors="replace").splitlines(keepends=True)
+        diff = difflib.unified_diff(
+            (),
+            lines,
+            fromfile="/dev/null",
+            tofile=f"b/{entry.path}",
+            n=3,
+        )
+        return (header + "".join(diff)).encode("utf-8")
+
+    async def _selected_file_lines(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+    ) -> bytes:
+        if start_line < 1 or end_line < start_line or end_line - start_line >= _MAX_LINES:
+            raise ValueError("line range is invalid")
+        payload = await self._payload(self._entry(path))
+        if b"\0" in payload:
+            raise ValueError("Snapshot file is binary")
+        return b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])
 
     @staticmethod
     def _is_normalized_relative(path: str) -> bool:
@@ -322,6 +475,21 @@ class FilesystemReviewTools:
             and ".." not in candidate.parts
             and candidate.as_posix() == path
         )
+
+    @staticmethod
+    def _instruction_order(target_path: str, rule_path: str) -> tuple[int, int, str] | None:
+        target = PurePosixPath(target_path)
+        rule = PurePosixPath(rule_path)
+        rule_name = rule.name.casefold()
+        if (
+            rule.parent == target.parent
+            and rule_name == f"{target.name}.review.md".casefold()
+        ):
+            return (len(rule.parent.parts), 2, rule_path)
+        kind_order = {"agents.md": 0, "review.md": 1}.get(rule_name)
+        if kind_order is None or not target.parent.is_relative_to(rule.parent):
+            return None
+        return (len(rule.parent.parts), kind_order, rule_path)
 
     @classmethod
     def _directory_prefix(cls, path: str) -> str:

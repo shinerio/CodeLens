@@ -3,7 +3,7 @@
   "glob": {"purpose": "按 POSIX glob 查找可见的 Snapshot 路径。", "parameters": "pattern: POSIX glob", "description": "按 POSIX glob 查找可见的 Snapshot 路径。"},
   "grep": {"purpose": "用正则表达式搜索可见的 Snapshot 文本。", "parameters": "pattern: 正则表达式", "description": "用正则表达式搜索可见的 Snapshot 文本。"},
   "read_file": {"purpose": "读取可见 Snapshot 文件的有限行范围。", "parameters": "path, start_line, end_line", "description": "读取可见 Snapshot 文件的有限行范围。"},
-  "get_change_map": {"purpose": "列出变更路径和稳定 hunk 位置；必须先调用。", "parameters": "无", "description": "返回变更路径和稳定的变更 hunk 位置。"},
+  "instruction_loader": {"purpose": "审查一个变更文件前加载其适用的仓库规则。", "parameters": "path: 精确的仓库相对 Review 文件路径", "description": "根据一个精确的仓库相对 Review 文件路径，加载按优先级排列的适用仓库规则。"},
   "get_diff": {"purpose": "读取固定 base 到 head 的单文件 diff。", "parameters": "path", "description": "读取一个已变更可见文件固定 base 到 head 的 diff。"},
   "read_revision": {"purpose": "读取固定 base 或 head revision 的有限行范围。", "parameters": "path, revision: base|head, start_line, end_line", "description": "读取可见 Snapshot 路径固定 base 或 head revision 的有限行范围。"},
   "comment": {"purpose": "提交已解析的审查意见。", "parameters": "comments", "description": "提交一条或多条具体的变更代码审查意见，供系统确定性定位。"},

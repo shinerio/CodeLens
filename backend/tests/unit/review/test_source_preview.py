@@ -21,6 +21,7 @@ class Store:
             git_common_dir_hash="b" * 64,
             base_oid="c" * 40,
             head_oid="d" * 40,
+            scope_type="branch",
             overlay_hash=None,
             overlay_artifact_ref=None,
             target_paths=("src/example.py",),

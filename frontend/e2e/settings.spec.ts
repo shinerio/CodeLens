@@ -1,0 +1,42 @@
+import { expect, test } from "@playwright/test";
+
+test("persists the recent repository limit without layout overflow", async ({ page }, testInfo) => {
+  await page.goto("/settings");
+
+  const limitInput = page.getByRole("spinbutton", {
+    name: "Recent repository limit",
+    exact: true,
+  });
+  const saveButton = page.getByRole("button", {
+    name: "Save recent repository limit",
+  });
+  await expect(limitInput).toBeEnabled();
+  if ((await limitInput.inputValue()) !== "12") {
+    await limitInput.fill("12");
+    await expect(saveButton).toBeEnabled();
+    await saveButton.click();
+  }
+
+  await expect
+    .poll(async () => {
+      const response = await page.request.get("/api/settings/repositories");
+      return response.json();
+    })
+    .toEqual({ recent_repository_limit: 12 });
+  await expect(limitInput).toHaveValue("12");
+
+  const boxes = await Promise.all([limitInput.boundingBox(), saveButton.boundingBox()]);
+  expect(boxes[0]).not.toBeNull();
+  expect(boxes[1]).not.toBeNull();
+  if (boxes[0] !== null && boxes[1] !== null) {
+    expect(boxes[0].x + boxes[0].width).toBeLessThanOrEqual(boxes[1].x);
+  }
+  expect(
+    await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),
+  ).toBeTruthy();
+
+  await page.screenshot({
+    fullPage: true,
+    path: testInfo.outputPath("settings.png"),
+  });
+});

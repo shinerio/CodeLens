@@ -10,22 +10,25 @@ import {
   Power,
   ServerCog,
   ShieldCheck,
+  SlidersHorizontal,
   Trash2,
   XCircle,
   Zap,
 } from "lucide-react";
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 
 import { useI18n } from "../../shared/i18n/i18n";
 import {
   activateModelGateway,
   createModelGateway,
   deleteModelGateway,
+  getRecentRepositorySettings,
   getRuntimeLogLevel,
   listModelGateways,
   testGatewayAvailability,
   testGatewayConnectivity,
   updateRuntimeLogLevel,
+  updateRecentRepositoryLimit,
   updateModelGateway,
 } from "./api";
 import type {
@@ -41,6 +44,7 @@ import "./SettingsPage.css";
 
 export const MODEL_GATEWAYS_QUERY_KEY = ["model-gateways"] as const;
 const RUNTIME_LOG_LEVEL_QUERY_KEY = ["runtime-log-level"] as const;
+const RECENT_REPOSITORY_SETTINGS_QUERY_KEY = ["recent-repository-settings"] as const;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unable to save the gateway.";
@@ -59,6 +63,7 @@ export function SettingsPage() {
   const [maxTokens, setMaxTokens] = useState(65536);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("disabled");
   const [agentTimeout, setAgentTimeout] = useState(1800);
+  const [recentRepositoryLimitDraft, setRecentRepositoryLimitDraft] = useState("10");
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
     queryFn: listModelGateways,
@@ -73,6 +78,26 @@ export function SettingsPage() {
       queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, settings);
     },
   });
+  const recentRepositorySettingsQuery = useQuery({
+    queryKey: RECENT_REPOSITORY_SETTINGS_QUERY_KEY,
+    queryFn: getRecentRepositorySettings,
+  });
+  const recentRepositorySettingsMutation = useMutation({
+    mutationFn: updateRecentRepositoryLimit,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(RECENT_REPOSITORY_SETTINGS_QUERY_KEY, settings);
+      setRecentRepositoryLimitDraft(String(settings.recent_repository_limit));
+      void queryClient.invalidateQueries({ queryKey: ["recent-repositories"] });
+    },
+  });
+
+  useEffect(() => {
+    if (recentRepositorySettingsQuery.data !== undefined) {
+      setRecentRepositoryLimitDraft(
+        String(recentRepositorySettingsQuery.data.recent_repository_limit),
+      );
+    }
+  }, [recentRepositorySettingsQuery.data]);
 
   const updateCatalog = (catalog: ModelGatewayCatalog) => {
     queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, catalog);
@@ -155,6 +180,14 @@ export function SettingsPage() {
     baseUrl.trim() === "" ||
     (!isEditing && apiKey.trim() === "") ||
     saveMutation.isPending;
+  const parsedRecentRepositoryLimit = Number(recentRepositoryLimitDraft);
+  const isRecentRepositoryLimitValid =
+    Number.isInteger(parsedRecentRepositoryLimit) &&
+    parsedRecentRepositoryLimit >= 1 &&
+    parsedRecentRepositoryLimit <= 20;
+  const isRecentRepositoryLimitUnchanged =
+    parsedRecentRepositoryLimit ===
+    recentRepositorySettingsQuery.data?.recent_repository_limit;
 
   function handleEdit(gateway: ModelGateway) {
     setEditingGatewayId(gateway.gateway_id);
@@ -183,7 +216,7 @@ export function SettingsPage() {
   }
 
   const mutationError =
-    saveMutation.error ?? activateMutation.error ?? deleteMutation.error ?? connectivityMutation.error ?? availabilityMutation.error ?? gatewayQuery.error ?? logLevelQuery.error ?? logLevelMutation.error;
+    saveMutation.error ?? activateMutation.error ?? deleteMutation.error ?? connectivityMutation.error ?? availabilityMutation.error ?? gatewayQuery.error ?? logLevelQuery.error ?? logLevelMutation.error ?? recentRepositorySettingsQuery.error ?? recentRepositorySettingsMutation.error;
 
   return (
     <section className="settings-page">
@@ -513,20 +546,58 @@ export function SettingsPage() {
         </div>
 
         <aside className="security-rail">
-          <label className="settings-field">
-            <span className="settings-field__label">{t("settings.runtimeLogLevel")}</span>
-            <select
-              aria-label={t("settings.runtimeLogLevel")}
-              disabled={logLevelQuery.isPending || logLevelMutation.isPending}
-              value={logLevelQuery.data?.level ?? "info"}
-              onChange={(event) => logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)}
-            >
-              <option value="debug">{t("settings.logDebug")}</option>
-              <option value="info">{t("settings.logInfo")}</option>
-              <option value="warning">{t("settings.logWarning")}</option>
-              <option value="error">{t("settings.logError")}</option>
-            </select>
-          </label>
+          <div className="local-preferences">
+            <p className="local-preferences__heading">
+              <SlidersHorizontal aria-hidden="true" /> {t("settings.localPreferences")}
+            </p>
+            <label className="settings-field">
+              <span className="settings-field__label">{t("settings.runtimeLogLevel")}</span>
+              <select
+                aria-label={t("settings.runtimeLogLevel")}
+                disabled={logLevelQuery.isPending || logLevelMutation.isPending}
+                value={logLevelQuery.data?.level ?? "info"}
+                onChange={(event) => logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)}
+              >
+                <option value="debug">{t("settings.logDebug")}</option>
+                <option value="info">{t("settings.logInfo")}</option>
+                <option value="warning">{t("settings.logWarning")}</option>
+                <option value="error">{t("settings.logError")}</option>
+              </select>
+            </label>
+            <div className="settings-field">
+              <label className="settings-field__label" htmlFor="recent-repository-limit">
+                {t("settings.recentRepositoryLimit")}
+              </label>
+              <div className="local-preferences__number-control">
+                <input
+                  aria-label={t("settings.recentRepositoryLimit")}
+                  disabled={recentRepositorySettingsQuery.isPending}
+                  id="recent-repository-limit"
+                  inputMode="numeric"
+                  max={20}
+                  min={1}
+                  step={1}
+                  type="number"
+                  value={recentRepositoryLimitDraft}
+                  onChange={(event) => setRecentRepositoryLimitDraft(event.currentTarget.value)}
+                />
+                <button
+                  aria-label={t("settings.saveRecentRepositoryLimit")}
+                  disabled={
+                    recentRepositorySettingsMutation.isPending ||
+                    !isRecentRepositoryLimitValid ||
+                    isRecentRepositoryLimitUnchanged
+                  }
+                  title={t("settings.saveRecentRepositoryLimit")}
+                  type="button"
+                  onClick={() => recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit)}
+                >
+                  <Check aria-hidden="true" />
+                </button>
+              </div>
+              <small>{t("settings.recentRepositoryLimitHint")}</small>
+            </div>
+          </div>
           <div className="security-rail__icon">
             <ShieldCheck aria-hidden="true" />
           </div>

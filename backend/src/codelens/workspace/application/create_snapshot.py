@@ -17,6 +17,7 @@ from codelens.workspace.application.worktree_lifecycle import ReviewWorktreeLife
 from codelens.workspace.domain.models import (
     CapturedReviewInput,
     ChangeIndex,
+    ReviewScopeType,
     ReviewSnapshot,
     SnapshotBuild,
     TaskWorktree,
@@ -42,7 +43,13 @@ class SnapshotManifestPort(Protocol):
 class ChangeIndexPort(Protocol):
     """Build deterministic changed-hunk evidence for a frozen worktree."""
 
-    async def build(self, worktree: TaskWorktree, base_oid: str) -> ChangeIndex:
+    async def build(
+        self,
+        worktree: TaskWorktree,
+        base_oid: str,
+        target_paths: tuple[str, ...],
+        scope_type: ReviewScopeType,
+    ) -> ChangeIndex:
         """Return all changed hunk identities relative to a pinned base."""
 
         raise NotImplementedError
@@ -54,6 +61,7 @@ def _snapshot_metadata(
     captured: CapturedReviewInput,
     build: SnapshotBuild,
     change_index: ChangeIndex,
+    scope_type: ReviewScopeType,
 ) -> bytes:
     payload = {
         "schema_version": 1,
@@ -64,6 +72,7 @@ def _snapshot_metadata(
         "base_oid": captured.target.base_oid,
         "head_oid": captured.target.head_oid,
         "overlay_hash": captured.target.overlay_hash,
+        "scope_type": scope_type,
         "manifest_hash": build.manifest_hash,
         "manifest": asdict(build.manifest),
         "change_index": asdict(change_index),
@@ -123,10 +132,22 @@ class SnapshotService:
             instructions,
             self._structured_skip,
         )
-        change_index = await self._change_index.build(worktree, captured.target.base_oid)
+        change_index = await self._change_index.build(
+            worktree,
+            captured.target.base_oid,
+            build.manifest.target_paths,
+            scope_plan.scope_type,
+        )
         snapshot_id = f"snapshot_{uuid.uuid4().hex}"
         artifact = await self._artifacts.write_bytes(
-            _snapshot_metadata(snapshot_id, worktree, captured, build, change_index)
+            _snapshot_metadata(
+                snapshot_id,
+                worktree,
+                captured,
+                build,
+                change_index,
+                scope_plan.scope_type,
+            )
         )
         return ReviewSnapshot(
             snapshot_id=snapshot_id,

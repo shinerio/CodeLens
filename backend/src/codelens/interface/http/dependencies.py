@@ -8,14 +8,18 @@ from codelens.review.application.commands import (
     CancelReviewHandler,
     CreateReviewHandler,
     DeleteReviewHandler,
+    GetRecentRepositorySettingsHandler,
     GetReviewHandler,
+    ListRecentRepositoriesHandler,
     ListReviewsHandler,
+    UpdateRecentRepositorySettingsHandler,
 )
 from codelens.review.application.source_preview import FindingSourcePreviewService
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
+    SqlRecentRepositoryStore,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
@@ -66,6 +70,9 @@ class HttpComponents:
     create_review: CreateReviewHandler
     get_review: GetReviewHandler
     list_reviews: ListReviewsHandler
+    list_recent_repositories: ListRecentRepositoriesHandler
+    get_recent_repository_settings: GetRecentRepositorySettingsHandler
+    update_recent_repository_settings: UpdateRecentRepositorySettingsHandler
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
     events: SqlEventOutbox
@@ -106,6 +113,7 @@ def build_components(settings: Settings) -> HttpComponents:
     input_artifacts = FilesystemInputArtifactStore(settings.data_dir / "artifacts" / "inputs")
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     review_store = SqlReviewStore(database, event_bus=event_bus)
+    recent_repository_store = SqlRecentRepositoryStore(database)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
     worktree_manager = GitReviewWorktreeManager(
         data_dir=settings.data_dir,
@@ -128,6 +136,11 @@ def build_components(settings: Settings) -> HttpComponents:
         create_review=CreateReviewHandler(planner, capture, review_store, input_artifacts),
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
+        list_recent_repositories=ListRecentRepositoriesHandler(recent_repository_store),
+        get_recent_repository_settings=GetRecentRepositorySettingsHandler(recent_repository_store),
+        update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
+            recent_repository_store
+        ),
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

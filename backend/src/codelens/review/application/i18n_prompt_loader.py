@@ -20,12 +20,9 @@ class LocalizedSystemPrompts:
     """All platform-authored model text for one locale, loaded before execution."""
 
     locale: str
-    platform_policy: str
-    repository_instruction_policy: str
-    output_contract: str
-    runtime_instruction: str
+    review_policy: str
+    review_workflow: str
     tools: Mapping[str, SystemToolPrompt]
-    comment_language_error: str
 
     @property
     def tool_catalog(self) -> tuple[dict[str, str], ...]:

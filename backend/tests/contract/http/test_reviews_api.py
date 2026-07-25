@@ -82,6 +82,49 @@ def test_startup_removes_only_verified_orphan_input_artifacts(tmp_path: Path) ->
     assert unrelated.read_text(encoding="utf-8") == "keep"
 
 
+def test_recent_repositories_deduplicates_review_paths(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    _prepared_repository(git_repository)
+    settings = _settings(tmp_path, tmp_path)
+    request = _request(
+        git_repository,
+        {
+            "type": "branch",
+            "base_ref": "main",
+            "target_ref": "feature-one",
+            "include_workspace_changes": False,
+        },
+    )
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
+        first = client.post("/api/reviews", json=request)
+        second = client.post("/api/reviews", json=request)
+        assert first.status_code == 202
+        assert second.status_code == 202
+
+        first_delete = client.request(
+            "DELETE", f"/api/reviews/{first.json()['task_id']}", json={}
+        )
+        second_delete = client.request(
+            "DELETE", f"/api/reviews/{second.json()['task_id']}", json={}
+        )
+        assert first_delete.status_code == 204
+        assert second_delete.status_code == 204
+
+        response = client.get("/api/repositories/recent")
+
+    assert response.status_code == 200
+    assert response.json() == [
+        {
+            "repository_name": git_repository.name,
+            "repository_path": str(git_repository.resolve()),
+            "last_reviewed_at": response.json()[0]["last_reviewed_at"],
+        }
+    ]
+
+
 @pytest.mark.parametrize(
     ("scope", "scope_type"),
     [

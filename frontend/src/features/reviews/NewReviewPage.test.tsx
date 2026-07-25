@@ -62,6 +62,9 @@ function installApiMock({ configured = true, nextOffset = null as number | null 
           : [],
       });
     }
+    if (url === "/api/repositories/recent") {
+      return jsonResponse([]);
+    }
     if (url === "/api/repositories/browse") {
       const body = JSON.parse(String(init?.body)) as { path: string | null };
       if (body.path === null) {

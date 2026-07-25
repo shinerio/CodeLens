@@ -140,7 +140,11 @@ class GatedRuntime:
         self._codec = AgentOutputCodec("1")
 
     async def invoke(
-        self, _agent: object, _payload: bytes, snapshot: ReviewSnapshot
+        self,
+        _agent: object,
+        _payload: bytes,
+        snapshot: ReviewSnapshot,
+        _prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
         self.active += 1

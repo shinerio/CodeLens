@@ -8,7 +8,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
 
-from sqlalchemy import case, func, insert, select, update
+from sqlalchemy import case, delete, func, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -25,7 +25,14 @@ from codelens.findings.domain.models import (
 )
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
-from codelens.review.domain.ports import ReviewEvent, ReviewExecutionRecord, ReviewRecord
+from codelens.review.domain.ports import (
+    MAX_RECENT_REPOSITORY_LIMIT,
+    MIN_RECENT_REPOSITORY_LIMIT,
+    RecentRepositoryRecord,
+    ReviewEvent,
+    ReviewExecutionRecord,
+    ReviewRecord,
+)
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.tables import (
@@ -33,10 +40,12 @@ from codelens.review.infrastructure.tables import (
     events,
     findings,
     jobs,
+    recent_repositories,
+    recent_repository_settings,
     review_tasks,
     task_worktrees,
 )
-from codelens.workspace.domain.models import TaskWorktree
+from codelens.workspace.domain.models import ReviewScopeType, TaskWorktree
 
 _LOGGER = logging.getLogger("codelens.review.infrastructure.repositories")
 
@@ -76,6 +85,13 @@ def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
 
 
+def _review_scope_type(scope: dict[str, object]) -> ReviewScopeType:
+    value = scope.get("type")
+    if value not in {"branch", "commit", "uncommitted", "full"}:
+        raise RuntimeError("review has an invalid persisted scope type")
+    return cast(ReviewScopeType, value)
+
+
 def _event_values(task_id: str, event_type: str, payload: dict[str, object]) -> dict[str, object]:
     return {
         "task_id": task_id,
@@ -83,6 +99,59 @@ def _event_values(task_id: str, event_type: str, payload: dict[str, object]) -> 
         "payload_json": _json(payload),
         "created_at": _now(),
     }
+
+
+async def _record_recent_repository(
+    session: AsyncSession,
+    repository_path: Path,
+    reviewed_at: datetime,
+    limit: int,
+) -> None:
+    """Touch one LRU entry and evict overflow within the Review creation transaction."""
+
+    statement = sqlite_insert(recent_repositories).values(
+        repository_path=str(repository_path),
+        last_reviewed_at=reviewed_at,
+    )
+    await session.execute(
+        statement.on_conflict_do_update(
+            index_elements=[recent_repositories.c.repository_path],
+            set_={
+                "last_reviewed_at": func.max(
+                    recent_repositories.c.last_reviewed_at,
+                    statement.excluded.last_reviewed_at,
+                )
+            },
+        )
+    )
+    await _prune_recent_repositories(session, limit)
+
+
+async def _get_recent_repository_limit(session: AsyncSession) -> int:
+    limit = await session.scalar(
+        select(recent_repository_settings.c.recent_repository_limit).where(
+            recent_repository_settings.c.settings_id == 1
+        )
+    )
+    if limit is None:
+        raise RuntimeError("recent repository settings are missing")
+    return int(limit)
+
+
+async def _prune_recent_repositories(session: AsyncSession, limit: int) -> None:
+    """Remove LRU entries beyond one validated capacity."""
+
+    overflow = (
+        select(recent_repositories.c.repository_path)
+        .order_by(
+            recent_repositories.c.last_reviewed_at.desc(),
+            recent_repositories.c.repository_path.asc(),
+        )
+        .offset(limit)
+    )
+    await session.execute(
+        delete(recent_repositories).where(recent_repositories.c.repository_path.in_(overflow))
+    )
 
 
 def _finding_payload(finding: Finding) -> str:
@@ -118,7 +187,7 @@ def _review_record(row: Any) -> ReviewRecord:
         repository_id=str(row["repository_id"]),
         repository_realpath_hash=str(row["repository_realpath_hash"]),
         git_common_dir_hash=str(row["git_common_dir_hash"]),
-        scope_type=str(scope["type"]),
+        scope_type=_review_scope_type(scope),
         base_oid=str(row["base_oid"]),
         head_oid=str(row["head_oid"]),
         selected_agent_versions=tuple(selected_agents),
@@ -132,6 +201,75 @@ def _review_record(row: Any) -> ReviewRecord:
         created_at=cast(datetime, row["created_at"]),
         is_deleted=row["deleted_at"] is not None,
     )
+
+
+class SqlRecentRepositoryStore:
+    """Read the bounded repository LRU without consulting Review tombstones."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def get_limit(self) -> int:
+        """Return the persisted list capacity."""
+
+        async with self._database.sessions() as session:
+            return await _get_recent_repository_limit(session)
+
+    async def update_limit(self, limit: int) -> int:
+        """Persist one capacity and prune older entries atomically."""
+
+        if not MIN_RECENT_REPOSITORY_LIMIT <= limit <= MAX_RECENT_REPOSITORY_LIMIT:
+            raise ValueError(
+                "recent repository limit must be between "
+                f"{MIN_RECENT_REPOSITORY_LIMIT} and {MAX_RECENT_REPOSITORY_LIMIT}"
+            )
+
+        async def operation(session: AsyncSession) -> int:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(recent_repository_settings)
+                    .where(recent_repository_settings.c.settings_id == 1)
+                    .values(recent_repository_limit=limit)
+                ),
+            )
+            if result.rowcount != 1:
+                raise RuntimeError("recent repository settings are missing")
+            await _prune_recent_repositories(session, limit)
+            return limit
+
+        return await self._database.run_transaction(operation)
+
+    async def list_recent_repositories(
+        self,
+        limit: int,
+    ) -> tuple[RecentRepositoryRecord, ...]:
+        """Return at most the persisted LRU capacity in recency order."""
+
+        if not MIN_RECENT_REPOSITORY_LIMIT <= limit <= MAX_RECENT_REPOSITORY_LIMIT:
+            raise ValueError(
+                "recent repository limit must be between "
+                f"{MIN_RECENT_REPOSITORY_LIMIT} and {MAX_RECENT_REPOSITORY_LIMIT}"
+            )
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(recent_repositories)
+                    .order_by(
+                        recent_repositories.c.last_reviewed_at.desc(),
+                        recent_repositories.c.repository_path.asc(),
+                    )
+                    .limit(limit)
+                )
+            ).mappings()
+        return tuple(
+            RecentRepositoryRecord(
+                repository_path=Path(str(row["repository_path"])),
+                repository_name=Path(str(row["repository_path"])).name,
+                last_reviewed_at=cast(datetime, row["last_reviewed_at"]),
+            )
+            for row in rows
+        )
 
 
 class SqlReviewStore:
@@ -229,6 +367,13 @@ class SqlReviewStore:
                         },
                     )
                 )
+            recent_repository_limit = await _get_recent_repository_limit(session)
+            await _record_recent_repository(
+                session,
+                task.repository_path,
+                timestamp,
+                recent_repository_limit,
+            )
 
         await self._database.run_transaction(operation)
         await self._publish_events(captured)
@@ -377,6 +522,7 @@ class SqlReviewStore:
             git_common_dir_hash=str(row["git_common_dir_hash"]),
             base_oid=str(row["base_oid"]),
             head_oid=str(row["head_oid"]),
+            scope_type=_review_scope_type(json.loads(str(row["scope_json"]))),
             overlay_hash=str(row["overlay_hash"]) if row["overlay_hash"] is not None else None,
             overlay_artifact_ref=(
                 str(row["overlay_artifact_ref"])
@@ -385,7 +531,7 @@ class SqlReviewStore:
             ),
             target_paths=tuple(target_paths),
             selected_agent_versions=tuple(selected),
-            prompt_locale=str(row["prompt_locale"] or "en"),
+            prompt_locale=str(row["prompt_locale"]),
             status=str(row["status"]),
             cancellation_requested=bool(row["cancellation_requested"]),
         )

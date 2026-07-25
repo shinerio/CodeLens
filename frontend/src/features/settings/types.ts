@@ -26,6 +26,10 @@ export type RuntimeLogLevelSettings = {
   level: RuntimeLogLevel;
 };
 
+export type RecentRepositorySettings = {
+  recent_repository_limit: number;
+};
+
 export type CreateModelGateway = {
   name: string;
   api_key: string;

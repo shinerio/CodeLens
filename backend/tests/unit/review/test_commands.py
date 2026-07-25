@@ -24,7 +24,7 @@ from codelens.workspace.domain.ports import RepositoryInfo, ScopePlan
 
 class FixedPlanner:
     async def plan_scope(self, _repository: Path, _scope: object) -> ScopePlan:
-        return ScopePlan("a" * 40, "b" * 40, ("src/app.py",), True)
+        return ScopePlan("a" * 40, "b" * 40, ("src/app.py",), True, "branch")
 
 
 class StableCaptureSource:

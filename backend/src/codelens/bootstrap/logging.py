@@ -1,8 +1,10 @@
 """Process-local structured logging for the API, Worker, and supervisor."""
 
+import gzip
 import json
 import logging
 import os
+import shutil
 from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from typing import Literal
@@ -16,6 +18,10 @@ _LOG_LEVELS: dict[LogLevel, int] = {
     "warning": logging.WARNING,
     "error": logging.ERROR,
 }
+_UNIFIED_WORKER_LOGGERS = (
+    "codelens.worker",
+    "codelens.review.infrastructure.openai_runtime",
+)
 
 _STANDARD_RECORD_ATTRIBUTES = frozenset(
     set(logging.LogRecord("", 0, "", 0, "", (), None).__dict__) | {"message", "asctime"},
@@ -49,6 +55,21 @@ class _CodeLensFileHandler(RotatingFileHandler):
     """Identify handlers owned by CodeLens without touching application handlers."""
 
     codelens_log_path: Path
+
+
+class _CodeLensModelFileHandler(RotatingFileHandler):
+    """Identify the dedicated compressed model transcript handler."""
+
+    codelens_log_path: Path
+
+
+def _gzip_rotator(source: str, destination: str) -> None:
+    """Compress one completed model log segment and remove its source file."""
+
+    with open(source, "rb") as source_handle, gzip.open(destination, "wb") as target_handle:
+        shutil.copyfileobj(source_handle, target_handle)
+    os.chmod(destination, 0o600)
+    os.remove(source)
 
 
 def get_runtime_log_level(data_directory: Path) -> LogLevel:
@@ -109,6 +130,7 @@ def configure_process_logging(
     *,
     log_directory: Path | None = None,
     data_directory: Path | None = None,
+    model_log_max_bytes: int = 10 * 1024 * 1024,
 ) -> Path:
     """Configure bounded JSON logs in ``logs/`` relative to the launch directory.
 
@@ -118,7 +140,8 @@ def configure_process_logging(
 
     directory = (log_directory or Path.cwd() / "logs").resolve()
     directory.mkdir(parents=True, exist_ok=True)
-    log_path = directory / f"{process_name}.log"
+    runtime_process: ProcessName = "api" if process_name == "unified" else process_name
+    log_path = directory / f"{runtime_process}.log"
     level_directory = (data_directory or Path.cwd() / "data").resolve()
 
     root_logger = logging.getLogger()
@@ -127,7 +150,30 @@ def configure_process_logging(
         if isinstance(existing_handler, _CodeLensFileHandler):
             root_logger.removeHandler(existing_handler)
             existing_handler.close()
-    root_logger.addHandler(_file_handler(log_path, process_name, level_directory))
+    runtime_handler = _file_handler(log_path, runtime_process, level_directory)
+    root_logger.addHandler(runtime_handler)
+
+    model_log_path = directory / "model.log"
+    model_logger = logging.getLogger("codelens.model")
+    for existing_handler in tuple(model_logger.handlers):
+        if isinstance(existing_handler, _CodeLensModelFileHandler):
+            model_logger.removeHandler(existing_handler)
+            existing_handler.close()
+    model_handler = _CodeLensModelFileHandler(
+        model_log_path,
+        encoding="utf-8",
+        maxBytes=model_log_max_bytes,
+        backupCount=1,
+    )
+    os.chmod(model_log_path, 0o600)
+    model_handler.namer = lambda path: f"{path}.gz"
+    model_handler.rotator = _gzip_rotator
+    model_handler.setFormatter(_JsonLogFormatter(process_name))
+    model_handler.codelens_log_path = model_log_path
+    model_logger.addHandler(model_handler)
+    model_logger.disabled = False
+    model_logger.setLevel(logging.INFO)
+    model_logger.propagate = False
 
     application_logger = logging.getLogger("codelens")
     for existing_handler in tuple(application_logger.handlers):
@@ -136,8 +182,26 @@ def configure_process_logging(
             existing_handler.close()
     # Third-party runtimes can replace root handlers during import. Keep CodeLens
     # task failures on an independently owned logger so their tracebacks survive.
-    application_logger.addHandler(_file_handler(log_path, process_name, level_directory))
+    application_logger.addHandler(runtime_handler)
     application_logger.propagate = False
+
+    worker_handler = (
+        _file_handler(directory / "worker.log", "worker", level_directory)
+        if process_name == "unified"
+        else None
+    )
+    for logger_name in _UNIFIED_WORKER_LOGGERS:
+        worker_logger = logging.getLogger(logger_name)
+        for existing_handler in tuple(worker_logger.handlers):
+            if isinstance(existing_handler, _CodeLensFileHandler):
+                worker_logger.removeHandler(existing_handler)
+                existing_handler.close()
+        worker_logger.propagate = True
+        if worker_handler is not None:
+            worker_logger.addHandler(worker_handler)
+            worker_logger.propagate = False
+        worker_logger.disabled = False
+        worker_logger.setLevel(logging.INFO)
 
     for logger_name in ("codelens", "uvicorn", "uvicorn.error", "uvicorn.access"):
         logger = logging.getLogger(logger_name)

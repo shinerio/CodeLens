@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from dataclasses import asdict, is_dataclass
 from typing import Any, Literal, Protocol, cast
 
 import httpx
@@ -11,7 +12,7 @@ import httpx
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_MODEL_DATA", "1")
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
-from agents import Agent, RawResponsesStreamEvent, RunConfig, RunItemStreamEvent, Runner
+from agents import Agent, RawResponsesStreamEvent, RunConfig, RunItemStreamEvent, Runner, Tool
 from agents.exceptions import (
     MaxTurnsExceeded,
     ModelBehaviorError,
@@ -53,6 +54,17 @@ type _AgentFailure = (
     AgentMaxTurnsExceededError | TransientAgentRuntimeError | PermanentAgentOutputError
 )
 _LOGGER = logging.getLogger(__name__)
+_FORBIDDEN_TOOL_CONTRACT_TERMS = (
+    "snapshot_id",
+    "hunk_id",
+    "content_hash",
+    "excerpt_hash",
+    "instruction chain",
+    "instruction_chain",
+    "context plan",
+    "context_plan",
+    "precedence",
+)
 
 
 class _RunnerPort(Protocol):
@@ -121,25 +133,28 @@ class OpenAIAgentRuntime:
         agent: AgentVersion,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
+        prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
-        return await self._invoke(agent, input_payload, snapshot, sink=None)
+        return await self._invoke(agent, input_payload, snapshot, prompt_locale, sink=None)
 
     async def invoke_stream(
         self,
         agent: AgentVersion,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
+        prompt_locale: str,
         sink: AgentRuntimeEventSink,
     ) -> UnvalidatedAgentOutput:
         """Emit visible model text and tool evidence while preserving the final checkpoint."""
 
-        return await self._invoke(agent, input_payload, snapshot, sink=sink)
+        return await self._invoke(agent, input_payload, snapshot, prompt_locale, sink=sink)
 
     async def _invoke(
         self,
         agent: AgentVersion,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
+        prompt_locale: str,
         sink: AgentRuntimeEventSink | None,
     ) -> UnvalidatedAgentOutput:
         provider_config = await self._config_store.load()
@@ -152,38 +167,43 @@ class OpenAIAgentRuntime:
             pass
         if input_text is None:
             raise PermanentAgentOutputError("Agent input is not valid UTF-8") from None
-        prompts = self._prompt_loader.get(self._output_locale(input_text))
+        prompts = self._prompt_loader.get(prompt_locale)
         if agent.output_contract_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
-        client = AsyncOpenAI(
-            api_key=provider_config.api_key,
-            base_url=provider_config.base_url,
-            http_client=httpx.AsyncClient(trust_env=False),
-        )
         behavior = (
             ModelProviderAdapterRegistry()
             .resolve(provider_config.vendor)
             .request_behavior(provider_config)
         )
         snapshot_tools = FilesystemReviewTools(snapshot, self._git, max_tool_calls=None)
+        initial_instruction_context = await snapshot_tools.initial_instruction_context()
         comment_collector = ReviewCommentCollector(
             snapshot=snapshot,
             reviewer_id=agent.agent_id,
             confidence_floor=agent.confidence_floor,
             tools=snapshot_tools,
-            output_locale="zh-CN" if prompts.locale == "zh-CN" else "en",
             tool_descriptions={name: tool.description for name, tool in prompts.tools.items()},
-            language_error=prompts.comment_language_error,
+        )
+        model_tools = [
+            *snapshot_tools.as_agent_tools(
+                {name: tool.description for name, tool in prompts.tools.items()}
+            ),
+            *comment_collector.as_agent_tools(),
+        ]
+        _validate_model_tool_contract(model_tools)
+        client = AsyncOpenAI(
+            api_key=provider_config.api_key,
+            base_url=provider_config.base_url,
+            http_client=httpx.AsyncClient(trust_env=False),
         )
         investigation_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
             instructions="\n\n".join(
                 (
-                    prompts.platform_policy,
-                    prompts.repository_instruction_policy,
-                    prompts.runtime_instruction,
-                    prompts.output_contract,
+                    prompts.review_policy,
+                    initial_instruction_context,
+                    prompts.review_workflow,
                     f"# Reviewer Policy\n{agent.prompt_template}",
                 )
             ),
@@ -192,12 +212,7 @@ class OpenAIAgentRuntime:
                 openai_client=client,
             ),
             model_settings=behavior.model_settings,
-            tools=[
-                *snapshot_tools.as_agent_tools(
-                    {name: tool.description for name, tool in prompts.tools.items()}
-                ),
-                *comment_collector.as_agent_tools(),
-            ],
+            tools=model_tools,
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
         investigation: object | None = None
@@ -205,6 +220,19 @@ class OpenAIAgentRuntime:
         phase: Literal["investigation", "unknown"] = "investigation"
         try:
             try:
+                if sink is not None:
+                    await sink(
+                        AgentRuntimeEvent(
+                            "prompt",
+                            _model_input(
+                                investigation_agent,
+                                input_text,
+                                provider_config.model,
+                                behavior.model_settings,
+                            ),
+                            {"model_name": provider_config.model},
+                        )
+                    )
                 investigation = await self._run_observable(
                     investigation_agent,
                     input_text,
@@ -213,6 +241,18 @@ class OpenAIAgentRuntime:
                     sink,
                     timeout_seconds=provider_config.agent_timeout,
                 )
+                if sink is not None and investigation is not None:
+                    for response_index, response in enumerate(
+                        cast(RunResult, investigation).raw_responses,
+                        start=1,
+                    ):
+                        await sink(
+                            AgentRuntimeEvent(
+                                "model_raw_output",
+                                _json_value(response),
+                                {"response_index": str(response_index)},
+                            )
+                        )
             except APIStatusError as provider_error:
                 failure = self._status_failure(provider_error, phase)
             except APITimeoutError:
@@ -301,16 +341,6 @@ class OpenAIAgentRuntime:
         )
         await client.close()
         return output
-
-    @staticmethod
-    def _output_locale(input_text: str) -> Literal["en", "zh-CN"]:
-        """Read the validated locale marker embedded in the canonical Agent input."""
-
-        try:
-            payload = json.loads(input_text)
-        except json.JSONDecodeError:
-            return "en"
-        return "zh-CN" if payload.get("output_locale") == "zh-CN" else "en"
 
     @classmethod
     def _failure(
@@ -445,9 +475,75 @@ def _message_metadata(payload: object, index_name: str) -> dict[str, str]:
 
 
 def _json_value(value: object) -> str:
+    return json.dumps(_json_compatible(value), ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _json_compatible(value: object) -> object:
+    """Convert SDK and dataclass values without dropping provider response fields."""
+
     dump = getattr(value, "model_dump", None)
-    payload = dump(mode="json") if callable(dump) else {"value": str(value)}
-    return json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str)
+    if callable(dump):
+        return dump(mode="json")
+    if is_dataclass(value) and not isinstance(value, type):
+        return asdict(value)
+    if isinstance(value, dict):
+        return {str(key): _json_compatible(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_json_compatible(item) for item in value]
+    if isinstance(value, str | int | float | bool) or value is None:
+        return value
+    return str(value)
+
+
+def _model_input(
+    agent: Agent[None],
+    user_input: str,
+    model_name: str,
+    model_settings: object,
+) -> str:
+    """Serialize the complete model-visible instructions, input, tool schemas, and settings."""
+
+    tools = tuple(
+        {
+            "name": str(getattr(tool, "name", "")),
+            "description": str(getattr(tool, "description", "")),
+            "parameters": _json_compatible(getattr(tool, "params_json_schema", {})),
+            "strict_json_schema": bool(getattr(tool, "strict_json_schema", False)),
+        }
+        for tool in agent.tools
+    )
+    return json.dumps(
+        {
+            "model": model_name,
+            "model_settings": _json_compatible(model_settings),
+            "system_instructions": str(agent.instructions),
+            "tools": tools,
+            "user_input": user_input,
+        },
+        ensure_ascii=False,
+        sort_keys=True,
+        default=str,
+    )
+
+
+def _validate_model_tool_contract(tools: list[Tool]) -> None:
+    """Fail before provider I/O if a model-visible tool exposes internal concepts."""
+
+    payload = json.dumps(
+        tuple(
+            {
+                "name": str(getattr(tool, "name", "")),
+                "description": str(getattr(tool, "description", "")),
+                "parameters": _json_compatible(getattr(tool, "params_json_schema", {})),
+            }
+            for tool in tools
+        ),
+        ensure_ascii=False,
+        sort_keys=True,
+    ).casefold()
+    leaked = next((term for term in _FORBIDDEN_TOOL_CONTRACT_TERMS if term in payload), None)
+    if leaked is not None:
+        raise PermanentAgentOutputError("Model tool contract exposes internal Review metadata")
 
 
 def _tool_metadata(value: object, *, include_name: bool = False) -> dict[str, str]:

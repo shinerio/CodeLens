@@ -15,6 +15,7 @@ export default defineConfig({
   },
   test: {
     environment: "jsdom",
+    maxWorkers: 4,
     setupFiles: "./src/testSetup.ts",
     exclude: ["e2e/**", "playwright.config.ts", "**/node_modules/**"],
   },

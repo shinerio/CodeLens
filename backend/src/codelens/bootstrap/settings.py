@@ -10,8 +10,8 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="CODELENS_", env_nested_delimiter="__")
 
-    data_dir: Path | None = None
-    prompt_dir: Path | None = None
+    data_dir: Path = Path()
+    prompt_dir: Path = Path()
     host: str = "127.0.0.1"
     port: int = 8800
     auth: Literal["none"] = "none"

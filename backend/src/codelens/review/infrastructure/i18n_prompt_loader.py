@@ -18,7 +18,7 @@ _REQUIRED_TOOL_NAMES = frozenset(
         "glob",
         "grep",
         "read_file",
-        "get_change_map",
+        "instruction_loader",
         "get_diff",
         "read_revision",
         "comment",
@@ -100,12 +100,7 @@ class I18nPromptLoader(I18nPromptLoaderPort):
             )
         return LocalizedSystemPrompts(
             locale=directory.name,
-            platform_policy=read_markdown("platform-policy.md"),
-            repository_instruction_policy=read_markdown(
-                "repository-instruction-policy.md"
-            ),
-            output_contract=read_markdown("output-contract.md"),
-            runtime_instruction=read_markdown("runtime-instruction.md"),
+            review_policy=read_markdown("review-policy.md"),
+            review_workflow=read_markdown("review-workflow.md"),
             tools=MappingProxyType(tools),
-            comment_language_error=read_markdown("comment-language-error.md"),
         )

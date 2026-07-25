@@ -6,6 +6,8 @@ build-backend = "hatchling.build"
 name = "codelens-review"
 version = "0.1.0"
 description = "Local multi-agent code review workbench"
+license = "Apache-2.0"
+license-files = ["LICENSE", "NOTICE"]
 requires-python = ">=3.12,<3.13"
 dependencies = [
   "aiosqlite",
@@ -54,4 +56,3 @@ select = ["E", "F", "I", "UP", "B", "ASYNC"]
 python_version = "3.12"
 strict = true
 packages = ["codelens"]
-

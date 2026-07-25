@@ -106,7 +106,11 @@ class RecordingRuntime:
         self.calls = 0
 
     async def invoke(
-        self, _agent: object, _input_payload: bytes, _snapshot: object
+        self,
+        _agent: object,
+        _input_payload: bytes,
+        _snapshot: object,
+        _prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
         return UnvalidatedAgentOutput(
@@ -124,12 +128,18 @@ class RecordingRuntime:
 
 class StreamingRuntime(RecordingRuntime):
     async def invoke_stream(
-        self, agent: object, input_payload: bytes, snapshot: object, sink: object
+        self,
+        agent: object,
+        input_payload: bytes,
+        snapshot: object,
+        prompt_locale: str,
+        sink: object,
     ) -> UnvalidatedAgentOutput:
         emit = sink
+        await emit(AgentRuntimeEvent("prompt", "complete model input", {}))
         await emit(AgentRuntimeEvent("model_started", "", {}))
         await emit(AgentRuntimeEvent("model_reasoning_delta", "Inspecting the diff", {}))
-        return await self.invoke(agent, input_payload, snapshot)
+        return await self.invoke(agent, input_payload, snapshot, prompt_locale)
 
 
 class RecordingTranscript:
@@ -151,9 +161,13 @@ class CancellingRuntime(RecordingRuntime):
         self._workflow = workflow
 
     async def invoke(
-        self, agent: object, input_payload: bytes, snapshot: object
+        self,
+        agent: object,
+        input_payload: bytes,
+        snapshot: object,
+        prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
-        output = await super().invoke(agent, input_payload, snapshot)
+        output = await super().invoke(agent, input_payload, snapshot, prompt_locale)
         self._workflow.is_cancellation_requested = True
         return output
 
@@ -224,6 +238,7 @@ def _prepared() -> PreparedReview:
         snapshot=snapshot,
         agents=(agent,),
         input_payloads={"correctness:v1": b"{}"},
+        prompt_locale="en",
     )
 
 
@@ -297,6 +312,7 @@ async def test_streamed_model_events_publish_the_prompt_before_completion() -> N
         "model_reasoning_delta",
         "model_output",
     ]
+    assert all("get_change_map" not in entry[1] for entry in entries)
     model_output = next(entry for entry in entries if entry[0] == "model_output")
     assert model_output[2] == {
         "agent": "correctness:v1",

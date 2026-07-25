@@ -11,19 +11,17 @@ from codelens.instruction_policy.domain.models import (
     ResolvedInstructionSet,
 )
 from codelens.review.application.context_builder import (
-    CandidateSummary,
-    ContextBudget,
-    ContextBudgetError,
     ContextBuilder,
     ContextContainmentError,
     ContextIntegrityError,
-    SnapshotRead,
+    ReviewScopeLimits,
 )
-from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
+from codelens.review.application.review_scope import ReviewScopeLimitError
 from codelens.workspace.domain.models import (
     ChangedHunk,
     ChangeIndex,
     RepositoryFingerprint,
+    ReviewFileChange,
     ReviewSnapshot,
     ReviewTarget,
     SnapshotEntry,
@@ -31,592 +29,211 @@ from codelens.workspace.domain.models import (
     TaskWorktree,
 )
 
-_INSTRUCTION_CONTENT = "Review changed behavior and cite evidence."
-_PROMPTS = I18nPromptLoader.load(Path(__file__).parents[4] / "prompts")
-
 
 def _hash(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-def _snapshot(
-    context_paths: tuple[str, ...],
-    context_hashes: dict[str, str] | None = None,
-) -> ReviewSnapshot:
-    changed = b"return ready\n"
-    hashes = context_hashes or {}
-    return ReviewSnapshot(
-        snapshot_id="snapshot-1",
+def _snapshot() -> tuple[ReviewSnapshot, ResolvedInstructionSet]:
+    target_paths = (
+        "src/renamed.py",
+        "src/original.py",
+        "src/deleted.py",
+        "src/changed.py",
+        "src/added.py",
+    )
+    root_rule = "Follow the repository rules.\n"
+    root_document = InstructionDocument(
+        "AGENTS.md",
+        root_rule,
+        _hash(root_rule.encode()),
+        "agents",
+        "",
+        0,
+    )
+    entries = tuple(
+        SnapshotEntry(
+            path,
+            "deleted" if path in {"src/original.py", "src/deleted.py"} else "file",
+            0o644,
+            0,
+            _hash(b""),
+            None,
+            "target",
+        )
+        for path in target_paths
+    ) + (
+        SnapshotEntry(
+            "AGENTS.md",
+            "file",
+            0o644,
+            len(root_rule.encode()),
+            _hash(root_rule.encode()),
+            None,
+            "instruction",
+        ),
+    )
+    snapshot = ReviewSnapshot(
+        snapshot_id="snapshot-internal",
         worktree=TaskWorktree(
-            worktree_id="worktree-1",
-            task_id="review-1",
-            repository_common_dir_hash="a" * 64,
-            root=Path("/private/source/repository"),
-            head_oid="b" * 40,
-            ownership_token_hash="c" * 64,
+            "worktree-1",
+            "review-1",
+            "a" * 64,
+            Path("/private/internal-worktree"),
+            "b" * 40,
+            "c" * 64,
         ),
         target=ReviewTarget("d" * 40, "b" * 40, None),
         fingerprint=RepositoryFingerprint("b" * 40, "e" * 64, "f" * 64),
         manifest=SnapshotManifest(
-            target_paths=("src/changed.py",),
-            context_paths=context_paths,
+            target_paths=target_paths,
+            context_paths=(),
             instruction_paths=("AGENTS.md",),
             excluded_paths=(),
-            entries=(
-                SnapshotEntry(
-                    "src/changed.py",
-                    "file",
-                    0o100644,
-                    len(changed),
-                    _hash(changed),
-                    None,
-                    "target",
-                ),
-                SnapshotEntry(
-                    "AGENTS.md",
-                    "file",
-                    0o100644,
-                    len(_INSTRUCTION_CONTENT.encode()),
-                    _hash(_INSTRUCTION_CONTENT.encode()),
-                    None,
-                    "instruction",
-                ),
-                *(
-                    SnapshotEntry(
-                        path,
-                        "deleted" if path == "src/deleted.py" else "file",
-                        0o100644,
-                        0,
-                        hashes[path],
-                        None,
-                        "context",
-                    )
-                    for path in context_paths
-                ),
-            ),
+            entries=entries,
         ),
         change_index=ChangeIndex(
-            (
-                ChangedHunk(
-                    "hunk-1",
-                    "src/changed.py",
-                    4,
-                    4,
-                    "new",
-                    _hash(changed),
-                ),
-            )
-        ),
-    )
-
-
-class FakeContextProvider:
-    def __init__(self, candidates: tuple[CandidateSummary, ...]) -> None:
-        self._candidates = candidates
-
-    async def summarize(self, _snapshot: ReviewSnapshot) -> tuple[CandidateSummary, ...]:
-        return self._candidates
-
-
-class RecordingReader:
-    def __init__(self, bodies: dict[tuple[str, str], bytes]) -> None:
-        self._bodies = bodies
-        self.paths_read: list[str] = []
-
-    async def read(
-        self,
-        _snapshot: ReviewSnapshot,
-        path: str,
-        start_line: int,
-        end_line: int,
-        side: str,
-        max_bytes: int,
-    ) -> SnapshotRead:
-        del start_line, end_line
-        self.paths_read.append(path)
-        payload = self._bodies[(path, side)]
-        return SnapshotRead(
-            content=payload[:max_bytes],
-            content_hash=_hash(payload),
-            truncated=len(payload) > max_bytes,
-        )
-
-
-def _instructions() -> ResolvedInstructionSet:
-    return ResolvedInstructionSet(
-        documents=(
-            InstructionDocument(
-                "AGENTS.md",
-                _INSTRUCTION_CONTENT,
-                _hash(_INSTRUCTION_CONTENT.encode()),
-                "agents",
-                "",
-                0,
+            hunks=(
+                ChangedHunk("h4", "src/changed.py", 20, 22, "new", "1" * 64),
+                ChangedHunk("h1", "src/added.py", 1, 3, "new", "2" * 64),
+                ChangedHunk("h3", "src/changed.py", 5, 6, "new", "3" * 64),
+                ChangedHunk("h2", "src/deleted.py", 1, 2, "old", "4" * 64),
+                ChangedHunk("h5", "src/renamed.py", 7, 8, "new", "5" * 64),
             ),
-        ),
-        chains=(InstructionChain("src/changed.py", ("AGENTS.md",)),),
-        excludes=(),
-        warnings=(),
-    )
-
-
-async def test_plans_ten_candidates_then_reads_only_the_two_that_fit() -> None:
-    context_paths = tuple(f"src/context_{index}.py" for index in range(10))
-    bodies = {
-        ("src/changed.py", "new"): b"return ready\n",
-        **{
-            (path, "new"): f"value_{index} = {index}\n".encode()
-            for index, path in enumerate(context_paths)
-        },
-    }
-    candidates = tuple(
-        CandidateSummary(
-            path=path,
-            start_line=1,
-            end_line=1,
-            side="new",
-            estimated_tokens=50,
-            priority=100 - index,
-            reason="direct caller",
-            trust_label="repository_context",
-            content_hash=_hash(bodies[(path, "new")]),
-        )
-        for index, path in enumerate(context_paths)
-    )
-    reader = RecordingReader(bodies)
-    builder = ContextBuilder(FakeContextProvider(candidates), reader, _PROMPTS)
-
-    agent_input = await builder.build(
-        _snapshot(
-            context_paths,
-            {path: _hash(bodies[(path, "new")]) for path in context_paths},
-        ),
-        _instructions(),
-        ContextBudget(
-            total_tokens=240,
-            platform_policy_tokens=30,
-            instruction_tokens=20,
-            output_contract_tokens=30,
-            changed_hunk_tokens=20,
-            max_excerpt_bytes=256,
-            max_line_chars=120,
-        ),
-    )
-
-    assert reader.paths_read == [
-        "src/changed.py",
-        "src/context_0.py",
-        "src/context_1.py",
-    ]
-    assert [instruction.path for instruction in agent_input.repository_instructions] == [
-        "AGENTS.md"
-    ]
-    assert [excerpt.path for excerpt in agent_input.changed_hunks] == ["src/changed.py"]
-    assert [excerpt.path for excerpt in agent_input.context] == [
-        "src/context_0.py",
-        "src/context_1.py",
-    ]
-    decisions = {decision.path: decision for decision in agent_input.plan.decisions}
-    assert decisions["src/context_0.py"].status == "included"
-    assert decisions["src/context_1.py"].status == "included"
-    assert decisions["src/context_2.py"].status == "omitted"
-    assert decisions["src/context_2.py"].reason == "token_budget"
-    assert decisions["src/context_2.py"].estimated_tokens == 50
-    assert agent_input.plan.considered_paths == context_paths
-    assert agent_input.plan.included_paths == context_paths[:2]
-    assert agent_input.plan.omitted_paths == context_paths[2:]
-    assert agent_input.plan.used_tokens <= agent_input.plan.total_tokens
-    assert b"/private/source/repository" not in agent_input.canonical_bytes()
-
-
-async def test_preserves_target_specific_instruction_chains_without_duplicating_documents() -> None:
-    source_rules = "Review source contracts."
-    snapshot = _snapshot(())
-    second_target = SnapshotEntry(
-        "tests/changed_test.py",
-        "file",
-        0o100644,
-        0,
-        _hash(b""),
-        None,
-        "target",
-    )
-    third_target = SnapshotEntry(
-        "tests/other_test.py",
-        "file",
-        0o100644,
-        0,
-        _hash(b""),
-        None,
-        "target",
-    )
-    source_instruction = SnapshotEntry(
-        "src/REVIEW.md",
-        "file",
-        0o100644,
-        len(source_rules.encode()),
-        _hash(source_rules.encode()),
-        None,
-        "instruction",
-    )
-    snapshot = replace(
-        snapshot,
-        manifest=replace(
-            snapshot.manifest,
-            target_paths=("src/changed.py", "tests/changed_test.py", "tests/other_test.py"),
-            instruction_paths=("AGENTS.md", "src/REVIEW.md"),
-            entries=(
-                *snapshot.manifest.entries,
-                second_target,
-                third_target,
-                source_instruction,
+            files=(
+                ReviewFileChange("src/renamed.py", "renamed", old_path="src/original.py"),
+                ReviewFileChange("src/deleted.py", "deleted"),
+                ReviewFileChange("src/changed.py", "modified"),
+                ReviewFileChange("src/added.py", "added"),
             ),
         ),
     )
     instructions = ResolvedInstructionSet(
         documents=(
+            root_document,
             InstructionDocument(
-                "AGENTS.md",
-                _INSTRUCTION_CONTENT,
-                _hash(_INSTRUCTION_CONTENT.encode()),
-                "agents",
-                "",
-                0,
-            ),
-            InstructionDocument(
-                "src/REVIEW.md",
-                source_rules,
-                _hash(source_rules.encode()),
+                "unrelated/REVIEW.md",
+                "Inactive rule body.\n",
+                _hash(b"Inactive rule body.\n"),
                 "review",
-                "src",
-                3,
+                "unrelated",
+                100,
             ),
         ),
-        chains=(
-            InstructionChain("src/changed.py", ("AGENTS.md", "src/REVIEW.md")),
-            InstructionChain("tests/changed_test.py", ("AGENTS.md",)),
-            InstructionChain("tests/other_test.py", ("AGENTS.md",)),
-        ),
+        chains=tuple(InstructionChain(path, ("AGENTS.md",)) for path in target_paths)
+        + (InstructionChain("unrelated/file.py", ("unrelated/REVIEW.md",)),),
         excludes=(),
         warnings=(),
     )
-    builder = ContextBuilder(FakeContextProvider(()), RecordingReader({}), _PROMPTS)
+    return snapshot, instructions
 
-    agent_input = await builder.build(
+
+def test_serializes_complete_sorted_review_files_and_nothing_else() -> None:
+    snapshot, instructions = _snapshot()
+
+    agent_input = ContextBuilder().build(snapshot, instructions)
+
+    assert json.loads(agent_input.canonical_bytes()) == {
+        "review_files": [
+            {
+                "change_type": "added",
+                "new_ranges": [{"end_line": 3, "start_line": 1}],
+                "path": "src/added.py",
+            },
+            {
+                "change_type": "modified",
+                "new_ranges": [
+                    {"end_line": 6, "start_line": 5},
+                    {"end_line": 22, "start_line": 20},
+                ],
+                "path": "src/changed.py",
+            },
+            {"change_type": "deleted", "new_ranges": [], "path": "src/deleted.py"},
+            {
+                "change_type": "renamed",
+                "new_ranges": [{"end_line": 8, "start_line": 7}],
+                "old_path": "src/original.py",
+                "path": "src/renamed.py",
+            },
+        ]
+    }
+    serialized = agent_input.canonical_bytes()
+    for forbidden in (
+        b"snapshot_id",
+        b"output_locale",
+        b"prompt_locale",
+        b"hunk_id",
+        b"content_hash",
+        b"excerpt_hash",
+        b"Inactive rule body",
+        b"Follow the repository rules",
+        b"plan",
+        b"changed_hunks",
+        b"context",
+    ):
+        assert forbidden not in serialized
+
+
+def test_same_snapshot_produces_identical_bytes_regardless_of_metadata_order() -> None:
+    snapshot, instructions = _snapshot()
+    reordered = replace(
         snapshot,
-        instructions,
-        ContextBudget(
-            total_tokens=400,
-            platform_policy_tokens=30,
-            instruction_tokens=100,
-            output_contract_tokens=30,
-            changed_hunk_tokens=20,
-            max_excerpt_bytes=256,
-            max_line_chars=120,
-            tool_driven=True,
+        change_index=replace(
+            snapshot.change_index,
+            hunks=tuple(reversed(snapshot.change_index.hunks)),
+            files=tuple(reversed(snapshot.change_index.files)),
         ),
     )
 
-    payload = json.loads(agent_input.canonical_bytes())
-    assert [item["path"] for item in payload["repository_instructions"]] == [
-        "AGENTS.md",
-        "src/REVIEW.md",
-    ]
-    assert payload["repository_instruction_chains"] == [
-        {"chain_id": "chain_1", "rule_paths": ["AGENTS.md", "src/REVIEW.md"]},
-        {"chain_id": "chain_2", "rule_paths": ["AGENTS.md"]},
-    ]
-    assert payload["repository_instruction_targets"] == [
-        {"chain_id": "chain_1", "target_path": "src/changed.py"},
-        {"chain_id": "chain_2", "target_path": "tests/changed_test.py"},
-        {"chain_id": "chain_2", "target_path": "tests/other_test.py"},
-    ]
-
-
-async def test_tool_driven_input_does_not_preload_changed_or_repository_bodies() -> None:
-    context_paths = ("src/context.py",)
-    bodies = {
-        ("src/changed.py", "new"): b"return ready\n",
-        ("src/context.py", "new"): b"return context\n",
-    }
-    reader = RecordingReader(bodies)
-    builder = ContextBuilder(
-        FakeContextProvider(
-            (
-                CandidateSummary(
-                    "src/context.py",
-                    1,
-                    1,
-                    "new",
-                    10,
-                    10,
-                    "context",
-                    "repository_context",
-                    _hash(bodies[("src/context.py", "new")]),
-                ),
-            )
-        ),
-        reader,
-        _PROMPTS,
+    assert ContextBuilder().build(reordered, instructions).canonical_bytes() == (
+        ContextBuilder().build(snapshot, instructions).canonical_bytes()
     )
 
-    agent_input = await builder.build(
-        _snapshot(context_paths, {"src/context.py": _hash(bodies[("src/context.py", "new")])}),
-        _instructions(),
-        ContextBudget(
-            total_tokens=240,
-            platform_policy_tokens=30,
-            instruction_tokens=20,
-            output_contract_tokens=30,
-            changed_hunk_tokens=20,
-            max_excerpt_bytes=256,
-            max_line_chars=120,
-            tool_driven=True,
-        ),
-    )
 
-    assert reader.paths_read == []
-    assert agent_input.changed_hunks == ()
-    assert agent_input.context == ()
-    assert agent_input.plan.decisions == ()
-    assert "Snapshot" in agent_input.platform_policy
-    payload = json.loads(agent_input.canonical_bytes())
-    assert set(payload) == {
-        "output_locale",
-        "repository_instruction_chains",
-        "repository_instruction_targets",
-        "repository_instructions",
-        "snapshot_id",
-    }
-    assert b"return ready" not in agent_input.canonical_bytes()
-    assert b"return context" not in agent_input.canonical_bytes()
+def test_fails_instead_of_truncating_review_files_or_ranges() -> None:
+    snapshot, instructions = _snapshot()
 
-
-async def test_binary_deleted_oversized_unicode_and_long_lines_are_bounded() -> None:
-    context_paths = (
-        "src/binary.bin",
-        "src/deleted.py",
-        "src/huge.py",
-        "src/unicode.py",
-        "src/long.py",
-    )
-    unicode_body = "你好🙂\n".encode()
-    long_body = ("x" * 500 + "\n").encode()
-    bodies = {
-        ("src/changed.py", "new"): b"return ready\n",
-        ("src/binary.bin", "new"): b"code\x00binary",
-        ("src/unicode.py", "new"): unicode_body,
-        ("src/long.py", "new"): long_body,
-    }
-    candidates = (
-        CandidateSummary(
-            "src/deleted.py", 1, 2, "new", 10, 100, "deleted", "repository_context", "a" * 64, True
-        ),
-        CandidateSummary(
-            "src/huge.py", 1, 10000, "new", 500, 90, "large", "repository_context", "b" * 64
-        ),
-        CandidateSummary(
-            "src/binary.bin",
-            1,
-            1,
-            "new",
-            10,
-            80,
-            "binary neighbor",
-            "repository_context",
-            _hash(bodies[("src/binary.bin", "new")]),
-        ),
-        CandidateSummary(
-            "src/unicode.py",
-            1,
-            1,
-            "new",
-            10,
-            70,
-            "unicode neighbor",
-            "repository_context",
-            _hash(unicode_body),
-        ),
-        CandidateSummary(
-            "src/long.py",
-            1,
-            1,
-            "new",
-            10,
-            60,
-            "long neighbor",
-            "repository_context",
-            _hash(long_body),
-        ),
-    )
-    reader = RecordingReader(bodies)
-    builder = ContextBuilder(FakeContextProvider(candidates), reader, _PROMPTS)
-
-    agent_input = await builder.build(
-        _snapshot(
-            context_paths,
-            {candidate.path: candidate.content_hash for candidate in candidates},
-        ),
-        _instructions(),
-        ContextBudget(
-            total_tokens=210,
-            platform_policy_tokens=30,
-            instruction_tokens=20,
-            output_contract_tokens=30,
-            changed_hunk_tokens=20,
-            max_excerpt_bytes=128,
-            max_line_chars=32,
-        ),
-    )
-
-    assert "src/deleted.py" not in reader.paths_read
-    assert "src/huge.py" not in reader.paths_read
-    assert [excerpt.path for excerpt in agent_input.context] == [
-        "src/unicode.py",
-        "src/long.py",
-    ]
-    assert agent_input.context[0].content == "你好🙂\n"
-    assert len(agent_input.context[1].content.splitlines()[0]) == 32
-    decisions = {decision.path: decision for decision in agent_input.plan.decisions}
-    assert decisions["src/deleted.py"].reason == "deleted"
-    assert decisions["src/huge.py"].reason == "token_budget"
-    assert decisions["src/binary.bin"].reason == "binary"
-    assert decisions["src/long.py"].status == "truncated"
-    assert agent_input.plan.truncated_paths == ("src/long.py",)
-
-
-async def test_skips_old_side_changed_hunks_that_are_not_readable_from_snapshot() -> None:
-    changed = b"return ready\n"
-    snapshot = replace(
-        _snapshot(()),
-        change_index=ChangeIndex(
-            (
-                ChangedHunk("hunk-new", "src/changed.py", 1, 1, "new", _hash(changed)),
-                ChangedHunk("hunk-old", "src/deleted.py", 1, 1, "old", _hash(b"removed\n")),
-            )
-        ),
-    )
-    reader = RecordingReader({("src/changed.py", "new"): changed})
-    builder = ContextBuilder(FakeContextProvider(()), reader, _PROMPTS)
-
-    agent_input = await builder.build(
-        snapshot,
-        _instructions(),
-        ContextBudget(240, 30, 20, 30, 20, 128, 80),
-    )
-
-    assert [excerpt.path for excerpt in agent_input.changed_hunks] == ["src/changed.py"]
-    assert reader.paths_read == ["src/changed.py"]
-
-
-async def test_rejects_provider_paths_outside_the_snapshot_before_reading() -> None:
-    candidate = CandidateSummary(
-        "../private.env",
-        1,
-        1,
-        "new",
-        10,
-        1,
-        "untrusted",
-        "repository_context",
-        "a" * 64,
-    )
-    reader = RecordingReader({("src/changed.py", "new"): b"return ready\n"})
-    builder = ContextBuilder(FakeContextProvider((candidate,)), reader, _PROMPTS)
-
-    with pytest.raises(ContextContainmentError):
-        await builder.build(
-            _snapshot(()),
-            _instructions(),
-            ContextBudget(240, 30, 20, 30, 20, 128, 80),
-        )
-
-    assert reader.paths_read == []
-
-
-async def test_rejects_instructions_that_exceed_their_reservation_before_reading() -> None:
-    oversized_content = "mandatory-rule " * 200
-    instructions = ResolvedInstructionSet(
-        documents=(
-            InstructionDocument(
-                "AGENTS.md",
-                oversized_content,
-                _hash(oversized_content.encode()),
-                "agents",
-                "",
-                0,
-            ),
-        ),
-        chains=(InstructionChain("src/changed.py", ("AGENTS.md",)),),
-        excludes=(),
-        warnings=(),
-    )
-    reader = RecordingReader({("src/changed.py", "new"): b"return ready\n"})
-    builder = ContextBuilder(FakeContextProvider(()), reader, _PROMPTS)
-
-    with pytest.raises(ContextBudgetError, match="instructions"):
-        await builder.build(
-            _snapshot(()),
+    with pytest.raises(ReviewScopeLimitError, match="file limit"):
+        ContextBuilder().build(
+            snapshot,
             instructions,
-            ContextBudget(240, 30, 20, 30, 20, 128, 80),
+            ReviewScopeLimits(max_review_files=3),
+        )
+    with pytest.raises(ReviewScopeLimitError, match="range limit"):
+        ContextBuilder().build(
+            snapshot,
+            instructions,
+            ReviewScopeLimits(max_review_ranges=3),
         )
 
-    assert reader.paths_read == []
+
+def test_rejects_active_instruction_metadata_that_is_not_exactly_frozen() -> None:
+    snapshot, instructions = _snapshot()
+    missing_rule_snapshot = replace(
+        snapshot,
+        manifest=replace(snapshot.manifest, instruction_paths=()),
+    )
+
+    with pytest.raises(ContextContainmentError, match="active repository instruction chains"):
+        ContextBuilder().build(missing_rule_snapshot, instructions)
+
+    stale = replace(
+        instructions,
+        documents=(replace(instructions.documents[0], content="Changed after freeze."),),
+    )
+    with pytest.raises(ContextIntegrityError, match="instruction content"):
+        ContextBuilder().build(snapshot, stale)
 
 
-async def test_rejects_uncontained_changed_hunk_before_reading() -> None:
-    malicious_snapshot = replace(
-        _snapshot(()),
-        change_index=ChangeIndex(
-            (
-                ChangedHunk(
-                    "hunk-malicious",
-                    "../outside.py",
-                    1,
-                    1,
-                    "new",
-                    "a" * 64,
-                ),
-            )
+def test_rejects_new_side_hunk_outside_snapshot_targets() -> None:
+    snapshot, instructions = _snapshot()
+    unsafe = replace(
+        snapshot,
+        change_index=replace(
+            snapshot.change_index,
+            hunks=(ChangedHunk("bad", "../outside.py", 1, 1, "new", "a" * 64),),
         ),
     )
-    reader = RecordingReader({("src/changed.py", "new"): b"return ready\n"})
-    builder = ContextBuilder(FakeContextProvider(()), reader, _PROMPTS)
 
-    with pytest.raises(ContextContainmentError, match="hunk"):
-        await builder.build(
-            malicious_snapshot,
-            _instructions(),
-            ContextBudget(240, 30, 20, 30, 20, 128, 80),
-        )
-
-    assert reader.paths_read == []
-
-
-async def test_rejects_stale_instruction_content_before_reading() -> None:
-    stale = ResolvedInstructionSet(
-        documents=(
-            InstructionDocument(
-                "AGENTS.md",
-                "Changed after the Snapshot was frozen.",
-                _hash(_INSTRUCTION_CONTENT.encode()),
-                "agents",
-                "",
-                0,
-            ),
-        ),
-        chains=(InstructionChain("src/changed.py", ("AGENTS.md",)),),
-        excludes=(),
-        warnings=(),
-    )
-    reader = RecordingReader({("src/changed.py", "new"): b"return ready\n"})
-    builder = ContextBuilder(FakeContextProvider(()), reader, _PROMPTS)
-
-    with pytest.raises(ContextIntegrityError, match="instruction"):
-        await builder.build(
-            _snapshot(()),
-            stale,
-            ContextBudget(240, 30, 20, 30, 20, 128, 80),
-        )
-
-    assert reader.paths_read == []
+    with pytest.raises(ContextContainmentError, match="changed hunk"):
+        ContextBuilder().build(unsafe, instructions)

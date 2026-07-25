@@ -48,6 +48,7 @@ class FullRepositoryScope:
 
 
 type ReviewScope = BranchScope | CommitScope | UncommittedScope | FullRepositoryScope
+type ReviewScopeType = Literal["branch", "commit", "uncommitted", "full"]
 
 
 @dataclass(frozen=True)
@@ -160,11 +161,30 @@ class ChangedHunk:
     excerpt_hash: str
 
 
+type ReviewFileChangeType = Literal["added", "modified", "deleted", "renamed"]
+
+
+@dataclass(frozen=True)
+class ReviewFileChange:
+    """Describe one immutable file-level change without exposing Git adapter types."""
+
+    path: str
+    change_type: ReviewFileChangeType
+    old_path: str | None = None
+
+    def __post_init__(self) -> None:
+        if self.change_type == "renamed" and self.old_path is None:
+            raise ValueError("renamed Review file requires old_path")
+        if self.change_type != "renamed" and self.old_path is not None:
+            raise ValueError("only renamed Review files may have old_path")
+
+
 @dataclass(frozen=True)
 class ChangeIndex:
     """Provide deterministic containment checks for changed source ranges."""
 
     hunks: tuple[ChangedHunk, ...]
+    files: tuple[ReviewFileChange, ...] = ()
 
     def contains(self, path: str, start_line: int, end_line: int, side: str) -> bool:
         """Return whether a location is fully contained by a matching hunk."""

@@ -212,8 +212,7 @@
   line-height: 1.6;
 }
 
-.inspection-summary,
-.inspector-card {
+.inspection-summary {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 12px 16px;
@@ -221,14 +220,12 @@
   padding: 0 18px 18px;
 }
 
-.inspection-summary div,
-.inspector-card div {
+.inspection-summary div {
   padding-top: 4px;
   border-top: 1px solid rgba(199, 202, 191, 0.8);
 }
 
-.inspection-summary dt,
-.inspector-card dt {
+.inspection-summary dt {
   margin-bottom: 5px;
   color: var(--page-muted);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -238,8 +235,7 @@
   text-transform: uppercase;
 }
 
-.inspection-summary dd,
-.inspector-card dd {
+.inspection-summary dd {
   margin: 0;
   overflow-wrap: anywhere;
   line-height: 1.45;
@@ -497,13 +493,85 @@
   align-content: start;
 }
 
-.aside-note {
-  margin: 0 18px 18px;
-  padding: 14px 16px;
-  border-left: 3px solid var(--page-accent);
-  background: rgba(224, 231, 210, 0.55);
+.recent-repository-list {
+  display: grid;
+  padding: 6px 18px 18px;
+}
+
+.recent-repository {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) 18px;
+  gap: 11px;
+  align-items: center;
+  min-width: 0;
+  padding: 13px 4px;
+  border: 0;
+  border-top: 1px solid var(--page-line);
+  background: transparent;
+  color: var(--page-ink);
+  text-align: left;
+  transition:
+    background-color 140ms ease,
+    color 140ms ease;
+}
+
+.recent-repository:last-child {
+  border-bottom: 1px solid var(--page-line);
+}
+
+.recent-repository:hover,
+.recent-repository:focus-visible {
+  background: rgba(8, 127, 140, 0.07);
+  outline: none;
+}
+
+.recent-repository--selected {
+  color: var(--page-accent);
+}
+
+.recent-repository__icon {
+  display: grid;
+  place-items: center;
+  width: 34px;
+  height: 34px;
+  border: 1px solid var(--page-line);
+  background: var(--page-paper-strong);
+}
+
+.recent-repository__icon svg,
+.recent-repository__check {
+  width: 16px;
+  height: 16px;
+  stroke-width: 2;
+}
+
+.recent-repository__content {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+
+.recent-repository__content strong,
+.recent-repository__content code,
+.recent-repository__content time {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recent-repository__content strong {
+  font-size: 0.9rem;
+}
+
+.recent-repository__content code,
+.recent-repository__content time {
   color: var(--page-muted);
-  line-height: 1.6;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.68rem;
+}
+
+.recent-repository__check {
+  color: var(--page-accent);
 }
 
 @media (max-width: 1080px) {
@@ -525,8 +593,7 @@
   .repository-picker,
   .mode-toggle-grid,
   .scope-toggle-grid,
-  .inspection-summary,
-  .inspector-card {
+  .inspection-summary {
     grid-template-columns: minmax(0, 1fr);
   }
 
@@ -560,6 +627,10 @@
   .agent-row,
   .action-button,
   .field__control {
+    transition: none;
+  }
+
+  .recent-repository {
     transition: none;
   }
 }

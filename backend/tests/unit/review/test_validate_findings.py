@@ -5,11 +5,11 @@ from pathlib import Path
 import pytest
 
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
-from codelens.review.application.context_builder import SnapshotRead
 from codelens.review.application.validate_findings import (
     FindingValidationError,
     FindingValidator,
 )
+from codelens.review.domain.ports import SnapshotRead
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
 from codelens.workspace.domain.models import (
     ChangedHunk,

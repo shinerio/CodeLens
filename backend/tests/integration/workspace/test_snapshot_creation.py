@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -6,6 +7,7 @@ import pytest
 from codelens.instruction_policy.application.resolver import InstructionResolver
 from codelens.instruction_policy.infrastructure.markdown_parser import MarkdownInstructionParser
 from codelens.instruction_policy.infrastructure.structured_skip import StructuredSkipMatcher
+from codelens.review.application.context_builder import ContextBuilder
 from codelens.shared.domain.errors import SnapshotStaleError, WorktreeMutatedError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.create_snapshot import SnapshotService
@@ -13,6 +15,7 @@ from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.application.worktree_lifecycle import ReviewWorktreeLifecycle
 from codelens.workspace.domain.models import (
     BranchScope,
+    FullRepositoryScope,
     RepositoryFingerprint,
     TaskWorktree,
     UncommittedScope,
@@ -232,3 +235,73 @@ async def test_freezes_manifest_change_index_and_detects_reviewer_mutation(
     )
     with pytest.raises(WorktreeMutatedError):
         await manifest_builder.verify(snapshot)
+
+
+async def test_full_scope_builds_complete_agent_input_and_freezes_only_active_rules(
+    git_repository: Path,
+    tmp_path: Path,
+) -> None:
+    git = GitCli()
+    (git_repository / "AGENTS.md").write_text(
+        "---\nexclude:\n  - tests/**\n---\nRoot rules.\n",
+        encoding="utf-8",
+    )
+    (git_repository / "src").mkdir()
+    (git_repository / "tests").mkdir()
+    (git_repository / "src" / "REVIEW.md").write_text("Source rules.\n", encoding="utf-8")
+    (git_repository / "tests" / "REVIEW.md").write_text("Test rules.\n", encoding="utf-8")
+    (git_repository / "src" / "service.py").write_text("first = 1\nsecond = 2\n", encoding="utf-8")
+    (git_repository / "tests" / "test_service.py").write_text("excluded = True\n", encoding="utf-8")
+    await git.run(git_repository, "add", ".")
+    await git.run(git_repository, "commit", "-m", "add full review files")
+
+    scope_plan = await ScopePlanner(GitWorkspaceAdapter(git)).plan(
+        git_repository,
+        FullRepositoryScope(),
+    )
+    artifact_store = FilesystemInputArtifactStore(tmp_path / "full-data" / "artifacts")
+    captured = await ReviewInputCaptureService(
+        GitReviewInputCaptureAdapter(git),
+        artifact_store,
+    ).capture(git_repository, scope_plan)
+    registry = SnapshotWorktreeRegistry()
+    lifecycle = ReviewWorktreeLifecycle(
+        worktrees=GitReviewWorktreeManager(
+            data_dir=tmp_path / "full-data",
+            git=git,
+            registry=registry,
+            locks=RepositoryLockRegistry(),
+        ),
+        artifacts=artifact_store,
+        materializer=GitOverlayMaterializer(git),
+    )
+    service = SnapshotService(
+        lifecycle=lifecycle,
+        manifest_builder=FilesystemSnapshotBuilder(git=git, ignore=GitIgnoreResolver(git)),
+        change_index=GitChangeIndexBuilder(git),
+        artifacts=artifact_store,
+        instructions=InstructionResolver(MarkdownInstructionParser()),
+        structured_skip=StructuredSkipMatcher(),
+    )
+
+    snapshot = await service.create("review-full", git_repository, captured, scope_plan)
+    instructions = await service.resolve_instructions(snapshot.worktree, scope_plan.target_paths)
+    payload = ContextBuilder().build(snapshot, instructions).canonical_bytes()
+
+    assert snapshot.manifest.target_paths == ("README.md", "src/service.py")
+    assert snapshot.manifest.instruction_paths == ("AGENTS.md", "src/REVIEW.md")
+    assert all(entry.path != "tests/REVIEW.md" for entry in snapshot.manifest.entries)
+    assert json.loads(payload) == {
+        "review_files": [
+            {
+                "change_type": "added",
+                "new_ranges": [{"end_line": 1, "start_line": 1}],
+                "path": "README.md",
+            },
+            {
+                "change_type": "added",
+                "new_ranges": [{"end_line": 2, "start_line": 1}],
+                "path": "src/service.py",
+            },
+        ]
+    }

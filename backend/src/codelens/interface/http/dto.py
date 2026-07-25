@@ -14,7 +14,7 @@ from pydantic import (
 )
 
 from codelens.review.application.process_report import ReviewProcessReport
-from codelens.review.domain.ports import ReviewRecord
+from codelens.review.domain.ports import RecentRepositoryRecord, ReviewRecord
 from codelens.workspace.domain.models import (
     BranchScope,
     CommitScope,
@@ -46,6 +46,14 @@ class RuntimeLogLevelResponse(StrictDto):
 
 
 class UpdateRuntimeLogLevelRequest(RuntimeLogLevelResponse):
+    pass
+
+
+class RecentRepositorySettingsResponse(StrictDto):
+    recent_repository_limit: Annotated[int, Field(ge=1, le=20)]
+
+
+class UpdateRecentRepositorySettingsRequest(RecentRepositorySettingsResponse):
     pass
 
 
@@ -136,6 +144,22 @@ class RepositoryResponse(StrictDto):
             head_oid=repository.head_sha,
             current_branch=repository.current_branch,
             is_dirty=repository.is_dirty,
+        )
+
+
+class RecentRepositoryResponse(StrictDto):
+    """Return one selectable repository directory from recent Review history."""
+
+    repository_path: str
+    repository_name: str
+    last_reviewed_at: datetime
+
+    @classmethod
+    def from_domain(cls, repository: RecentRepositoryRecord) -> "RecentRepositoryResponse":
+        return cls(
+            repository_path=str(repository.repository_path),
+            repository_name=repository.repository_name,
+            last_reviewed_at=repository.last_reviewed_at,
         )
 
 
@@ -299,9 +323,7 @@ class ReviewProcessReportResponse(StrictDto):
     agents: list[AgentProcessResponse]
 
     @classmethod
-    def from_application(
-        cls, report: ReviewProcessReport
-    ) -> "ReviewProcessReportResponse":
+    def from_application(cls, report: ReviewProcessReport) -> "ReviewProcessReportResponse":
         return cls.model_validate(asdict(report))
 
 

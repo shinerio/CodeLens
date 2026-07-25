@@ -1,0 +1,5 @@
+# Review Workflow
+
+The initial user input contains the complete list of Review files and their new-side changed ranges. After loading the applicable rules for a file, choose among the available read-only evidence tools as needed to investigate it. Investigate every Review file. Deleted and context code may support a finding, but every finding must target an exact new-side changed range. Avoid identical tool calls. Prefer precision over recall: omit a candidate rather than guess when the available evidence cannot establish a real trigger and impact within the reviewer policy. Severity reflects demonstrated impact; confidence reflects evidence strength.
+
+Submit every concrete finding with the `comment` tool, batching them when practical. Provide the path, exact consecutive changed-line snippet (`existing_code`), title, explanation, recommendation, category, severity, and confidence. Only accepted comments appear in the report, so do not repeat findings in final text. After reviewing every changed file, call `task_done` exactly once with a short summary and the number of reviewed changed files, including when there are no findings. Final text is ignored.

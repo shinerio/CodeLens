@@ -7,7 +7,35 @@ from typing import Literal, Protocol
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.models import ReviewTask
 from codelens.reviewer_catalog.domain.models import AgentVersion
-from codelens.workspace.domain.models import ReviewSnapshot
+from codelens.workspace.domain.models import ReviewScopeType, ReviewSnapshot
+
+DEFAULT_RECENT_REPOSITORY_LIMIT = 10
+MIN_RECENT_REPOSITORY_LIMIT = 1
+MAX_RECENT_REPOSITORY_LIMIT = 20
+
+
+@dataclass(frozen=True)
+class SnapshotRead:
+    """Return bounded bytes plus their full immutable content identity."""
+
+    content: bytes
+    content_hash: str
+    truncated: bool
+
+
+class SnapshotFileReaderPort(Protocol):
+    """Read bounded line ranges only from a verified task-owned Snapshot."""
+
+    async def read(
+        self,
+        snapshot: ReviewSnapshot,
+        path: str,
+        start_line: int,
+        end_line: int,
+        side: str,
+        max_bytes: int,
+    ) -> SnapshotRead:
+        raise NotImplementedError
 
 
 @dataclass(frozen=True)
@@ -38,6 +66,7 @@ class AgentRuntimeEvent:
     """One complete observable model or tool event emitted while an Agent is running."""
 
     kind: Literal[
+        "prompt",
         "model_started",
         "model_reasoning_delta",
         "model_reasoning_completed",
@@ -85,6 +114,15 @@ class ReviewRecord:
 
 
 @dataclass(frozen=True)
+class RecentRepositoryRecord:
+    """Expose one repository directory from the bounded recent-use catalog."""
+
+    repository_path: Path
+    repository_name: str
+    last_reviewed_at: datetime
+
+
+@dataclass(frozen=True)
 class ReviewExecutionRecord:
     """Carry the private durable inputs needed to reconstruct one Worker execution."""
 
@@ -94,6 +132,7 @@ class ReviewExecutionRecord:
     git_common_dir_hash: str
     base_oid: str
     head_oid: str
+    scope_type: ReviewScopeType
     overlay_hash: str | None
     overlay_artifact_ref: str | None
     target_paths: tuple[str, ...]
@@ -111,6 +150,28 @@ class ReviewEvent:
     task_id: str
     event_type: str
     payload: dict[str, object]
+
+
+class RecentRepositoryStorePort(Protocol):
+    """Read the repository-use catalog independently from Review visibility."""
+
+    async def get_limit(self) -> int:
+        """Return the persisted LRU capacity."""
+
+        raise NotImplementedError
+
+    async def update_limit(self, limit: int) -> int:
+        """Persist a validated capacity and immediately prune overflow."""
+
+        raise NotImplementedError
+
+    async def list_recent_repositories(
+        self,
+        limit: int,
+    ) -> tuple[RecentRepositoryRecord, ...]:
+        """Return repository directories from most to least recently used."""
+
+        raise NotImplementedError
 
 
 class ReviewStorePort(Protocol):
@@ -159,6 +220,7 @@ class AgentRuntimePort(Protocol):
         agent: AgentVersion,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
+        prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
         """Return canonical untrusted output plus redacted usage diagnostics."""
 

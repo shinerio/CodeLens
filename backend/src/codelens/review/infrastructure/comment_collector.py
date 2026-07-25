@@ -19,12 +19,7 @@ _LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1
 
 
 class ReviewCommentSubmission(BaseModel):
-    """Validate model-supplied comment fields before Snapshot resolution.
-
-    The model is deliberately not allowed to provide hunk IDs, hashes, or trusted
-    locations. Those values are derived from the task's frozen Snapshot only.
-    Line numbers are resolved deterministically from the quoted existing_code.
-    """
+    """Validate one evidence-backed Review comment submission."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -60,9 +55,7 @@ class ReviewCommentCollector:
     reviewer_id: str
     confidence_floor: float
     tools: FilesystemReviewTools
-    output_locale: Literal["en", "zh-CN"] = "en"
     tool_descriptions: dict[str, str] = field(default_factory=dict)
-    language_error: str = "Chinese review output is required for this task"
     _findings: list[dict[str, object]] = field(default_factory=list)
     _completion: ReviewCompletionSubmission | None = None
 
@@ -96,11 +89,10 @@ class ReviewCommentCollector:
     async def submit(self, submission: ReviewCommentSubmission) -> str:
         """Resolve one candidate or return a bounded tool error without retaining it."""
 
-        self._validate_output_language(
-            submission.title,
-            submission.content,
-            submission.recommendation,
-        )
+        if not self.tools.instructions_loaded_for(submission.path):
+            raise ValueError(
+                "instruction_loader must be called for the complete target path before comment"
+            )
         if submission.confidence < self.confidence_floor:
             raise ValueError("comment confidence is below this reviewer's threshold")
 
@@ -123,14 +115,13 @@ class ReviewCommentCollector:
             raise ValueError(
                 "existing_code must be fully contained in exactly one changed new-side hunk"
             )
-        excerpt = json.loads(
-            await self.tools.read_file(submission.path, start_line, end_line)
+        excerpt_hash, excerpt_truncated = await self.tools.excerpt_identity(
+            submission.path,
+            start_line,
+            end_line,
         )
-        if not isinstance(excerpt, dict) or excerpt.get("truncated") is True:
+        if excerpt_truncated:
             raise ValueError("comment location cannot be resolved to a complete frozen excerpt")
-        excerpt_hash = excerpt.get("content_hash")
-        if not isinstance(excerpt_hash, str):
-            raise ValueError("comment location has no frozen excerpt hash")
         hunk = hunks[0]
         self._findings.append(
             {
@@ -166,7 +157,7 @@ class ReviewCommentCollector:
             }
         )
         return json.dumps(
-            {"accepted": True, "comment_count": len(self._findings), "hunk_id": hunk.hunk_id},
+            {"accepted": True, "comment_count": len(self._findings)},
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -177,19 +168,13 @@ class ReviewCommentCollector:
 
         if not submissions or len(submissions) > 20:
             raise ValueError("comment requires between one and twenty comments")
-        accepted_hunks: list[str] = []
         for submission in submissions:
-            acknowledgement = json.loads(await self.submit(submission))
-            hunk_id = acknowledgement.get("hunk_id")
-            if not isinstance(hunk_id, str):
-                raise ValueError("comment acknowledgement is invalid")
-            accepted_hunks.append(hunk_id)
+            await self.submit(submission)
         return json.dumps(
             {
                 "accepted": True,
-                "accepted_count": len(accepted_hunks),
+                "accepted_count": len(submissions),
                 "comment_count": len(self._findings),
-                "hunk_ids": accepted_hunks,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -201,7 +186,10 @@ class ReviewCommentCollector:
 
         if self._completion is not None:
             raise ValueError("task_done has already been called")
-        self._validate_output_language(submission.summary)
+        if self.tools.unloaded_instruction_paths:
+            raise ValueError(
+                "instruction_loader must be called for every changed target before task_done"
+            )
         self._completion = submission
         return json.dumps(
             {
@@ -237,21 +225,6 @@ class ReviewCommentCollector:
             return resolved
 
         raise ValueError("existing_code cannot be resolved to a line range")
-
-    def _validate_output_language(self, *values: str) -> None:
-        """Reject non-Chinese user-facing output when this run selected Chinese.
-
-        Code identifiers may remain in English, but each submitted user-facing field
-        must include Chinese prose. A rejected tool call lets the model correct its
-        own response without allowing an English Finding into a Chinese review.
-        """
-
-        if self.output_locale != "zh-CN":
-            return
-        if any(
-            not any("\u4e00" <= character <= "\u9fff" for character in value) for value in values
-        ):
-            raise ValueError(self.language_error)
 
     def finding_batch(self) -> dict[str, object]:
         """Return only resolved candidates in the stable output envelope."""

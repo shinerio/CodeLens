@@ -1,9 +1,14 @@
 import { api } from "../../shared/api/client";
 import type {
   DirectoryListing,
+  RecentRepository,
   RepositoryCatalog,
   RepositoryInspectionResponse,
 } from "./types";
+
+export async function listRecentRepositories(): Promise<RecentRepository[]> {
+  return api<RecentRepository[]>("/repositories/recent");
+}
 
 export async function inspectRepository(path: string): Promise<RepositoryInspectionResponse> {
   return api<RepositoryInspectionResponse>("/repositories/inspect", {

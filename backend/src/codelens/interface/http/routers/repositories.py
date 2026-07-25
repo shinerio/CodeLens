@@ -7,6 +7,7 @@ from codelens.interface.http.dto import (
     DirectoryBrowseRequest,
     DirectoryEntryResponse,
     DirectoryListingResponse,
+    RecentRepositoryResponse,
     RepositoryBranchResponse,
     RepositoryCatalogRequest,
     RepositoryCatalogResponse,
@@ -16,6 +17,18 @@ from codelens.interface.http.dto import (
 )
 
 router = APIRouter(prefix="/api/repositories", tags=["repositories"])
+
+
+@router.get("/recent", response_model=list[RecentRepositoryResponse])
+async def list_recent_repositories(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> list[RecentRepositoryResponse]:
+    """Return the independent repository-use LRU for quick selection."""
+
+    return [
+        RecentRepositoryResponse.from_domain(repository)
+        for repository in await components.list_recent_repositories.handle()
+    ]
 
 
 @router.post("/inspect", response_model=RepositoryResponse)

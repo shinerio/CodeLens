@@ -15,8 +15,7 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
-from codelens.review.application.context_builder import SnapshotFileReaderPort
-from codelens.review.domain.ports import AgentOutputCodecPort
+from codelens.review.domain.ports import AgentOutputCodecPort, SnapshotFileReaderPort
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.workspace.domain.models import ReviewSnapshot
 
@@ -119,16 +118,6 @@ class FindingValidator:
             raise FindingValidationError("Finding confidence is below the Agent threshold")
         primary = await self._location(candidate.primary_location)
         related = tuple([await self._location(item) for item in candidate.related_locations])
-        matching_hunks = tuple(
-            item
-            for item in self._snapshot.change_index.hunks
-            if (
-                item.path == primary.path
-                and item.side == primary.side
-                and primary.start_line >= item.start_line
-                and primary.end_line <= item.end_line
-            )
-        )
         hunk = None
         if candidate.changed_hunk_id is not None:
             hunk = next(
@@ -145,17 +134,7 @@ class FindingValidator:
                 and primary.start_line >= hunk.start_line
                 and primary.end_line <= hunk.end_line
             ):
-                if (
-                    len(matching_hunks) == 1
-                    and len(candidate.changed_hunk_id) == 64
-                    and all(
-                        character in "0123456789abcdef"
-                        for character in candidate.changed_hunk_id
-                    )
-                ):
-                    hunk = matching_hunks[0]
-                else:
-                    raise FindingValidationError("Finding references an unknown changed hunk")
+                raise FindingValidationError("Finding references an unknown changed hunk")
 
         if self._excerpt_reader is not None and primary.side == "new":
             excerpt = await self._excerpt_reader.read(

@@ -140,6 +140,7 @@ class GitWorkspaceAdapter:
             head_oid=head_oid,
             target_paths=tuple(sorted(dict.fromkeys(target_paths))),
             capture_workspace_overlay=capture_overlay,
+            scope_type=scope.type,
             warnings=warnings,
         )
 

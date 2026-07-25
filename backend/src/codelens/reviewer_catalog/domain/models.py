@@ -26,7 +26,6 @@ class AgentVersion:
     output_contract_version: str
     timeout_seconds: float
     max_turns: int
-    token_budget: int
     confidence_floor: float
     failure_policy: str
     mode_support: tuple[ReviewMode, ...]

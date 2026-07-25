@@ -213,7 +213,6 @@ CodeLens/
 ├── frontend/
 │   ├── src/                # React 应用与领域 feature
 │   └── e2e/                # Playwright 端到端流程
-├── docs/adr/               # 架构决策记录
 ├── ARCHITECTURE.md         # 强制架构约束
 └── TODO.md                 # 延期功能与路线图
 ```
@@ -261,4 +260,11 @@ pnpm --dir frontend exec playwright test
 
 - [产品白皮书](./CodeLens-白皮书.md)
 - [架构约束](./ARCHITECTURE.md)
+- [与 Open Code Review 的实现与能力对比](./docs/open-code-review-comparison.md)
 - [TODO 与延期事项](./TODO.md)
+
+## 开源许可与致谢
+
+CodeLens 采用 [Apache License 2.0](./LICENSE) 开源。第三方来源、版权归属和修改说明见 [NOTICE](./NOTICE)。
+
+本项目的任务内评论收集思路参考了 [Alibaba Open Code Review](https://github.com/alibaba/open-code-review) 的 `code_comment` 模式；`backend/src/codelens/review/infrastructure/line_resolver.py` 对其 `internal/diff/resolver.go` 中的确定性行号定位算法进行了 Python 改编。CodeLens 在此基础上增加了冻结 Snapshot、Manifest 内容哈希校验、唯一新侧变更 hunk 约束，以及由后端派生 hunk ID 和 excerpt hash 的验证链路。参考版本、逐项差异和可借鉴结论见[完整对比报告](./docs/open-code-review-comparison.md)。

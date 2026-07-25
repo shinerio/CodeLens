@@ -1,6 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
+from codelens.shared.domain.errors import WorktreeOwnershipError
 from codelens.workspace.domain.models import CapturedReviewInput, TaskWorktree
 from codelens.workspace.domain.ports import (
     InputArtifactPort,
@@ -9,7 +10,6 @@ from codelens.workspace.domain.ports import (
     WorktreeRecoveryPort,
     WorktreeRegistryPort,
 )
-from codelens.shared.domain.errors import WorktreeOwnershipError
 
 
 @dataclass(frozen=True)

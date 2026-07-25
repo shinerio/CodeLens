@@ -1,5 +1,5 @@
 import asyncio
-from datetime import UTC, datetime
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
@@ -22,6 +22,7 @@ from codelens.review.infrastructure.repositories import (
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlJobQueue,
+    SqlRecentRepositoryStore,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
@@ -29,18 +30,24 @@ from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactSt
 from codelens.workspace.domain.models import BranchScope, ReviewTarget, TaskWorktree
 
 
-def _task(task_id: str, *, head: str = "b") -> ReviewTask:
+def _task(
+    task_id: str,
+    *,
+    head: str = "b",
+    repository_path: Path = Path("/tmp/repository-1"),
+    created_at: datetime = datetime(2026, 7, 17, tzinfo=UTC),
+) -> ReviewTask:
     return ReviewTask.create(
         task_id=task_id,
         repository_id="repository-1",
         repository_realpath_hash="c" * 64,
         git_common_dir_hash="d" * 64,
-        repository_path=Path("/tmp/repository-1"),
+        repository_path=repository_path,
         target_paths=("src/state.py",),
         scope=BranchScope(base_ref="main", target_ref=f"feature-{head}"),
         target=ReviewTarget("a" * 40, head * 40, None),
         selected_agent_versions=("correctness:v1",),
-        created_at=datetime(2026, 7, 17, tzinfo=UTC),
+        created_at=created_at,
     )
 
 
@@ -128,6 +135,60 @@ async def test_migration_and_task_job_event_creation_are_atomic(tmp_path: Path) 
             rows = (await connection.execute(text("PRAGMA table_info(jobs)"))).mappings().all()
         columns = {str(row["name"]) for row in rows}
         assert not {"lease_owner", "lease_expires_at", "fencing_token"} & columns
+    finally:
+        await database.dispose()
+
+
+async def test_recent_repository_store_uses_a_ten_entry_lru(tmp_path: Path) -> None:
+    database = await _database(tmp_path)
+    review_store = SqlReviewStore(database)
+    recent_store = SqlRecentRepositoryStore(database)
+    started_at = datetime(2026, 7, 17, tzinfo=UTC)
+    try:
+        assert await recent_store.get_limit() == 10
+        for index in range(11):
+            await review_store.create_with_job(
+                _task(
+                    f"review-{index}",
+                    repository_path=tmp_path / f"repository-{index}",
+                    created_at=started_at + timedelta(minutes=index),
+                )
+            )
+
+        initial = await recent_store.list_recent_repositories(limit=10)
+        assert [item.repository_path for item in initial] == [
+            tmp_path / f"repository-{index}" for index in range(10, 0, -1)
+        ]
+
+        await review_store.create_with_job(
+            _task(
+                "review-reused",
+                repository_path=tmp_path / "repository-1",
+                created_at=started_at + timedelta(minutes=11),
+            )
+        )
+        await review_store.create_with_job(
+            _task(
+                "review-new",
+                repository_path=tmp_path / "repository-11",
+                created_at=started_at + timedelta(minutes=12),
+            )
+        )
+
+        promoted = await recent_store.list_recent_repositories(limit=10)
+        assert [item.repository_path for item in promoted[:2]] == [
+            tmp_path / "repository-11",
+            tmp_path / "repository-1",
+        ]
+        assert tmp_path / "repository-2" not in {item.repository_path for item in promoted}
+
+        await recent_store.update_limit(3)
+        trimmed = await recent_store.list_recent_repositories(limit=3)
+        assert [item.repository_path for item in trimmed] == [
+            tmp_path / "repository-11",
+            tmp_path / "repository-1",
+            tmp_path / "repository-10",
+        ]
     finally:
         await database.dispose()
 

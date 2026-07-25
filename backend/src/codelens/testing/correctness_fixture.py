@@ -115,6 +115,8 @@ async def load_simple_branch_batch(repository: Path, *, base_oid: str) -> Findin
             ownership_token_hash="e" * 64,
         ),
         base_oid,
+        ("src/state.py",),
+        "branch",
     )
     matching_hunks = [
         hunk
@@ -151,7 +153,7 @@ class FixtureRuntime:
         self.delay_seconds = delay_seconds
 
     async def invoke(
-        self, _agent: object, _payload: bytes, _snapshot: object
+        self, _agent: object, _payload: bytes, _snapshot: object, _prompt_locale: str
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
         if self.delay_seconds > 0:
@@ -172,25 +174,12 @@ class FixtureRuntime:
         agent: object,
         payload: bytes,
         snapshot: object,
+        prompt_locale: str,
         sink: AgentRuntimeEventSink,
     ) -> UnvalidatedAgentOutput:
-        """Emit one deterministic tool exchange for browser-level transcript coverage."""
+        """Emit deterministic model lifecycle events without a synthetic tool exchange."""
 
         await sink(AgentRuntimeEvent("model_started", "", {}))
-        await sink(
-            AgentRuntimeEvent(
-                "tool_call",
-                '{"name":"get_change_map"}',
-                {"tool_name": "get_change_map", "tool_call_id": "fixture-call"},
-            )
-        )
-        await sink(
-            AgentRuntimeEvent(
-                "tool_result",
-                '{"changed_files":1}',
-                {"tool_call_id": "fixture-call"},
-            )
-        )
-        output = await self.invoke(agent, payload, snapshot)
+        output = await self.invoke(agent, payload, snapshot, prompt_locale)
         await sink(AgentRuntimeEvent("model_completed", "", {}))
         return output

@@ -29,6 +29,12 @@ export type RepositoryCatalog = {
   next_commit_offset: number | null;
 };
 
+export type RecentRepository = {
+  repository_path: string;
+  repository_name: string;
+  last_reviewed_at: string;
+};
+
 export type DirectoryEntry = {
   name: string;
   path: string;

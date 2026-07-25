@@ -6,6 +6,7 @@ from codelens.workspace.domain.models import (
     OpaqueArtifact,
     RepositoryFingerprint,
     ReviewScope,
+    ReviewScopeType,
     TaskWorktree,
 )
 
@@ -82,6 +83,7 @@ class ScopePlan:
     head_oid: str
     target_paths: tuple[str, ...]
     capture_workspace_overlay: bool
+    scope_type: ReviewScopeType
     warnings: tuple[str, ...] = ()
 
 

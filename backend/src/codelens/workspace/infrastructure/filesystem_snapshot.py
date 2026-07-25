@@ -139,8 +139,10 @@ class FilesystemSnapshotBuilder:
             for raw in listed.stdout.split(b"\0")
             if raw
         )
-        instruction_paths = tuple(document.relative_path for document in instructions.documents)
-        control_set = set(instruction_paths)
+        all_instruction_paths = tuple(
+            document.relative_path for document in instructions.documents
+        )
+        control_set = set(all_instruction_paths)
         candidates = tuple(sorted({*context_candidates, *target_paths} - control_set))
         ignore_resolution = await self._ignore.resolve(worktree.root, candidates)
 
@@ -166,6 +168,20 @@ class FilesystemSnapshotBuilder:
                 path
                 for path in context_candidates
                 if path in included_set and path not in control_set
+            )
+        )
+        active_targets = set(normalized_targets)
+        active_instruction_path_set = {
+            rule_path
+            for chain in instructions.chains
+            if chain.target_path in active_targets
+            for rule_path in chain.rule_paths
+        }
+        instruction_paths = tuple(
+            sorted(
+                document.relative_path
+                for document in instructions.documents
+                if document.relative_path in active_instruction_path_set
             )
         )
         origins: dict[str, _SnapshotOrigin] = {path: "context" for path in context_paths}

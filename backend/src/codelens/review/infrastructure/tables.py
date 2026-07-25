@@ -1,5 +1,6 @@
 from sqlalchemy import (
     Boolean,
+    CheckConstraint,
     Column,
     DateTime,
     Float,
@@ -37,6 +38,24 @@ review_tasks = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("deleted_at", DateTime(timezone=True)),
+)
+
+recent_repositories = Table(
+    "recent_repositories",
+    metadata,
+    Column("repository_path", Text, primary_key=True),
+    Column("last_reviewed_at", DateTime(timezone=True), nullable=False, index=True),
+)
+
+recent_repository_settings = Table(
+    "recent_repository_settings",
+    metadata,
+    Column("settings_id", Integer, primary_key=True),
+    Column("recent_repository_limit", Integer, nullable=False),
+    CheckConstraint(
+        "recent_repository_limit BETWEEN 1 AND 20",
+        name="ck_recent_repository_settings_limit",
+    ),
 )
 
 task_worktrees = Table(

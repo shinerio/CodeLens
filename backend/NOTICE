@@ -1,0 +1,25 @@
+CodeLens
+Copyright 2026 CodeLens contributors
+
+This product includes a Python adaptation of the deterministic line-resolution
+algorithm from Open Code Review:
+
+  Project: Open Code Review
+  Source: https://github.com/alibaba/open-code-review
+  Reference revision: c9b145635c6b6343b108941c2a627ac636836c6b
+  Reference file: internal/diff/resolver.go
+  Copyright 2026 Alibaba
+  License: Apache License 2.0
+
+The adapted implementation is located at:
+
+  src/codelens/review/infrastructure/line_resolver.py
+
+CodeLens rewrote the Go implementation in Python and integrated it with an
+immutable ReviewSnapshot. It also adds Snapshot path and content validation,
+new-side changed-hunk containment, and derived hunk/excerpt identities. See
+the repository's docs/open-code-review-comparison.md for the implementation
+comparison.
+
+Open Code Review is a trademark or product name of its respective owner. This
+notice describes source attribution and does not imply endorsement.

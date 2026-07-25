@@ -1,4 +1,4 @@
-import { cleanup, render, screen, within } from "@testing-library/react";
+import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -24,6 +24,12 @@ it("creates the first persistent model gateway without retaining its API key", a
     )
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 10 }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -110,6 +116,12 @@ it("switches the active gateway without asking for the stored key", async () => 
       }),
     )
     .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 10 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
           ...initialCatalog,
@@ -160,6 +172,12 @@ it("sends a connectivity test request when the test connectivity button is click
     )
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 10 }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -217,6 +235,12 @@ it("sends an availability test request when the test availability button is clic
       }),
     )
     .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 10 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: false, latency_ms: 100, detail: "Connection failed." }),
         { status: 200, headers: { "Content-Type": "application/json" } },
@@ -240,4 +264,51 @@ it("sends an availability test request when the test availability button is clic
   expect(
     await within(card).findByText("LLM not responding"),
   ).toBeInTheDocument();
+});
+
+it("updates the recent repository list limit", async () => {
+  fetchMock
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ active_gateway_id: null, gateways: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 10 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 15 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    );
+  const user = userEvent.setup();
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  const limitInput = await screen.findByLabelText("Recent repository limit");
+  await waitFor(() => expect(limitInput).toBeEnabled());
+  await user.clear(limitInput);
+  await user.type(limitInput, "15");
+  const saveButton = screen.getByRole("button", { name: "Save recent repository limit" });
+  await waitFor(() => expect(saveButton).toBeEnabled());
+  await user.click(saveButton);
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/settings/repositories",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ recent_repository_limit: 15 }),
+    }),
+  );
 });

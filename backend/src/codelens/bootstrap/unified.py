@@ -7,6 +7,7 @@ from dataclasses import dataclass
 
 import uvicorn
 
+from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.settings import Settings
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.instruction_policy.application.resolver import InstructionResolver
@@ -19,16 +20,18 @@ from codelens.review.domain.ports import AgentRuntimePort
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
+from codelens.review.infrastructure.model_log import ModelTranscriptLogWriter
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.review.infrastructure.repositories import (
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlJobQueue,
+    SqlRecentRepositoryStore,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
-from codelens.review.infrastructure.snapshot_context import FilesystemSnapshotContextAdapter
+from codelens.review.infrastructure.snapshot_reader import FilesystemSnapshotReader
 from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
     WorkerTranscriptStore,
@@ -74,13 +77,18 @@ class UnifiedBackend:
         """Create runtime directories, migrate database, and recover interrupted tasks."""
 
         await self.components.start()
+        configure_process_logging("unified", data_directory=self.settings.data_dir)
         _LOGGER.info("Unified backend started")
 
     async def run(self, stop: asyncio.Event) -> None:
         """Run HTTP server and scheduler concurrently until stop signal."""
 
         config = uvicorn.Config(
-            create_app_with_components(self.settings, self.components),
+            create_app_with_components(
+                self.settings,
+                self.components,
+                manage_components=False,
+            ),
             host=self.settings.host,
             port=self.settings.port,
             log_config=None,
@@ -123,12 +131,14 @@ def build_unified_backend(
 
     # Shared infrastructure
     review_store = SqlReviewStore(database, event_bus=event_bus)
+    recent_repository_store = SqlRecentRepositoryStore(database)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
     input_artifacts = FilesystemInputArtifactStore(settings.data_dir / "artifacts" / "inputs")
-    transcripts_store = ExecutionTranscriptStore(
-        settings.data_dir / "artifacts" / "transcripts"
+    transcripts_store = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
+    worker_transcripts = WorkerTranscriptStore(
+        transcripts_store,
+        model_log=ModelTranscriptLogWriter(),
     )
-    worker_transcripts = WorkerTranscriptStore(transcripts_store)
 
     # Worker components
     worktree_manager = GitReviewWorktreeManager(
@@ -158,7 +168,7 @@ def build_unified_backend(
         instructions=InstructionResolver(MarkdownInstructionParser()),
         structured_skip=StructuredSkipMatcher(),
     )
-    context_adapter = FilesystemSnapshotContextAdapter()
+    snapshot_reader = FilesystemSnapshotReader()
     codec = AgentOutputCodec("1")
     system_prompts = I18nPromptLoader.load(settings.prompt_dir)
     provider_runtime = runtime or OpenAIAgentRuntime(
@@ -179,8 +189,8 @@ def build_unified_backend(
         worktree_lifecycle=lifecycle,
         worktree_recovery=recovery,
         snapshot_service=snapshot_service,
-        context_builder=ContextBuilder(context_adapter, context_adapter, system_prompts),
-        excerpt_reader=context_adapter,
+        context_builder=ContextBuilder(),
+        excerpt_reader=snapshot_reader,
         runtime=provider_runtime,
         output_artifacts=FilesystemRunArtifactStore(
             database,
@@ -215,8 +225,11 @@ def build_unified_backend(
         CancelReviewHandler,
         CreateReviewHandler,
         DeleteReviewHandler,
+        GetRecentRepositorySettingsHandler,
         GetReviewHandler,
+        ListRecentRepositoriesHandler,
         ListReviewsHandler,
+        UpdateRecentRepositorySettingsHandler,
     )
     from codelens.review.application.source_preview import FindingSourcePreviewService
     from codelens.reviewer_catalog.application.provider_settings import (
@@ -256,6 +269,11 @@ def build_unified_backend(
         create_review=CreateReviewHandler(planner, capture, review_store, input_artifacts),
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
+        list_recent_repositories=ListRecentRepositoriesHandler(recent_repository_store),
+        get_recent_repository_settings=GetRecentRepositorySettingsHandler(recent_repository_store),
+        update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
+            recent_repository_store
+        ),
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

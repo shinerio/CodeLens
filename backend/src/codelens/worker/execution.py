@@ -5,11 +5,7 @@ from dataclasses import replace
 
 from codelens.bootstrap.settings import Settings
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
-from codelens.review.application.context_builder import (
-    ContextBudget,
-    ContextBuilder,
-    SnapshotFileReaderPort,
-)
+from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.orchestrator import (
     CheckpointView,
     PreparedReview,
@@ -22,6 +18,7 @@ from codelens.review.domain.ports import (
     AgentRuntimeEventSink,
     AgentRuntimePort,
     ReviewExecutionRecord,
+    SnapshotFileReaderPort,
     UnvalidatedAgentOutput,
 )
 from codelens.review.infrastructure.repositories import (
@@ -71,24 +68,26 @@ class _ModelLimitedRuntime:
         agent: AgentVersion,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
+        prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
         async with self._semaphore:
-            return await self._runtime.invoke(agent, input_payload, snapshot)
+            return await self._runtime.invoke(agent, input_payload, snapshot, prompt_locale)
 
     async def invoke_stream(
         self,
         agent: AgentVersion,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
+        prompt_locale: str,
         sink: AgentRuntimeEventSink,
     ) -> UnvalidatedAgentOutput:
         """Keep streamed provider work inside the Worker-wide model concurrency limit."""
 
         stream = getattr(self._runtime, "invoke_stream", None)
         if stream is None:
-            return await self.invoke(agent, input_payload, snapshot)
+            return await self.invoke(agent, input_payload, snapshot, prompt_locale)
         async with self._semaphore:
-            return await stream(agent, input_payload, snapshot, sink)
+            return await stream(agent, input_payload, snapshot, prompt_locale, sink)
 
 
 class SqlCheckpointPortAdapter:
@@ -238,6 +237,7 @@ class WorkerReviewExecutor:
             head_oid=record.head_oid,
             target_paths=record.target_paths,
             capture_workspace_overlay=record.overlay_artifact_ref is not None,
+            scope_type=record.scope_type,
         )
         instructions = await self._snapshot_service.resolve_instructions(
             worktree,
@@ -252,14 +252,14 @@ class WorkerReviewExecutor:
         agents = await self._agents(record.selected_agent_versions, record.prompt_locale)
         payloads: dict[str, bytes] = {}
         for agent in agents:
-            agent_input = await self._context_builder.build(
-                snapshot,
-                instructions,
-                self._context_budget(agent),
-                "zh-CN" if record.prompt_locale == "zh-CN" else "en",
-            )
+            agent_input = self._context_builder.build(snapshot, instructions)
             payloads[f"{agent.agent_id}:v{agent.version}"] = agent_input.canonical_bytes()
-        return PreparedReview(snapshot=snapshot, agents=agents, input_payloads=payloads)
+        return PreparedReview(
+            snapshot=snapshot,
+            agents=agents,
+            input_payloads=payloads,
+            prompt_locale=record.prompt_locale,
+        )
 
     async def record_failure(self, task_id: str, error: Exception) -> None:
         """Record a stable, readable failure without provider response content."""
@@ -341,19 +341,6 @@ class WorkerReviewExecutor:
             return tuple(agents)
         except KeyError as error:
             raise ValueError("review references an unavailable Agent version") from error
-
-    @staticmethod
-    def _context_budget(agent: AgentVersion) -> ContextBudget:
-        return ContextBudget(
-            total_tokens=agent.token_budget,
-            platform_policy_tokens=128,
-            instruction_tokens=8_192,
-            output_contract_tokens=128,
-            changed_hunk_tokens=8_192,
-            max_excerpt_bytes=64 * 1024,
-            max_line_chars=2_000,
-            tool_driven=True,
-        )
 
     def _validator(
         self,

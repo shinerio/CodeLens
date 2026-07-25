@@ -1,54 +1,231 @@
 import asyncio
 import hashlib
+import os
 import re
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Literal
 
 from codelens.shared.domain.errors import InvalidRepositoryError
-from codelens.workspace.domain.models import ChangedHunk, ChangeIndex, TaskWorktree
+from codelens.workspace.domain.models import (
+    ChangedHunk,
+    ChangeIndex,
+    ReviewFileChange,
+    ReviewScopeType,
+    TaskWorktree,
+)
 from codelens.workspace.infrastructure.git_cli import GitCli
 
-_HUNK_HEADER = re.compile(
-    r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@"
-)
+_HUNK_HEADER = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
 
-def _read_lines(path: Path) -> tuple[str, ...]:
+def _read_payload(path: Path) -> bytes | None:
     try:
-        return tuple(path.read_text(encoding="utf-8").splitlines(keepends=True))
+        if path.is_symlink():
+            return os.readlink(path).encode("utf-8")
+        return path.read_bytes()
     except (FileNotFoundError, IsADirectoryError):
+        return None
+
+
+def _read_lines(path: Path) -> tuple[bytes, ...]:
+    payload = _read_payload(path)
+    if payload is None or b"\0" in payload:
         return ()
+    return tuple(payload.splitlines(keepends=True))
+
+
+def _normalize_path(raw_path: bytes) -> str:
+    path = raw_path.decode("utf-8", errors="strict")
+    candidate = PurePosixPath(path)
+    if (
+        not path
+        or "\0" in path
+        or "\\" in path
+        or candidate.is_absolute()
+        or ".." in candidate.parts
+        or candidate.as_posix() != path
+    ):
+        raise InvalidRepositoryError("Git returned an unsafe change path")
+    return path
+
+
+def _diff_header_path(raw_path: str) -> str | None:
+    if raw_path == "/dev/null":
+        return None
+    value = raw_path[2:] if raw_path.startswith(("a/", "b/")) else raw_path
+    return _normalize_path(value.encode("utf-8"))
+
+
+def _parse_name_status(output: bytes) -> tuple[ReviewFileChange, ...]:
+    fields = output.split(b"\0")
+    if fields and fields[-1] == b"":
+        fields.pop()
+    changes: list[ReviewFileChange] = []
+    offset = 0
+    while offset < len(fields):
+        status = fields[offset].decode("ascii", errors="strict")
+        offset += 1
+        code = status[:1]
+        if code == "R":
+            if offset + 2 > len(fields):
+                raise InvalidRepositoryError("unexpected Git rename status")
+            old_path = _normalize_path(fields[offset])
+            path = _normalize_path(fields[offset + 1])
+            changes.append(ReviewFileChange(path, "renamed", old_path=old_path))
+            offset += 2
+            continue
+        if code not in {"A", "D", "M", "T"} or offset >= len(fields):
+            raise InvalidRepositoryError("unsupported Git file change status")
+        path = _normalize_path(fields[offset])
+        offset += 1
+        change_type: Literal["added", "modified", "deleted"]
+        if code == "A":
+            change_type = "added"
+        elif code == "D":
+            change_type = "deleted"
+        else:
+            change_type = "modified"
+        changes.append(ReviewFileChange(path, change_type))
+    return tuple(changes)
 
 
 class GitChangeIndexBuilder:
-    """Build deterministic changed-hunk identities from a pinned base and worktree."""
+    """Build deterministic file changes and hunk identities from a frozen worktree."""
 
     def __init__(self, git: GitCli) -> None:
         self._git = git
 
-    async def build(self, worktree: TaskWorktree, base_oid: str) -> ChangeIndex:
-        """Index new- or old-side hunk locations with excerpt hashes."""
+    async def build(
+        self,
+        worktree: TaskWorktree,
+        base_oid: str,
+        target_paths: tuple[str, ...],
+        scope_type: ReviewScopeType,
+    ) -> ChangeIndex:
+        """Index every target's typed file change and new- or old-side ranges."""
 
-        result = await self._git.run(
+        target_set = set(target_paths)
+        if scope_type == "full":
+            return await self._build_full_scope(worktree, target_set)
+        status_result = await self._git.run(
             worktree.root,
             "diff",
-            "--unified=0",
+            "--name-status",
+            "-z",
+            "--find-renames",
             "--no-ext-diff",
             "--no-textconv",
             base_oid,
             "--",
         )
-        lines = result.stdout.decode("utf-8", errors="replace").splitlines()
-        path: str | None = None
+        changes = [
+            change
+            for change in _parse_name_status(status_result.stdout)
+            if change.path in target_set
+            or (change.old_path is not None and change.old_path in target_set)
+        ]
+        covered_paths = {
+            path
+            for change in changes
+            for path in (change.path, change.old_path)
+            if path is not None
+        }
+        untracked_result = await self._git.run(
+            worktree.root,
+            "ls-files",
+            "--others",
+            "--exclude-standard",
+            "-z",
+        )
+        untracked_paths = tuple(
+            path
+            for raw_path in untracked_result.stdout.split(b"\0")
+            if raw_path
+            if (path := _normalize_path(raw_path)) in target_set
+        )
+        for path in untracked_paths:
+            if path not in covered_paths:
+                changes.append(ReviewFileChange(path, "added"))
+                covered_paths.add(path)
+        if not target_set.issubset(covered_paths):
+            raise InvalidRepositoryError("Review target has no reliable file change metadata")
+
+        diff_result = await self._git.run(
+            worktree.root,
+            "diff",
+            "--unified=0",
+            "--find-renames",
+            "--no-ext-diff",
+            "--no-textconv",
+            base_oid,
+            "--",
+        )
+        hunks = await self._parse_hunks(worktree, diff_result.stdout, target_set)
+        hunk_paths = {hunk.path for hunk in hunks}
+        for path in untracked_paths:
+            if path in hunk_paths:
+                continue
+            file_lines = await asyncio.to_thread(_read_lines, worktree.root / path)
+            if not file_lines:
+                continue
+            excerpt = b"".join(file_lines)
+            hunks.append(self._hunk(path, 1, len(file_lines), "new", excerpt))
+        return ChangeIndex(
+            hunks=tuple(
+                sorted(
+                    hunks,
+                    key=lambda item: (
+                        item.path,
+                        item.start_line,
+                        item.end_line,
+                        item.side,
+                        item.hunk_id,
+                    ),
+                )
+            ),
+            files=tuple(sorted(changes, key=lambda item: item.path)),
+        )
+
+    async def _build_full_scope(
+        self,
+        worktree: TaskWorktree,
+        target_paths: set[str],
+    ) -> ChangeIndex:
+        """Treat the final full-repository Snapshot as added from an empty baseline."""
+
+        changes: list[ReviewFileChange] = []
+        hunks: list[ChangedHunk] = []
+        for path in sorted(target_paths):
+            payload = await asyncio.to_thread(_read_payload, worktree.root / path)
+            if payload is None:
+                changes.append(ReviewFileChange(path, "deleted"))
+                continue
+            changes.append(ReviewFileChange(path, "added"))
+            if not payload or b"\0" in payload:
+                continue
+            lines = tuple(payload.splitlines(keepends=True))
+            if lines:
+                hunks.append(self._hunk(path, 1, len(lines), "new", b"".join(lines)))
+        return ChangeIndex(hunks=tuple(hunks), files=tuple(changes))
+
+    async def _parse_hunks(
+        self,
+        worktree: TaskWorktree,
+        output: bytes,
+        target_paths: set[str],
+    ) -> list[ChangedHunk]:
+        lines = output.decode("utf-8", errors="replace").splitlines()
+        old_path: str | None = None
+        new_path: str | None = None
         hunks: list[ChangedHunk] = []
         for line in lines:
-            if line.startswith("+++ "):
-                raw_path = line[4:]
-                path = raw_path[2:] if raw_path.startswith("b/") else raw_path
-                if path == "/dev/null":
-                    path = None
+            if line.startswith("--- "):
+                old_path = _diff_header_path(line[4:])
+            elif line.startswith("+++ "):
+                new_path = _diff_header_path(line[4:])
             elif line.startswith("@@ "):
-                if path is None:
+                path = new_path if new_path is not None else old_path
+                if path is None or path not in target_paths:
                     continue
                 match = _HUNK_HEADER.match(line)
                 if match is None:
@@ -61,22 +238,30 @@ class GitChangeIndexBuilder:
                     start_line = int(new_start)
                     end_line = start_line + new_count - 1
                     file_lines = await asyncio.to_thread(_read_lines, worktree.root / path)
-                    excerpt = "".join(file_lines[start_line - 1 : end_line]).encode("utf-8")
+                    excerpt = b"".join(file_lines[start_line - 1 : end_line])
                 else:
                     side = "old"
                     start_line = int(old_start)
                     end_line = start_line + max(old_count, 1) - 1
                     excerpt = line.encode("utf-8")
-                excerpt_hash = hashlib.sha256(excerpt).hexdigest()
-                identity = f"{path}\0{side}\0{start_line}\0{end_line}\0{excerpt_hash}"
-                hunks.append(
-                    ChangedHunk(
-                        hunk_id=hashlib.sha256(identity.encode("utf-8")).hexdigest(),
-                        path=path,
-                        start_line=start_line,
-                        end_line=end_line,
-                        side=side,
-                        excerpt_hash=excerpt_hash,
-                    )
-                )
-        return ChangeIndex(tuple(hunks))
+                hunks.append(self._hunk(path, start_line, end_line, side, excerpt))
+        return hunks
+
+    @staticmethod
+    def _hunk(
+        path: str,
+        start_line: int,
+        end_line: int,
+        side: Literal["old", "new"],
+        excerpt: bytes,
+    ) -> ChangedHunk:
+        excerpt_hash = hashlib.sha256(excerpt).hexdigest()
+        identity = f"{path}\0{side}\0{start_line}\0{end_line}\0{excerpt_hash}"
+        return ChangedHunk(
+            hunk_id=hashlib.sha256(identity.encode("utf-8")).hexdigest(),
+            path=path,
+            start_line=start_line,
+            end_line=end_line,
+            side=side,
+            excerpt_hash=excerpt_hash,
+        )

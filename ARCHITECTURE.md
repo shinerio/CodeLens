@@ -4,7 +4,7 @@
 
 本文档是 CodeLens 项目架构事实与约束的唯一权威来源，适用于后端、Worker、前端、数据库、外部能力、稳定契约和部署入口。本文只回答系统由什么组成、边界在哪里、依赖如何流动，以及哪些契约和安全属性必须长期成立。
 
-修改稳定契约、依赖方向、数据所有权、安全边界、限界上下文或部署拓扑时，必须同步更新本文档，并新增或更新 ADR。实现和其他说明文档与本文档冲突时，以本文档为准。
+修改稳定契约、依赖方向、数据所有权、安全边界、限界上下文或部署拓扑时，必须同步更新本文档。实现和其他说明文档与本文档冲突时，以本文档为准。
 
 ## 2. 技术栈
 
@@ -15,7 +15,7 @@
 - SQLAlchemy 2 负责持久化适配，Alembic 管理数据库迁移。
 - SQLite 使用 WAL 模式；大对象写入 Artifact Store，数据库仅保存元数据、内容哈希和不透明引用。
 - OpenAI Agents SDK、Git、文件系统、Skill、MCP、沙箱、代码检索和 Secret Store 均作为外部能力，通过 Port/Adapter 接入。MVP 的代码检索仅由 CodeLens 内置、只读的 Snapshot 工具提供，不依赖本机预装的第三方CodeGraph、LSP 或 MCP 工具。
-- 所有模型可见的平台系统提示词、仓库规则优先级、通用 Review 工作流、输出约束与工具说明必须存放在 `prompts/sys/<locale>/`；组合根在启动时通过 `I18nPromptLoader` 完整校验并加载为不可变语言包。Review Runtime 按“平台边界、仓库规则策略、通用工作流、输出契约、Agent 专属策略”的固定顺序组成系统指令；设置页面只能覆盖 `prompts/<agent_id>/<locale>.md` 对应的 Agent 专属策略，不能覆盖通用系统层。Review 运行时只按任务 `prompt_locale` 读取已加载语言包，未知语言回退至配置的默认语言；新增语言不得要求在模型 Runtime 中拼接或硬编码自然语言提示词。
+- 所有模型可见的平台系统提示词、仓库规则优先级、通用 Review 工作流、输出约束与工具说明必须存放在 `prompts/sys/<locale>/`；每个语言包固定包含合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md` 和结构化工具说明 `tools.json`，避免跨文件重复约束。组合根在启动时通过 `I18nPromptLoader` 完整校验并加载为不可变语言包。Review Runtime 按“平台边界、仓库规则策略、预取的根目录仓库规则、通用工作流、输出契约、Agent 专属策略”的固定顺序组成系统指令；设置页面只能覆盖 `prompts/<agent_id>/<locale>.md` 对应的 Agent 专属策略，不能覆盖通用系统层。Review 运行时只按任务 `prompt_locale` 读取已加载语言包，未知语言回退至配置的默认语言；新增语言不得要求在模型 Runtime 中拼接或硬编码自然语言提示词。
 - 模型 Provider 配置由本机 Web Settings API 在运行期写入 Secret Store；API Key 是只写字段，不进入普通配置、数据库、日志、事件或 API 响应。
 - 后端运行日志统一写入项目根目录 `logs/` 并由 `.gitignore` 排除。统一后端进程按职责拆分：HTTP、Uvicorn 和 API 应用日志写入 `logs/api.log`，Worker 调度和模型 Runtime 诊断写入 `logs/worker.log`；Supervisor 使用独立的 `logs/supervisor.log`。拆分由 logger 命名空间和独立 Handler 完成，不得依赖消息正文分类；各日志独立限量轮转，互不传播和重复写入。
 - 运行日志和日志级别变更使用结构化字段。日志级别只使用 `debug`、`info`、`warning`、`error`；默认级别和当前级别必须明确。未处理异常记录异常堆栈和最小必要的任务或请求标识，不得记录密钥等敏感信息。当前级别通过稳定的 Settings HTTP/JSON 契约读取和更新，持久化到项目 `data/` 目录；API、Worker 和 Supervisor 必须无需重启即可采用新级别。前端不得直接读写日志文件或数据目录。
@@ -54,8 +54,9 @@
 - API 请求、响应和模型输出必须在后端边界使用 Pydantic DTO 校验，不得直接序列化领域实体或 ORM 模型。
 - JSON 字段、错误码、事件名称和状态值属于稳定契约。变更时必须考虑向后兼容、幂等、迁移和失败恢复。
 - `/api/settings/model-gateways` 是本地模型网关集合契约，支持创建、列出、更新和删除；`PUT /api/settings/active-model-gateway` 原子切换当前网关。读取只返回网关 ID、名称、模型 ID、Base URL 和激活状态，API Key 永不通过读取契约返回。
+- `GET/PUT /api/settings/repositories` 读取或更新最近 Review 仓库目录容量，字段为 `recent_repository_limit`，允许 1–20，默认 10。更新必须持久化并立即按当前 LRU 顺序裁剪溢出目录。
 - `/api/repositories/browse` 只返回系统根目录、目录项和 Git 仓库标记；`/api/repositories/catalog` 返回全部可选分支以及分页 Commit 元数据。两者都不能返回文件正文。
-- `GET /api/repositories/recent` 返回最多 6 个由未删除 Review 确定的去重仓库目录、名称和最近 Review 时间，用于本机仓库快捷选择。该列表不读取文件系统；选中路径后仍必须通过既有 inspect/catalog 契约重新执行允许根目录、Git 仓库和身份校验。
+- `GET /api/repositories/recent` 返回独立持久化的最近 Review 仓库目录、名称和最近使用时间，用于本机仓库快捷选择。目录按 LRU 维护，Review 创建成功时提升对应目录，并按持久化设置保留 1–20 个，默认 10 个；Review tombstone 不得删除或降级目录项。该列表不读取文件系统；选中路径后仍必须通过既有 inspect/catalog 契约重新执行允许根目录、Git 仓库和身份校验。
 - `GET /api/reviews/{task_id}/findings/{finding_id}/source` 只返回该 Finding 所在文件在 Review 固定 base/head revision 的完整正文及高亮行范围；不得读取可变原始工作区，也不得用模型输出决定文件路径或 revision。
 - `GET /api/reviews/{task_id}/process-report` 仅在 Review 到达终态后返回由完整脱敏转录确定性聚合的执行指标，包括 LLM 调用与 token、Agent、工具 call/result、时长和 Finding 数；旧转录或失败执行缺少供应商 usage 时必须通过 `usage_is_complete=false` 显式表达，不得估算为精确用量。
 - `GET /api/reviews` 返回未删除的持久化 Review 工作空间；`DELETE /api/reviews/{task_id}` 使用软删除语义，活动任务必须同时持久化取消意图。
@@ -140,17 +141,19 @@ Interface 层当前包含 FastAPI 路由、请求/响应 DTO、SSE 端点和 Wor
 
 仓库审查规则按目标文件独立解析。从仓库根目录到目标文件所在目录的每一级，都以大小写不敏感方式同时发现 `AGENTS.md` 与 `REVIEW.md`，最后发现大小写不敏感的 `<target-file>.review.md`；同一目录出现仅大小写不同的同名规则文件属于歧义并必须拒绝。每个目标的规则链按通用到具体排列：更深目录高于上级目录，同一目录 `REVIEW.md` 高于 `AGENTS.md`，文件专属规则最高。结构化 exclude 为累积并集，不允许下级规则重新包含已排除路径。
 
-多目标 Review 必须分别保留每个目标的规则链，不得把规则正文合并成失去适用范围的全局指令。模型输入使用去重的 `repository_instructions` 文档表、去重的 `repository_instruction_chains` 规则链表，以及逐目标的 `repository_instruction_targets` 规则链 ID 映射；每份文档携带 kind、scope path、precedence 和内容哈希。仓库规则只能约束其目标链内的审查偏好，不能覆盖平台、工具、Snapshot 范围或输出契约。
+多目标 Review 必须在后端分别保留每个目标的规则链，用于结构化 exclude、Snapshot 冻结、完整性与作用域校验，不得在这些确定性控制中丢失适用范围。Snapshot 只冻结最终 Review 目标实际引用的规则文件；首次模型调用的系统上下文完整加载其中位于根目录的 `AGENTS.md`、`REVIEW.md`，并只列出其他适用于至少一个 Review 文件的已冻结规则路径；根规则预取不记为工具调用。模型初始用户输入不得包含规则正文、规则文件清单、内部规则链、逐目标映射、优先级或内容哈希。Agent 必须对初始 `review_files` 中的每个完整仓库相对目标路径调用内置 `instruction_loader`；该工具由后端返回从通用到具体的完整规则路径顺序，每份非根规则正文在单个 Agent Run 中只返回一次，后续目标只引用已返回路径。未完成规则加载时不得接受该目标的 `comment`，也不得接受 `task_done`。仓库规则不能覆盖平台、安全、工具、Snapshot 范围或输出契约。
 
 ### 5.1 MVP 内置 Review 工具
 
-MVP 为每个 Agent Run 提供 CodeLens 自身实现的只读证据工具：`explore`、`glob`、`grep`、`read_file`、`get_change_map`、`get_diff` 与 `read_revision`。这些工具的唯一数据源是该任务冻结后的 `ReviewSnapshot`；工具驱动的 Agent 系统指令承载平台工具指引和输出契约，用户输入只包含 Snapshot 标识、输出语言和去重后的适用仓库规则映射。用户输入不得重复系统指令或工具描述，不得包含内部上下文计划、预算或 token 估算，也不得预先拼入变更 hunk、上下文 excerpt 或完整仓库正文。Agent 必须先通过 `get_change_map` 建立调查计划，再按需读取证据。
+MVP 为每个 Agent Run 提供 CodeLens 自身实现的只读证据工具：`explore`、`glob`、`grep`、`read_file`、`instruction_loader`、`get_diff` 与 `read_revision`。这些工具的唯一数据源是该任务冻结后的 `ReviewSnapshot`。Context Builder 在首次模型调用前从 Snapshot 的不可变文件级变更元数据确定性构造完整 `review_files`；每项只包含规范化仓库相对路径、`added`、`modified`、`deleted` 或 `renamed` 类型、可选重命名前路径，以及允许产生 Finding 的新侧范围。文件和范围稳定排序，超过产品上限必须在模型调用前明确失败，不得静默截断。无法可靠表达变更类型的范围也必须在 Snapshot 构建边界失败，不能根据 hunk 正文猜测。全仓 Review 使用明确的空概念基线：最终存在的目标按 `added` 处理，其完整文本范围为新侧范围，overlay 删除的目标按 `deleted` 处理；二进制文件可以没有新侧文本范围。
+
+工具驱动 Agent 的首次用户输入只序列化 `review_files`。任务持久化的 `prompt_locale` 由 Runtime 显式接收并用于选择系统语言包，不进入模型输入。Snapshot ID、hunk ID、内容哈希、摘录哈希和规则链标识仅由后端保留，用于隔离、完整性校验、Finding 定位、转录与 Artifact，不得序列化给模型。系统指令、工具描述、仓库规则正文、完整 diff 和上下文 excerpt 不得重复进入首次用户消息。完整 diff 不预加载；Agent 对每个目标加载规则后，根据调查需要从可用的只读证据工具中自行选择。
 
 除证据工具外，Review Runtime 还提供任务内有状态的 `comment` 与 `task_done` 工具。`comment` 可批量收集候选评论；`task_done` 只记录调查完成声明及已检查变更文件数。它们不读写持久化数据、不执行文件写入、Shell 或网络操作，也不访问原始工作区。模型仅可提交路径、行范围与评论内容；适配器必须以冻结 Snapshot 重新解析范围，确认其完整位于唯一的新侧变更 hunk，并派生 hunk ID 与 excerpt hash。无法解析、越界或未变更位置的候选评论必须丢弃，不得进入最终报告。运行结束后，最终 FindingBatch 只能由已解析评论确定性生成，模型的最终文本和模型提供的 hunk ID、哈希均不得作为输出依据。
 
-内置工具的模型可见自然语言描述、平台审查规则、输出约束、运行结束要求和语言校验反馈统一由启动时加载的 `prompts/sys/<locale>` 提供。工具名、JSON 字段名、路径、代码标识符与 Snapshot 返回结构属于稳定技术契约，不随本地化改变。
+内置工具的模型可见自然语言描述、平台审查规则、输出约束和运行结束要求统一由启动时加载的 `prompts/sys/<locale>` 提供。工具名、JSON 字段名、路径、代码标识符与 Snapshot 返回结构属于稳定技术契约，不随本地化改变。
 
-工具实现必须位于 `review.infrastructure` 或 `workspace.infrastructure`，并通过 Review 的 Runtime Port 接入。每次证据读取必须校验 Snapshot ID、规范化相对路径、Manifest 可见性和内容哈希；必须限制读取字节数、行数、搜索结果数与 Git 输出。工具调用不设置独立次数上限，而由可配置的模型回合数、单次工具输出上限和用户取消共同约束；Review 不设置总执行时限。必须记录总调用数用于诊断和成本治理。所有工具不得写入文件、执行任意 Shell、访问网络、访问原始工作区或读取 Snapshot 之外的路径。
+工具实现必须位于 `review.infrastructure` 或 `workspace.infrastructure`，并通过 Review 的 Runtime Port 接入。每次证据读取必须校验 Snapshot ID、规范化相对路径、Manifest 可见性和内容哈希；`instruction_loader` 只接受 `review_files` 中的完整仓库相对目标路径，只能返回 Snapshot 中已冻结且适用于该目标的规则文档；必须限制读取字节数、行数、搜索结果数与 Git 输出。工具调用不设置独立次数上限，而由可配置的模型回合数、单次工具输出上限和用户取消共同约束；Review 不设置总执行时限。必须记录总调用数用于诊断和成本治理。宿主构造 `review_files` 和预取根规则不产生工具转录或工具计数；`get_change_map` 不属于模型可见工具，过程报告中的调用次数为零。所有工具不得写入文件、执行任意 Shell、访问网络、访问原始工作区或读取 Snapshot 之外的路径。
 
 MVP 不实现 Serena、CodeGraph、codebase-memory、第三方 MCP、Skills、LSP 或通用沙箱工具。未来接入这些能力时，必须经 `capabilities` 上下文的版本化 Capability Profile 与受控 Adapter 暴露稳定工具契约，不能将供应商工具、路径或权限直接泄漏给 Agent。
 
@@ -187,6 +190,7 @@ frontend/src/
 - Secret（包括 API Key、Authorization、Cookie 和会话凭证）不得进入数据库、日志、事件、Artifact、Prompt、RunContext 或错误响应。为本机操作者提供可审计执行过程时，系统可以将已脱敏的 Prompt、模型可见输出、工具调用和 Skill 生命周期写入任务专属 Artifact，并仅通过稳定的 HTTP/JSON 与可恢复 SSE 契约读取；Transcript 对内容不做截断，折叠仅是前端呈现能力。经本地操作者明确启用的 `logs/model.log` 是唯一允许记录完整已脱敏模型交换的日志，不得包含凭证，也不得把正文复制到其他运行日志。任务级存储配额和删除策略负责 Artifact 保留边界；模型日志按固定大小和数量轮转，不得通过静默截断单条记录控制容量。
 - 本地 Web 写入的多网关 Secret Catalog 保存在 data directory 的 `secrets/model-gateways.json`；目录和文件分别使用 owner-only `0700`/`0600` 权限并原子替换。API 与 Worker 只通过 Secret Store Port 共享，Worker 在实际模型调用时读取当前激活网关，进程启动不得依赖网关已配置。Secret Store 默认位于源码仓库之外。
 - Review 工作空间删除使用数据库 tombstone，不级联删除 Finding、事件、快照或审计数据；读取单个已删除 Review 与列表查询都不得重新暴露 tombstone 记录。
+- 最近 Review 仓库目录拥有独立于 Review 工作空间 tombstone 的持久化生命周期；删除 Review 不得改变该目录，目录只在新仓库使用或容量设置更新导致 LRU 超出当前配置时淘汰。
 - 非 HTTPS 的远程模型 Base URL 会明文传输凭证和 Review 内容，界面必须显式警告；是否使用该受信任网络边界由本机操作者决定。
 - 数据库结构只能通过 Alembic migration 演进；持久化任务和事件必须支持幂等、重启恢复及部分失败。
 
@@ -201,4 +205,4 @@ frontend/src/
 - API、事件、数据库和持久化任务变更已覆盖兼容、迁移、幂等及恢复。
 - 数据所有权、Secret、仓库访问和执行隔离没有突破既有安全与信任边界。
 - 进程职责、启动关系、事件传递和持久化策略与既定运行拓扑一致。
-- 架构调整已同步更新本文档和必要的 ADR；实施与验证要求交由 `AGENTS.md` 维护。
+- 架构调整已同步更新本文档；实施与验证要求交由 `AGENTS.md` 维护。

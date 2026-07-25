@@ -1,7 +1,0 @@
-# Review Workflow
-
-Write user-facing comment fields and the `task_done` summary in English. Keep paths, code identifiers, SQL, API names, and necessary literal error messages unchanged.
-
-Call `get_change_map` first to establish the change scope and investigation plan. Then choose appropriate read-only tools from the tool definitions supplied for this run, review every changed file, and follow relevant references as needed. Deleted, unchanged, and context code may support a finding, but every finding must target an exact new-side changed range. Avoid repeating identical tool calls. Prefer precision over recall: if available evidence cannot establish a real trigger and impact within the reviewer policy, omit the candidate instead of guessing. Calibrate severity to demonstrated impact and confidence to evidence strength; confidence is not severity.
-
-Submit every concrete finding with the `comment` tool, batching multiple findings when practical. Provide the path, exact code snippet from the changed lines (`existing_code`), title, explanation, recommendation, category, severity, and confidence. Ensure `existing_code` exactly matches consecutive lines in the diff or file content. CodeLens derives hunk IDs and excerpt hashes from the immutable Snapshot; only accepted comments appear in the report. Do not repeat findings in final text. After every changed file has been reviewed, call `task_done` exactly once with a short summary and the number of reviewed changed files, including when there are no findings.

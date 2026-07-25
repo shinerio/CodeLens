@@ -5,7 +5,12 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 
 from codelens.review.domain.models import ReviewTask
-from codelens.review.domain.ports import ReviewRecord, ReviewStorePort
+from codelens.review.domain.ports import (
+    RecentRepositoryRecord,
+    RecentRepositoryStorePort,
+    ReviewRecord,
+    ReviewStorePort,
+)
 from codelens.shared.domain.errors import DomainError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.plan_scope import ScopePlanner
@@ -119,6 +124,43 @@ class ListReviewsHandler:
         """Return newest Review workspaces for the navigation hierarchy."""
 
         return await self._store.list_reviews()
+
+
+class ListRecentRepositoriesHandler:
+    """List repository directories from the independent recent-use catalog."""
+
+    def __init__(self, store: RecentRepositoryStorePort) -> None:
+        self._store = store
+
+    async def handle(self) -> tuple[RecentRepositoryRecord, ...]:
+        """Return the configured newest-first list for repository selection."""
+
+        limit = await self._store.get_limit()
+        return await self._store.list_recent_repositories(limit)
+
+
+class GetRecentRepositorySettingsHandler:
+    """Read the persisted recent repository list setting."""
+
+    def __init__(self, store: RecentRepositoryStorePort) -> None:
+        self._store = store
+
+    async def handle(self) -> int:
+        """Return the current LRU capacity."""
+
+        return await self._store.get_limit()
+
+
+class UpdateRecentRepositorySettingsHandler:
+    """Update the recent repository LRU capacity and apply it immediately."""
+
+    def __init__(self, store: RecentRepositoryStorePort) -> None:
+        self._store = store
+
+    async def handle(self, limit: int) -> int:
+        """Persist one validated capacity through the repository catalog boundary."""
+
+        return await self._store.update_limit(limit)
 
 
 class DeleteReviewHandler:

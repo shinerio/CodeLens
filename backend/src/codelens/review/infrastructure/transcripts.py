@@ -1,4 +1,4 @@
-"""Bounded, credential-safe execution transcripts for one Review task."""
+"""Lossless, credential-safe execution transcripts for one Review task."""
 
 import asyncio
 import json
@@ -8,7 +8,7 @@ import tempfile
 from collections.abc import Mapping, Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal
+from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
@@ -29,7 +29,10 @@ TranscriptKind = Literal[
 ]
 
 _SECRET_PATTERN = re.compile(
-    r"(?i)(?:authorization\s*:\s*bearer\s+|(?:api[_-]?key|bearer|cookie|token)\s*[:=]\s*)[^\s,\"}]+"
+    r"(?i)(?P<prefix>"
+    r"[\"']?authorization[\"']?\s*:\s*[\"']?\s*(?:(?:bearer|basic)\s+)?|"
+    r"[\"']?(?:api[_-]?key|bearer|cookie|token)[\"']?\s*[:=]\s*[\"']?"
+    r")(?P<secret>[^\s,\"'}]+)"
 )
 
 
@@ -45,8 +48,17 @@ class TranscriptEntry(BaseModel):
     metadata: dict[str, str] = Field(default_factory=dict)
 
 
+class ModelTranscriptLogPort(Protocol):
+    """Write complete sanitized model exchanges when a task transcript becomes terminal."""
+
+    async def write(self, task_id: str, entries: Sequence[TranscriptEntry]) -> None:
+        """Persist model exchanges outside the streaming event path."""
+
+        raise NotImplementedError
+
+
 class ExecutionTranscriptStore:
-    """Append and read transcript entries without placing model content in logs/events.
+    """Append and read complete transcript entries while removing credential values.
 
     Files are task-scoped and atomically replaced through unique, same-directory temporary
     files, so stale interrupted writes cannot block a Worker. Credential-like substrings are
@@ -66,7 +78,7 @@ class ExecutionTranscriptStore:
         *,
         metadata: Mapping[str, str] | None = None,
     ) -> None:
-        """Sanitize and append an entry without exposing content through logging."""
+        """Sanitize and append one complete entry without truncation."""
 
         await self.append_many(task_id, ((kind, content, metadata),))
 
@@ -148,8 +160,13 @@ class ExecutionTranscriptStore:
 class WorkerTranscriptStore:
     """Keep active Review transcripts in Worker memory and persist only at completion."""
 
-    def __init__(self, durable_store: ExecutionTranscriptStore) -> None:
+    def __init__(
+        self,
+        durable_store: ExecutionTranscriptStore,
+        model_log: ModelTranscriptLogPort | None = None,
+    ) -> None:
         self._durable_store = durable_store
+        self._model_log = model_log
         self._entries: dict[str, list[TranscriptEntry]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -195,11 +212,15 @@ class WorkerTranscriptStore:
             entries = self._entries.pop(task_id, [])
             if entries:
                 await self._durable_store.replace(task_id, entries)
+                if self._model_log is not None:
+                    await self._model_log.write(task_id, entries)
 
 
 def _redact(content: str) -> tuple[str, bool]:
     """Remove credential-like values while retaining enough text for diagnosis."""
 
-    safe, count = _SECRET_PATTERN.subn("[REDACTED_CREDENTIAL]", content)
+    safe, count = _SECRET_PATTERN.subn(
+        lambda match: f"{match.group('prefix')}[REDACTED_CREDENTIAL]",
+        content,
+    )
     return safe, count > 0
-

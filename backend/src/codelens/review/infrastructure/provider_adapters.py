@@ -7,7 +7,13 @@ from agents.model_settings import ModelSettings, Reasoning
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel
 
-from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
+from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig, ThinkingLevel
+
+
+def _reasoning(level: ThinkingLevel) -> Reasoning | None:
+    if level == "disabled":
+        return None
+    return Reasoning(effort=level)
 
 
 @dataclass(frozen=True)
@@ -34,11 +40,7 @@ class OpenAIProviderAdapter:
             OpenAIResponsesModel if config.api_type == "responses" else OpenAIChatCompletionsModel,
             ModelSettings(
                 max_tokens=config.max_tokens,
-                reasoning=(
-                    None
-                    if config.thinking_level == "disabled"
-                    else Reasoning(effort=config.thinking_level)
-                ),
+                reasoning=_reasoning(config.thinking_level),
             ),
         )
 
@@ -71,7 +73,7 @@ class ZhipuProviderAdapter:
             OpenAIChatCompletionsModel,
             ModelSettings(
                 max_tokens=config.max_tokens,
-                reasoning=Reasoning(effort=config.thinking_level) if enabled else None,
+                reasoning=_reasoning(config.thinking_level),
                 extra_body={"thinking": {"type": "enabled" if enabled else "disabled"}},
             ),
         )
