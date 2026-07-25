@@ -9,6 +9,7 @@ from codelens.workspace.domain.ports import (
     WorktreeRecoveryPort,
     WorktreeRegistryPort,
 )
+from codelens.shared.domain.errors import WorktreeOwnershipError
 
 
 @dataclass(frozen=True)
@@ -92,14 +93,29 @@ class ReviewWorktreeRecoveryService:
             recovery_input = active.get(task_id)
             if recovery_input is None:
                 if await self._recovery.is_present(record):
-                    await self._lifecycle.remove_owned(record)
+                    try:
+                        await self._lifecycle.remove_owned(record)
+                    except WorktreeOwnershipError:
+                        # Orphaned worktree with invalid ownership; force cleanup
+                        await self._registry.remove(task_id)
                 else:
                     await self._registry.remove(task_id)
                 continue
             if await self._recovery.is_present(record):
-                await self._recovery.verify_ownership(record)
-                recovered[task_id] = record
-                continue
+                try:
+                    await self._recovery.verify_ownership(record)
+                    recovered[task_id] = record
+                    continue
+                except WorktreeOwnershipError:
+                    # Ownership marker mismatch; verify_ownership already quarantined
+                    # the physical worktree, so we just clean up the registry and recreate
+                    await self._registry.remove(task_id)
+                    recovered[task_id] = await self._lifecycle.create(
+                        task_id,
+                        recovery_input.repository,
+                        recovery_input.captured,
+                    )
+                    continue
             await self._recovery.forget_missing(record, recovery_input.repository)
             recovered[task_id] = await self._lifecycle.create(
                 task_id,

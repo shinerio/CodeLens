@@ -52,8 +52,8 @@ powershell -ExecutionPolicy Bypass -File .\code-lens.ps1
 启动完成后访问：
 
 - Web 页面：`http://127.0.0.1:5173`
-- 后端 API：`http://127.0.0.1:8765`
-- OpenAPI 文档：`http://127.0.0.1:8765/docs`
+- 后端 API：`http://127.0.0.1:8800`
+- OpenAPI 文档：`http://127.0.0.1:8800/docs`
 
 按 `Ctrl+C` 会同时停止前后端。首次启动后，先打开 Web 页面中的 **Settings / 设置** 添加模型网关；服务启动和浏览仓库都不依赖模型配置。
 
@@ -76,10 +76,10 @@ pnpm --dir frontend install
 uv run --project backend codelens-review start
 ```
 
-后端默认监听 `http://127.0.0.1:8765`。健康检查和 OpenAPI 文档分别位于：
+后端默认监听 `http://127.0.0.1:8800`。健康检查和 OpenAPI 文档分别位于：
 
-- `http://127.0.0.1:8765/api/health`
-- `http://127.0.0.1:8765/docs`
+- `http://127.0.0.1:8800/api/health`
+- `http://127.0.0.1:8800/docs`
 
 #### 3. 启动前端
 
@@ -179,7 +179,7 @@ CodeLens 会随任务快照冻结适用于目标文件的规则，按从仓库�
 | --- | --- | --- |
 | `CODELENS_DATA_DIR` | `~/.local/share/codelens-review` | SQLite、worktree、检查点和 Artifact 的应用数据目录 |
 | `CODELENS_HOST` | `127.0.0.1` | HTTP 监听地址；首版只接受回环地址 |
-| `CODELENS_PORT` | `8765` | HTTP 端口 |
+| `CODELENS_PORT` | `8800` | HTTP 端口 |
 | `CODELENS_DATABASE_URL` | 本地 SQLite | 可选数据库连接 URL；数据库结构仍由 Alembic 管理 |
 
 启动命令也支持 `--host`、`--port` 和 `--data-dir`。执行以下命令查看完整参数：

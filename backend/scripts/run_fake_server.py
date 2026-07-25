@@ -122,7 +122,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
         repository_roots=tuple(Path(value) for value in values.repository_roots),
     )
     app = asyncio.run(_build_app(settings))
-    uvicorn.run(app, host="127.0.0.1", port=8765)
+    uvicorn.run(app, host="127.0.0.1", port=8800)
 
 
 if __name__ == "__main__":

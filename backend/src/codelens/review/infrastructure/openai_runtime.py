@@ -6,6 +6,8 @@ import logging
 import os
 from typing import Any, Literal, Protocol, cast
 
+import httpx
+
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_MODEL_DATA", "1")
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
@@ -157,6 +159,7 @@ class OpenAIAgentRuntime:
         client = AsyncOpenAI(
             api_key=provider_config.api_key,
             base_url=provider_config.base_url,
+            http_client=httpx.AsyncClient(trust_env=False),
         )
         behavior = (
             ModelProviderAdapterRegistry()

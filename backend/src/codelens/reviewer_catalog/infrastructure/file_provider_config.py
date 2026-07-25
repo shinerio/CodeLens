@@ -131,6 +131,8 @@ class FilesystemModelProviderConfigAdapter:
         return ModelGatewayCatalog(cast(str | None, active_gateway_id), tuple(gateways))
 
     def _save_catalog_sync(self, catalog: ModelGatewayCatalog) -> None:
+        # Windows: mkdir mode is ignored; chmod works but has different semantics.
+        # Unix-like systems (Linux, macOS): enforce strict owner-only permissions.
         self._directory.mkdir(mode=0o700, parents=True, exist_ok=True)
         os.chmod(self._directory, 0o700)
         payload: _StoredGatewayCatalog = {
@@ -159,7 +161,9 @@ class FilesystemModelProviderConfigAdapter:
         )
         temporary_path = Path(temporary_name)
         try:
-            os.fchmod(descriptor, 0o600)
+            # os.fchmod is Unix-only; Windows skips file descriptor permissions.
+            if hasattr(os, "fchmod"):
+                os.fchmod(descriptor, 0o600)
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 descriptor = -1
                 json.dump(payload, stream, sort_keys=True, separators=(",", ":"))

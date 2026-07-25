@@ -235,13 +235,17 @@ class GitReviewWorktreeManager:
         await self.verify_ownership(worktree)
         lock = await self._locks.get(worktree.repository_common_dir_hash)
         async with lock:
-            await self._git.run(
-                worktree.root,
-                "worktree",
-                "remove",
-                "--force",
-                str(worktree.root),
-            )
+            try:
+                await self._git.run(
+                    worktree.root,
+                    "worktree",
+                    "remove",
+                    "--force",
+                    str(worktree.root),
+                )
+            except Exception:
+                # Windows may have permission issues; fall back to manual removal
+                pass
         await self._registry.remove(worktree.task_id)
         await asyncio.to_thread(_remove_task_directory, worktree.root.parent)
 

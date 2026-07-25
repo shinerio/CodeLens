@@ -165,13 +165,13 @@ start_services() {
   FRONTEND_PID=$!
   printf '%s\n' "$FRONTEND_PID" >"$FRONTEND_PID_FILE"
 
-  wait_for_http "http://127.0.0.1:8765/api/health" "$BACKEND_PID" "Backend"
+  wait_for_http "http://127.0.0.1:8800/api/health" "$BACKEND_PID" "Backend"
   wait_for_http "http://127.0.0.1:5173" "$FRONTEND_PID" "Frontend"
 
   printf '\nCodeLens is ready. Open these addresses:\n'
   printf '  Frontend:  http://%s:5173\n' "$host"
-  printf '  Backend:   http://%s:8765\n' "$host"
-  printf '  OpenAPI:   http://%s:8765/docs\n' "$host"
+  printf '  Backend:   http://%s:8800\n' "$host"
+  printf '  OpenAPI:   http://%s:8800/docs\n' "$host"
   printf '\nAll locally accessible Git repositories are allowed by default.\n'
   printf 'Choose a repository and configure model gateways in the Web UI.\n'
   printf 'Run ./code-lens stop to stop all services.\n\n'

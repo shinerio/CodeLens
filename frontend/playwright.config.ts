@@ -14,7 +14,7 @@ export default defineConfig({
     {
       command: `uv run --project backend python backend/scripts/run_fake_server.py --data-dir ${dataDir}`,
       cwd: "..",
-      port: 8765,
+      port: 8800,
       reuseExistingServer: false,
     },
     {

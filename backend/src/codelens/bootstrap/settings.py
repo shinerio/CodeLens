@@ -10,10 +10,10 @@ class Settings(BaseSettings):
 
     model_config = SettingsConfigDict(env_prefix="CODELENS_", env_nested_delimiter="__")
 
-    data_dir: Path = Path.cwd() / "data"
-    prompt_dir: Path = Path.cwd() / "prompts"
+    data_dir: Path | None = None
+    prompt_dir: Path | None = None
     host: str = "127.0.0.1"
-    port: int = 8765
+    port: int = 8800
     auth: Literal["none"] = "none"
     max_workers: int = 1
     max_active_reviews: int = 4
@@ -22,6 +22,18 @@ class Settings(BaseSettings):
     repository_roots: tuple[Path, ...] = ()
     database_url: str | None = None
     initialize_schema: bool = True
+
+    @model_validator(mode="before")
+    @classmethod
+    def resolve_default_paths(cls, data: dict) -> dict:
+        """Resolve data_dir and prompt_dir relative to the project root."""
+        # Project root = parent of backend/
+        project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
+        if "data_dir" not in data or data["data_dir"] is None:
+            data["data_dir"] = project_root / "data"
+        if "prompt_dir" not in data or data["prompt_dir"] is None:
+            data["prompt_dir"] = project_root / "prompts"
+        return data
 
     @field_validator("repository_roots")
     @classmethod

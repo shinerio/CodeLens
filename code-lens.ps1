@@ -4,6 +4,19 @@ $backendProcess = $null
 $frontendProcess = $null
 $locationPushed = $false
 
+function Stop-ExistingPortProcess {
+    param([int]$Port)
+
+    $connections = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
+    if ($connections) {
+        $procIds = $connections | ForEach-Object { $_.OwningProcess } | Select-Object -Unique
+        foreach ($procId in $procIds) {
+            Stop-Process -Id $procId -Force -ErrorAction SilentlyContinue
+        }
+        Start-Sleep -Seconds 1
+    }
+}
+
 function Stop-ProcessTree {
     param([System.Diagnostics.Process]$Process)
 
@@ -45,33 +58,40 @@ try {
     }
 
     Write-Host "`n[3/3] Starting CodeLens..."
+
+    # 清理占用端口的旧进程
+    Stop-ExistingPortProcess -Port 5173
+    Stop-ExistingPortProcess -Port 8800
+
+    # 通过 cmd /c 启动以保持进程树连接（解决 uv.exe 包装器立即退出的问题）
+    # pnpm 是 .ps1 文件，也需要通过 cmd /c 调用
     $backendProcess = Start-Process `
-        -FilePath $uvCommand.Source `
-        -ArgumentList @("run", "--project", "backend", "codelens-review", "start") `
+        -FilePath "cmd.exe" `
+        -ArgumentList @("/c", "`"$($uvCommand.Source)`" run --project backend codelens-review start") `
         -WorkingDirectory $scriptRoot `
         -NoNewWindow `
         -PassThru
     $frontendProcess = Start-Process `
-        -FilePath $pnpmCommand.Source `
-        -ArgumentList @("--dir", "frontend", "dev", "--host", "127.0.0.1", "--strictPort") `
+        -FilePath "powershell.exe" `
+        -ArgumentList @("-File", $pnpmCommand.Source, "--dir", "frontend", "dev", "--host", "127.0.0.1", "--strictPort") `
         -WorkingDirectory $scriptRoot `
         -NoNewWindow `
         -PassThru
 
-    Start-Sleep -Seconds 1
+    Start-Sleep -Seconds 3
     $backendProcess.Refresh()
     $frontendProcess.Refresh()
     if ($backendProcess.HasExited) {
-        throw "Backend failed to start. Make sure port 8765 is available."
+        throw "Backend failed to start (exit=$($backendProcess.ExitCode)). Make sure port 8800 is available."
     }
     if ($frontendProcess.HasExited) {
-        throw "Frontend failed to start. Make sure port 5173 is available."
+        throw "Frontend failed to start (exit=$($frontendProcess.ExitCode)). Make sure port 5173 is available."
     }
 
     Write-Host "`nCodeLens is starting. Open these addresses:"
     Write-Host "  Frontend:  http://127.0.0.1:5173"
-    Write-Host "  Backend:   http://127.0.0.1:8765"
-    Write-Host "  OpenAPI:   http://127.0.0.1:8765/docs"
+    Write-Host "  Backend:   http://127.0.0.1:8800"
+    Write-Host "  OpenAPI:   http://127.0.0.1:8800/docs"
     Write-Host "`nAll locally accessible Git repositories are allowed by default."
     Write-Host "Choose a repository and configure model gateways in the Web UI."
     Write-Host "Press Ctrl+C to stop both services.`n"

@@ -295,7 +295,11 @@ class WorkerReviewExecutor:
             return
         worktree = await self._worktree_registry.get(task_id)
         if worktree is not None:
-            await self._worktree_lifecycle.remove_owned(worktree)
+            try:
+                await self._worktree_lifecycle.remove_owned(worktree)
+            except Exception:
+                # Cleanup failures should not crash the service
+                pass
 
     async def _validate_repository(self, record: ReviewExecutionRecord) -> None:
         repository = await self._repository_inspector.inspect(record.repository_path)
