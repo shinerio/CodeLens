@@ -124,19 +124,20 @@ CodeLens 整体 Runtime、Prompt 和结果持久化见 [`runtime-mechanism.md`](
 在进入 SDK 前，CodeLens 已经完成：
 
 1. 冻结 `ReviewSnapshot`；
-2. 用 `ContextBuilder` 生成 `review_files` 和 `repository_instructions`；
+2. 用 `ContextBuilder` 生成包含 `review_files` 和可信 `repository_instructions` 的内部信封；
 3. 加载当前语言的系统 Prompt；
 4. 加载 Reviewer 专属 Prompt；
 5. 读取当前激活模型网关；
 6. 创建当前 Run 专属的证据工具和评论收集器。
 
-`OpenAIAgentRuntime._invoke()` 随后创建 `Agent[None]`。其关键配置可简化为：
+`OpenAIAgentRuntime._invoke()` 先把内部信封拆成系统规则段和用户输入段，再创建 `Agent[None]`。其关键配置可简化为：
 
 ```python
 agent = Agent(
     name="correctness:v1",
     instructions=(
         review_policy
+        + canonical_repository_instructions
         + review_workflow
         + reviewer_policy
     ),
@@ -153,7 +154,11 @@ agent = Agent(
     ],
     tool_use_behavior=completion_tool_use_behavior,
 )
+
+runner_input = canonical_review_files
 ```
+
+因此 `Agent.instructions` 是系统级高优先级指令，依次包含平台策略、已冻结校验的可信仓库规则、通用工作流和 Reviewer 专属策略；首次用户输入只包含本次 Review 的文件范围。原始内部信封不会整体传给 SDK。
 
 ### 3.2 SDK 默认值与显式完成策略
 
@@ -197,7 +202,7 @@ async for event in stream.stream_events():
 SDK 创建流式结果时，主要字段处于以下状态：
 
 ```text
-input          = 首次用户输入
+input          = 只含 review_files 的首次用户输入
 current_agent  = starting_agent
 current_turn   = 0
 max_turns      = CodeLens 网关配置
@@ -314,7 +319,7 @@ SDK 允许 instructions 和工具启用状态是动态函数。CodeLens 传入�
 SDK 将以下内容转换为下一轮模型输入：
 
 ```text
-首次用户输入
+只含 review_files 的首次用户输入
 + 前几轮模型 message/reasoning items
 + 前几轮 tool call items
 + 对应 tool output items

@@ -37,7 +37,8 @@ CodeLens 没有复制 OCR 的 CLI、Prompt 模板、规则库、MCP、并发调�
   -> 校验并加载 prompts/sys/<locale> 与 Reviewer Prompt
   -> 用户选择仓库和 Review 范围
   -> 创建隔离 detached worktree，冻结 Snapshot、Manifest、diff 范围和规则链
-  -> ContextBuilder 生成包含 review_files 与去重 repository_instructions 的首次用户输入
+  -> ContextBuilder 生成包含 review_files 与去重 repository_instructions 的内部信封
+  -> Runtime 将 repository_instructions 放入系统指令，用户输入只保留 review_files
   -> 单个 Reviewer Run 调查全部目标
        -> 按需 get_diff/read_file/grep/... 获取证据
        -> comment 提交候选 Finding
@@ -77,8 +78,8 @@ CLI 启动
 | Review 范围 | 分支差异、Commit、未提交改动、全仓；可冻结 overlay | workspace、range、commit、全文件 `scan`，另有 delegate | 范围接近；OCR 的 scan、delegate 与 CI 使用更成熟 |
 | 执行粒度 | 一个 Agent Run 查看完整 `review_files` | 每个文件独立 plan/main subtask，并发执行 | OCR 对大变更吞吐和覆盖更有优势；CodeLens 更利于跨文件统一推理，但容易受单一上下文和回合预算影响 |
 | 输入一致性 | 任务专属 detached worktree + immutable Snapshot + Manifest/hash | 按运行模式读取 Git 对象或当前工作区；有路径约束，但没有等价的内容哈希 Snapshot | CodeLens 的复现、隔离和证据完整性更强；OCR workspace 模式更轻但运行中工作区变化的影响更大 |
-| 首次提示 | 用户消息包含完整、排序后的 `review_files`，以及正文去重并带精确目标映射的 `repository_instructions`；不含完整 diff 和内部 ID | 每文件的 plan/main 用户消息直接含完整 diff、当前路径、其他变更文件、规则、背景和可选计划 | CodeLens 规则首轮可用且避免逐文件工具往返；OCR 首轮还包含当前完整 diff，可直接分析但大 diff 成本更高 |
-| Prompt 加载 | 启动时完整校验本地化 `review-policy`、`review-workflow` 和工具说明，再组合 Reviewer 策略；仓库规则由 Context Builder 放入首次用户输入 | 编译期嵌入 task manifest 和 Markdown Prompt，启动时解析；语言指令追加到 system 消息 | 两者都避免运行中散乱拼接；CodeLens 的本地化完整性校验更严格，OCR 的多阶段模板更丰富 |
+| 首次提示 | 系统指令包含正文去重并带精确目标映射的可信 `repository_instructions`；用户消息只包含完整、排序后的 `review_files`，不含完整 diff 和内部 ID | 每文件的 plan/main 用户消息直接含完整 diff、当前路径、其他变更文件、规则、背景和可选计划 | CodeLens 规则首轮可用且避免逐文件工具往返；OCR 首轮还包含当前完整 diff，可直接分析但大 diff 成本更高 |
+| Prompt 加载 | 启动时完整校验本地化 `review-policy`、`review-workflow` 和工具说明；运行时在两者之间插入可信仓库规则，再组合 Reviewer 策略 | 编译期嵌入 task manifest 和 Markdown Prompt，启动时解析；语言指令追加到 system 消息 | 两者都避免运行中散乱拼接；CodeLens 的本地化完整性校验更严格，OCR 的多阶段模板更丰富 |
 | 仓库指令 | 冻结每个目标的 `AGENTS.md`、`REVIEW.md`、文件级规则链；宿主按规则正文去重并附带精确 `applies_to` 目标映射 | 内嵌语言规则库，叠加命令行、项目和全局 `.opencodereview/rule.json`，按路径匹配且可合并系统规则 | CodeLens 更适合仓库原生、层级化规则并可审计适用范围；OCR 内建规则覆盖和集中配置成熟度更高 |
 | 规则强制 | Context Builder 在模型调用前确定性校验并完整注入所有适用规则，模型不参与规则加载 | 规则正文直接进入当前文件 Prompt，不需要加载工具 | 两者都避免规则加载工具往返；CodeLens 额外保留 Snapshot 哈希与多目标作用域校验 |
 | 内置调查工具 | `find_files`、`grep`、`read_file`、`get_diff` | `file_read`、`code_search`、`file_read_diff`、`file_find` | CodeLens 通过 `read_file` 支持 current/base/head 版本读取；OCR 的代码搜索参数、Git pathspec 与跨文件 diff 批量读取更强 |
@@ -98,7 +99,7 @@ CLI 启动
 
 ### 5.1 CodeLens
 
-CodeLens 在进程启动时由 `I18nPromptLoader` 校验每个 locale 的固定语言包：合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md` 和六个工具说明。运行时按固定顺序组合 `review-policy`、`review-workflow` 和 Reviewer 专属策略。Context Builder 在模型调用前验证冻结规则并构造首次用户消息：`review_files` 提供路径、变化类型、可选旧路径和允许 Finding 的 old/new 侧范围；`repository_instructions` 提供正文去重的完整规则和精确 `applies_to` 目标映射。
+CodeLens 在进程启动时由 `I18nPromptLoader` 校验每个 locale 的固定语言包：合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md` 和六个工具说明。Context Builder 在模型调用前验证冻结规则并构造内部信封：`review_files` 提供路径、变化类型、可选旧路径和允许 Finding 的 old/new 侧范围；`repository_instructions` 提供正文去重的完整规则和精确 `applies_to` 目标映射。Runtime 将信封拆分，按 `review-policy`、可信 `repository_instructions`、`review-workflow`、Reviewer 专属策略的顺序组成系统指令，用户输入仅保留 `review_files`。
 
 优点：
 

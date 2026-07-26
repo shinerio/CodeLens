@@ -178,13 +178,7 @@ class OpenAIAgentRuntime:
         provider_config = await self._config_store.load()
         if provider_config is None:
             raise PermanentAgentOutputError("Model provider is not configured")
-        input_text: str | None = None
-        try:
-            input_text = input_payload.decode("utf-8", errors="strict")
-        except UnicodeDecodeError:
-            pass
-        if input_text is None:
-            raise PermanentAgentOutputError("Agent input is not valid UTF-8") from None
+        user_input, repository_instructions = _split_agent_input(input_payload)
         prompts = self._prompt_loader.get(prompt_locale)
         completion_settings = (
             await self._completion_settings.get()
@@ -237,6 +231,7 @@ class OpenAIAgentRuntime:
             instructions="\n\n".join(
                 (
                     prompts.review_policy,
+                    repository_instructions,
                     prompts.review_workflow,
                     f"# Reviewer Policy\n{agent.prompt_template}",
                 )
@@ -261,7 +256,7 @@ class OpenAIAgentRuntime:
                             "prompt",
                             _model_input(
                                 investigation_agent,
-                                input_text,
+                                user_input,
                                 provider_config.model,
                                 behavior.model_settings,
                             ),
@@ -270,7 +265,7 @@ class OpenAIAgentRuntime:
                     )
                 investigation = await self._run_observable(
                     investigation_agent,
-                    input_text,
+                    user_input,
                     provider_config.max_agent_turns,
                     run_config,
                     sink,
@@ -549,6 +544,49 @@ def _json_compatible(value: object) -> object:
     if isinstance(value, str | int | float | bool) or value is None:
         return value
     return str(value)
+
+
+def _split_agent_input(input_payload: bytes) -> tuple[str, str]:
+    """Split the internal context envelope into user scope and trusted instructions."""
+
+    try:
+        decoded = input_payload.decode("utf-8", errors="strict")
+        envelope = json.loads(decoded)
+    except (UnicodeDecodeError, json.JSONDecodeError):
+        raise PermanentAgentOutputError("Agent input is not valid JSON UTF-8") from None
+
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "review_files",
+        "repository_instructions",
+    }:
+        raise PermanentAgentOutputError("Agent input envelope has an invalid shape")
+    review_files = envelope["review_files"]
+    repository_instructions = envelope["repository_instructions"]
+    if not isinstance(review_files, list) or not all(
+        isinstance(item, dict) for item in review_files
+    ):
+        raise PermanentAgentOutputError("Agent review_files input has an invalid shape")
+    if not isinstance(repository_instructions, list) or not all(
+        isinstance(item, dict) for item in repository_instructions
+    ):
+        raise PermanentAgentOutputError(
+            "Agent repository_instructions input has an invalid shape"
+        )
+
+    return (
+        json.dumps(
+            {"review_files": review_files},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+        json.dumps(
+            {"repository_instructions": repository_instructions},
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        ),
+    )
 
 
 def _model_input(

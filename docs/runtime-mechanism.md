@@ -72,7 +72,7 @@ HTTP 查询 Findings/Transcript，SSE 通知 Review 生命周期变化
 | 顺序 | 文件 | 阅读重点 |
 | --- | --- | --- |
 | 1 | [`worker/execution.py`](../backend/src/codelens/worker/execution.py) | Worker 如何重建 Snapshot、规则、Agent 和首次输入 |
-| 2 | [`review/application/context_builder.py`](../backend/src/codelens/review/application/context_builder.py) | 首次用户输入的精确结构和完整性校验 |
+| 2 | [`review/application/context_builder.py`](../backend/src/codelens/review/application/context_builder.py) | Runtime 内部输入信封的精确结构和完整性校验 |
 | 3 | [`review/application/orchestrator.py`](../backend/src/codelens/review/application/orchestrator.py) | Runtime 调用、转录、Artifact、checkpoint 和结果校验 |
 | 4 | [`review/infrastructure/openai_runtime.py`](../backend/src/codelens/review/infrastructure/openai_runtime.py) | 模型客户端、Agent、工具和 Runner 的组装 |
 | 5 | [`review/infrastructure/i18n_prompt_loader.py`](../backend/src/codelens/review/infrastructure/i18n_prompt_loader.py) | 系统语言包的启动加载与校验 |
@@ -112,9 +112,9 @@ HTTP 查询 Findings/Transcript，SSE 通知 Review 生命周期变化
 
 同一 Review 可以准备多个 `AgentVersion`，每个 Agent 都获得独立的输入字节。当前内置目录只注册了 `correctness:v1`，其不可变元数据定义在 [`reviewer_catalog/infrastructure/builtin_agents.py`](../backend/src/codelens/reviewer_catalog/infrastructure/builtin_agents.py)。
 
-## 5. 首次用户输入如何构造
+## 5. Runtime 内部输入如何构造
 
-`ContextBuilder.build()` 不负责生成自然语言 Prompt。它生成一个确定性的 JSON 用户输入，仅包含两个顶层字段：
+`ContextBuilder.build()` 不负责生成自然语言 Prompt。它生成一个确定性的内部 JSON 信封，仅包含两个顶层字段：
 
 ```json
 {
@@ -145,7 +145,7 @@ HTTP 查询 Findings/Transcript，SSE 通知 Review 生命周期变化
 - 重命名前路径（如适用）；
 - old/new 侧允许产生 Finding 的变更范围。
 
-模型首轮知道完整审查范围，但不会预先收到全部 diff 或文件正文。模型需要根据调查需要调用 `get_diff`、`read_file` 或 `grep`。
+Runtime 会把这一字段单独序列化为首次用户输入。模型首轮知道完整审查范围，但不会预先收到全部 diff 或文件正文，需要根据调查调用 `get_diff`、`read_file` 或 `grep`。
 
 ### 5.2 `repository_instructions`
 
@@ -157,15 +157,15 @@ HTTP 查询 Findings/Transcript，SSE 通知 Review 生命周期变化
 - 规则适用范围和优先级顺序有效；
 - Snapshot Manifest 中的规则条目与解析结果一致。
 
-相同规则正文只注入一次，`applies_to` 精确列出它作用于哪些 Review 文件。内部 precedence 数值、Snapshot ID、内容哈希和规则链标识不会暴露给模型。
+相同规则正文只注入一次，`applies_to` 精确列出它作用于哪些 Review 文件。完成冻结、路径、正文哈希、作用域和顺序校验后，这组 `repository_instructions` 被视为可信 Review 配置，由 Runtime 放入系统指令。内部 precedence 数值、Snapshot ID、内容哈希和规则链标识不会暴露给模型。
 
 ### 5.3 确定性序列化
 
-`AgentInput.canonical_bytes()` 使用固定字段、稳定排序和紧凑 JSON 序列化。同一个 Snapshot 和规则集合应产生相同输入字节，这对 checkpoint、转录审计和重启恢复很重要。
+`AgentInput.canonical_bytes()` 使用固定字段、稳定排序和紧凑 JSON 序列化。同一个 Snapshot 和规则集合应产生相同内部信封字节，这对 checkpoint、转录审计和重启恢复很重要。`OpenAIAgentRuntime` 在 Provider 调用前解析该信封，并再次以相同规范化规则分别序列化系统规则段和用户输入段。
 
 ## 6. Prompt 的三种来源
 
-阅读 Runtime 时要区分“系统指令”“工具描述”和“首次用户输入”。三者都对模型可见，但来源和职责不同。
+阅读 Runtime 时要区分“系统指令”“工具描述”“首次用户输入”和仅在宿主内部传递的输入信封。前三者对模型可见，内部信封本身不会原样传给 SDK。
 
 ### 6.1 平台系统 Prompt
 
@@ -204,17 +204,32 @@ prompts/<agent_id>/<locale>.md
 
 `ReviewerPromptSettingsService` 会先读取仓库内默认 Prompt，再检查数据目录中的用户覆盖。设置页面只能覆盖这一层，不能替换 `review-policy.md`、`review-workflow.md` 或工具说明。
 
-### 6.3 仓库规则
+### 6.3 可信仓库规则
 
-仓库中的 `AGENTS.md`、`REVIEW.md` 和文件级规则属于不可信仓库输入。它们不会拼到系统指令里，而是作为 `repository_instructions` 放在首次用户消息中，并带有精确适用范围。
+原始 `AGENTS.md`、`REVIEW.md` 和文件级规则在发现及校验前只是仓库内容。宿主完成 Snapshot 冻结、路径 containment、正文哈希、适用范围和稳定顺序校验后，`ContextBuilder` 才把它们规范化为可信 `repository_instructions`。这份配置进入 `Agent.instructions`，但不能覆盖位于它之前的平台安全边界，也不能扩大工具或进程权限。
 
-因此，实际模型输入的层次是：
+### 6.4 Prompt 拼接与输入拆分
+
+`ContextBuilder` 交给 `AgentRuntimePort` 的字节是内部信封，不等于 Runner 的 `input`。`OpenAIAgentRuntime._split_agent_input()` 要求信封同时且只包含 `review_files` 与 `repository_instructions`，然后执行确定性拆分：
+
+```text
+ContextBuilder internal envelope
+  { review_files, repository_instructions }
+                  |
+                  v
+OpenAIAgentRuntime._split_agent_input
+  +-- Agent.instructions <- canonical { repository_instructions }
+  +-- Runner.input       <- canonical { review_files }
+```
+
+`Agent.instructions` 使用两个换行连接四段内容，顺序是稳定契约：
 
 ```text
 System instructions
-  1. review-policy
-  2. review-workflow
-  3. Reviewer Policy
+  1. prompts.review_policy
+  2. canonical {"repository_instructions":[...]}
+  3. prompts.review_workflow
+  4. "# Reviewer Policy\n" + agent.prompt_template
 
 Tool definitions
   - tools.json 中的自然语言描述
@@ -222,10 +237,23 @@ Tool definitions
 
 Initial user input
   - review_files
-  - repository_instructions
 ```
 
-`OpenAIAgentRuntime` 使用上述固定顺序拼接 `Agent.instructions`，避免仓库规则覆盖平台边界。
+也就是：
+
+```python
+agent.instructions = "\n\n".join(
+    (
+        prompts.review_policy,
+        canonical_repository_instructions,
+        prompts.review_workflow,
+        reviewer_policy,
+    )
+)
+runner_input = canonical_review_files
+```
+
+这里的 `instructions` 就是 Agents SDK 的 Agent 级高优先级指令，Provider Adapter 会把它映射到模型协议的 system/developer instructions。Prompt Transcript 中的 `system_instructions` 和 `user_input` 记录的是拆分后的真实模型输入，因此仓库规则正文只出现一次。
 
 ## 7. 模型 Provider 如何选择
 
@@ -363,7 +391,8 @@ for turn in range(max_turns):
 ### 9.2 一次典型调查
 
 ```text
-第 1 轮：模型读取 review_files 和 repository_instructions
+第 1 轮：模型从 system instructions 读取 repository_instructions，
+         从 user input 读取 review_files
          -> 调用 get_diff(path="...")
 
 工具执行：验证 Snapshot -> 返回 bounded diff JSON
@@ -536,7 +565,7 @@ async def execute_review(task_id: str) -> None:
     snapshot = await snapshot_service.freeze(record, instructions)
 
     reviewer = await reviewer_catalog.load(record.agent, record.prompt_locale)
-    user_input = ContextBuilder().build(snapshot, instructions).canonical_bytes()
+    runtime_envelope = ContextBuilder().build(snapshot, instructions).canonical_bytes()
 
     provider = await provider_config_store.load()
     prompts = system_prompt_loader.get(record.prompt_locale)
@@ -548,9 +577,12 @@ async def execute_review(task_id: str) -> None:
         + collector.as_agent_tools()
     )
 
+    review_files, repository_instructions = split_agent_input(runtime_envelope)
+
     agent = Agent(
         instructions=join(
             prompts.review_policy,
+            repository_instructions,
             prompts.review_workflow,
             reviewer.prompt_template,
         ),
@@ -560,7 +592,7 @@ async def execute_review(task_id: str) -> None:
 
     sdk_result = await Runner.run_streamed(
         starting_agent=agent,
-        input=user_input.decode("utf-8"),
+        input=review_files,
         max_turns=provider.max_agent_turns,
     )
 

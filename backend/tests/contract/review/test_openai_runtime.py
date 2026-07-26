@@ -157,6 +157,10 @@ def _agent() -> AgentVersion:
     )
 
 
+def _runtime_input() -> bytes:
+    return b'{"repository_instructions":[],"review_files":[]}'
+
+
 def _snapshot() -> ReviewSnapshot:
     return ReviewSnapshot(
         snapshot_id="snapshot-1",
@@ -188,7 +192,7 @@ async def test_successful_provider_responses_are_not_marked_as_parse_failures() 
         runner=runner,
     )
 
-    await runtime.invoke_stream(_agent(), b'{"review_files":[]}', _snapshot(), "en", record_event)
+    await runtime.invoke_stream(_agent(), _runtime_input(), _snapshot(), "en", record_event)
 
     raw_events = [event for event in events if event.kind == "model_raw_output"]
     assert len(raw_events) == 1
@@ -205,7 +209,7 @@ async def test_accepted_task_done_stops_the_agent_without_another_model_turn() -
         runner=runner,
     )
 
-    await runtime.invoke(_agent(), b'{"review_files":[]}', _snapshot(), "en")
+    await runtime.invoke(_agent(), _runtime_input(), _snapshot(), "en")
 
     assert runner.starting_agent is not None
     completion_behavior = runner.starting_agent.tool_use_behavior
@@ -246,7 +250,7 @@ async def test_uses_active_gateway_execution_limits(
         runner=runner,
     )
 
-    await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+    await runtime.invoke(_agent(), _runtime_input(), _snapshot(), "en")
 
     assert runner.max_turns == 17
     assert observed_limits == {
@@ -268,7 +272,7 @@ async def test_non_streamed_run_uses_active_gateway_timeout() -> None:
     )
 
     with pytest.raises(TransientAgentRuntimeError) as captured:
-        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+        await runtime.invoke(_agent(), _runtime_input(), _snapshot(), "en")
 
     assert captured.value.reason_code == "agent_run_timeout"
 
@@ -319,7 +323,7 @@ async def test_ignores_model_final_text_without_a_comment_tool_call() -> None:
         runner=FakeRunner(FakeResult({"schema_version": "1", "findings": [finding]}, ())),
     )
 
-    output = await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+    output = await runtime.invoke(_agent(), _runtime_input(), _snapshot(), "en")
 
     payload = json.loads(output.canonical_bytes)
     assert payload["findings"] == []
@@ -371,7 +375,7 @@ async def test_streaming_investigation_closes_client_after_a_non_streaming_run(
     )
 
     output = await runtime.invoke_stream(
-        _agent(), b"bounded input", _snapshot(), "en", record_event
+        _agent(), _runtime_input(), _snapshot(), "en", record_event
     )
 
     assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
@@ -412,7 +416,7 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
     )
 
     with pytest.raises(TransientAgentRuntimeError) as captured:
-        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+        await runtime.invoke(_agent(), _runtime_input(), _snapshot(), "en")
 
     assert "rate limited" not in str(captured.value)
     assert "server failed" not in str(captured.value)
@@ -436,7 +440,7 @@ async def test_maps_invalid_investigation_to_a_permanent_failure(result: Excepti
     )
 
     with pytest.raises(PermanentAgentOutputError) as captured:
-        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+        await runtime.invoke(_agent(), _runtime_input(), _snapshot(), "en")
 
     assert "FULL_PROVIDER_PAYLOAD_SECRET" not in str(captured.value)
     formatted = "".join(traceback.format_exception(captured.value))
@@ -454,7 +458,7 @@ async def test_missing_provider_configuration_fails_only_when_invoked() -> None:
     )
 
     with pytest.raises(PermanentAgentOutputError, match="not configured"):
-        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+        await runtime.invoke(_agent(), _runtime_input(), _snapshot(), "en")
 
 
 async def test_runtime_rejects_a_model_run_without_an_accepted_task_done_call() -> None:
@@ -482,7 +486,7 @@ async def test_runtime_rejects_a_model_run_without_an_accepted_task_done_call() 
     )
 
     with pytest.raises(PermanentAgentOutputError) as captured:
-        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+        await runtime.invoke(_agent(), _runtime_input(), _snapshot(), "en")
 
     assert captured.value.reason_code == "review_completion_not_declared"
 

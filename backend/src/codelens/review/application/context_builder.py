@@ -37,14 +37,14 @@ class ReviewScopeLimits:
 
 @dataclass(frozen=True)
 class RepositoryInstructionInput:
-    """Expose one deduplicated frozen rule body and its exact Review targets."""
+    """Carry one trusted frozen rule body and its exact Review targets."""
 
     path: str
     content: str
     applies_to: tuple[str, ...]
 
     def as_payload(self) -> dict[str, object]:
-        """Return the stable model-visible repository rule shape."""
+        """Return the stable trusted system-instruction shape."""
 
         return {
             "path": self.path,
@@ -55,13 +55,13 @@ class RepositoryInstructionInput:
 
 @dataclass(frozen=True)
 class AgentInput:
-    """Carry complete Review scope and frozen repository rules for one Agent."""
+    """Carry the internal Runtime envelope for one Agent invocation."""
 
     review_files: tuple[ReviewFileInput, ...]
     repository_instructions: tuple[RepositoryInstructionInput, ...]
 
     def canonical_bytes(self) -> bytes:
-        """Serialize model-visible Review scope and rules in deterministic form."""
+        """Serialize scope and trusted rules for deterministic Runtime splitting."""
 
         return json.dumps(
             {
@@ -77,7 +77,7 @@ class AgentInput:
 
 
 class ContextBuilder:
-    """Build complete model-visible scope from one frozen ReviewSnapshot."""
+    """Build the Runtime input envelope from one frozen ReviewSnapshot."""
 
     def build(
         self,
