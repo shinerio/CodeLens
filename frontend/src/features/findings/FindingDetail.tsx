@@ -42,6 +42,14 @@ function formatConfidence(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function measureCommentHeight(host: HTMLElement, content: HTMLElement) {
+  const styles = getComputedStyle(host);
+  const paddingTop = Number.parseFloat(styles.paddingTop) || 0;
+  const paddingBottom = Number.parseFloat(styles.paddingBottom) || 0;
+  const contentHeight = Math.max(content.scrollHeight, content.getBoundingClientRect().height);
+  return Math.max(132, Math.ceil(contentHeight + paddingTop + paddingBottom));
+}
+
 function normalizeText(content: string) {
   return content.replaceAll(/\s+/g, " ").trim();
 }
@@ -136,6 +144,7 @@ function SourceComparison({
     editor: MonacoEditor.ICodeEditor;
     frameId: number;
     id: string;
+    mutationObserver: MutationObserver;
     observer: ResizeObserver;
     root: Root;
     zone: MonacoEditor.IViewZone;
@@ -170,6 +179,7 @@ function SourceComparison({
     }
     commentZoneRef.current = null;
     cancelAnimationFrame(commentZone.frameId);
+    commentZone.mutationObserver.disconnect();
     commentZone.observer.disconnect();
     commentZone.editor.changeViewZones((accessor) => accessor.removeZone(commentZone.id));
     queueMicrotask(() => commentZone.root.unmount());
@@ -260,7 +270,7 @@ function SourceComparison({
     root.render(<FindingOpinion finding={finding} labels={opinionLabels} />);
     const zone: MonacoEditor.IViewZone = {
       afterLineNumber: Math.min(source.highlight_end_line, model.getLineCount()),
-      heightInPx: 180,
+      heightInPx: 132,
       domNode: host,
       showInHiddenAreas: true,
     };
@@ -268,8 +278,18 @@ function SourceComparison({
     selectedEditor.changeViewZones((accessor) => {
       zoneId = accessor.addZone(zone);
     });
+    let observedContent: HTMLElement | null = null;
     const layoutZone = () => {
-      const height = Math.max(132, host.scrollHeight);
+      const content = host.firstElementChild;
+      if (!(content instanceof HTMLElement)) {
+        return;
+      }
+      if (content !== observedContent) {
+        observer.disconnect();
+        observer.observe(content);
+        observedContent = content;
+      }
+      const height = measureCommentHeight(host, content);
       if (zone.heightInPx === height) {
         return;
       }
@@ -277,9 +297,20 @@ function SourceComparison({
       selectedEditor.changeViewZones((accessor) => accessor.layoutZone(zoneId));
     };
     const observer = new ResizeObserver(layoutZone);
+    const mutationObserver = new MutationObserver(layoutZone);
     observer.observe(host);
+    mutationObserver.observe(host, { childList: true });
+    layoutZone();
     const frameId = requestAnimationFrame(layoutZone);
-    commentZoneRef.current = { editor: selectedEditor, frameId, id: zoneId, observer, root, zone };
+    commentZoneRef.current = {
+      editor: selectedEditor,
+      frameId,
+      id: zoneId,
+      mutationObserver,
+      observer,
+      root,
+      zone,
+    };
     selectedEditor.revealLineNearTop(Math.min(source.highlight_start_line, model.getLineCount()));
   }, [clearCommentZone, finding, opinionLabels, source]);
 
@@ -417,11 +448,20 @@ export function FindingDetail({ finding, source }: { finding: FindingRecord | nu
     <article className="finding-detail" data-severity={finding.severity}>
       <header className="finding-detail__header">
         <div>
-          <p className="finding-detail__eyebrow">
-            <span>{finding.severity}</span>
-            <span>{finding.category}</span>
-            <span>{formatConfidence(finding.confidence)}</span>
-          </p>
+          <dl className="finding-detail__eyebrow">
+            <div>
+              <dt>{t("finding.severity")}</dt>
+              <dd>{finding.severity}</dd>
+            </div>
+            <div>
+              <dt>{t("finding.category")}</dt>
+              <dd>{finding.category}</dd>
+            </div>
+            <div>
+              <dt>{t("finding.confidence")}</dt>
+              <dd>{formatConfidence(finding.confidence)}</dd>
+            </div>
+          </dl>
           <h3>{finding.title}</h3>
         </div>
         <div className="finding-detail__meta">

@@ -115,6 +115,10 @@ test("shows stable added, deleted, and modified findings with execution metrics"
     ));
     const opinionBox = await commentZone.locator(".finding-detail__opinion").boundingBox();
     expect(opinionBox?.width).toBeGreaterThanOrEqual(280);
+    const commentZoneBox = await commentZone.boundingBox();
+    expect(commentZoneBox?.height).toBeGreaterThanOrEqual(
+      opinionBox?.height ?? Number.POSITIVE_INFINITY,
+    );
     if ((page.viewportSize()?.width ?? 0) <= 760) {
       const readScrollLeft = () => detail.locator(".finding-detail__source").evaluate(
         (element) => element.scrollLeft,

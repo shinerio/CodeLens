@@ -438,7 +438,7 @@
 }
 
 .finding-list__severity,
-.finding-detail__eyebrow,
+.finding-detail__eyebrow dd,
 .finding-detail__opinion span {
   color: var(--run-accent);
   font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
@@ -485,10 +485,28 @@
   margin: 0 0 6px;
 }
 
-.finding-detail__eyebrow > span {
-  padding: 3px 6px;
+.finding-detail__eyebrow > div {
+  display: flex;
+  align-items: stretch;
   border: 1px solid currentColor;
   background: #fff;
+}
+
+.finding-detail__eyebrow dt,
+.finding-detail__eyebrow dd {
+  display: flex;
+  align-items: center;
+  margin: 0;
+  padding: 3px 6px;
+}
+
+.finding-detail__eyebrow dt {
+  border-right: 1px solid var(--run-line);
+  background: var(--run-paper-strong);
+  color: var(--run-muted);
+  font-size: 0.62rem;
+  font-weight: 700;
+  line-height: 1;
 }
 
 .finding-detail__header h3 {
@@ -661,7 +679,7 @@
   box-sizing: border-box;
   width: 100%;
   padding: 8px 12px 8px 8px;
-  overflow: visible;
+  overflow: hidden;
   background: #15242a;
 }
 

@@ -82,6 +82,9 @@ const source: FindingSourcePreview = {
 it("renders one equal-width side-by-side diff with side-aware comment placement", () => {
   render(<FindingDetail finding={finding} source={source} />, { wrapper: TestProviders });
 
+  expect(screen.getByText("Severity")).toBeInTheDocument();
+  expect(screen.getByText("Category")).toBeInTheDocument();
+  expect(screen.getByText("Confidence")).toBeInTheDocument();
   expect(screen.getByLabelText("Pinned source comparison")).toBeInTheDocument();
   const comparison = screen.getByTestId("monaco-diff-editor");
   expect(comparison).toHaveAttribute("data-original", source.base?.content);
