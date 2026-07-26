@@ -140,7 +140,7 @@ function SourceComparison({
     explanation: t("finding.explanation"),
     impact: t("finding.impact"),
     recommendation: t("finding.recommendation"),
-  }), [source.highlight_side, t]);
+  }), [t]);
 
   const clearDecorations = useCallback(() => {
     for (const decorations of decorationRefs.current) {
