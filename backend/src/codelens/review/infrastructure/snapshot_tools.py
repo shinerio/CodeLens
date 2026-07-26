@@ -12,10 +12,11 @@ import json
 import multiprocessing
 import os
 import re
+import stat
 from functools import cache
 from multiprocessing.connection import Connection
 from multiprocessing.process import BaseProcess
-from pathlib import PurePosixPath
+from pathlib import Path, PurePosixPath
 from typing import Annotated, Literal
 
 from agents import Tool, function_tool
@@ -29,6 +30,7 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 _MAX_RESULTS = 200
 _MAX_READ_BYTES = 64 * 1024
 _MAX_SCAN_BYTES = 1024 * 1024
+_MAX_SOURCE_BYTES = 1024 * 1024
 _MAX_LINES = 500
 _MAX_PATH_CHARS = 1024
 _MAX_PATTERN_CHARS = 512
@@ -39,7 +41,6 @@ _FileVersion = Literal["current", "base", "head"]
 _ModelPath = Annotated[str, Field(max_length=_MAX_PATH_CHARS)]
 _ModelPattern = Annotated[str, Field(min_length=1, max_length=_MAX_PATTERN_CHARS)]
 _ModelLine = Annotated[int, Field(ge=1)]
-_ModelCursor = Annotated[int, Field(ge=0)]
 
 
 def _matches_posix_path_glob(path: str, pattern: str) -> bool:
@@ -77,13 +78,21 @@ def _regex_search_worker(
         sender.send(_REGEX_WORKER_READY)
         expression = re.compile(pattern)
         matches: list[dict[str, object]] = []
-        for processed_count, (path, line_number, line) in enumerate(lines, start=1):
-            if expression.search(line):
-                matches.append({"path": path, "line": line_number, "text": line[:200]})
+        for path, line_number, line in lines:
+            match = expression.search(line)
+            if match is not None:
                 if len(matches) >= _MAX_RESULTS:
-                    sender.send((matches, True, processed_count))
+                    sender.send((matches, True))
                     return
-        sender.send((matches, False, len(lines)))
+                window_start = max(0, min(match.start() - 100, len(line) - 200))
+                matches.append(
+                    {
+                        "path": path,
+                        "line": line_number,
+                        "text": line[window_start : window_start + 200],
+                    }
+                )
+        sender.send((matches, False))
     finally:
         sender.close()
 
@@ -103,7 +112,7 @@ def _search_regular_expression(
     pattern: str,
     lines: tuple[tuple[str, int, str], ...],
     timeout_seconds: float,
-) -> tuple[list[dict[str, object]], bool, int]:
+) -> tuple[list[dict[str, object]], bool]:
     """Bound worker startup separately, then terminate regex evaluation at its deadline."""
 
     process_context = multiprocessing.get_context("spawn")
@@ -125,13 +134,12 @@ def _search_regular_expression(
         message: object = receiver.recv()
         if (
             not isinstance(message, tuple)
-            or len(message) != 3
+            or len(message) != 2
             or not isinstance(message[0], list)
             or not isinstance(message[1], bool)
-            or not isinstance(message[2], int)
         ):
             raise ValueError("grep worker returned an invalid result")
-        return message[0], message[1], message[2]
+        return message[0], message[1]
     except EOFError:
         raise ValueError("grep worker terminated without a result") from None
     finally:
@@ -182,16 +190,7 @@ class FilesystemReviewTools:
         """Find visible files below a directory using a relative POSIX glob pattern."""
 
         self._consume()
-        normalized_pattern = PurePosixPath(pattern)
-        if (
-            not pattern
-            or len(pattern) > _MAX_PATTERN_CHARS
-            or pattern.startswith("/")
-            or "\\" in pattern
-            or ".." in normalized_pattern.parts
-            or normalized_pattern.as_posix() != pattern
-        ):
-            raise ValueError("file pattern is invalid")
+        self._validate_file_pattern(pattern)
         prefix = self._directory_prefix(path)
         paths = [
             candidate
@@ -201,8 +200,13 @@ class FilesystemReviewTools:
         ]
         return self._json({"paths": paths[:_MAX_RESULTS], "truncated": len(paths) > _MAX_RESULTS})
 
-    async def grep(self, pattern: str, path: str = "", cursor: int = 0) -> str:
-        """Search one visible path scope and return a resumable bounded result page."""
+    async def grep(
+        self,
+        pattern: str,
+        path: str = "",
+        file_pattern: str = "**",
+    ) -> str:
+        """Search one visible path scope and return bounded non-paginated matches."""
 
         self._consume()
         if len(pattern) > _MAX_PATTERN_CHARS:
@@ -211,12 +215,10 @@ class FilesystemReviewTools:
             re.compile(pattern)
         except re.error as error:
             raise ValueError("grep pattern is invalid") from error
-        if cursor < 0:
-            raise ValueError("grep cursor is invalid")
-        entries = self._grep_entries(path)
+        self._validate_file_pattern(file_pattern)
+        entries = self._grep_entries(path, file_pattern)
         lines: list[tuple[str, int, str]] = []
         scanned = 0
-        visited_lines = 0
         has_more = False
         for candidate_path, entry in entries:
             payload = await self._payload(entry)
@@ -224,71 +226,89 @@ class FilesystemReviewTools:
                 continue
             text = payload.decode("utf-8", errors="replace")
             for line_number, line in enumerate(text.splitlines(), start=1):
-                if visited_lines < cursor:
-                    visited_lines += 1
-                    continue
                 encoded_size = len(line.encode("utf-8")) + 1
                 if lines and scanned + encoded_size > _MAX_SCAN_BYTES:
                     has_more = True
                     break
                 lines.append((candidate_path, line_number, line))
                 scanned += encoded_size
-                visited_lines += 1
             if has_more:
                 break
-        if cursor > visited_lines:
-            raise ValueError("grep cursor is invalid")
-        matches, result_truncated, processed_count = await asyncio.to_thread(
+        matches, result_truncated = await asyncio.to_thread(
             _search_regular_expression,
             pattern,
             tuple(lines),
             self._regex_timeout_seconds,
         )
         is_truncated = result_truncated or has_more
-        next_cursor = cursor + processed_count if is_truncated else None
         return self._json(
             {
                 "matches": matches,
-                "next_cursor": next_cursor,
                 "truncated": is_truncated,
             }
         )
 
-    def _grep_entries(self, path: str) -> list[tuple[str, SnapshotEntry]]:
+    def _grep_entries(
+        self,
+        path: str,
+        file_pattern: str,
+    ) -> list[tuple[str, SnapshotEntry]]:
         if path in self._entries:
-            return [(path, self._entries[path])]
+            filename = PurePosixPath(path).name
+            return (
+                [(path, self._entries[path])]
+                if _matches_posix_path_glob(filename, file_pattern)
+                else []
+            )
         prefix = self._directory_prefix(path)
         return [
             (candidate, entry)
             for candidate, entry in sorted(self._entries.items())
             if candidate.startswith(prefix)
+            and _matches_posix_path_glob(candidate[len(prefix) :], file_pattern)
         ]
 
     async def read_file(
         self,
         path: str,
-        start_line: int,
-        end_line: int,
+        start_line: int | None = None,
+        end_line: int | None = None,
         version: _FileVersion = "current",
     ) -> str:
-        """Read a bounded current, base, or head line range from a visible file."""
+        """Read a bounded range or bounded whole current, base, or head file."""
 
         self._consume()
         if version not in {"current", "base", "head"}:
             raise ValueError("file version is invalid")
-        selected = await self._selected_file_lines(path, start_line, end_line, version)
+        if (start_line is None) != (end_line is None):
+            raise ValueError("start_line and end_line must be provided together")
+        is_whole_file = start_line is None
+        if is_whole_file:
+            effective_start_line = 1
+            payload = await self._file_payload(path, version)
+            lines = payload.splitlines(keepends=True)
+            selected_lines = lines[:_MAX_LINES]
+            selected = b"".join(selected_lines)
+            effective_end_line = len(selected_lines)
+            is_line_truncated = len(lines) > _MAX_LINES
+        else:
+            assert start_line is not None and end_line is not None
+            effective_start_line = start_line
+            effective_end_line = end_line
+            selected = await self._selected_file_lines(path, start_line, end_line, version)
+            is_line_truncated = False
         raw_content = selected[:_MAX_READ_BYTES].decode("utf-8", errors="replace")
-        content = self._add_line_prefixes(raw_content, start_line)
+        content = self._add_line_prefixes(raw_content, effective_start_line)
         if path in self._review_files_by_path:
             self._evidence_viewed_paths.add(path)
         return self._json(
             {
                 "path": path,
                 "version": version,
-                "start_line": start_line,
-                "end_line": end_line,
+                "start_line": effective_start_line,
+                "end_line": effective_end_line,
                 "content": content,
-                "truncated": len(selected) > _MAX_READ_BYTES,
+                "truncated": is_line_truncated or len(selected) > _MAX_READ_BYTES,
             }
         )
 
@@ -368,10 +388,14 @@ class FilesystemReviewTools:
             name_override="grep",
             description_override=descriptions["grep"],
         )
-        async def grep_tool(pattern: _ModelPattern, path: _ModelPath, cursor: _ModelCursor) -> str:
+        async def grep_tool(
+            pattern: _ModelPattern,
+            path: _ModelPath,
+            file_pattern: _ModelPattern,
+        ) -> str:
             """Search visible Snapshot text with a regular expression."""
 
-            return await self.grep(pattern, path, cursor)
+            return await self.grep(pattern, path, file_pattern)
 
         @function_tool(
             name_override="read_file",
@@ -379,13 +403,19 @@ class FilesystemReviewTools:
         )
         async def read_file_tool(
             path: _ModelPath,
-            start_line: _ModelLine,
-            end_line: _ModelLine,
             version: _FileVersion,
+            start_line: _ModelLine | None = None,
+            end_line: _ModelLine | None = None,
         ) -> str:
-            """Read a bounded current, base, or head range from a visible file."""
+            """Read a bounded range or bounded whole current, base, or head file."""
 
             return await self.read_file(path, start_line, end_line, version)
+
+        # OpenAI strict function schemas require every property. This one tool deliberately
+        # uses a non-strict provider schema so the model can omit both optional line fields;
+        # the generated Pydantic adapter and local unknown-field guard still validate input.
+        read_file_tool.params_json_schema["required"] = ["path", "version"]
+        read_file_tool.strict_json_schema = False
 
         @function_tool(
             name_override="get_diff",
@@ -416,6 +446,8 @@ class FilesystemReviewTools:
 
     async def _payload(self, entry: SnapshotEntry) -> bytes:
         absolute = self._root / entry.path
+        if entry.size_bytes > _MAX_SOURCE_BYTES:
+            raise ValueError("Snapshot source file exceeds the tool limit")
         if entry.kind == "deleted":
             if await asyncio.to_thread(os.path.lexists, absolute):
                 raise ValueError("Snapshot context content changed")
@@ -429,9 +461,27 @@ class FilesystemReviewTools:
             resolved = absolute.resolve()
             if not resolved.is_relative_to(self._root):
                 raise ValueError("Snapshot context path escapes its worktree")
-            payload = await asyncio.to_thread(absolute.read_bytes)
+            metadata = await asyncio.to_thread(absolute.stat)
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError("Snapshot context content changed")
+            if metadata.st_size > _MAX_SOURCE_BYTES:
+                raise ValueError("Snapshot source file exceeds the tool limit")
+            payload = await asyncio.to_thread(
+                self._read_bounded_regular_file,
+                absolute,
+            )
         if hashlib.sha256(payload).hexdigest() != entry.content_hash:
             raise ValueError("Snapshot context content changed")
+        return payload
+
+    @staticmethod
+    def _read_bounded_regular_file(path: Path) -> bytes:
+        """Read at most one source limit plus a sentinel byte to contain races."""
+
+        with path.open("rb") as source:
+            payload = source.read(_MAX_SOURCE_BYTES + 1)
+        if len(payload) > _MAX_SOURCE_BYTES:
+            raise ValueError("Snapshot source file exceeds the tool limit")
         return payload
 
     @staticmethod
@@ -463,14 +513,16 @@ class FilesystemReviewTools:
 
         before_lines = base_payload.decode("utf-8", errors="replace").splitlines(keepends=True)
         after_lines = current_payload.decode("utf-8", errors="replace").splitlines(keepends=True)
+        diff_lines = difflib.unified_diff(
+            before_lines,
+            after_lines,
+            fromfile="/dev/null" if change_type == "added" else f"a/{base_path}",
+            tofile="/dev/null" if change_type == "deleted" else f"b/{path}",
+            n=3,
+        )
         body = "".join(
-            difflib.unified_diff(
-                before_lines,
-                after_lines,
-                fromfile="/dev/null" if change_type == "added" else f"a/{base_path}",
-                tofile="/dev/null" if change_type == "deleted" else f"b/{path}",
-                n=3,
-            )
+            line if line.endswith("\n") else f"{line}\n\\ No newline at end of file\n"
+            for line in diff_lines
         )
         if not body and not metadata:
             return b""
@@ -485,6 +537,12 @@ class FilesystemReviewTools:
     ) -> bytes:
         if start_line < 1 or end_line < start_line or end_line - start_line >= _MAX_LINES:
             raise ValueError("line range is invalid")
+        payload = await self._file_payload(path, version)
+        return b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])
+
+    async def _file_payload(self, path: str, version: _FileVersion) -> bytes:
+        """Read one hash-verified Snapshot version and reject binary content."""
+
         entry = self._entry(path)
         if version == "current":
             payload = await self._payload(entry)
@@ -493,7 +551,7 @@ class FilesystemReviewTools:
             payload = await self._revision_payload(path, version)
         if b"\0" in payload:
             raise ValueError("Snapshot file is binary")
-        return b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])
+        return payload
 
     async def _revision_payload(self, path: str, version: Literal["base", "head"]) -> bytes:
         review_file = self._review_files_by_path.get(path)
@@ -542,6 +600,19 @@ class FilesystemReviewTools:
         if not cls._is_normalized_relative(normalized):
             raise ValueError("directory path is invalid")
         return f"{normalized}/"
+
+    @staticmethod
+    def _validate_file_pattern(pattern: str) -> None:
+        normalized_pattern = PurePosixPath(pattern)
+        if (
+            not pattern
+            or len(pattern) > _MAX_PATTERN_CHARS
+            or pattern.startswith("/")
+            or "\\" in pattern
+            or ".." in normalized_pattern.parts
+            or normalized_pattern.as_posix() != pattern
+        ):
+            raise ValueError("file pattern is invalid")
 
     @staticmethod
     def _json(value: object) -> str:

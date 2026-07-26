@@ -49,7 +49,7 @@ Runtime 创建本次 Agent Run 的 7 个工具并校验契约
 
 ### 2.2 严格 JSON Schema
 
-所有参数都必须显式提供，不应依赖 Python 实现中的默认值。例如，调用 `find_files` 时 `path` 和 `pattern` 都必填，调用 `read_file` 时 4 个参数都必填。参数类型、枚举、字符串长度和数组数量由 SDK 生成的严格 JSON Schema 校验；额外字段还会在本地工具边界再次被拒绝。
+参数默认必须显式提供，不应依赖 Python 实现中的默认值。例如，调用 `find_files` 时 `path` 和 `pattern` 都必填，调用 `grep` 时 `pattern`、`path` 和 `file_pattern` 都必填。唯一例外是 `read_file` 的 `start_line` 与 `end_line`：两者可以同时省略以读取有界全文，也只能同时提供。除 `read_file` 为表达真正可省略字段而使用非严格 provider schema 外，参数类型、枚举、字符串长度和数组数量仍由 SDK 生成的 Pydantic 参数适配器校验；额外字段还会在本地工具边界再次被拒绝。
 
 本文示例使用以下逻辑格式表示模型函数调用：
 
@@ -124,7 +124,7 @@ glob 语义：
 }
 ```
 
-最多返回 200 条按路径排序的结果。存在更多匹配时只返回前 200 条，并设置 `truncated: true`。
+最多返回 200 条按路径排序的结果且不提供分页。存在更多匹配时只返回前 200 条，并设置 `truncated: true`；模型应缩小 `path` 或细化 `pattern` 后重新搜索，而不是重复相同调用。
 
 ### 3.4 工作原理
 
@@ -145,7 +145,7 @@ glob 语义：
 | --- | --- | --- | --- |
 | `pattern` | string | 必填，1–512 字符 | Python `re` 语法的正则表达式 |
 | `path` | string | 必填，最长 1024 字符 | 要搜索的可见文件或目录；根目录使用 `""` |
-| `cursor` | integer | 必填，`>= 0` | 首次调用传 `0`；后续原样传入上页返回的 `next_cursor` |
+| `file_pattern` | string | 必填，1–512 字符 | 相对于 `path` 的路径段感知 glob；不过滤时使用 `**` |
 
 ### 4.3 使用示例
 
@@ -155,7 +155,7 @@ glob 语义：
   "arguments": {
     "pattern": "ReviewCommentCollector\\(",
     "path": "backend/src",
-    "cursor": 0
+    "file_pattern": "**/*.py"
   }
 }
 ```
@@ -171,20 +171,21 @@ glob 语义：
       "text": "        comment_collector = ReviewCommentCollector("
     }
   ],
-  "next_cursor": null,
   "truncated": false
 }
 ```
 
-每个匹配包含仓库相对路径、从 1 开始的行号和最多 200 字符的该行文本。每页最多扫描 1 MiB 内容、返回 200 个匹配；任一上限触发时 `truncated` 为 `true`，并返回用于继续扫描的 `next_cursor`。没有后续页时 `next_cursor` 为 `null`。含 NUL 字节的二进制条目会被跳过。
+`file_pattern` 使用与 `find_files.pattern` 相同的 `*`/`**` 语义。`path` 是目录时，它匹配相对于该目录的候选路径；`path` 是精确文件时，它匹配文件名且不能扩大搜索范围。
+
+每个匹配包含仓库相对路径、从 1 开始的行号和最多 200 字符的该行文本。单次最多扫描 1 MiB 内容、返回 200 个匹配且不提供分页；任一上限触发时 `truncated` 为 `true`。模型应缩小内容 `pattern`、`path` 或细化 `file_pattern` 后重新搜索，不能通过重复相同调用获取剩余结果。含 NUL 字节的二进制条目会被跳过。
 
 ### 4.4 工作原理
 
 1. 在主进程中编译正则，提前拒绝非法表达式。
-2. 将 `path` 解析为单个可见文件或目录范围，再按路径顺序逐一读取条目；每次读取都复验 Manifest 哈希，二进制内容不参与搜索。
-3. 从 `cursor` 指定的行位置继续组装不超过扫描上限的一页文本，并交给使用 `spawn` 创建的独立子进程。
+2. 将 `path` 解析为单个可见文件或目录范围，使用 `file_pattern` 过滤候选，再按路径顺序逐一读取条目；每次读取都复验 Manifest 哈希，二进制内容不参与搜索。
+3. 从过滤后的文件起点组装不超过扫描上限的文本，并交给使用 `spawn` 创建的独立子进程。
 4. 子进程就绪后逐行执行正则搜索并收集有界结果。默认计算时限为 30 秒；超时后宿主会终止该进程，必要时再强制杀死，避免灾难性回溯长期占用 Runtime。
-5. 若扫描或结果上限截断本页，返回精确的 `next_cursor`；调用方将其原样传回即可继续，不需要自行计算偏移。
+5. 若扫描或结果上限触发截断，返回 `truncated: true`；调用方必须细化搜索条件后重试。
 
 `grep` 只能搜索 `path` 指定的可见文件或目录范围。需要先枚举候选路径时，可配合 `find_files`，再用 `read_file` 精读匹配上下文。
 
@@ -199,8 +200,8 @@ glob 语义：
 | 参数 | 类型 | 约束 | 含义 |
 | --- | --- | --- | --- |
 | `path` | string | 必填，1–1024 字符 | 可见文件的仓库相对路径 |
-| `start_line` | integer | 必填，`>= 1` | 起始行，包含该行 |
-| `end_line` | integer | 必填，`>= start_line` | 结束行，包含该行；一次最多 500 行 |
+| `start_line` | integer | 可选，`>= 1` | 起始行，包含该行；必须与 `end_line` 同时提供或同时省略 |
+| `end_line` | integer | 可选，`>= start_line` | 结束行，包含该行；必须与 `start_line` 同时提供，一次最多 500 行 |
 | `version` | string | 必填，`current`、`base` 或 `head` | 要读取的版本 |
 
 版本含义：
@@ -212,6 +213,8 @@ glob 语义：
 | `head` | Snapshot 固定 `head_oid` 的 Git 对象 | 查看目标 revision，不一定包含未提交 overlay |
 
 新增文件不存在 `base` 版本，删除文件不存在 `head` 版本，此时调用会失败。
+
+同时省略 `start_line` 和 `end_line` 时，工具从第一行读取到文件结尾，但仍受 500 行和 64 KiB 上限约束。这适合直接读取常见的小文件全文。
 
 ### 5.3 使用示例
 
@@ -240,14 +243,28 @@ glob 语义：
 }
 ```
 
-`content` 中每个非空输出行使用 `行号|正文` 格式。单次输出最多 64 KiB，超过时设置 `truncated: true`；二进制文件会被拒绝。
+`content` 中每个非空输出行使用 `行号|正文` 格式。单个 Snapshot 源文件超过 1 MiB 时会在载入正文前被拒绝；单次输出最多 64 KiB，超过时设置 `truncated: true`；二进制文件会被拒绝。
+
+有界全文调用可以省略两个行号：
+
+```json
+{
+  "name": "read_file",
+  "arguments": {
+    "path": "backend/src/codelens/review/infrastructure/snapshot_tools.py",
+    "version": "current"
+  }
+}
+```
+
+全文超过任一上限时 `truncated` 为 `true`，模型应改用明确且更小的行范围继续读取。
 
 ### 5.4 工作原理
 
-1. 校验版本枚举、路径可见性和行范围；`end_line - start_line >= 500` 会被拒绝。
+1. 校验版本枚举、路径可见性和行范围；两个行号只能同时存在，`end_line - start_line >= 500` 会被拒绝。
 2. `current` 直接读取并哈希验证冻结条目；`base`/`head` 先验证冻结条目，再以 `git show <固定 OID>:<路径>` 读取。
-3. 按字节内容切分行并截取首尾都包含的请求范围。
-4. 应用 64 KiB 输出上限、UTF-8 替换解码和行号前缀，返回请求元数据及截断状态。
+3. 按字节内容切分行；显式范围按首尾都包含的区间截取，省略范围时从第一行截取至 EOF 或 500 行上限。
+4. 应用 64 KiB 输出上限、UTF-8 替换解码和行号前缀，返回实际范围元数据及截断状态。
 
 ## 6. `get_diff`
 
@@ -282,7 +299,7 @@ glob 语义：
 }
 ```
 
-输出最多 64 KiB，超过时 `truncated` 为 `true`。未变更的 context 文件即使可见，也不能调用该工具。
+单个 Snapshot 源文件超过 1 MiB 时会在载入正文前被拒绝。输出最多 64 KiB，超过时 `truncated` 为 `true`。未变更的 context 文件即使可见，也不能调用该工具。
 
 ### 6.4 工作原理
 
@@ -353,11 +370,13 @@ glob 语义：
 {
   "accepted": true,
   "accepted_count": 1,
-  "comment_count": 1
+  "comment_count": 1,
+  "rejected_comments": [],
+  "rejected_count": 0
 }
 ```
 
-`accepted_count` 是本批接受数，`comment_count` 是本 Agent Run 当前累计评论数。批次按顺序逐条解析；如果后续项失败，之前已接受的项仍保留，因此重试时不应重复提交已经接受的评论。
+`accepted_count` 和 `rejected_count` 是本批接受数和拒绝数，`comment_count` 是本 Agent Run 当前累计评论数。批次按顺序逐条独立解析；候选级语义失败记录在 `rejected_comments`，其中 `index` 是输入 `comments` 数组中从零开始的索引，`reason` 是拒绝原因。同批其他有效评论仍会被处理，`accepted` 表示本批至少接受了一项。模型只应修正并重试被拒绝的索引，不应重复提交已经接受的评论。若整个参数信封无法校验或 Snapshot、Git、I/O 完整性失效，工具调用仍整体失败。
 
 ### 7.4 工作原理
 

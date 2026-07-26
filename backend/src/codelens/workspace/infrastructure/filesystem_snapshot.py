@@ -47,6 +47,19 @@ def _contained_symlink(path: str, target: str) -> bool:
 
 
 type _SnapshotOrigin = Literal["target", "context", "instruction"]
+_HASH_CHUNK_BYTES = 64 * 1024
+
+
+def _hash_regular_file(path: Path) -> tuple[int, str]:
+    """Hash one regular file incrementally without retaining its contents."""
+
+    digest = hashlib.sha256()
+    size_bytes = 0
+    with path.open("rb") as source:
+        while chunk := source.read(_HASH_CHUNK_BYTES):
+            digest.update(chunk)
+            size_bytes += len(chunk)
+    return size_bytes, digest.hexdigest()
 
 
 def _snapshot_entry(root: Path, path: str, origin: _SnapshotOrigin) -> SnapshotEntry | None:
@@ -70,13 +83,15 @@ def _snapshot_entry(root: Path, path: str, origin: _SnapshotOrigin) -> SnapshotE
         if not _contained_symlink(normalized, target):
             raise InvalidRepositoryError("Snapshot symlink escapes worktree")
         content = target.encode("utf-8")
+        size_bytes = len(content)
+        content_hash = hashlib.sha256(content).hexdigest()
         kind: Literal["file", "symlink", "deleted"] = "symlink"
         symlink_target: str | None = target
     elif stat.S_ISREG(metadata.st_mode):
         resolved = absolute.resolve()
         if not resolved.is_relative_to(root):
             raise InvalidRepositoryError("Snapshot path escapes worktree")
-        content = absolute.read_bytes()
+        size_bytes, content_hash = _hash_regular_file(absolute)
         kind = "file"
         symlink_target = None
     else:
@@ -87,8 +102,8 @@ def _snapshot_entry(root: Path, path: str, origin: _SnapshotOrigin) -> SnapshotE
         path=normalized,
         kind=kind,
         mode=stat.S_IMODE(metadata.st_mode),
-        size_bytes=len(content),
-        content_hash=hashlib.sha256(content).hexdigest(),
+        size_bytes=size_bytes,
+        content_hash=content_hash,
         symlink_target=symlink_target,
         origin=origin,
     )

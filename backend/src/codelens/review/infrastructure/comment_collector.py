@@ -66,6 +66,10 @@ _CommentBatch = Annotated[
 ]
 
 
+class CommentCandidateRejectedError(ValueError):
+    """Report one semantically invalid candidate without rejecting its batch."""
+
+
 @dataclass
 class ReviewCommentCollector:
     """Task-local stateful tool that resolves accepted comments into Finding candidates.
@@ -148,7 +152,11 @@ class ReviewCommentCollector:
         """Resolve one candidate or return a bounded tool error without retaining it."""
 
         if submission.confidence < self.confidence_floor:
-            raise ValueError("comment confidence is below this reviewer's threshold")
+            raise CommentCandidateRejectedError(
+                "comment confidence is below this reviewer's threshold"
+            )
+        if submission.path not in self.tools.review_file_paths:
+            raise CommentCandidateRejectedError("comment path is outside this Review")
 
         # Resolve line numbers from quoted code
         start_line, end_line = await self._resolve_line_numbers(
@@ -166,7 +174,7 @@ class ReviewCommentCollector:
             )
         )
         if len(hunks) != 1:
-            raise ValueError(
+            raise CommentCandidateRejectedError(
                 f"existing_code must quote only consecutive changed {submission.side}-side "
                 "lines without diff markers; do not include unchanged context lines"
             )
@@ -177,7 +185,9 @@ class ReviewCommentCollector:
             "base" if submission.side == "old" else "current",
         )
         if excerpt_truncated:
-            raise ValueError("comment location cannot be resolved to a complete frozen excerpt")
+            raise CommentCandidateRejectedError(
+                "comment location cannot be resolved to a complete frozen excerpt"
+            )
         hunk = hunks[0]
         self._findings.append(
             {
@@ -225,13 +235,22 @@ class ReviewCommentCollector:
 
         if not submissions or len(submissions) > 20:
             raise ValueError("comment requires between one and twenty comments")
-        for submission in submissions:
-            await self.submit(submission)
+        accepted_count = 0
+        rejected_comments: list[dict[str, object]] = []
+        for index, submission in enumerate(submissions):
+            try:
+                await self.submit(submission)
+            except CommentCandidateRejectedError as error:
+                rejected_comments.append({"index": index, "reason": str(error)})
+            else:
+                accepted_count += 1
         return json.dumps(
             {
-                "accepted": True,
-                "accepted_count": len(submissions),
+                "accepted": accepted_count > 0,
+                "accepted_count": accepted_count,
                 "comment_count": len(self._findings),
+                "rejected_comments": rejected_comments,
+                "rejected_count": len(rejected_comments),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -338,7 +357,9 @@ class ReviewCommentCollector:
         if resolved is not None:
             return resolved
 
-        raise ValueError("existing_code cannot be resolved to a line range")
+        raise CommentCandidateRejectedError(
+            "existing_code cannot be resolved to a line range"
+        )
 
     def _is_deleted_path(self, path: str) -> bool:
         entry = next((item for item in self.snapshot.manifest.entries if item.path == path), None)
