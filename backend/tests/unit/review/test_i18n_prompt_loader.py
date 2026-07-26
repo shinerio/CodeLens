@@ -42,3 +42,11 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "side=old" in english.tools["comment"].description
     assert "不得包含未修改的 diff 上下文行" in chinese.tools["comment"].description
     assert "side=old" in chinese.tools["comment"].description
+    assert "narrow path or pattern" in english.tools["find_files"].description
+    assert "缩小 path 或细化 pattern" in chinese.tools["find_files"].description
+    assert "file_pattern" in english.tools["grep"].description
+    assert "file_pattern" in chinese.tools["grep"].description
+    assert "narrow pattern, path, or file_pattern" in english.tools["grep"].description
+    assert "缩小 pattern、path 或细化 file_pattern" in chinese.tools["grep"].description
+    assert "may both be omitted" in english.tools["read_file"].description
+    assert "可以同时省略" in chinese.tools["read_file"].description

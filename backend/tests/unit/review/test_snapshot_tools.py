@@ -193,7 +193,7 @@ async def test_exposes_only_hash_verified_snapshot_content(tmp_path: Path) -> No
         await tools.read_file(".git/config", 1, 1)
 
 
-async def test_grep_scopes_search_and_resumes_from_returned_cursor(
+async def test_grep_reports_truncation_and_supports_narrower_retry(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -201,24 +201,124 @@ async def test_grep_scopes_search_and_resumes_from_returned_cursor(
     tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
     monkeypatch.setattr(snapshot_tools_module, "_MAX_SCAN_BYTES", 45)
 
-    first_page = json.loads(await tools.grep("return", path="src", cursor=0))
-    assert first_page["matches"] == [
-        {"line": 2, "path": "src/helper.py", "text": "    return 'helper'"}
-    ]
-    assert isinstance(first_page["next_cursor"], int)
-    assert first_page["truncated"] is True
+    broad_result = json.loads(await tools.grep("return", path="src"))
+    assert broad_result == {
+        "matches": [
+            {"line": 2, "path": "src/helper.py", "text": "    return 'helper'"}
+        ],
+        "truncated": True,
+    }
 
-    second_page = json.loads(
-        await tools.grep("return", path="src", cursor=first_page["next_cursor"])
+    narrower_result = json.loads(
+        await tools.grep("return", path="src", file_pattern="service.*")
     )
-    assert second_page["matches"] == [
+    assert narrower_result == {
+        "matches": [
+            {"line": 2, "path": "src/service.py", "text": "    return 'new'"}
+        ],
+        "truncated": False,
+    }
+
+    outside_scope = json.loads(await tools.grep("return", path="tests"))
+    assert outside_scope == {"matches": [], "truncated": False}
+
+
+async def test_grep_filters_directory_scope_with_relative_file_pattern(tmp_path: Path) -> None:
+    snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+
+    result = json.loads(
+        await tools.grep(
+            "return",
+            path="src",
+            file_pattern="service.*",
+        )
+    )
+
+    assert result["matches"] == [
         {"line": 2, "path": "src/service.py", "text": "    return 'new'"}
     ]
-    assert second_page["next_cursor"] is None
-    assert second_page["truncated"] is False
+    exact_file = json.loads(
+        await tools.grep(
+            "return",
+            path="src/service.py",
+            file_pattern="*.py",
+        )
+    )
+    assert exact_file["matches"] == result["matches"]
+    excluded_exact_file = json.loads(
+        await tools.grep(
+            "return",
+            path="src/service.py",
+            file_pattern="*.json",
+        )
+    )
+    assert excluded_exact_file["matches"] == []
+    with pytest.raises(ValueError, match="file pattern"):
+        await tools.grep("return", path="src", file_pattern="../*.py")
 
-    outside_scope = json.loads(await tools.grep("return", path="tests", cursor=0))
-    assert outside_scope == {"matches": [], "next_cursor": None, "truncated": False}
+
+async def test_grep_returns_a_window_containing_the_actual_match(tmp_path: Path) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "src/helper.py"
+    payload = f"{'prefix-' * 50}needle{'-suffix' * 50}\n".encode()
+    (tmp_path / path).write_bytes(payload)
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            entries=tuple(
+                replace(entry, size_bytes=len(payload), content_hash=_hash(payload))
+                if entry.path == path
+                else entry
+                for entry in snapshot.manifest.entries
+            ),
+        ),
+    )
+
+    result = json.loads(
+        await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).grep(
+            "needle", path=path, file_pattern="*.py"
+        )
+    )
+
+    assert len(result["matches"]) == 1
+    assert "needle" in result["matches"][0]["text"]
+    assert len(result["matches"][0]["text"]) <= 200
+
+
+@pytest.mark.parametrize(("match_count", "is_truncated"), [(200, False), (201, True)])
+async def test_grep_truncates_only_when_additional_matches_exist(
+    tmp_path: Path,
+    match_count: int,
+    is_truncated: bool,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    payload = b"match\n" * match_count
+    path = "src/helper.py"
+    (tmp_path / path).write_bytes(payload)
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            entries=tuple(
+                replace(
+                    entry,
+                    size_bytes=len(payload),
+                    content_hash=_hash(payload),
+                )
+                if entry.path == path
+                else entry
+                for entry in snapshot.manifest.entries
+            ),
+        ),
+    )
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+
+    result = json.loads(await tools.grep("match", path=path, file_pattern="*.py"))
+
+    assert len(result["matches"]) == min(match_count, 200)
+    assert result["truncated"] is is_truncated
 
 
 async def test_find_files_uses_posix_path_glob_semantics(tmp_path: Path) -> None:
@@ -259,6 +359,79 @@ async def test_find_files_uses_posix_path_glob_semantics(tmp_path: Path) -> None
     ]
 
 
+async def test_find_files_reports_non_paginated_truncation(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+    monkeypatch.setattr(snapshot_tools_module, "_MAX_RESULTS", 1)
+
+    result = json.loads(await tools.find_files(path="src", pattern="*.py"))
+
+    assert result == {"paths": ["src/helper.py"], "truncated": True}
+
+
+async def test_read_file_supports_bounded_whole_file_mode(tmp_path: Path) -> None:
+    snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+
+    read = json.loads(await tools.read_file("src/service.py"))
+
+    assert read == {
+        "path": "src/service.py",
+        "version": "current",
+        "start_line": 1,
+        "end_line": 2,
+        "content": "1|def original() -> str:\n2|    return 'new'",
+        "truncated": False,
+    }
+    with pytest.raises(ValueError, match="provided together"):
+        await tools.read_file("src/service.py", start_line=1)
+
+
+async def test_read_file_marks_whole_file_line_limit_as_truncated(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+    monkeypatch.setattr(snapshot_tools_module, "_MAX_LINES", 1)
+
+    read = json.loads(await tools.read_file("src/service.py"))
+
+    assert read["content"] == "1|def original() -> str:"
+    assert read["end_line"] == 1
+    assert read["truncated"] is True
+
+
+async def test_tools_reject_oversized_snapshot_sources_before_reading(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "src/helper.py"
+    payload = b"0123456789abcdef\n"
+    (tmp_path / path).write_bytes(payload)
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            entries=tuple(
+                replace(entry, size_bytes=len(payload), content_hash=_hash(payload))
+                if entry.path == path
+                else entry
+                for entry in snapshot.manifest.entries
+            ),
+        ),
+    )
+    monkeypatch.setattr(snapshot_tools_module, "_MAX_SOURCE_BYTES", 8)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+
+    with pytest.raises(ValueError, match="source file exceeds"):
+        await tools.read_file(path)
+
+
 async def test_provides_diff_and_bounded_base_version_reads(
     tmp_path: Path,
 ) -> None:
@@ -278,6 +451,47 @@ async def test_provides_diff_and_bounded_base_version_reads(
     assert "2|    return 'new'" in head["content"]
     with pytest.raises(ValueError, match="version"):
         await tools.read_file("src/service.py", 1, 2, "arbitrary")
+
+
+async def test_get_diff_separates_lines_without_trailing_newlines(tmp_path: Path) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "src/no-newline.py"
+    (tmp_path / path).write_bytes(b"old")
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "add no-newline source")
+    base_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    payload = b"new"
+    (tmp_path / path).write_bytes(payload)
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "change no-newline source")
+    head_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    snapshot = replace(
+        snapshot,
+        worktree=replace(snapshot.worktree, head_oid=head_oid),
+        target=ReviewTarget(base_oid, head_oid, None),
+        manifest=replace(
+            snapshot.manifest,
+            target_paths=(path,),
+            entries=(
+                *snapshot.manifest.entries,
+                SnapshotEntry(path, "file", 0o644, len(payload), _hash(payload), None, "target"),
+            ),
+        ),
+        change_index=ChangeIndex(
+            hunks=(
+                ChangedHunk("old-no-newline", path, 1, 1, "old", _hash(b"old")),
+                ChangedHunk("new-no-newline", path, 1, 1, "new", _hash(b"new")),
+            ),
+            files=(ReviewFileChange(path, "modified"),),
+        ),
+    )
+
+    diff = json.loads(
+        await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).get_diff(path)
+    )["content"]
+
+    assert "-old\n\\ No newline at end of file\n" in diff
+    assert "+new\n\\ No newline at end of file\n" in diff
 
 
 async def test_get_diff_rejects_content_changed_after_snapshot(tmp_path: Path) -> None:
@@ -765,6 +979,8 @@ async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_pa
         "accepted": True,
         "accepted_count": 1,
         "comment_count": 1,
+        "rejected_comments": [],
+        "rejected_count": 0,
     }
     assert missing_evidence == {
         "accepted": False,
@@ -785,6 +1001,87 @@ async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_pa
     assert collector.is_completed is True
     with pytest.raises(ValueError, match="already"):
         collector.complete(ReviewCompletionSubmission(summary="Repeated completion."))
+
+
+async def test_comment_collector_rejects_only_invalid_candidates_in_a_batch(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    collector = ReviewCommentCollector(
+        snapshot=snapshot,
+        reviewer_id="correctness",
+        confidence_floor=0.7,
+        tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
+    )
+
+    acknowledgement = json.loads(
+        await collector.submit_many(
+            [
+                ReviewCommentSubmission(
+                    path="src/service.py",
+                    side="old",
+                    existing_code="    return 'old'\n",
+                    title="Removed fallback",
+                    content="The required fallback is removed.",
+                    recommendation="Keep the fallback.",
+                    category="correctness",
+                    severity="high",
+                    confidence=0.9,
+                ),
+                ReviewCommentSubmission(
+                    path="src/service.py",
+                    side="new",
+                    existing_code="    return 'new'\n",
+                    title="Low-confidence candidate",
+                    content="This candidate is too uncertain.",
+                    recommendation="Investigate further.",
+                    category="correctness",
+                    severity="low",
+                    confidence=0.2,
+                ),
+                ReviewCommentSubmission(
+                    path="src/helper.py",
+                    side="new",
+                    existing_code="HELPER = True\n",
+                    title="Out-of-scope candidate",
+                    content="This path is not a changed Review file.",
+                    recommendation="Submit only changed Review paths.",
+                    category="correctness",
+                    severity="low",
+                    confidence=0.9,
+                ),
+                ReviewCommentSubmission(
+                    path="src/service.py",
+                    side="new",
+                    existing_code="    return 'new'\n",
+                    title="Missing migration",
+                    content="Existing installations do not receive the new state.",
+                    recommendation="Add an idempotent migration.",
+                    category="correctness",
+                    severity="medium",
+                    confidence=0.9,
+                ),
+            ]
+        )
+    )
+
+    assert acknowledgement == {
+        "accepted": True,
+        "accepted_count": 2,
+        "comment_count": 2,
+        "rejected_comments": [
+            {
+                "index": 1,
+                "reason": "comment confidence is below this reviewer's threshold",
+            },
+            {"index": 2, "reason": "comment path is outside this Review"},
+        ],
+        "rejected_count": 2,
+    }
+    assert [finding["title"] for finding in collector.finding_batch()["findings"]] == [
+        "Removed fallback",
+        "Missing migration",
+    ]
 
 
 async def test_completion_rejection_distinguishes_unread_and_undeclared_files(
@@ -917,6 +1214,14 @@ async def test_all_model_tools_work_through_agents_sdk_entrypoints(tmp_path: Pat
             *collector.as_agent_tools(),
         )
     }
+    read_file_agent_tool = agent_tools["read_file"]
+    assert read_file_agent_tool.strict_json_schema is False
+    assert read_file_agent_tool.params_json_schema["required"] == ["path", "version"]
+    assert agent_tools["grep"].params_json_schema["required"] == [
+        "pattern",
+        "path",
+        "file_pattern",
+    ]
 
     async def invoke(name: str, arguments: dict[str, object]) -> dict[str, object]:
         serialized = json.dumps(arguments)
@@ -945,10 +1250,19 @@ async def test_all_model_tools_work_through_agents_sdk_entrypoints(tmp_path: Pat
         (
             await invoke(
                 "grep",
-                {"pattern": "return\\s+'new'", "path": "src", "cursor": 0},
+                {
+                    "pattern": "return\\s+'new'",
+                    "path": "src",
+                    "file_pattern": "**/*.py",
+                },
             )
         )["matches"]
     ) == 1
+    whole_file = await invoke(
+        "read_file",
+        {"path": "src/service.py", "version": "current"},
+    )
+    assert "return 'new'" in str(whole_file["content"])
     for version, expected in (("current", "new"), ("base", "old"), ("head", "new")):
         read = await invoke(
             "read_file",

@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import json
 from pathlib import Path
 
@@ -20,6 +21,7 @@ from codelens.workspace.domain.models import (
     TaskWorktree,
     UncommittedScope,
 )
+from codelens.workspace.infrastructure import filesystem_snapshot as filesystem_snapshot_module
 from codelens.workspace.infrastructure.change_index import GitChangeIndexBuilder
 from codelens.workspace.infrastructure.filesystem_snapshot import FilesystemSnapshotBuilder
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -89,6 +91,25 @@ async def _artifact_files(root: Path) -> tuple[Path, ...]:
         return tuple(path for path in root.rglob("*") if path.is_file()) if root.exists() else ()
 
     return await asyncio.to_thread(list_files)
+
+
+def test_snapshot_entry_hashes_regular_files_without_reading_them_whole(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = b"bounded snapshot hashing\n"
+    (tmp_path / "source.py").write_bytes(payload)
+
+    def reject_unbounded_read_bytes(path: Path) -> bytes:
+        raise AssertionError(f"unexpected unbounded read: {path}")
+
+    monkeypatch.setattr(Path, "read_bytes", reject_unbounded_read_bytes)
+
+    entry = filesystem_snapshot_module._snapshot_entry(tmp_path, "source.py", "context")
+
+    assert entry is not None
+    assert entry.size_bytes == len(payload)
+    assert entry.content_hash == hashlib.sha256(payload).hexdigest()
 
 
 async def test_captures_overlay_and_ignored_control_inputs_before_source_changes(
