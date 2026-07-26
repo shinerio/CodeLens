@@ -140,6 +140,20 @@
   line-height: 1.45;
 }
 
+.run-coverage-warning__files {
+  display: grid;
+  gap: 4px;
+  max-height: 180px;
+  margin: 8px 0 0;
+  padding-left: 18px;
+  overflow: auto;
+}
+
+.run-coverage-warning__files code {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
 .run-failure__summary {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);

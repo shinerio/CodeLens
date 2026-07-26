@@ -4,5 +4,6 @@
   "read_file": {"description": "读取可见文件。path、从 1 开始且首尾都包含的 start_line/end_line，以及 current|base|head 的 version 都必填；最多读取 500 行。current 是经过验证的冻结内容，可能包含捕获的 overlay；base 和 head 是固定 Git revision。拒绝二进制文件，输出上限为 64 KiB。"},
   "get_diff": {"description": "读取一个已变更可见 path 经过验证的 base-to-current diff。current 是冻结的 Review 内容，可能包含捕获的工作区 overlay；base 是固定的基线 revision。输出上限为 64 KiB。"},
   "comment": {"description": "通过 comments 提交 1 到 20 条具体 Finding。每项必须提供 path、side、existing_code、title、content、recommendation、category、severity 和 confidence。评论基准版本中被删除的 - 行使用 side=old，评论目标版本中新增的 + 行使用 side=new。existing_code 必须引用仅由对应侧实际变更行组成的最小精确连续片段，不包含 diff 标记。不得包含未修改的 diff 上下文行。severity 为 critical|high|medium|low|info，confidence 范围为 0 到 1。"},
-  "task_done": {"description": "必须且只能调用一次以结束调查，不创建 Finding。summary 必填且长度为 1 到 8000 个字符；reviewed_changed_files 必填，表示已调查变更文件数，范围为 0 到 10000。"}
+  "review_file_done": {"description": "声明一个或多个 Review 文件已经调查完成。reviewed_files 必须包含 review_files 中 1 到 2000 个精确路径。只有该路径已经成功通过模型可见的 get_diff 或 read_file 查看后才会记录；否则结果会在 missing_evidence_files 中拒绝该路径。重复路径具备幂等性。"},
+  "task_done": {"description": "尝试结束整个调查。summary 必填且长度为 1 到 8000 个字符。当仍有 Review 文件未完成时会拒绝：missing_evidence_files 表示尚未成功通过 get_diff 或 read_file 查看；undeclared_files 表示已经查看但尚未通过 review_file_done 记录。继续调查后重新调用 task_done。达到配置的最大打回次数后，工具会接受完成并通过 incomplete_files 返回未完成文件，以便保留已有 Finding 并完成整理。"}
 }

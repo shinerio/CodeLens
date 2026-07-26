@@ -102,8 +102,9 @@ class MemoryCheckpoints:
 
 
 class RecordingRuntime:
-    def __init__(self, payload: bytes) -> None:
+    def __init__(self, payload: bytes, incomplete_review_files: tuple[str, ...] = ()) -> None:
         self.payload = payload
+        self.incomplete_review_files = incomplete_review_files
         self.calls = 0
 
     async def invoke(
@@ -124,6 +125,7 @@ class RecordingRuntime:
                 AgentResponseDiagnostic("response-1", "request-1", 6, 2, 1),
                 AgentResponseDiagnostic("response-2", "request-2", 5, 2, 1),
             ),
+            self.incomplete_review_files,
         )
 
 
@@ -461,6 +463,41 @@ async def test_candidate_validation_warnings_complete_the_review_and_reach_trans
         "skipped_count": "2",
         "duplicate_count": "1",
         "invalid_count": "1",
+    }
+    assert workflow.status == "completed"
+    assert completion.calls == 1
+
+
+async def test_forced_completion_warns_about_files_without_verified_review_coverage() -> None:
+    workflow = MemoryWorkflow()
+    checkpoints = MemoryCheckpoints()
+    runtime = RecordingRuntime(
+        b'{"schema_version":"1","findings":[]}',
+        ("src/missed.py", "src/unread.py"),
+    )
+    artifacts = MemoryArtifacts()
+    completion = RecordingCompletion(checkpoints)
+    transcript = RecordingTranscript()
+
+    await _orchestrator(
+        workflow, checkpoints, runtime, artifacts, completion, transcript=transcript
+    ).execute("review-1")
+
+    entries = [entry for batch in transcript.batches for entry in batch]
+    warning = next(
+        entry
+        for entry in entries
+        if entry[2] and entry[2].get("warning_code") == "review_coverage_incomplete"
+    )
+    assert warning[1] == (
+        "Review completed after the incomplete-review retry limit; "
+        "2 files lack verified review coverage"
+    )
+    assert warning[2] == {
+        "agent": "correctness:v1",
+        "warning_code": "review_coverage_incomplete",
+        "incomplete_file_count": "2",
+        "incomplete_files": '["src/missed.py","src/unread.py"]',
     }
     assert workflow.status == "completed"
     assert completion.calls == 1

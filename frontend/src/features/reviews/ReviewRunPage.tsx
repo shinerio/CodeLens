@@ -145,6 +145,14 @@ export function ReviewRunPage() {
   const failureEntry = latestFailureEntry(transcriptQuery.data);
   const failure = failureEntry === undefined ? undefined : failureDetails(failureEntry.metadata, locale);
   const validationWarning = latestValidationWarningEntry(transcriptQuery.data);
+  const coverageWarnings = coverageWarningEntries(transcriptQuery.data);
+  const incompleteReviewFiles = Array.from(
+    new Set(
+      coverageWarnings.flatMap((entry) =>
+        parseIncompleteReviewFiles(entry.metadata.incomplete_files),
+      ),
+    ),
+  ).sort();
   const processReportQuery = useQuery({
     queryKey: ["review-process-report", taskId],
     queryFn: () => getProcessReport(taskId ?? ""),
@@ -273,6 +281,22 @@ export function ReviewRunPage() {
               duplicates: validationWarning.metadata.duplicate_count ?? "0",
               invalid: validationWarning.metadata.invalid_count ?? "0",
             })}</p>
+          </div>
+        </div>
+      ) : null}
+      {coverageWarnings.length > 0 ? (
+        <div
+          aria-label={t("run.coverageWarningTitle")}
+          className="run-validation-warning"
+          role="status"
+        >
+          <CircleAlert aria-hidden="true" />
+          <div>
+            <strong>{t("run.coverageWarningTitle")}</strong>
+            <p>{t("run.coverageWarningSummary")}</p>
+            <ul className="run-coverage-warning__files">
+              {incompleteReviewFiles.map((path) => <li key={path}><code>{path}</code></li>)}
+            </ul>
           </div>
         </div>
       ) : null}
@@ -416,4 +440,23 @@ function latestValidationWarningEntry(entries: TranscriptEntry[]): TranscriptEnt
     }
   }
   return undefined;
+}
+
+function coverageWarningEntries(entries: TranscriptEntry[]): TranscriptEntry[] {
+  return entries.filter(
+    (entry) =>
+      entry.kind === "lifecycle" &&
+      entry.metadata.warning_code === "review_coverage_incomplete",
+  );
+}
+
+function parseIncompleteReviewFiles(value: string | undefined): string[] {
+  if (value === undefined) return [];
+  try {
+    const parsed: unknown = JSON.parse(value);
+    if (!Array.isArray(parsed) || !parsed.every((item) => typeof item === "string")) return [];
+    return parsed;
+  } catch {
+    return [];
+  }
 }

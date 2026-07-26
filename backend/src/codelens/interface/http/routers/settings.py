@@ -16,10 +16,12 @@ from codelens.interface.http.dto import (
     ModelGatewayCatalogResponse,
     ModelGatewayResponse,
     RecentRepositorySettingsResponse,
+    ReviewCompletionSettingsResponse,
     RuntimeLogLevelResponse,
     UpdateInstructionFileSettingsRequest,
     UpdateModelGatewayRequest,
     UpdateRecentRepositorySettingsRequest,
+    UpdateReviewCompletionSettingsRequest,
     UpdateRuntimeLogLevelRequest,
 )
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
@@ -131,6 +133,33 @@ async def update_instruction_file_settings(
         nested_max_lines=request.nested_max_lines,
     )
     return _instruction_settings_response(limits.root_max_lines, limits.nested_max_lines)
+
+
+@router.get("/review-completion", response_model=ReviewCompletionSettingsResponse)
+async def get_review_completion_settings(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ReviewCompletionSettingsResponse:
+    """Return the retry limit used for incomplete Agent completion attempts."""
+
+    settings = await components.review_completion_settings.get()
+    return ReviewCompletionSettingsResponse(
+        max_incomplete_review_retries=settings.max_incomplete_review_retries
+    )
+
+
+@router.put("/review-completion", response_model=ReviewCompletionSettingsResponse)
+async def update_review_completion_settings(
+    request: UpdateReviewCompletionSettingsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ReviewCompletionSettingsResponse:
+    """Persist the retry limit adopted by subsequent Agent runs."""
+
+    settings = await components.review_completion_settings.update(
+        max_incomplete_review_retries=request.max_incomplete_review_retries
+    )
+    return ReviewCompletionSettingsResponse(
+        max_incomplete_review_retries=settings.max_incomplete_review_retries
+    )
 
 
 @router.get("/model-gateways", response_model=ModelGatewayCatalogResponse)

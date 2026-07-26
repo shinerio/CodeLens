@@ -7,6 +7,10 @@ from typing import Annotated, Literal
 from agents import Tool, function_tool
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints
 
+from codelens.review.application.settings import (
+    MAX_MAX_INCOMPLETE_REVIEW_RETRIES,
+    MIN_MAX_INCOMPLETE_REVIEW_RETRIES,
+)
 from codelens.review.infrastructure.line_resolver import (
     resolve_from_file_content,
     resolve_from_hunk,
@@ -16,6 +20,10 @@ from codelens.review.infrastructure.tool_contract import reject_unknown_argument
 from codelens.workspace.domain.models import ReviewSnapshot
 
 _ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
+_ReviewPath = Annotated[
+    str,
+    StringConstraints(strip_whitespace=True, min_length=1, max_length=1_024),
+]
 _LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000)]
 _TaskSummary = Annotated[str, Field(min_length=1, max_length=8_000)]
 
@@ -25,7 +33,7 @@ class ReviewCommentSubmission(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    path: _ShortText
+    path: _ReviewPath
     side: Literal["old", "new"]
     existing_code: _LongText
     title: _ShortText
@@ -42,7 +50,14 @@ class ReviewCompletionSubmission(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     summary: _LongText
-    reviewed_changed_files: int = Field(ge=0, le=10_000)
+
+
+class ReviewFileCompletionSubmission(BaseModel):
+    """Validate a bounded batch of canonical Review paths declared complete."""
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    reviewed_files: Annotated[tuple[_ReviewPath, ...], Field(min_length=1, max_length=2_000)]
 
 
 _CommentBatch = Annotated[
@@ -64,9 +79,24 @@ class ReviewCommentCollector:
     reviewer_id: str
     confidence_floor: float
     tools: FilesystemReviewTools
+    max_incomplete_review_retries: int = 3
     tool_descriptions: dict[str, str] = field(default_factory=dict)
     _findings: list[dict[str, object]] = field(default_factory=list)
     _completion: ReviewCompletionSubmission | None = None
+    _reviewed_files: set[str] = field(default_factory=set)
+    _incomplete_retry_count: int = 0
+    _incomplete_review_files: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        """Reject invalid retry policies even when constructed outside a composition root."""
+
+        value = self.max_incomplete_review_retries
+        if (
+            isinstance(value, bool)
+            or value < MIN_MAX_INCOMPLETE_REVIEW_RETRIES
+            or value > MAX_MAX_INCOMPLETE_REVIEW_RETRIES
+        ):
+            raise ValueError("max incomplete review retries must be between 0 and 20")
 
     def as_agent_tools(self) -> list[Tool]:
         """Expose bounded comment collection and explicit completion through the SDK."""
@@ -81,23 +111,36 @@ class ReviewCommentCollector:
             return await self.submit_many(comments)
 
         @function_tool(
+            name_override="review_file_done",
+            description_override=self.tool_descriptions["review_file_done"],
+        )
+        async def review_file_done_tool(
+            reviewed_files: Annotated[list[_ReviewPath], Field(min_length=1, max_length=2_000)],
+        ) -> str:
+            """Record files reviewed after successful model-visible evidence access."""
+
+            return self.complete_files(
+                ReviewFileCompletionSubmission.model_validate(
+                    {"reviewed_files": reviewed_files}
+                )
+            )
+
+        @function_tool(
             name_override="task_done",
             description_override=self.tool_descriptions["task_done"],
         )
         async def task_done_tool(
             summary: _TaskSummary,
-            reviewed_changed_files: Annotated[int, Field(ge=0, le=10_000)],
         ) -> str:
             """Declare that changed-file investigation is complete without creating a Finding."""
 
             return self.complete(
-                ReviewCompletionSubmission.model_validate(
-                    {"summary": summary, "reviewed_changed_files": reviewed_changed_files}
-                )
+                ReviewCompletionSubmission.model_validate({"summary": summary})
             )
 
         return [
             reject_unknown_arguments(comment_tool),
+            reject_unknown_arguments(review_file_done_tool),
             reject_unknown_arguments(task_done_tool),
         ]
 
@@ -196,16 +239,63 @@ class ReviewCommentCollector:
         )
 
     def complete(self, submission: ReviewCompletionSubmission) -> str:
-        """Record one task-local completion declaration and return trusted aggregate counts."""
+        """Accept final completion only after every evidenced Review file was declared."""
 
         if self._completion is not None:
             raise ValueError("task_done has already been called")
+        targets = set(self.tools.review_file_paths)
+        viewed = set(self.tools.evidence_viewed_paths)
+        missing_evidence = tuple(sorted(targets - viewed))
+        undeclared = tuple(sorted((targets & viewed) - self._reviewed_files))
+        incomplete = tuple(sorted(targets - self._reviewed_files))
+        if incomplete:
+            self._incomplete_retry_count += 1
+            if self._incomplete_retry_count <= self.max_incomplete_review_retries:
+                return json.dumps(
+                    {
+                        "accepted": False,
+                        "incomplete_retry_count": self._incomplete_retry_count,
+                        "max_incomplete_review_retries": self.max_incomplete_review_retries,
+                        "missing_evidence_files": missing_evidence,
+                        "undeclared_files": undeclared,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                )
+            self._incomplete_review_files = incomplete
         self._completion = submission
         return json.dumps(
             {
                 "accepted": True,
                 "comment_count": len(self._findings),
-                "reviewed_changed_files": submission.reviewed_changed_files,
+                "forced_completion": bool(incomplete),
+                **({"incomplete_files": incomplete} if incomplete else {}),
+                "reviewed_files": tuple(sorted(self._reviewed_files)),
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    def complete_files(self, submission: ReviewFileCompletionSubmission) -> str:
+        """Record only known paths already exposed by a successful evidence tool call."""
+
+        if self._completion is not None:
+            raise ValueError("review task has already been completed")
+        targets = set(self.tools.review_file_paths)
+        requested = set(submission.reviewed_files)
+        unknown = tuple(sorted(requested - targets))
+        if unknown:
+            raise ValueError(f"reviewed_files contains paths outside this Review: {unknown[0]}")
+        missing_evidence = tuple(sorted(requested - self.tools.evidence_viewed_paths))
+        recorded = tuple(sorted(requested - set(missing_evidence)))
+        self._reviewed_files.update(recorded)
+        return json.dumps(
+            {
+                "accepted": not missing_evidence,
+                "missing_evidence_files": missing_evidence,
+                "recorded_files": recorded,
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -218,6 +308,12 @@ class ReviewCommentCollector:
 
         return self._completion is not None
 
+    @property
+    def incomplete_review_files(self) -> tuple[str, ...]:
+        """Return paths left incomplete when the configured retry limit was exceeded."""
+
+        return self._incomplete_review_files
+
     async def _resolve_line_numbers(
         self,
         path: str,
@@ -227,7 +323,7 @@ class ReviewCommentCollector:
         """Resolve line numbers from quoted code via diff hunk or file content matching."""
 
         # Tier 1: Try hunk matching
-        diff_result = json.loads(await self.tools.get_diff(path))
+        diff_result = json.loads(await self.tools.read_diff_for_resolution(path))
         diff_text = diff_result.get("content", "")
         resolved = resolve_from_hunk(diff_text, existing_code, side=side)
         if resolved is not None:

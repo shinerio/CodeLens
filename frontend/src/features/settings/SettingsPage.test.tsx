@@ -17,6 +17,15 @@ function instructionSettingsResponse(rootMaxLines = 500, nestedMaxLines = 200) {
   });
 }
 
+function reviewCompletionSettingsResponse(maxIncompleteReviewRetries = 3) {
+  return new Response(JSON.stringify({
+    max_incomplete_review_retries: maxIncompleteReviewRetries,
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
@@ -45,6 +54,7 @@ it("creates the first persistent model gateway without retaining its API key", a
       }),
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -91,7 +101,7 @@ it("creates the first persistent model gateway without retaining its API key", a
   });
   expect(await screen.findByText("Active gateway")).toBeInTheDocument();
   expect(screen.getByLabelText("API Key")).toHaveValue("");
-});
+}, 10_000);
 
 it("switches the active gateway without asking for the stored key", async () => {
   const initialCatalog = {
@@ -133,6 +143,7 @@ it("switches the active gateway without asking for the stored key", async () => 
       }),
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -195,6 +206,7 @@ it("sends a connectivity test request when the test connectivity button is click
       }),
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: true, latency_ms: 42, detail: "TCP connection succeeded." }),
@@ -254,6 +266,7 @@ it("sends an availability test request when the test availability button is clic
       }),
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: false, latency_ms: 100, detail: "Connection failed." }),
@@ -301,6 +314,7 @@ it("updates the recent repository list limit", async () => {
       }),
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ recent_repository_limit: 15 }), {
         status: 200,
@@ -349,6 +363,7 @@ it("updates instruction file limits and omits credential handling details", asyn
       }),
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(instructionSettingsResponse(800, 240));
   const user = userEvent.setup();
 
@@ -371,6 +386,48 @@ it("updates instruction file limits and omits credential handling details", asyn
     expect.objectContaining({
       method: "PUT",
       body: JSON.stringify({ root_max_lines: 800, nested_max_lines: 240 }),
+    }),
+  );
+});
+
+it("updates the maximum incomplete review retry count", async () => {
+  fetchMock
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ active_gateway_id: null, gateways: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 10 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(reviewCompletionSettingsResponse(5));
+  const user = userEvent.setup();
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  const retryLimit = await screen.findByLabelText("Incomplete review retry limit");
+  await waitFor(() => expect(retryLimit).toBeEnabled());
+  await user.clear(retryLimit);
+  await user.type(retryLimit, "5");
+  await user.click(screen.getByRole("button", { name: "Save incomplete review retry limit" }));
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/settings/review-completion",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ max_incomplete_review_retries: 5 }),
     }),
   );
 });

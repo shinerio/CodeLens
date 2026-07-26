@@ -20,9 +20,11 @@ from codelens.instruction_policy.infrastructure.structured_skip import Structure
 from codelens.interface.http.app import create_app_with_components
 from codelens.interface.http.dependencies import HttpComponents
 from codelens.review.application.context_builder import ContextBuilder
+from codelens.review.application.settings import ReviewCompletionSettingsService
 from codelens.review.domain.ports import AgentRuntimePort
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
+from codelens.review.infrastructure.file_settings import FilesystemReviewCompletionSettingsStore
 from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.model_log import ModelTranscriptLogWriter
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
@@ -144,6 +146,9 @@ def build_unified_backend(
         model_log=ModelTranscriptLogWriter(),
     )
     instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
+    review_completion_settings = ReviewCompletionSettingsService(
+        FilesystemReviewCompletionSettingsStore(settings.data_dir)
+    )
 
     # Worker components
     worktree_manager = GitReviewWorktreeManager(
@@ -184,6 +189,7 @@ def build_unified_backend(
         codec,
         git,
         system_prompts,
+        completion_settings=review_completion_settings,
     )
     semaphores = WorkerSemaphores.create(
         agent_limit=settings.max_active_agent_runs,
@@ -285,6 +291,7 @@ def build_unified_backend(
             recent_repository_store
         ),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
+        review_completion_settings=review_completion_settings,
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

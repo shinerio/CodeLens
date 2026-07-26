@@ -19,6 +19,7 @@ from codelens.review.infrastructure.comment_collector import (
     ReviewCommentCollector,
     ReviewCommentSubmission,
     ReviewCompletionSubmission,
+    ReviewFileCompletionSubmission,
 )
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.reviewer_catalog.domain.models import AgentVersion
@@ -194,17 +195,22 @@ class FixtureRuntime:
         self.calls += 1
         if self.delay_seconds > 0:
             await asyncio.sleep(self.delay_seconds)
+        tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=None)
         collector = ReviewCommentCollector(
             snapshot=snapshot,
             reviewer_id=agent.agent_id,
             confidence_floor=agent.confidence_floor,
-            tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=None),
+            tools=tools,
         )
         await collector.submit_many(list(self._comments))
+        for path in tools.review_file_paths:
+            await tools.get_diff(path)
+        collector.complete_files(
+            ReviewFileCompletionSubmission(reviewed_files=tools.review_file_paths)
+        )
         collector.complete(
             ReviewCompletionSubmission(
                 summary="Deterministic fixture reviewed all three changed files.",
-                reviewed_changed_files=3,
             )
         )
         return UnvalidatedAgentOutput(
@@ -250,18 +256,58 @@ class FixtureRuntime:
                 {"tool_call_id": comment_call_id},
             )
         )
+        file_completion_call_id = "fixture-review-file-done-call"
+        await sink(
+            AgentRuntimeEvent(
+                "tool_call",
+                json.dumps(
+                    {"reviewed_files": ["src/cache.py", "src/permissions.py", "src/state.py"]}
+                ),
+                {
+                    "tool_call_id": file_completion_call_id,
+                    "tool_name": "review_file_done",
+                },
+            )
+        )
+        await sink(
+            AgentRuntimeEvent(
+                "tool_result",
+                json.dumps(
+                    {
+                        "accepted": True,
+                        "missing_evidence_files": [],
+                        "recorded_files": [
+                            "src/cache.py",
+                            "src/permissions.py",
+                            "src/state.py",
+                        ],
+                    }
+                ),
+                {"tool_call_id": file_completion_call_id},
+            )
+        )
         completion_call_id = "fixture-task-done-call"
         await sink(
             AgentRuntimeEvent(
                 "tool_call",
-                json.dumps({"reviewed_changed_files": 3}),
+                json.dumps({"summary": "Reviewed all changed files."}),
                 {"tool_call_id": completion_call_id, "tool_name": "task_done"},
             )
         )
         await sink(
             AgentRuntimeEvent(
                 "tool_result",
-                json.dumps({"accepted": True, "reviewed_changed_files": 3}),
+                json.dumps(
+                    {
+                        "accepted": True,
+                        "forced_completion": False,
+                        "reviewed_files": [
+                            "src/cache.py",
+                            "src/permissions.py",
+                            "src/state.py",
+                        ],
+                    }
+                ),
                 {"tool_call_id": completion_call_id},
             )
         )

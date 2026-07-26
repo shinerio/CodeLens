@@ -35,6 +35,10 @@ export type InstructionFileSettings = {
   nested_max_lines: number;
 };
 
+export type ReviewCompletionSettings = {
+  max_incomplete_review_retries: number;
+};
+
 export type CreateModelGateway = {
   name: string;
   api_key: string;

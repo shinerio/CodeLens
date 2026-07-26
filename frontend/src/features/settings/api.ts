@@ -5,6 +5,7 @@ import type {
   InstructionFileSettings,
   ModelGatewayCatalog,
   RecentRepositorySettings,
+  ReviewCompletionSettings,
   RuntimeLogLevel,
   RuntimeLogLevelSettings,
   UpdateModelGateway,
@@ -48,6 +49,19 @@ export async function updateInstructionFileSettings(
   settings: InstructionFileSettings,
 ): Promise<InstructionFileSettings> {
   return api<InstructionFileSettings>("/settings/instruction-files", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function getReviewCompletionSettings(): Promise<ReviewCompletionSettings> {
+  return api<ReviewCompletionSettings>("/settings/review-completion");
+}
+
+export async function updateReviewCompletionSettings(
+  settings: ReviewCompletionSettings,
+): Promise<ReviewCompletionSettings> {
+  return api<ReviewCompletionSettings>("/settings/review-completion", {
     method: "PUT",
     body: JSON.stringify(settings),
   });

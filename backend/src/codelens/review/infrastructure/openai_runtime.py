@@ -30,6 +30,10 @@ from openai import (
 )
 
 from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
+from codelens.review.application.settings import (
+    ReviewCompletionSettings,
+    ReviewCompletionSettingsService,
+)
 from codelens.review.domain.errors import (
     AgentMaxTurnsExceededError,
     PermanentAgentOutputError,
@@ -121,12 +125,14 @@ class OpenAIAgentRuntime:
         git: GitCli,
         prompt_loader: I18nPromptLoaderPort,
         runner: _RunnerPort | None = None,
+        completion_settings: ReviewCompletionSettingsService | None = None,
     ) -> None:
         self._config_store = config_store
         self._output_codec = output_codec
         self._git = git
         self._prompt_loader = prompt_loader
         self._runner = runner or _PublicSdkRunner()
+        self._completion_settings = completion_settings
 
     async def invoke(
         self,
@@ -168,6 +174,11 @@ class OpenAIAgentRuntime:
         if input_text is None:
             raise PermanentAgentOutputError("Agent input is not valid UTF-8") from None
         prompts = self._prompt_loader.get(prompt_locale)
+        completion_settings = (
+            await self._completion_settings.get()
+            if self._completion_settings is not None
+            else ReviewCompletionSettings()
+        )
         if agent.output_contract_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
@@ -182,6 +193,9 @@ class OpenAIAgentRuntime:
             reviewer_id=agent.agent_id,
             confidence_floor=agent.confidence_floor,
             tools=snapshot_tools,
+            max_incomplete_review_retries=(
+                completion_settings.max_incomplete_review_retries
+            ),
             tool_descriptions={name: tool.description for name, tool in prompts.tools.items()},
         )
         model_tools = [
@@ -307,6 +321,14 @@ class OpenAIAgentRuntime:
             )
 
         result = cast(RunResult, investigation)
+        if not comment_collector.is_completed:
+            await client.close()
+            raise PermanentAgentOutputError(
+                "Code investigation ended without an accepted task_done call.",
+                phase="investigation",
+                reason_code="review_completion_not_declared",
+                retryable=False,
+            ) from None
         try:
             canonical_bytes = self._output_codec.encode(comment_collector.finding_batch())
         except ValueError as error:
@@ -339,6 +361,7 @@ class OpenAIAgentRuntime:
             input_tokens=sum(item.input_tokens for item in diagnostics),
             output_tokens=sum(item.output_tokens for item in diagnostics),
             diagnostics=diagnostics,
+            incomplete_review_files=comment_collector.incomplete_review_files,
         )
         await client.close()
         return output

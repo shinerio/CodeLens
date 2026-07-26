@@ -2,7 +2,7 @@
 
 ## 1. 文档范围
 
-CodeLens 在每个 Reviewer Agent 的单次运行中提供 6 个模型可见工具：
+CodeLens 在每个 Reviewer Agent 的单次运行中提供 7 个模型可见工具：
 
 | 类别 | 工具 | 主要用途 | 是否保存任务内状态 |
 | --- | --- | --- | --- |
@@ -11,6 +11,7 @@ CodeLens 在每个 Reviewer Agent 的单次运行中提供 6 个模型可见工�
 | 证据读取 | `read_file` | 按行读取 `current`、`base` 或 `head` 版本的文件 | 否 |
 | 证据读取 | `get_diff` | 获取单个变更文件的 `base-to-current` diff | 否 |
 | 结果提交 | `comment` | 提交并解析一批候选 Finding | 是 |
+| 运行控制 | `review_file_done` | 批量声明已经完成调查的 Review 文件 | 是 |
 | 运行控制 | `task_done` | 声明本次调查完成 | 是 |
 
 这里的“工具”特指 OpenAI Agents SDK 暴露给模型的函数工具，不是 HTTP API、CLI 命令或供用户直接执行的 Shell 命令。MVP 不向模型提供 Shell、网络、任意文件系统、第三方 MCP、Skills、LSP、Serena、CodeGraph、codebase-memory 或通用沙箱工具。
@@ -18,7 +19,7 @@ CodeLens 在每个 Reviewer Agent 的单次运行中提供 6 个模型可见工�
 权威实现位于：
 
 - [`snapshot_tools.py`](../backend/src/codelens/review/infrastructure/snapshot_tools.py)：4 个只读证据工具；
-- [`comment_collector.py`](../backend/src/codelens/review/infrastructure/comment_collector.py)：`comment` 和 `task_done`；
+- [`comment_collector.py`](../backend/src/codelens/review/infrastructure/comment_collector.py)：`comment`、`review_file_done` 和 `task_done`；
 - [`openai_runtime.py`](../backend/src/codelens/review/infrastructure/openai_runtime.py)：工具组装、运行和转录事件；
 - [`tools.json`](../prompts/sys/zh-CN/tools.json)：简体中文模型可见说明。
 
@@ -34,16 +35,17 @@ CodeLens 在每个 Reviewer Agent 的单次运行中提供 6 个模型可见工�
 ReviewSnapshot 冻结
         |
         v
-Runtime 创建本次 Agent Run 的 6 个工具并校验契约
+Runtime 创建本次 Agent Run 的 7 个工具并校验契约
         |
         v
-模型使用证据工具调查 -> comment 提交已证实问题 -> task_done 结束调查
+模型使用 get_diff/read_file 调查 -> comment 提交已证实问题
+        -> review_file_done 批量声明文件 -> task_done 结束调查
         |
         v
 宿主只用 comment 已解析并接受的记录生成 FindingBatch
 ```
 
-模型最终自然语言文本不用于生成 Finding；需要进入报告的问题必须通过 `comment` 提交并被接受。根据系统 Review 工作流，即使没有 Finding，也必须调用一次 `task_done`。
+模型最终自然语言文本不用于生成 Finding；需要进入报告的问题必须通过 `comment` 提交并被接受。根据系统 Review 工作流，即使没有 Finding，也必须让每个文件通过查看与声明门禁，并调用一次被接受的 `task_done`。
 
 ### 2.2 严格 JSON Schema
 
@@ -75,7 +77,7 @@ Runtime 创建本次 Agent Run 的 6 个工具并校验契约
 
 读取 `base` 或 `head` 时，工具先复验对应的当前 Snapshot 条目，再通过受限的 Git 参数数组从固定 OID 读取对象。整个过程不执行 Shell，不访问网络，不读取用户的可变原始工作区，也不写入任何文件。
 
-生产 Runtime 不为证据工具设置独立调用次数上限；调查仍受 Agent 最大模型回合数、单次工具输出上限和用户取消约束。每次模型可见工具调用及结果会以 `tool_call`/`tool_result` 事件进入运行转录，并用于过程报告中的工具调用统计。
+生产 Runtime 不为证据工具设置独立调用次数上限；调查仍受 Agent 最大模型回合数、单次工具输出上限和用户取消约束。`grep` 的隔离进程启动阶段单独受限，只有 Worker 就绪后才开始计算正则求值时限，避免把解释器冷启动误判为表达式超时。每次模型可见工具调用及结果会以 `tool_call`/`tool_result` 事件进入运行转录，并用于过程报告中的工具调用统计。
 
 ## 3. `find_files`
 
@@ -364,27 +366,25 @@ glob 语义：
 
 `comment` 只修改本次运行内存中的收集器，不写数据库、Artifact 或文件。Runtime 完成后才把已解析候选编码成稳定的 `schema_version: "1"` FindingBatch；模型最终文本以及模型臆造的位置元数据都不会成为报告依据。
 
-## 8. `task_done`
+## 8. `review_file_done`
 
 ### 8.1 功能
 
-声明当前 Reviewer 已完成所有变更文件的调查。它不创建 Finding；没有问题时也必须使用它结束调查。系统工作流要求每个 Agent Run 必须且只能调用一次，收集器会明确拒绝第二次调用。
+批量声明当前 Reviewer 已完成哪些 Review 文件的调查。只有本次 Agent Run 已经通过模型可见的 `get_diff` 或 `read_file` 成功查看过的路径才能记录；`find_files`、`grep` 以及宿主为 Finding 定位而执行的内部读取都不构成文件查看证据。
 
 ### 8.2 参数
 
 | 参数 | 类型 | 约束 | 含义 |
 | --- | --- | --- | --- |
-| `summary` | string | 必填，1–8000 字符 | 本次调查的简短总结 |
-| `reviewed_changed_files` | integer | 必填，0–10000 | 实际调查过的变更文件数 |
+| `reviewed_files` | array[string] | 必填，1–2000 项；每项 1–1024 字符 | `review_files` 中已经完成调查的精确路径 |
 
 ### 8.3 使用示例
 
 ```json
 {
-  "name": "task_done",
+  "name": "review_file_done",
   "arguments": {
-    "summary": "已检查全部 4 个变更文件，并提交 1 条评论。",
-    "reviewed_changed_files": 4
+    "reviewed_files": ["src/cache.py", "src/service.py"]
   }
 }
 ```
@@ -394,22 +394,76 @@ glob 语义：
 ```json
 {
   "accepted": true,
-  "comment_count": 1,
-  "reviewed_changed_files": 4
+  "missing_evidence_files": [],
+  "recorded_files": ["src/cache.py", "src/service.py"]
 }
 ```
 
 ### 8.4 工作原理
 
-工具严格校验总结和计数，将完成声明保存到当前 `ReviewCommentCollector` 的内存状态，并返回当前累计评论数。重复调用会返回 `task_done has already been called` 错误。`summary` 不会替代 `comment`，`reviewed_changed_files` 也不会自行产生或删除 Finding。
+工具以 Snapshot 生成的完整 `review_files` 校验路径，并检查 `FilesystemReviewTools` 在本次 Run 内记录的成功查看证据。范围外路径会拒绝整个调用；缺少证据的路径通过 `missing_evidence_files` 返回，批次中其余具备证据的路径仍会记录。重复声明幂等，不会重复计数或改变 Finding。
 
-## 9. 契约装载与可观测性
+## 9. `task_done`
 
-工具的自然语言说明与参数 Schema 分开维护：参数结构由带类型标注和 Pydantic 约束的实现生成，模型可见说明来自 `prompts/sys/<locale>/tools.json`。应用启动时，`I18nPromptLoader` 会完整读取各语言包，并要求每个语言包恰好包含这 6 个稳定工具；缺失、额外或空说明都会导致启动失败。未知语言回退到配置的默认语言，工具名称和 JSON 字段不会本地化。
+### 9.1 功能
+
+尝试声明当前 Reviewer 已完成全部 Review 文件的调查。它不创建 Finding；没有问题时也必须使用它结束调查。模型最终文本不能替代一次被接受的 `task_done`。
+
+### 9.2 参数
+
+| 参数 | 类型 | 约束 | 含义 |
+| --- | --- | --- | --- |
+| `summary` | string | 必填，1–8000 字符 | 本次调查的简短总结 |
+
+### 9.3 拒绝与成功响应
+
+调用示例：
+
+```json
+{
+  "name": "task_done",
+  "arguments": {
+    "summary": "已检查全部 Review 文件，并提交 1 条评论。"
+  }
+}
+```
+
+文件尚未完整覆盖时返回：
+
+```json
+{
+  "accepted": false,
+  "incomplete_retry_count": 1,
+  "max_incomplete_review_retries": 3,
+  "missing_evidence_files": ["src/cache.py"],
+  "undeclared_files": ["src/service.py"]
+}
+```
+
+`missing_evidence_files` 表示尚未成功调用 `get_diff` 或 `read_file`；`undeclared_files` 表示已经查看，但没有通过 `review_file_done` 记录。模型必须按具体原因补齐后再次调用 `task_done`。
+
+全部完成时返回：
+
+```json
+{
+  "accepted": true,
+  "comment_count": 1,
+  "forced_completion": false,
+  "reviewed_files": ["src/cache.py", "src/service.py"]
+}
+```
+
+### 9.4 重试耗尽
+
+`GET/PUT /api/settings/review-completion` 的 `max_incomplete_review_retries` 控制每个 Agent Run 最多打回多少次，允许 0–20，默认 3。每个 Run 启动时读取当前设置；超过该次数后，下一次不完整的 `task_done` 会被接受并返回 `forced_completion: true` 和精确的 `incomplete_files`。Runtime 保留当前已验证 Finding 并让任务成功完成，同时写入 `review_coverage_incomplete` 生命周期告警；Web 会合并所有 Agent 的未完成路径并提示用户。若模型在任何 `task_done` 被接受前自行结束，Runtime 会把该 Agent Run 判为失败。
+
+## 10. 契约装载与可观测性
+
+工具的自然语言说明与参数 Schema 分开维护：参数结构由带类型标注和 Pydantic 约束的实现生成，模型可见说明来自 `prompts/sys/<locale>/tools.json`。应用启动时，`I18nPromptLoader` 会完整读取各语言包，并要求每个语言包恰好包含这 7 个稳定工具；缺失、额外或空说明都会导致启动失败。未知语言回退到配置的默认语言，工具名称和 JSON 字段不会本地化。
 
 Runtime 在模型调用前还会扫描工具名称、说明和 Schema，禁止暴露 `snapshot_id`、`hunk_id`、`content_hash`、`excerpt_hash`、内部规则链、Context Plan 和优先级等宿主内部概念。流式运行时，SDK 的工具调用和结果分别映射为稳定的 `tool_call` 与 `tool_result` 转录记录，并保留 tool name/call ID 用于前端执行过程展示和终态过程报告。
 
-## 10. 常见错误与处理
+## 11. 常见错误与处理
 
 | 错误场景 | 原因 | 建议处理 |
 | --- | --- | --- |
@@ -420,9 +474,12 @@ Runtime 在模型调用前还会扫描工具名称、说明和 Schema，禁止�
 | `existing_code cannot be resolved to a line range` | 摘录在所选版本中找不到 | 从 `get_diff` 重新复制对应侧的精确连续变更行 |
 | `existing_code must quote only consecutive changed ... lines` | 摘录包含上下文、跨 hunk、side 错误或不在变更范围 | 移除上下文和 diff 标记，修正 `old/new` 侧别 |
 | `comment confidence is below this reviewer's threshold` | 置信度低于该 Reviewer 配置阈值 | 补充证据；无法证实时放弃该候选，而不是虚增置信度 |
+| `reviewed_files contains paths outside this Review` | `review_file_done` 提交了不属于当前 `review_files` 的路径 | 使用首次输入中的精确目标路径，不要提交 context 文件或旧重命名路径 |
+| `missing_evidence_files` 非空 | 对应文件尚未成功调用 `get_diff` 或 `read_file` | 先查看这些文件，再用 `review_file_done` 声明 |
+| `undeclared_files` 非空 | 文件已经查看但没有声明完成 | 用 `review_file_done` 批量声明这些路径，再重试 `task_done` |
 | `task_done has already been called` | 同一 Agent Run 重复结束 | 首次成功后不要再次调用 |
 
-## 11. 设计边界总结
+## 12. 设计边界总结
 
 内置工具遵循三条核心原则：
 
