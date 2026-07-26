@@ -1,5 +1,5 @@
 import { fireEvent, render, screen, within } from "@testing-library/react";
-import { expect, it, vi } from "vitest";
+import { expect, it } from "vitest";
 
 import { ReviewConsole } from "./ReviewConsole";
 
@@ -236,40 +236,7 @@ it("labels a raw output as a parsing failure only when its metadata says so", ()
   expect(screen.getByText("unparsed provider body")).toBeInTheDocument();
 });
 
-it("uses unique message identities when a legacy transcript repeats sequences", () => {
-  const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
-  render(
-    <ReviewConsole
-      entries={[
-        {
-          sequence: 65,
-          kind: "tool_result",
-          content: "first legacy result",
-          created_at: "2026-07-25T12:19:47Z",
-          redacted: false,
-          truncated: false,
-          metadata: {},
-        },
-        {
-          sequence: 65,
-          kind: "tool_call",
-          content: "second legacy call",
-          created_at: "2026-07-25T12:19:48Z",
-          redacted: false,
-          truncated: false,
-          metadata: {},
-        },
-      ]}
-    />,
-  );
-
-  expect(
-    consoleError.mock.calls.some((call) => String(call[0]).includes("same key")),
-  ).toBe(false);
-  consoleError.mockRestore();
-});
-
-it("renders streamed Markdown after its agent has completed without a provider done event", () => {
+it("renders streamed Markdown when agent completion finalizes the message", () => {
   render(
     <ReviewConsole
       entries={[

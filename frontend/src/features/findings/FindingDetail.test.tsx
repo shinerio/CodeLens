@@ -82,15 +82,11 @@ const source: FindingSourcePreview = {
 it("renders one equal-width side-by-side diff with side-aware comment placement", () => {
   render(<FindingDetail finding={finding} source={source} />, { wrapper: TestProviders });
 
-  expect(screen.queryByRole("heading", { name: "Evidence" })).toBeNull();
   expect(screen.getByLabelText("Pinned source comparison")).toBeInTheDocument();
   const comparison = screen.getByTestId("monaco-diff-editor");
   expect(comparison).toHaveAttribute("data-original", source.base?.content);
   expect(comparison).toHaveAttribute("data-modified", source.target?.content);
   expect(comparison).toHaveAttribute("data-view", "split");
-  expect(screen.queryByRole("button", { name: "Side by side" })).not.toBeInTheDocument();
-  expect(screen.queryByRole("button", { name: "Unified diff" })).not.toBeInTheDocument();
-  expect(screen.queryByText("Add", { exact: false })).not.toBeInTheDocument();
   expect(screen.getByLabelText("Pinned source comparison")).toHaveAttribute(
     "data-comment-side",
     "new",

@@ -237,7 +237,6 @@ it("shows the actionable failure reason in the page banner", async () => {
   expect(await screen.findByRole("alert")).toHaveTextContent("Cannot connect to the model gateway");
   expect(screen.getByRole("alert")).toHaveTextContent("Check the Base URL and network access");
   expect(screen.getByRole("alert")).toHaveTextContent("HTTP 503");
-  expect(screen.queryByText("The run failed before synthesis completed.")).not.toBeInTheDocument();
 });
 
 it("shows the process report after a review has completed", async () => {

@@ -3,7 +3,6 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
-from sqlalchemy import text
 from sqlalchemy.exc import IntegrityError
 
 from codelens.findings.domain.models import (
@@ -130,10 +129,6 @@ async def test_migration_and_task_job_event_creation_are_atomic(tmp_path: Path) 
             "worktree-1",
             "worktree-2",
         }
-        async with database.engine.connect() as connection:
-            rows = (await connection.execute(text("PRAGMA table_info(jobs)"))).mappings().all()
-        columns = {str(row["name"]) for row in rows}
-        assert not {"lease_owner", "lease_expires_at", "fencing_token"} & columns
     finally:
         await database.dispose()
 

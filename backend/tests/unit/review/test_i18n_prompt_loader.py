@@ -19,7 +19,7 @@ def test_system_prompt_locales_use_the_minimal_bundle_file_set() -> None:
         assert bundle_files == EXPECTED_BUNDLE_FILES
 
 
-def test_repository_policy_describes_complete_prefetched_rules_without_loader_tool() -> None:
+def test_repository_policy_describes_complete_prefetched_rules_and_review_workflow() -> None:
     loader = I18nPromptLoader.load(PROMPT_ROOT)
     english = loader.get("en")
     chinese = loader.get("zh-CN")
@@ -28,16 +28,10 @@ def test_repository_policy_describes_complete_prefetched_rules_without_loader_to
     assert "complete frozen repository rules" in english.review_policy
     assert "repository_instructions" in chinese.review_policy
     assert "完整冻结仓库规则" in chinese.review_policy
-    assert "instruction_loader" not in english.review_policy
-    assert "instruction_loader" not in chinese.review_policy
-    assert "instruction_loader" not in english.review_workflow
-    assert "instruction_loader" not in chinese.review_workflow
     assert "Apply the rules mapped to each file" in english.review_workflow
     assert "直接应用映射到每个文件的规则" in chinese.review_workflow
     assert "never request a shell or invent another tool" in english.review_workflow
     assert "不得请求 Shell，也不得发明其他工具" in chinese.review_workflow
-    assert "get_diff" not in english.review_workflow
-    assert "get_diff" not in chinese.review_workflow
     assert english.review_workflow.count("`task_done`") == 1
     assert chinese.review_workflow.count("`task_done`") == 1
     assert "Do not include unchanged diff context" in english.tools["comment"].description

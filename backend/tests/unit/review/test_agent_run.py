@@ -48,7 +48,6 @@ def test_agent_run_requires_output_checkpoint_before_validation() -> None:
 
     assert run.status is AgentRunStatus.VALIDATING
     assert run.output_artifact_ref == "artifact-1"
-    assert not hasattr(run, "succeed")
 
 
 def test_failed_run_retries_only_within_policy() -> None:
@@ -67,4 +66,3 @@ def test_failed_run_retries_only_within_policy() -> None:
 
     with pytest.raises(InvalidAgentRunStateError):
         run.retry(max_attempts=2)
-

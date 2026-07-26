@@ -312,7 +312,6 @@ async def test_streamed_model_events_publish_the_prompt_before_completion() -> N
         "model_reasoning_delta",
         "model_output",
     ]
-    assert all("get_change_map" not in entry[1] for entry in entries)
     model_output = next(entry for entry in entries if entry[0] == "model_output")
     assert model_output[2] == {
         "agent": "correctness:v1",

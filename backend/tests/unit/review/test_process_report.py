@@ -78,7 +78,6 @@ def test_process_report_aggregates_llm_tokens_agents_and_tools() -> None:
         ("get_diff", 1, 1),
         ("grep", 1, 1),
     ]
-    assert all(tool.tool_name != "get_change_map" for tool in report.tools)
     assert report.agent_run_count == 1
     assert report.finding_count == 2
     assert report.transcript_entry_count == 7

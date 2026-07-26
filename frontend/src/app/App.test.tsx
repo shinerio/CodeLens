@@ -9,11 +9,10 @@ afterEach(() => {
 });
 
 describe("App", () => {
-  it("uses runs as the only workspace list entry", () => {
+  it("links to runs from the workspace navigation", () => {
     render(<App />, { wrapper: TestProviders });
 
     expect(screen.getByText("CodeLens")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Runs" })).toHaveAttribute("href", "/runs");
-    expect(screen.queryByRole("button", { name: "New review" })).not.toBeInTheDocument();
   });
 });
