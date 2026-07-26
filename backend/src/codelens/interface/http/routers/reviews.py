@@ -18,6 +18,7 @@ from codelens.interface.http.dto import (
     CancelReviewRequest,
     CreateReviewRequest,
     FindingSourcePreviewResponse,
+    RetryReviewRequest,
     ReviewProcessReportResponse,
     ReviewResponse,
 )
@@ -112,6 +113,17 @@ async def cancel_review(
     """Persist cancellation intent; the singleton Worker performs propagation."""
 
     return ReviewResponse.from_domain(await components.cancel_review.handle(task_id))
+
+
+@router.post("/{task_id}/retry", response_model=ReviewResponse, status_code=202)
+async def retry_review(
+    task_id: TaskId,
+    _request: RetryReviewRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ReviewResponse:
+    """Create and enqueue an independent Review from one failed task's frozen input."""
+
+    return ReviewResponse.from_domain(await components.retry_review.handle(task_id))
 
 
 @router.get("/{task_id}/report")

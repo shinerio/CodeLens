@@ -244,6 +244,7 @@ def build_unified_backend(
         GetReviewHandler,
         ListRecentRepositoriesHandler,
         ListReviewsHandler,
+        RetryReviewHandler,
         UpdateRecentRepositorySettingsHandler,
     )
     from codelens.review.application.source_preview import FindingSourcePreviewService
@@ -298,6 +299,7 @@ def build_unified_backend(
             worktree_manager,
         ),
         cancel_review=CancelReviewHandler(review_store),
+        retry_review=RetryReviewHandler(review_store),
         events=SqlEventOutbox(database, event_bus=event_bus),
         event_bus=event_bus,
         review_store=review_store,

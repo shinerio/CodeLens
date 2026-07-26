@@ -455,6 +455,107 @@ class SqlReviewStore:
             )
         return tuple(_review_record(row) for row in rows)
 
+    async def retry_failed_review(
+        self,
+        source_task_id: str,
+        new_task_id: str,
+        created_at: datetime,
+    ) -> ReviewRecord | None:
+        """Atomically clone a visible failed command into a fresh queued task."""
+
+        captured: list[ReviewEvent] = []
+
+        async def operation(session: AsyncSession) -> ReviewRecord | None:
+            source = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(review_tasks.c.task_id == source_task_id)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if source is None or source["deleted_at"] is not None:
+                return None
+            if str(source["status"]) != "failed":
+                raise InvalidAgentRunStateError("only failed reviews can retry")
+
+            await session.execute(
+                insert(review_tasks).values(
+                    task_id=new_task_id,
+                    repository_id=source["repository_id"],
+                    repository_path=source["repository_path"],
+                    repository_realpath_hash=source["repository_realpath_hash"],
+                    git_common_dir_hash=source["git_common_dir_hash"],
+                    scope_json=source["scope_json"],
+                    base_oid=source["base_oid"],
+                    head_oid=source["head_oid"],
+                    overlay_hash=source["overlay_hash"],
+                    overlay_artifact_ref=source["overlay_artifact_ref"],
+                    target_paths_json=source["target_paths_json"],
+                    status="created",
+                    selected_agent_versions_json=source["selected_agent_versions_json"],
+                    prompt_locale=source["prompt_locale"],
+                    worktree_id=None,
+                    snapshot_id=None,
+                    cancellation_requested=False,
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+            )
+            await session.execute(
+                insert(jobs).values(
+                    task_id=new_task_id,
+                    status="queued",
+                    created_at=created_at,
+                    updated_at=created_at,
+                )
+            )
+            payload: dict[str, object] = {
+                "status": "created",
+                "base_oid": str(source["base_oid"]),
+                "head_oid": str(source["head_oid"]),
+                "retried_from_task_id": source_task_id,
+            }
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(new_task_id, "review.created", payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is not None:
+                captured.append(
+                    ReviewEvent(
+                        event_id=int(event_id),
+                        task_id=new_task_id,
+                        event_type="review.created",
+                        payload=payload,
+                    )
+                )
+            repository_path = source["repository_path"]
+            if repository_path is None:
+                raise RuntimeError("review lacks restart-safe repository input")
+            recent_repository_limit = await _get_recent_repository_limit(session)
+            await _record_recent_repository(
+                session,
+                Path(str(repository_path)),
+                created_at,
+                recent_repository_limit,
+            )
+            created = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(review_tasks.c.task_id == new_task_id)
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            return _review_record(created)
+
+        record = await self._database.run_transaction(operation)
+        await self._publish_events(captured)
+        return record
+
     async def soft_delete_review(self, task_id: str) -> bool:
         """Hide one workspace and atomically request cancellation if it is active."""
 

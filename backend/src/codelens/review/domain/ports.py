@@ -198,6 +198,16 @@ class ReviewStorePort(Protocol):
 
         raise NotImplementedError
 
+    async def retry_failed_review(
+        self,
+        source_task_id: str,
+        new_task_id: str,
+        created_at: datetime,
+    ) -> ReviewRecord | None:
+        """Create an independent queued task from one visible failed Review."""
+
+        raise NotImplementedError
+
     async def soft_delete_review(self, task_id: str) -> bool:
         """Hide one review and request cancellation when it is still active."""
 

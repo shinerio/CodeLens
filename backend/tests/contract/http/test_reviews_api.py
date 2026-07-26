@@ -125,6 +125,69 @@ def test_recent_repositories_deduplicates_review_paths(
     assert response.json()[0]["last_reviewed_at"].endswith(("Z", "+00:00"))
 
 
+def test_retry_failed_review_creates_a_new_review_from_the_original_request(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    _prepared_repository(git_repository)
+    app = create_app(_settings(tmp_path, tmp_path))
+    request = _request(
+        git_repository,
+        {
+            "type": "branch",
+            "base_ref": "main",
+            "target_ref": "feature-one",
+            "include_workspace_changes": False,
+        },
+    )
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        original = client.post("/api/reviews", json=request)
+        original_task_id = original.json()["task_id"]
+        client.portal.call(
+            app.state.components.review_store.fail,
+            original_task_id,
+            "review_execution_failed",
+        )
+
+        retried = client.post(f"/api/reviews/{original_task_id}/retry", json={})
+        original_after_retry = client.get(f"/api/reviews/{original_task_id}")
+
+    assert retried.status_code == 202, retried.text
+    assert retried.json()["task_id"] != original_task_id
+    assert retried.json()["status"] == "created"
+    assert retried.json()["base_oid"] == original.json()["base_oid"]
+    assert retried.json()["head_oid"] == original.json()["head_oid"]
+    assert retried.json()["selected_agents"] == original.json()["selected_agents"]
+    assert original_after_retry.json()["status"] == "failed"
+
+
+def test_retry_rejects_a_review_that_is_not_failed(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    _prepared_repository(git_repository)
+    app = create_app(_settings(tmp_path, tmp_path))
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        original = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        response = client.post(f"/api/reviews/{original.json()['task_id']}/retry", json={})
+
+    assert response.status_code == 409
+    assert response.json()["code"] == "invalid_agent_run_state"
+
+
 def test_recent_repository_can_be_removed_without_deleting_reviews(
     tmp_path: Path,
     git_repository: Path,

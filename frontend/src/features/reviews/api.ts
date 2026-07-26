@@ -78,6 +78,13 @@ export async function cancelReview(taskId: string): Promise<ReviewResponse> {
   });
 }
 
+export async function retryReview(taskId: string): Promise<ReviewResponse> {
+  return api<ReviewResponse>(`/reviews/${taskId}/retry`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
 export async function listFindings(taskId: string): Promise<FindingRecord[]> {
   return api<FindingRecord[]>(`/reviews/${taskId}/findings`);
 }

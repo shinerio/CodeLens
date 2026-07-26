@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import (
     RecentRepositoryRecord,
@@ -125,6 +126,38 @@ class ListReviewsHandler:
         """Return newest Review workspaces for the navigation hierarchy."""
 
         return await self._store.list_reviews()
+
+
+class RetryReviewHandler:
+    """Create a new durable Review from a failed task's frozen request."""
+
+    def __init__(
+        self,
+        store: ReviewStorePort,
+        *,
+        id_factory: Callable[[], str] | None = None,
+        clock: Callable[[], datetime] | None = None,
+    ) -> None:
+        self._store = store
+        self._id_factory = id_factory or (lambda: f"review_{uuid.uuid4().hex}")
+        self._clock = clock or (lambda: datetime.now(UTC))
+
+    async def handle(self, task_id: str) -> ReviewRecord:
+        """Keep the failed task immutable and enqueue an independent retry task."""
+
+        source = await self._store.get_review(task_id)
+        if source is None or source.is_deleted:
+            raise ReviewNotFoundError("review does not exist")
+        if source.status != "failed":
+            raise InvalidAgentRunStateError("only failed reviews can retry")
+        record = await self._store.retry_failed_review(
+            task_id,
+            self._id_factory(),
+            self._clock(),
+        )
+        if record is None:
+            raise ReviewNotFoundError("review does not exist")
+        return record
 
 
 class ListRecentRepositoriesHandler:

@@ -1,5 +1,8 @@
 # CodeLens TODO
 
+- 支持多个agent并发，每个agent单独从一个角度进行代码review，然后汇总所有review意见，为这些agent生成初始化提示词，并和正确性agent一样，支持修改和重置。另外新增一个通用agent，会从所有角度进行代码review，默认选中这个agent。
+- 上下文过长时，需要压缩。将工具调用和审查对话压缩为：已确认问题、工具结论、已完成任务、待办任务、当前关注点
+
 ## 后续功能
 
 - 支持用户人工划词 review，并学习用户的 review 意见，放到根目录 `REVIEW.md`、当前文件夹下`REVIEW.md` 或指定文件的 `<filename>.review.md` 中（放到最合适的一处即可）。

@@ -15,6 +15,7 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
+from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import (
@@ -129,6 +130,62 @@ async def test_migration_and_task_job_event_creation_are_atomic(tmp_path: Path) 
             "worktree-1",
             "worktree-2",
         }
+    finally:
+        await database.dispose()
+
+
+async def test_failed_review_retry_creates_an_independent_queued_task(tmp_path: Path) -> None:
+    database = await _database(tmp_path)
+    try:
+        store = SqlReviewStore(database)
+        jobs = SqlJobQueue(database)
+        events = SqlEventOutbox(database)
+        original = _task("review-original")
+        await store.create_with_job(original)
+        await store.fail(original.task_id, "review_execution_failed")
+
+        retried = await store.retry_failed_review(
+            original.task_id,
+            "review-retry",
+            datetime(2026, 7, 18, tzinfo=UTC),
+        )
+
+        original_record = await store.get_review(original.task_id)
+        retry_execution = await store.get_execution(retried.task_id)
+        assert original_record is not None
+        assert original_record.status == "failed"
+        assert retried.task_id == "review-retry"
+        assert retried.status == "created"
+        assert (retried.base_oid, retried.head_oid) == (
+            original.target.base_oid,
+            original.target.head_oid,
+        )
+        assert retried.selected_agent_versions == original.selected_agent_versions
+        assert retry_execution is not None
+        assert retry_execution.repository_path == original.repository_path.resolve()
+        assert retry_execution.target_paths == original.target_paths
+        assert (await jobs.get(retried.task_id)).status == "queued"
+        retry_events = await events.list_after(retried.task_id, after_event_id=0)
+        assert [event.event_type for event in retry_events] == ["review.created"]
+        assert retry_events[0].payload["retried_from_task_id"] == original.task_id
+    finally:
+        await database.dispose()
+
+
+async def test_retry_rejects_a_review_that_has_not_failed(tmp_path: Path) -> None:
+    database = await _database(tmp_path)
+    try:
+        store = SqlReviewStore(database)
+        await store.create_with_job(_task("review-active"))
+
+        with pytest.raises(InvalidAgentRunStateError, match="only failed reviews can retry"):
+            await store.retry_failed_review(
+                "review-active",
+                "review-retry",
+                datetime(2026, 7, 18, tzinfo=UTC),
+            )
+
+        assert await store.get_review("review-retry") is None
     finally:
         await database.dispose()
 

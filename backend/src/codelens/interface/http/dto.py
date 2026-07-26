@@ -366,6 +366,10 @@ class CancelReviewRequest(StrictDto):
     pass
 
 
+class RetryReviewRequest(StrictDto):
+    pass
+
+
 class ProblemResponse(StrictDto):
     code: str
     message: str

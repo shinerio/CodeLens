@@ -17,6 +17,7 @@ from codelens.review.application.commands import (
     GetReviewHandler,
     ListRecentRepositoriesHandler,
     ListReviewsHandler,
+    RetryReviewHandler,
     UpdateRecentRepositorySettingsHandler,
 )
 from codelens.review.application.settings import ReviewCompletionSettingsService
@@ -85,6 +86,7 @@ class HttpComponents:
     review_completion_settings: ReviewCompletionSettingsService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
+    retry_review: RetryReviewHandler
     events: SqlEventOutbox
     event_bus: InMemoryEventBus
     review_store: SqlReviewStore
@@ -164,6 +166,7 @@ def build_components(settings: Settings) -> HttpComponents:
             worktree_manager,
         ),
         cancel_review=CancelReviewHandler(review_store),
+        retry_review=RetryReviewHandler(review_store),
         events=SqlEventOutbox(database, event_bus=event_bus),
         event_bus=event_bus,
         review_store=review_store,
