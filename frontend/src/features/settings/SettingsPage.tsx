@@ -2,7 +2,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Check,
   CheckCircle2,
-  FileText,
   KeyRound,
   Network,
   Pencil,
@@ -580,54 +579,69 @@ export function SettingsPage() {
                 {isEditing ? t("common.save") : t("settings.addGateway")}
               </button>
             </footer>
-            </form>
+          </form>
           </div>
+        </main>
 
-          <section className="policy-settings">
-            <header className="policy-settings__heading">
-              <div>
-                <p>{t("settings.reviewPolicy")}</p>
-                <h2>{t("settings.localReviewControls")}</h2>
-              </div>
-              <FileText aria-hidden="true" />
-            </header>
-            <div className="policy-settings__fields">
-              <div className="settings-field">
-                <label className="settings-field__label" htmlFor="recent-repository-limit">
-                  {t("settings.recentRepositoryLimit")}
-                </label>
-                <div className="policy-settings__number-control">
-                  <input
-                    aria-label={t("settings.recentRepositoryLimit")}
-                    disabled={recentRepositorySettingsQuery.isPending}
-                    id="recent-repository-limit"
-                    inputMode="numeric"
-                    max={20}
-                    min={1}
-                    step={1}
-                    type="number"
-                    value={recentRepositoryLimitDraft}
-                    onChange={(event) => setRecentRepositoryLimitDraft(event.currentTarget.value)}
-                  />
-                  <button
-                    aria-label={t("settings.saveRecentRepositoryLimit")}
-                    disabled={
-                      recentRepositorySettingsMutation.isPending ||
-                      !isRecentRepositoryLimitValid ||
-                      isRecentRepositoryLimitUnchanged
-                    }
-                    title={t("settings.saveRecentRepositoryLimit")}
-                    type="button"
-                    onClick={() =>
-                      recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit)
-                    }
-                  >
-                    <Check aria-hidden="true" />
-                  </button>
-                </div>
-                <small>{t("settings.recentRepositoryLimitHint")}</small>
-              </div>
+        <aside className="runtime-rail">
+          <div className="local-preferences">
+            <p className="local-preferences__heading">
+              <SlidersHorizontal aria-hidden="true" /> {t("settings.localPreferences")}
+            </p>
+            <label className="settings-field">
+              <span className="settings-field__label">{t("settings.runtimeLogLevel")}</span>
+              <select
+                aria-label={t("settings.runtimeLogLevel")}
+                disabled={logLevelQuery.isPending || logLevelMutation.isPending}
+                value={logLevelQuery.data?.level ?? "info"}
+                onChange={(event) =>
+                  logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)
+                }
+              >
+                <option value="debug">{t("settings.logDebug")}</option>
+                <option value="info">{t("settings.logInfo")}</option>
+                <option value="warning">{t("settings.logWarning")}</option>
+                <option value="error">{t("settings.logError")}</option>
+              </select>
+            </label>
 
+            <div className="settings-field">
+              <label className="settings-field__label" htmlFor="recent-repository-limit">
+                {t("settings.recentRepositoryLimit")}
+              </label>
+              <div className="local-preferences__number-control">
+                <input
+                  aria-label={t("settings.recentRepositoryLimit")}
+                  disabled={recentRepositorySettingsQuery.isPending}
+                  id="recent-repository-limit"
+                  inputMode="numeric"
+                  max={20}
+                  min={1}
+                  step={1}
+                  type="number"
+                  value={recentRepositoryLimitDraft}
+                  onChange={(event) => setRecentRepositoryLimitDraft(event.currentTarget.value)}
+                />
+                <button
+                  aria-label={t("settings.saveRecentRepositoryLimit")}
+                  disabled={
+                    recentRepositorySettingsMutation.isPending ||
+                    !isRecentRepositoryLimitValid ||
+                    isRecentRepositoryLimitUnchanged
+                  }
+                  title={t("settings.saveRecentRepositoryLimit")}
+                  type="button"
+                  onClick={() =>
+                    recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit)
+                  }
+                >
+                  <Check aria-hidden="true" />
+                </button>
+              </div>
+              <small>{t("settings.recentRepositoryLimitHint")}</small>
+            </div>
+
+            <div className="local-preferences__instruction-fields">
               <label className="settings-field">
                 <span className="settings-field__label">{t("settings.rootInstructionLimit")}</span>
                 <input
@@ -659,10 +673,12 @@ export function SettingsPage() {
                 />
                 <small>{t("settings.recommendedLines", { count: 200 })}</small>
               </label>
-            </div>
-            <footer className="policy-settings__footer">
-              <small>{t("settings.instructionLimitHint")}</small>
+
+              <small className="local-preferences__instruction-hint">
+                {t("settings.instructionLimitHint")}
+              </small>
               <button
+                className="local-preferences__save-limits"
                 disabled={
                   instructionFileSettingsMutation.isPending ||
                   !areInstructionLimitsValid ||
@@ -679,31 +695,7 @@ export function SettingsPage() {
                 <Check aria-hidden="true" />
                 {t("settings.saveInstructionLimits")}
               </button>
-            </footer>
-          </section>
-        </main>
-
-        <aside className="runtime-rail">
-          <div className="local-preferences">
-            <p className="local-preferences__heading">
-              <SlidersHorizontal aria-hidden="true" /> {t("settings.localPreferences")}
-            </p>
-            <label className="settings-field">
-              <span className="settings-field__label">{t("settings.runtimeLogLevel")}</span>
-              <select
-                aria-label={t("settings.runtimeLogLevel")}
-                disabled={logLevelQuery.isPending || logLevelMutation.isPending}
-                value={logLevelQuery.data?.level ?? "info"}
-                onChange={(event) =>
-                  logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)
-                }
-              >
-                <option value="debug">{t("settings.logDebug")}</option>
-                <option value="info">{t("settings.logInfo")}</option>
-                <option value="warning">{t("settings.logWarning")}</option>
-                <option value="error">{t("settings.logError")}</option>
-              </select>
-            </label>
+            </div>
           </div>
         </aside>
       </div>
