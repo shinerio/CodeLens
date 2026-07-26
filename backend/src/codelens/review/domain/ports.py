@@ -59,6 +59,7 @@ class UnvalidatedAgentOutput:
     input_tokens: int
     output_tokens: int
     diagnostics: tuple[AgentResponseDiagnostic, ...]
+    incomplete_review_files: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

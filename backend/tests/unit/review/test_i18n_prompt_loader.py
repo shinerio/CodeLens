@@ -32,8 +32,12 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "直接应用映射到每个文件的规则" in chinese.review_workflow
     assert "never request a shell or invent another tool" in english.review_workflow
     assert "不得请求 Shell，也不得发明其他工具" in chinese.review_workflow
-    assert english.review_workflow.count("`task_done`") == 1
-    assert chinese.review_workflow.count("`task_done`") == 1
+    assert "`review_file_done`" in english.review_workflow
+    assert "`review_file_done`" in chinese.review_workflow
+    assert "missing_evidence_files" in english.review_workflow
+    assert "missing_evidence_files" in chinese.review_workflow
+    assert "undeclared_files" in english.review_workflow
+    assert "undeclared_files" in chinese.review_workflow
     assert "Do not include unchanged diff context" in english.tools["comment"].description
     assert "side=old" in english.tools["comment"].description
     assert "不得包含未修改的 diff 上下文行" in chinese.tools["comment"].description

@@ -57,6 +57,7 @@
 - `/api/settings/model-gateways` 是本地模型网关集合契约，支持创建、列出、更新和删除；`PUT /api/settings/active-model-gateway` 原子切换当前网关。读取只返回网关 ID、名称、模型 ID、Base URL、激活状态和非 Secret 的模型与执行策略，API Key 永不通过读取契约返回。每个网关独立持有 Agent 总超时、最大模型回合、最大工具调用、相同参数与结果熔断阈值和单次工具超时；默认值依次为 1800 秒、100、300、3 和 30 秒，允许范围依次为 60–7200、1–500、1–5000、2–20 和 1–300。新 Agent Run 在实际调用时读取当前激活网关的完整策略，无需重启。
 - `GET/PUT /api/settings/repositories` 读取或更新最近 Review 仓库目录容量，字段为 `recent_repository_limit`，允许 1–20，默认 10。更新必须持久化并立即按当前 LRU 顺序裁剪溢出目录。
 - `GET/PUT /api/settings/instruction-files` 读取或更新仓库规则文件的行数上限，字段为 `root_max_lines` 和 `nested_max_lines`，均允许 1–10000，默认分别为 500 和 200，且根目录上限不得低于嵌套目录上限。更新必须原子持久化，并在后续规则解析时无需重启即可生效。
+- `GET/PUT /api/settings/review-completion` 读取或更新未完整 Review 的最大打回次数，字段为 `max_incomplete_review_retries`，允许 0–20，默认 3。更新必须原子持久化；每个 Agent Run 开始时读取当前值，无需重启即可生效，已开始的 Run 保持其启动时策略不变。
 - `/api/repositories/browse` 只返回系统根目录、目录项和 Git 仓库标记；`/api/repositories/catalog` 返回全部可选分支，并按请求中的目标分支返回该分支 tip 之前的分页 Commit 元数据。目标分支必须来自后端枚举的分支，Commit 候选不得混入目标分支不可达的提交或目标 tip 本身。两者都不能返回文件正文。
 - `GET /api/repositories/recent` 返回独立持久化的最近 Review 仓库目录、名称和最近使用时间，用于本机仓库快捷选择；`DELETE /api/repositories/recent` 按请求中的 `repository_path` 幂等删除单个快捷记录，不得删除或修改关联 Review 工作空间。目录按 LRU 维护，Review 创建成功时提升对应目录，并按持久化设置保留 1–20 个，默认 10 个；Review tombstone 不得删除或降级目录项。该列表不读取文件系统；选中路径后仍必须通过既有 inspect/catalog 契约重新执行允许根目录、Git 仓库和身份校验。
 - `GET /api/reviews/{task_id}/findings/{finding_id}/source` 同时返回该 Finding 所在文件在 Review 固定 base/head revision 的可用完整正文、评论所属 old/new 侧及高亮行范围；新增或删除文件允许一侧为空。它不得读取可变原始工作区，也不得用模型输出决定文件路径或 revision。Review 页面只提供一种等宽并排对比方式：base/old 位于左侧，target/new 位于右侧；纯删除使用红色，纯新增使用绿色，替换修改使用高对比蓝色。old 评论完整内嵌在左侧对应变更行后，new 评论完整内嵌在右侧对应变更行后，不显示重复的侧别提示。意见导航位于代码区上方；桌面全局导航默认折叠并在 hover 或键盘聚焦时展开，不能挤占代码横向空间。
@@ -150,7 +151,11 @@ MVP 为每个 Agent Run 提供 CodeLens 自身实现的模型可见只读证据�
 
 工具驱动 Agent 的首次用户输入只序列化完整 `review_files` 和去重后的 `repository_instructions`。每条仓库规则只包含规范化相对路径、完整正文和精确 `applies_to` 目标列表；正文只注入一次，不得在系统指令或同一首包其他位置重复。任务持久化的 `prompt_locale` 由 Runtime 显式接收并用于选择系统语言包，不进入模型输入。Snapshot ID、hunk ID、内容哈希、摘录哈希、内部规则链标识和优先级数字仅由后端保留，用于隔离、完整性校验、Finding 定位、转录与 Artifact，不得序列化给模型。完整 diff 和上下文 excerpt 不预加载；Agent 已在首轮获得全部适用规则，再根据调查需要从可用的只读证据工具中自行选择。
 
-除证据工具外，Review Runtime 还提供任务内有状态的 `comment` 与 `task_done` 工具。`comment` 可批量收集候选评论；`task_done` 只记录调查完成声明及已检查变更文件数。它们不读写持久化数据、不执行文件写入、Shell 或网络操作，也不访问原始工作区。模型必须为每条评论显式提交路径、`old` 或 `new` 侧、原样代码摘录与评论内容；`old` 侧从固定 base 正文及删除行解析，`new` 侧从哈希验证后的 current 正文及新增行解析。适配器必须以冻结 Snapshot 重新解析范围，确认其完整位于所选侧唯一的 changed hunk，并派生 side、hunk ID、excerpt hash 和整文件删除标记。无法解析、越界、侧别不符、重复或位于未变更位置的候选评论必须丢弃，不得进入最终报告；宿主必须尽力保留同批次的其余有效 Finding，并通过脱敏转录在 Web 提示丢弃计数，不能因单条候选校验失败而使整个 Review 失败。只有无法解析整体输出信封、无法确定候选边界或 Snapshot 完整性失效时才能使校验阶段失败。运行结束后，最终 FindingBatch 只能由已解析评论确定性生成，模型的最终文本和模型提供的 hunk ID、哈希均不得作为输出依据。
+除证据工具外，Review Runtime 还提供任务内有状态的 `comment`、`review_file_done` 与 `task_done` 工具。`comment` 可批量收集候选评论；`review_file_done` 批量记录模型声明已调查的 Review 文件；`task_done` 尝试结束整个 Agent Run。它们不读写持久化数据、不执行文件写入、Shell 或网络操作，也不访问原始工作区。一个文件只有在本次 Run 中成功完成模型可见的 `get_diff` 或 `read_file` 调用后，才能被 `review_file_done` 记录；宿主为评论定位而执行的内部 diff 或全文读取不构成模型查看证据。重复声明幂等，Review 范围外路径必须拒绝。
+
+`task_done` 不接受模型自报的文件计数，并以 Snapshot 确定的完整 `review_files` 为完成基准。尚未覆盖全部文件时必须拒绝：`missing_evidence_files` 精确列出没有成功调用 `get_diff` 或 `read_file` 的目标，`undeclared_files` 精确列出已经查看但尚未通过 `review_file_done` 声明的目标。模型可据此补充调查并再次调用 `task_done`；未调用一次被接受的 `task_done` 就结束的 Run 必须失败。拒绝次数超过当前 Run 启动时读取的 `max_incomplete_review_retries` 后，宿主接受完成并保留当前已验证 Finding，任务仍按成功完成，同时在脱敏转录和 Web 中用 `review_coverage_incomplete` 告警精确列出未完成文件；多 Agent 的告警文件必须合并展示，不得只保留最后一个 Agent 的列表。
+
+模型必须为每条评论显式提交路径、`old` 或 `new` 侧、原样代码摘录与评论内容；`old` 侧从固定 base 正文及删除行解析，`new` 侧从哈希验证后的 current 正文及新增行解析。适配器必须以冻结 Snapshot 重新解析范围，确认其完整位于所选侧唯一的 changed hunk，并派生 side、hunk ID、excerpt hash 和整文件删除标记。无法解析、越界、侧别不符、重复或位于未变更位置的候选评论必须丢弃，不得进入最终报告；宿主必须尽力保留同批次的其余有效 Finding，并通过脱敏转录在 Web 提示丢弃计数，不能因单条候选校验失败而使整个 Review 失败。只有无法解析整体输出信封、无法确定候选边界或 Snapshot 完整性失效时才能使校验阶段失败。运行结束后，最终 FindingBatch 只能由已解析评论确定性生成，模型的最终文本和模型提供的 hunk ID、哈希均不得作为输出依据。
 
 内置工具的模型可见自然语言描述、参数语义与边界、平台审查规则、输出约束和运行结束要求统一由启动时加载的 `prompts/sys/<locale>` 提供；工具参数还必须在严格 JSON schema 中表达可机器校验的类型、枚举、长度和数量边界，描述与 schema 不得声明互相矛盾的默认值或可选性。工具名、JSON 字段名、路径、代码标识符与 Snapshot 返回结构属于稳定技术契约，不随本地化改变。
 

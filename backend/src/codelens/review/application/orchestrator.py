@@ -1,6 +1,7 @@
 """Restart-safe review workflow orchestration."""
 
 import asyncio
+import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
@@ -274,6 +275,27 @@ class ReviewOrchestrator:
                 },
             )
         )
+        if output.incomplete_review_files:
+            incomplete_files = json.dumps(
+                output.incomplete_review_files,
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+            transcript_records.append(
+                (
+                    "lifecycle",
+                    (
+                        "Review completed after the incomplete-review retry limit; "
+                        f"{len(output.incomplete_review_files)} files lack verified review coverage"
+                    ),
+                    {
+                        "agent": self._agent_key(agent),
+                        "warning_code": "review_coverage_incomplete",
+                        "incomplete_file_count": str(len(output.incomplete_review_files)),
+                        "incomplete_files": incomplete_files,
+                    },
+                )
+            )
         await self._record_many(task_id, transcript_records)
         await self._hit("after_model_return")
         artifact = await self._artifacts.write_output(node_key, output.canonical_bytes)

@@ -33,6 +33,8 @@ _MAX_LINES = 500
 _MAX_PATH_CHARS = 1024
 _MAX_PATTERN_CHARS = 512
 _DEFAULT_REGEX_TIMEOUT_SECONDS = 30.0
+_REGEX_WORKER_STARTUP_TIMEOUT_SECONDS = 15.0
+_REGEX_WORKER_READY = "regex_worker_ready"
 _FileVersion = Literal["current", "base", "head"]
 _ModelPath = Annotated[str, Field(max_length=_MAX_PATH_CHARS)]
 _ModelPattern = Annotated[str, Field(min_length=1, max_length=_MAX_PATTERN_CHARS)]
@@ -72,6 +74,7 @@ def _regex_search_worker(
     """Run untrusted regular-expression matching in a terminable child process."""
 
     try:
+        sender.send(_REGEX_WORKER_READY)
         expression = re.compile(pattern)
         matches: list[dict[str, object]] = []
         for processed_count, (path, line_number, line) in enumerate(lines, start=1):
@@ -101,7 +104,7 @@ def _search_regular_expression(
     lines: tuple[tuple[str, int, str], ...],
     timeout_seconds: float,
 ) -> tuple[list[dict[str, object]], bool, int]:
-    """Return bounded matches or terminate a regex evaluation that exceeds its deadline."""
+    """Bound worker startup separately, then terminate regex evaluation at its deadline."""
 
     process_context = multiprocessing.get_context("spawn")
     receiver, sender = process_context.Pipe(duplex=False)
@@ -113,6 +116,10 @@ def _search_regular_expression(
     try:
         process.start()
         sender.close()
+        if not receiver.poll(_REGEX_WORKER_STARTUP_TIMEOUT_SECONDS):
+            raise ValueError("grep worker failed to start")
+        if receiver.recv() != _REGEX_WORKER_READY:
+            raise ValueError("grep worker returned an invalid readiness signal")
         if not receiver.poll(timeout_seconds):
             raise ValueError("grep pattern evaluation timed out")
         message: object = receiver.recv()
@@ -169,6 +176,7 @@ class FilesystemReviewTools:
             max_ranges=max(1, len(snapshot.change_index.hunks)),
         )
         self._review_files_by_path = {item.path: item for item in review_files}
+        self._evidence_viewed_paths: set[str] = set()
 
     async def find_files(self, path: str = "", pattern: str = "**") -> str:
         """Find visible files below a directory using a relative POSIX glob pattern."""
@@ -271,6 +279,8 @@ class FilesystemReviewTools:
         selected = await self._selected_file_lines(path, start_line, end_line, version)
         raw_content = selected[:_MAX_READ_BYTES].decode("utf-8", errors="replace")
         content = self._add_line_prefixes(raw_content, start_line)
+        if path in self._review_files_by_path:
+            self._evidence_viewed_paths.add(path)
         return self._json(
             {
                 "path": path,
@@ -298,6 +308,18 @@ class FilesystemReviewTools:
         """Read the bounded base-to-verified-current diff for one changed visible file."""
 
         self._consume()
+        result = await self._get_diff(path)
+        self._evidence_viewed_paths.add(path)
+        return result
+
+    async def read_diff_for_resolution(self, path: str) -> str:
+        """Read a verified diff internally without recording model-visible evidence."""
+
+        return await self._get_diff(path)
+
+    async def _get_diff(self, path: str) -> str:
+        """Build one verified diff without applying model-visible call accounting."""
+
         entry = self._entry(path)
         review_file = self._review_files_by_path.get(path)
         if review_file is None:
@@ -317,6 +339,18 @@ class FilesystemReviewTools:
                 "truncated": len(output) > _MAX_READ_BYTES,
             }
         )
+
+    @property
+    def review_file_paths(self) -> tuple[str, ...]:
+        """Return the stable canonical Review target paths."""
+
+        return tuple(sorted(self._review_files_by_path))
+
+    @property
+    def evidence_viewed_paths(self) -> frozenset[str]:
+        """Return Review paths exposed through successful model-visible evidence calls."""
+
+        return frozenset(self._evidence_viewed_paths)
 
     def as_agent_tools(self, descriptions: dict[str, str]) -> list[Tool]:
         """Expose the stable read-only contract using startup-loaded descriptions."""

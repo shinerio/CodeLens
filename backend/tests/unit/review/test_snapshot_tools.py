@@ -12,6 +12,7 @@ from codelens.review.infrastructure.comment_collector import (
     ReviewCommentCollector,
     ReviewCommentSubmission,
     ReviewCompletionSubmission,
+    ReviewFileCompletionSubmission,
 )
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.workspace.domain.models import (
@@ -373,6 +374,20 @@ async def test_grep_times_out_catastrophic_regular_expression(tmp_path: Path) ->
         await tools.grep(r"(a+)+$")
 
 
+async def test_grep_timeout_starts_after_isolated_worker_is_ready(tmp_path: Path) -> None:
+    snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        regex_timeout_seconds=0.05,
+    )
+
+    result = json.loads(await tools.grep("return"))
+
+    assert len(result["matches"]) == 2
+
+
 async def test_get_diff_accepts_review_files_without_hunks(tmp_path: Path) -> None:
     snapshot = await _snapshot(tmp_path)
     snapshot = replace(snapshot, change_index=replace(snapshot.change_index, hunks=()))
@@ -706,11 +721,13 @@ async def test_comment_collector_rejects_location_outside_changed_hunk(tmp_path:
 
 async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_path: Path) -> None:
     snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
     collector = ReviewCommentCollector(
         snapshot=snapshot,
         reviewer_id="correctness",
         confidence_floor=0.7,
-        tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
+        tools=tools,
+        max_incomplete_review_retries=2,
     )
     acknowledgement = json.loads(
         await collector.submit_many(
@@ -729,13 +746,19 @@ async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_pa
             ]
         )
     )
-    completion = json.loads(
-        collector.complete(
-            ReviewCompletionSubmission(
-                summary="Reviewed the changed service file.",
-                reviewed_changed_files=1,
-            )
+    missing_evidence = json.loads(
+        collector.complete_files(
+            ReviewFileCompletionSubmission(reviewed_files=("src/service.py",))
         )
+    )
+    await tools.get_diff("src/service.py")
+    file_completion = json.loads(
+        collector.complete_files(
+            ReviewFileCompletionSubmission(reviewed_files=("src/service.py",))
+        )
+    )
+    completion = json.loads(
+        collector.complete(ReviewCompletionSubmission(summary="Reviewed the changed service file."))
     )
 
     assert acknowledgement == {
@@ -743,11 +766,123 @@ async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_pa
         "accepted_count": 1,
         "comment_count": 1,
     }
-    assert completion == {"accepted": True, "comment_count": 1, "reviewed_changed_files": 1}
+    assert missing_evidence == {
+        "accepted": False,
+        "missing_evidence_files": ["src/service.py"],
+        "recorded_files": [],
+    }
+    assert file_completion == {
+        "accepted": True,
+        "missing_evidence_files": [],
+        "recorded_files": ["src/service.py"],
+    }
+    assert completion == {
+        "accepted": True,
+        "comment_count": 1,
+        "forced_completion": False,
+        "reviewed_files": ["src/service.py"],
+    }
     assert collector.is_completed is True
     with pytest.raises(ValueError, match="already"):
-        collector.complete(
-            ReviewCompletionSubmission(summary="Repeated completion.", reviewed_changed_files=1)
+        collector.complete(ReviewCompletionSubmission(summary="Repeated completion."))
+
+
+async def test_completion_rejection_distinguishes_unread_and_undeclared_files(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+    collector = ReviewCommentCollector(
+        snapshot=snapshot,
+        reviewer_id="correctness",
+        confidence_floor=0.7,
+        tools=tools,
+        max_incomplete_review_retries=2,
+    )
+
+    unread = json.loads(
+        collector.complete(ReviewCompletionSubmission(summary="Attempted completion."))
+    )
+    await tools.read_file("src/service.py", 1, 2, "current")
+    undeclared = json.loads(
+        collector.complete(ReviewCompletionSubmission(summary="Attempted completion again."))
+    )
+    forced = json.loads(
+        collector.complete(ReviewCompletionSubmission(summary="Retry limit reached."))
+    )
+
+    assert unread == {
+        "accepted": False,
+        "incomplete_retry_count": 1,
+        "max_incomplete_review_retries": 2,
+        "missing_evidence_files": ["src/service.py"],
+        "undeclared_files": [],
+    }
+    assert undeclared == {
+        "accepted": False,
+        "incomplete_retry_count": 2,
+        "max_incomplete_review_retries": 2,
+        "missing_evidence_files": [],
+        "undeclared_files": ["src/service.py"],
+    }
+    assert forced == {
+        "accepted": True,
+        "comment_count": 0,
+        "forced_completion": True,
+        "incomplete_files": ["src/service.py"],
+        "reviewed_files": [],
+    }
+    assert collector.incomplete_review_files == ("src/service.py",)
+
+
+async def test_zero_completion_retries_accepts_first_incomplete_attempt_with_warning(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    collector = ReviewCommentCollector(
+        snapshot=snapshot,
+        reviewer_id="correctness",
+        confidence_floor=0.7,
+        tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
+        max_incomplete_review_retries=0,
+    )
+
+    completion = json.loads(
+        collector.complete(ReviewCompletionSubmission(summary="Finish without retrying."))
+    )
+
+    assert completion == {
+        "accepted": True,
+        "comment_count": 0,
+        "forced_completion": True,
+        "incomplete_files": ["src/service.py"],
+        "reviewed_files": [],
+    }
+    assert collector.incomplete_review_files == ("src/service.py",)
+
+
+def test_review_file_completion_accepts_paths_supported_by_evidence_tools() -> None:
+    long_path = f"src/{'nested/' * 40}service.py"
+
+    submission = ReviewFileCompletionSubmission(reviewed_files=(long_path,))
+
+    assert submission.reviewed_files == (long_path,)
+
+
+@pytest.mark.parametrize("retry_limit", [-1, 21])
+async def test_comment_collector_rejects_invalid_completion_retry_limit(
+    tmp_path: Path,
+    retry_limit: int,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+
+    with pytest.raises(ValueError, match="between 0 and 20"):
+        ReviewCommentCollector(
+            snapshot=snapshot,
+            reviewer_id="correctness",
+            confidence_floor=0.7,
+            tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
+            max_incomplete_review_retries=retry_limit,
         )
 
 
@@ -759,6 +894,7 @@ async def test_all_model_tools_work_through_agents_sdk_entrypoints(tmp_path: Pat
         "read_file": "Read a versioned file range.",
         "get_diff": "Read a verified diff.",
         "comment": "Submit findings.",
+        "review_file_done": "Record reviewed files.",
         "task_done": "Finish the review.",
     }
     filesystem_tools = FilesystemReviewTools(
@@ -845,7 +981,12 @@ async def test_all_model_tools_work_through_agents_sdk_entrypoints(tmp_path: Pat
     )
     assert comment["accepted_count"] == 1
     completion = await invoke(
-        "task_done",
-        {"summary": "Reviewed the changed service file.", "reviewed_changed_files": 1},
+        "review_file_done",
+        {"reviewed_files": ["src/service.py"]},
     )
-    assert completion["reviewed_changed_files"] == 1
+    assert completion["recorded_files"] == ["src/service.py"]
+    completion = await invoke(
+        "task_done",
+        {"summary": "Reviewed the changed service file."},
+    )
+    assert completion["reviewed_files"] == ["src/service.py"]

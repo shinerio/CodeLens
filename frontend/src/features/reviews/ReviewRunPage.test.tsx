@@ -302,6 +302,80 @@ it("shows candidate validation warnings without failing the completed review", a
   expect(document.querySelector(".review-run-page__subtitle")).toHaveTextContent("completed");
 });
 
+it("shows files that were not verified before forced successful completion", async () => {
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/findings")) return jsonResponse([]);
+    if (url.endsWith("/transcript")) {
+      return jsonResponse([
+        {
+          sequence: 8,
+          kind: "lifecycle",
+          content: "Review completed after the incomplete-review retry limit",
+          created_at: "2026-07-26T00:00:05Z",
+          redacted: false,
+          truncated: false,
+          metadata: {
+            agent: "correctness:v1",
+            warning_code: "review_coverage_incomplete",
+            incomplete_file_count: "2",
+            incomplete_files: '["src/missed.py","src/unread.py"]',
+          },
+        },
+        {
+          sequence: 9,
+          kind: "lifecycle",
+          content: "Review completed after the incomplete-review retry limit",
+          created_at: "2026-07-26T00:00:06Z",
+          redacted: false,
+          truncated: false,
+          metadata: {
+            agent: "security:v1",
+            warning_code: "review_coverage_incomplete",
+            incomplete_file_count: "2",
+            incomplete_files: '["src/unread.py","src/security.py"]',
+          },
+        },
+      ]);
+    }
+    if (url.endsWith("/process-report")) {
+      return jsonResponse({ code: "process_report_not_ready", message: "not ready" }, 409);
+    }
+    return jsonResponse({
+      task_id: "review_completed",
+      status: "completed",
+      scope_type: "branch",
+      base_oid: "a".repeat(40),
+      head_oid: "b".repeat(40),
+      selected_agents: ["correctness:v1"],
+      worktree_status: "pending",
+      repository_id: "repository-1",
+      repository_realpath_hash: "c".repeat(64),
+      git_common_dir_hash: "d".repeat(64),
+      cancellation_requested: false,
+    });
+  });
+
+  render(<ReviewRunPage />, {
+    wrapper: ({ children }) => (
+      <TestProviders initialEntries={["/runs/review_completed"]}>
+        <Routes>
+          <Route path="/runs/:taskId" element={children} />
+        </Routes>
+      </TestProviders>
+    ),
+  });
+
+  const warning = await screen.findByRole("status", {
+    name: "Some files were not fully reviewed",
+  });
+  expect(warning).toHaveTextContent("src/missed.py");
+  expect(warning).toHaveTextContent("src/security.py");
+  expect(warning).toHaveTextContent("src/unread.py");
+  expect(screen.getAllByText("src/unread.py")).toHaveLength(1);
+  expect(document.querySelector(".review-run-page__subtitle")).toHaveTextContent("completed");
+});
+
 it("shows the process report after a review has completed", async () => {
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);

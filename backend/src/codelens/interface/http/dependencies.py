@@ -19,9 +19,11 @@ from codelens.review.application.commands import (
     ListReviewsHandler,
     UpdateRecentRepositorySettingsHandler,
 )
+from codelens.review.application.settings import ReviewCompletionSettingsService
 from codelens.review.application.source_preview import FindingSourcePreviewService
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
+from codelens.review.infrastructure.file_settings import FilesystemReviewCompletionSettingsStore
 from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
     SqlRecentRepositoryStore,
@@ -80,6 +82,7 @@ class HttpComponents:
     get_recent_repository_settings: GetRecentRepositorySettingsHandler
     update_recent_repository_settings: UpdateRecentRepositorySettingsHandler
     instruction_settings: InstructionSettingsService
+    review_completion_settings: ReviewCompletionSettingsService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
     events: SqlEventOutbox
@@ -130,6 +133,9 @@ def build_components(settings: Settings) -> HttpComponents:
     )
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
     instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
+    review_completion_settings = ReviewCompletionSettingsService(
+        FilesystemReviewCompletionSettingsStore(settings.data_dir)
+    )
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
     return HttpComponents(
@@ -151,6 +157,7 @@ def build_components(settings: Settings) -> HttpComponents:
             recent_repository_store
         ),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
+        review_completion_settings=review_completion_settings,
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

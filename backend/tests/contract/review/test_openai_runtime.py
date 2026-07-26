@@ -6,8 +6,9 @@ from pathlib import Path
 
 import httpx
 import pytest
-from agents import Agent, RunConfig
+from agents import Agent, RunConfig, Usage
 from agents.exceptions import ModelBehaviorError
+from agents.tool_context import ToolContext
 from openai import APIConnectionError, InternalServerError, RateLimitError
 
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
@@ -79,7 +80,24 @@ class FakeRunner:
         self.calls.append((starting_agent, input, max_turns))
         if isinstance(self.result, Exception):
             raise self.result
+        await self.complete_review(starting_agent)
         return self.result
+
+    @staticmethod
+    async def complete_review(starting_agent: Agent[None]) -> None:
+        tool = next(tool for tool in starting_agent.tools if tool.name == "task_done")
+        arguments = json.dumps({"summary": "Completed the empty Review scope."})
+        await tool.on_invoke_tool(
+            ToolContext(
+                None,
+                usage=Usage(),
+                tool_name="task_done",
+                tool_call_id="fake-task-done",
+                tool_arguments=arguments,
+                run_config=RunConfig(),
+            ),
+            arguments,
+        )
 
 
 class SlowRunner(FakeRunner):
@@ -241,6 +259,7 @@ def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_lo
         "read_file",
         "get_diff",
         "comment",
+        "review_file_done",
         "task_done",
     }
 
@@ -308,6 +327,7 @@ async def test_streaming_investigation_closes_client_after_a_non_streaming_run(
             client = starting_agent.model._client
             assert client.is_closed is False
             self.calls.append((starting_agent, input, max_turns))
+            await self.complete_review(starting_agent)
             return FakeResult(FindingBatchSchema(schema_version="1", findings=()), ())
 
     client = RecordingClient()
@@ -413,6 +433,36 @@ async def test_missing_provider_configuration_fails_only_when_invoked() -> None:
 
     with pytest.raises(PermanentAgentOutputError, match="not configured"):
         await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+
+
+async def test_runtime_rejects_a_model_run_without_an_accepted_task_done_call() -> None:
+    class NonCompletingRunner(FakeRunner):
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            assert starting_agent is not None
+            assert input
+            assert max_turns > 0
+            assert run_config is not None
+            return FakeResult({}, ())
+
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=NonCompletingRunner(FakeResult({}, ())),
+    )
+
+    with pytest.raises(PermanentAgentOutputError) as captured:
+        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+
+    assert captured.value.reason_code == "review_completion_not_declared"
 
 
 def test_builtin_correctness_agent_is_immutable_and_content_addressed() -> None:

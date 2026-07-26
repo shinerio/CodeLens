@@ -78,6 +78,14 @@ class UpdateInstructionFileSettingsRequest(InstructionFileSettingsResponse):
         return self
 
 
+class ReviewCompletionSettingsResponse(StrictDto):
+    max_incomplete_review_retries: Annotated[int, Field(ge=0, le=20)]
+
+
+class UpdateReviewCompletionSettingsRequest(ReviewCompletionSettingsResponse):
+    pass
+
+
 RefLabel = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 AgentReference = Annotated[
     str,

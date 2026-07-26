@@ -23,6 +23,7 @@ import {
   deleteModelGateway,
   getInstructionFileSettings,
   getRecentRepositorySettings,
+  getReviewCompletionSettings,
   getRuntimeLogLevel,
   listModelGateways,
   testGatewayAvailability,
@@ -30,6 +31,7 @@ import {
   updateRuntimeLogLevel,
   updateInstructionFileSettings,
   updateRecentRepositoryLimit,
+  updateReviewCompletionSettings,
   updateModelGateway,
 } from "./api";
 import type {
@@ -47,6 +49,7 @@ export const MODEL_GATEWAYS_QUERY_KEY = ["model-gateways"] as const;
 const RUNTIME_LOG_LEVEL_QUERY_KEY = ["runtime-log-level"] as const;
 const RECENT_REPOSITORY_SETTINGS_QUERY_KEY = ["recent-repository-settings"] as const;
 const INSTRUCTION_FILE_SETTINGS_QUERY_KEY = ["instruction-file-settings"] as const;
+const REVIEW_COMPLETION_SETTINGS_QUERY_KEY = ["review-completion-settings"] as const;
 const DEFAULT_AGENT_TIMEOUT = 1800;
 const DEFAULT_MAX_AGENT_TURNS = 100;
 const DEFAULT_MAX_TOOL_CALLS = 300;
@@ -78,6 +81,7 @@ export function SettingsPage() {
   const [recentRepositoryLimitDraft, setRecentRepositoryLimitDraft] = useState("10");
   const [rootInstructionLimitDraft, setRootInstructionLimitDraft] = useState("500");
   const [nestedInstructionLimitDraft, setNestedInstructionLimitDraft] = useState("200");
+  const [incompleteReviewRetryLimitDraft, setIncompleteReviewRetryLimitDraft] = useState("3");
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
     queryFn: listModelGateways,
@@ -127,6 +131,17 @@ export function SettingsPage() {
       gateways[0],
     [gateways, runtimeGatewayId],
   );
+  const reviewCompletionSettingsQuery = useQuery({
+    queryKey: REVIEW_COMPLETION_SETTINGS_QUERY_KEY,
+    queryFn: getReviewCompletionSettings,
+  });
+  const reviewCompletionSettingsMutation = useMutation({
+    mutationFn: updateReviewCompletionSettings,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(REVIEW_COMPLETION_SETTINGS_QUERY_KEY, settings);
+      setIncompleteReviewRetryLimitDraft(String(settings.max_incomplete_review_retries));
+    },
+  });
 
   useEffect(() => {
     if (recentRepositorySettingsQuery.data !== undefined) {
@@ -162,6 +177,14 @@ export function SettingsPage() {
       String(runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS),
     );
   }, [runtimeGateway]);
+
+  useEffect(() => {
+    if (reviewCompletionSettingsQuery.data !== undefined) {
+      setIncompleteReviewRetryLimitDraft(
+        String(reviewCompletionSettingsQuery.data.max_incomplete_review_retries),
+      );
+    }
+  }, [reviewCompletionSettingsQuery.data]);
 
   const updateCatalog = (catalog: ModelGatewayCatalog) => {
     queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, catalog);
@@ -336,6 +359,14 @@ export function SettingsPage() {
     },
     onSuccess: updateCatalog,
   });
+  const parsedIncompleteReviewRetryLimit = Number(incompleteReviewRetryLimitDraft);
+  const isIncompleteReviewRetryLimitValid =
+    Number.isInteger(parsedIncompleteReviewRetryLimit) &&
+    parsedIncompleteReviewRetryLimit >= 0 &&
+    parsedIncompleteReviewRetryLimit <= 20;
+  const isIncompleteReviewRetryLimitUnchanged =
+    parsedIncompleteReviewRetryLimit ===
+    reviewCompletionSettingsQuery.data?.max_incomplete_review_retries;
 
   function handleEdit(gateway: ModelGateway) {
     setEditingGatewayId(gateway.gateway_id);
@@ -363,7 +394,21 @@ export function SettingsPage() {
   }
 
   const mutationError =
-    saveMutation.error ?? executionLimitsMutation.error ?? activateMutation.error ?? deleteMutation.error ?? connectivityMutation.error ?? availabilityMutation.error ?? gatewayQuery.error ?? logLevelQuery.error ?? logLevelMutation.error ?? recentRepositorySettingsQuery.error ?? recentRepositorySettingsMutation.error ?? instructionFileSettingsQuery.error ?? instructionFileSettingsMutation.error;
+    saveMutation.error ??
+    executionLimitsMutation.error ??
+    activateMutation.error ??
+    deleteMutation.error ??
+    connectivityMutation.error ??
+    availabilityMutation.error ??
+    gatewayQuery.error ??
+    logLevelQuery.error ??
+    logLevelMutation.error ??
+    recentRepositorySettingsQuery.error ??
+    recentRepositorySettingsMutation.error ??
+    instructionFileSettingsQuery.error ??
+    instructionFileSettingsMutation.error ??
+    reviewCompletionSettingsQuery.error ??
+    reviewCompletionSettingsMutation.error;
 
   return (
     <section className="settings-page">
@@ -884,6 +929,46 @@ export function SettingsPage() {
                 <Check aria-hidden="true" />
                 {t("settings.saveInstructionLimits")}
               </button>
+            </div>
+
+            <div className="settings-field">
+              <label className="settings-field__label" htmlFor="incomplete-review-retry-limit">
+                {t("settings.incompleteReviewRetryLimit")}
+              </label>
+              <div className="local-preferences__number-control">
+                <input
+                  aria-label={t("settings.incompleteReviewRetryLimit")}
+                  disabled={reviewCompletionSettingsQuery.isPending}
+                  id="incomplete-review-retry-limit"
+                  inputMode="numeric"
+                  max={20}
+                  min={0}
+                  step={1}
+                  type="number"
+                  value={incompleteReviewRetryLimitDraft}
+                  onChange={(event) =>
+                    setIncompleteReviewRetryLimitDraft(event.currentTarget.value)
+                  }
+                />
+                <button
+                  aria-label={t("settings.saveIncompleteReviewRetryLimit")}
+                  disabled={
+                    reviewCompletionSettingsMutation.isPending ||
+                    !isIncompleteReviewRetryLimitValid ||
+                    isIncompleteReviewRetryLimitUnchanged
+                  }
+                  title={t("settings.saveIncompleteReviewRetryLimit")}
+                  type="button"
+                  onClick={() =>
+                    reviewCompletionSettingsMutation.mutate({
+                      max_incomplete_review_retries: parsedIncompleteReviewRetryLimit,
+                    })
+                  }
+                >
+                  <Check aria-hidden="true" />
+                </button>
+              </div>
+              <small>{t("settings.incompleteReviewRetryLimitHint")}</small>
             </div>
           </div>
         </aside>
