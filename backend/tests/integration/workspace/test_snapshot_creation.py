@@ -308,11 +308,13 @@ async def test_full_scope_builds_complete_agent_input_and_freezes_only_active_ru
             {
                 "change_type": "added",
                 "new_ranges": [{"end_line": 1, "start_line": 1}],
+                "old_ranges": [],
                 "path": "README.md",
             },
             {
                 "change_type": "added",
                 "new_ranges": [{"end_line": 2, "start_line": 1}],
+                "old_ranges": [],
                 "path": "src/service.py",
             },
         ]

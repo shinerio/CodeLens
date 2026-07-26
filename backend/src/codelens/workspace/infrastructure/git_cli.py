@@ -51,15 +51,20 @@ class GitCli:
         if stdin is not None and len(stdin) > self._max_input_bytes:
             raise InvalidRepositoryError("git input exceeded the configured limit")
 
-        process = await asyncio.create_subprocess_exec(
-            "git",
-            "-C",
-            str(repository),
-            *args,
-            stdin=asyncio.subprocess.PIPE if stdin is not None else None,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                "-C",
+                str(repository),
+                *args,
+                stdin=asyncio.subprocess.PIPE if stdin is not None else None,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            raise InvalidRepositoryError("git executable is not installed or not on PATH") from None
+        except PermissionError:
+            raise InvalidRepositoryError("git executable cannot be executed") from None
         try:
             stdout, stderr = await asyncio.wait_for(
                 process.communicate(stdin),
@@ -83,8 +88,39 @@ class GitCli:
             raise InvalidRepositoryError(message or "git command failed")
         return CommandResult(returncode, stdout, stderr)
 
+    async def verify_available(self, repository: Path) -> None:
+        """Fail startup unless a runnable Git executable is available on the process PATH."""
+
+        result = await self.run(repository, "--version")
+        if not result.stdout.startswith(b"git version "):
+            raise InvalidRepositoryError("git executable returned an invalid version response")
+
     async def read_revision(self, repository: Path, revision: str, path: str) -> bytes:
         """Read one normalized repository-relative path from a pinned Git revision."""
+
+        self._validate_revision_path(path)
+        return (await self.run(repository, "show", f"{revision}:{path}")).stdout
+
+    async def read_revision_optional(
+        self,
+        repository: Path,
+        revision: str,
+        path: str,
+    ) -> bytes | None:
+        """Read a pinned path or return None when that revision has no such path."""
+
+        self._validate_revision_path(path)
+        result = await self.run(
+            repository,
+            "show",
+            f"{revision}:{path}",
+            ok_codes=(0, 128),
+        )
+        return result.stdout if result.returncode == 0 else None
+
+    @staticmethod
+    def _validate_revision_path(path: str) -> None:
+        """Reject paths that could escape the repository-relative Git object lookup."""
 
         candidate = PurePosixPath(path)
         if (
@@ -96,4 +132,3 @@ class GitCli:
             or candidate.as_posix() != path
         ):
             raise InvalidRepositoryError("revision path is unsafe")
-        return (await self.run(repository, "show", f"{revision}:{path}")).stdout

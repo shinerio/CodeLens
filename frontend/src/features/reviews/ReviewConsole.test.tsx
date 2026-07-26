@@ -192,6 +192,50 @@ it("hides tool calls and results again when the Tools filter is unchecked", () =
   expect(consoleView.getByText("late tool output").closest("li")).not.toBeVisible();
 });
 
+it("hides successful provider responses by default without calling them parsing failures", () => {
+  render(
+    <ReviewConsole
+      entries={[
+        {
+          sequence: 1,
+          kind: "model_raw_output",
+          content: '{"output":[]}',
+          created_at: "2026-07-26T00:00:00Z",
+          redacted: false,
+          truncated: false,
+          metadata: { response_index: "1" },
+        },
+      ]}
+    />,
+  );
+
+  expect(screen.queryByText("Provider raw response")).not.toBeInTheDocument();
+  fireEvent.click(screen.getByRole("checkbox", { name: "Raw responses" }));
+  expect(screen.getByText("Provider raw response")).toBeInTheDocument();
+  expect(screen.queryByText(/parsing failed/i)).not.toBeInTheDocument();
+});
+
+it("labels a raw output as a parsing failure only when its metadata says so", () => {
+  render(
+    <ReviewConsole
+      entries={[
+        {
+          sequence: 1,
+          kind: "model_raw_output",
+          content: "unparsed provider body",
+          created_at: "2026-07-26T00:00:00Z",
+          redacted: false,
+          truncated: false,
+          metadata: { parse_failed: "true" },
+        },
+      ]}
+    />,
+  );
+
+  expect(screen.getByText("Model raw output (parsing failed)")).toBeInTheDocument();
+  expect(screen.getByText("unparsed provider body")).toBeInTheDocument();
+});
+
 it("uses unique message identities when a legacy transcript repeats sequences", () => {
   const consoleError = vi.spyOn(console, "error").mockImplementation(() => undefined);
   render(

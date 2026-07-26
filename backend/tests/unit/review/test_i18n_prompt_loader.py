@@ -40,3 +40,7 @@ def test_repository_policy_describes_complete_prefetched_rules_without_loader_to
     assert "get_diff" not in chinese.review_workflow
     assert english.review_workflow.count("`task_done`") == 1
     assert chinese.review_workflow.count("`task_done`") == 1
+    assert "Do not include unchanged diff context" in english.tools["comment"].description
+    assert "side=old" in english.tools["comment"].description
+    assert "不得包含未修改的 diff 上下文行" in chinese.tools["comment"].description
+    assert "side=old" in chinese.tools["comment"].description

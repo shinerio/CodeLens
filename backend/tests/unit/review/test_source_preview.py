@@ -1,4 +1,5 @@
 from pathlib import Path
+from typing import Literal
 
 from codelens.findings.domain.models import (
     ChangeOrigin,
@@ -36,39 +37,88 @@ class Store:
 
 
 class Reader:
-    async def read_revision(self, repository: Path, revision: str, path: str) -> bytes:
-        assert (repository, revision, path) == (Path("/repo"), "d" * 40, "src/example.py")
-        return b"one\ntwo\nthree\nfour\nfive\n"
+    async def read_revision_optional(
+        self,
+        repository: Path,
+        revision: str,
+        path: str,
+    ) -> bytes | None:
+        assert repository == Path("/repo")
+        assert path == "src/example.py"
+        if revision == "c" * 40:
+            return b"one\ntwo\nold three\nfour\nfive\n"
+        if revision == "d" * 40:
+            return b"one\ntwo\nthree\nfour\nfive\n"
+        raise AssertionError(f"unexpected revision: {revision}")
 
 
-async def test_source_preview_reads_the_pinned_head_revision_and_highlights_finding_lines() -> None:
+async def test_source_preview_reads_both_pinned_revisions_and_highlights_finding_side() -> None:
     preview = await FindingSourcePreviewService(Store(), Reader()).get(
         "review_" + "a" * 32, "finding-1"
     )
 
     assert preview.path == "src/example.py"
-    assert preview.revision == "d" * 40
-    assert (preview.start_line, preview.end_line) == (1, 5)
+    assert preview.base is not None
+    assert preview.base.revision == "c" * 40
+    assert preview.base.content == "one\ntwo\nold three\nfour\nfive\n"
+    assert preview.target is not None
+    assert preview.target.revision == "d" * 40
+    assert preview.target.content == "one\ntwo\nthree\nfour\nfive\n"
+    assert preview.highlight_side == "new"
     assert (preview.highlight_start_line, preview.highlight_end_line) == (3, 4)
-    assert preview.content == "one\ntwo\nthree\nfour\nfive\n"
 
 
 async def test_source_preview_returns_complete_file_instead_of_an_excerpt() -> None:
     class FullReader(Reader):
-        async def read_revision(self, repository: Path, revision: str, path: str) -> bytes:
-            assert (repository, revision, path) == (Path("/repo"), "d" * 40, "src/example.py")
+        async def read_revision_optional(
+            self,
+            repository: Path,
+            revision: str,
+            path: str,
+        ) -> bytes | None:
+            assert (repository, path) == (Path("/repo"), "src/example.py")
             return "\n".join(f"line {number}" for number in range(1, 31)).encode()
 
     preview = await FindingSourcePreviewService(Store(), FullReader()).get(
         "review_" + "a" * 32, "finding-1"
     )
 
-    assert (preview.start_line, preview.end_line) == (1, 30)
-    assert preview.content.startswith("line 1\nline 2")
-    assert preview.content.endswith("line 30")
+    assert preview.base is not None
+    assert preview.target is not None
+    assert preview.base.content.startswith("line 1\nline 2")
+    assert preview.target.content.endswith("line 30")
 
 
-def _finding() -> Finding:
+async def test_source_preview_allows_a_missing_target_for_a_deleted_file() -> None:
+    class DeletedStore(Store):
+        async def list_findings(self, _task_id: str) -> tuple[Finding, ...]:
+            return (_finding(side="old", is_deleted=True),)
+
+    class DeletedReader(Reader):
+        async def read_revision_optional(
+            self,
+            repository: Path,
+            revision: str,
+            path: str,
+        ) -> bytes | None:
+            assert (repository, path) == (Path("/repo"), "src/example.py")
+            return b"removed\n" if revision == "c" * 40 else None
+
+    preview = await FindingSourcePreviewService(DeletedStore(), DeletedReader()).get(
+        "review_" + "a" * 32, "finding-1"
+    )
+
+    assert preview.base is not None
+    assert preview.base.content == "removed\n"
+    assert preview.target is None
+    assert preview.highlight_side == "old"
+
+
+def _finding(
+    *,
+    side: Literal["old", "new"] = "new",
+    is_deleted: bool = False,
+) -> Finding:
     return Finding(
         finding_id="finding-1",
         fingerprint="f" * 64,
@@ -78,7 +128,14 @@ def _finding() -> Finding:
         severity=FindingSeverity.HIGH,
         disposition=FindingDisposition.BLOCKING,
         confidence=0.9,
-        primary_location=SourceLocation("src/example.py", 3, 4, "new", "e" * 64, False),
+        primary_location=SourceLocation(
+            "src/example.py",
+            3,
+            4,
+            side,
+            "e" * 64,
+            is_deleted,
+        ),
         related_locations=(),
         changed_hunk_id="hunk-1",
         change_origin=ChangeOrigin.INTRODUCED,

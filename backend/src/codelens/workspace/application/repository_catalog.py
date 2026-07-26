@@ -19,14 +19,16 @@ class RepositoryCatalogService:
         self,
         path: Path,
         *,
+        target_ref: str | None,
         commit_offset: int,
         commit_limit: int,
     ) -> RepositoryCatalog:
-        """Return refs only after exact Git-root validation succeeds."""
+        """Return branch-scoped refs only after exact Git-root validation succeeds."""
 
         repository = await self._inspector.inspect(path)
         return await self._catalog.list_catalog(
             repository.path,
+            target_ref=target_ref,
             commit_offset=commit_offset,
             commit_limit=commit_limit,
         )

@@ -1,4 +1,5 @@
 from pathlib import Path
+from unittest.mock import AsyncMock
 
 import pytest
 
@@ -41,3 +42,14 @@ async def test_git_cli_rejects_output_over_limit(git_repository: Path) -> None:
 
     with pytest.raises(InvalidRepositoryError, match="output limit"):
         await GitCli(max_output_bytes=32).run(git_repository, "show", "HEAD:large.txt")
+
+
+async def test_git_cli_reports_missing_executable(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    create_process = AsyncMock(side_effect=FileNotFoundError)
+    monkeypatch.setattr("asyncio.create_subprocess_exec", create_process)
+
+    with pytest.raises(InvalidRepositoryError, match="not installed"):
+        await GitCli().verify_available(tmp_path)

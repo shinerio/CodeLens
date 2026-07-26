@@ -42,12 +42,17 @@ export type FindingRecord = {
   rule_sources: RuleReferenceRecord[];
 };
 
-export type FindingSourcePreview = {
+export type PinnedSourceVersion = {
   path: string;
   revision: string;
-  start_line: number;
-  end_line: number;
+  content: string;
+};
+
+export type FindingSourcePreview = {
+  path: string;
+  base: PinnedSourceVersion | null;
+  target: PinnedSourceVersion | null;
+  highlight_side: "old" | "new";
   highlight_start_line: number;
   highlight_end_line: number;
-  content: string;
 };

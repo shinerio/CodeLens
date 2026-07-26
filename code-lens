@@ -132,6 +132,7 @@ ensure_dependencies() {
   command -v uv >/dev/null 2>&1 || fail "uv is required: https://docs.astral.sh/uv/"
   command -v pnpm >/dev/null 2>&1 || fail "pnpm is required: https://pnpm.io/installation"
   command -v curl >/dev/null 2>&1 || fail "curl is required to verify service startup"
+  command -v git >/dev/null 2>&1 || fail "git is required: https://git-scm.com/downloads"
 
   printf '\n[1/3] Installing backend dependencies...\n'
   uv sync --project backend || fail "backend dependency installation failed"

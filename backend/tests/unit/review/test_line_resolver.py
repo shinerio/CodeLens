@@ -84,6 +84,18 @@ class TestParseHunks:
 
 
 class TestResolveFromHunk:
+    def test_resolves_only_the_requested_diff_side(self) -> None:
+        diff = """\
+@@ -10,1 +20,1 @@
+-old_value
++new_value
+"""
+
+        assert resolve_from_hunk(diff, "old_value", side="old") == (10, 10)
+        assert resolve_from_hunk(diff, "old_value", side="new") is None
+        assert resolve_from_hunk(diff, "new_value", side="new") == (20, 20)
+        assert resolve_from_hunk(diff, "new_value", side="old") is None
+
     def test_matches_added_line(self) -> None:
         result = resolve_from_hunk(SAMPLE_DIFF, "new_changed_line_1")
         assert result == (13, 13)

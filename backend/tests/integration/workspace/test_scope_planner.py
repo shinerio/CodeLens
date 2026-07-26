@@ -82,20 +82,15 @@ async def test_branch_scope_uses_merge_base_and_pins_target_oid(git_repository: 
     assert "dirty-only-on-main.py" not in plan.target_paths
 
 
-async def test_commit_scope_warns_for_non_ancestor_baseline(git_repository: Path) -> None:
+async def test_commit_scope_rejects_non_ancestor_baseline(git_repository: Path) -> None:
     git = GitCli()
-    _, feature_a_oid, feature_b_oid = await _create_feature_branches(git, git_repository)
+    _, feature_a_oid, _ = await _create_feature_branches(git, git_repository)
 
-    plan = await _planner(git).plan(
-        git_repository,
-        CommitScope(base_commit=feature_a_oid, target_ref="feature-b"),
-    )
-
-    assert plan.base_oid == feature_a_oid
-    assert plan.head_oid == feature_b_oid
-    assert plan.scope_type == "commit"
-    assert plan.warnings == ("base commit is not an ancestor of target; using direct diff",)
-    assert plan.target_paths == ("src/feature_a.py", "src/feature_b.py")
+    with pytest.raises(InvalidRepositoryError, match="not an ancestor"):
+        await _planner(git).plan(
+            git_repository,
+            CommitScope(base_commit=feature_a_oid, target_ref="feature-b"),
+        )
 
 
 async def test_uncommitted_scope_collects_tracked_and_allowed_untracked_paths(

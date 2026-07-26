@@ -90,11 +90,15 @@ function installApiMock({ configured = true, nextOffset = null as number | null 
       return jsonResponse(inspection);
     }
     if (url === "/api/repositories/catalog") {
-      const body = JSON.parse(String(init?.body)) as { commit_offset: number };
+      const body = JSON.parse(String(init?.body)) as {
+        commit_offset: number;
+        target_ref?: string;
+      };
       const offset = body.commit_offset;
+      const firstCommit = body.target_ref === "main" ? 100 : offset;
       return jsonResponse({
         branches,
-        commits: Array.from({ length: 10 }, (_, index) => commit(offset + index)),
+        commits: Array.from({ length: 10 }, (_, index) => commit(firstCommit + index)),
         next_commit_offset: offset === 0 ? nextOffset : null,
       });
     }
@@ -197,5 +201,30 @@ it("loads commits ten at a time into the commit selector", async () => {
 
   expect(await screen.findByRole("option", { name: /Author 19 · Commit message 19/ })).toBeVisible();
   const catalogCalls = fetchMock.mock.calls.filter(([url]) => url === "/api/repositories/catalog");
-  expect(JSON.parse(String(catalogCalls[1]?.[1]?.body))).toMatchObject({ commit_offset: 10 });
+  expect(JSON.parse(String(catalogCalls[1]?.[1]?.body))).toMatchObject({
+    target_ref: "feature",
+    commit_offset: 10,
+  });
+});
+
+it("reloads base commits and target tip when the target branch changes", async () => {
+  installApiMock();
+  const user = userEvent.setup();
+
+  render(<NewReviewPage />, { wrapper: TestProviders });
+  await chooseRepository(user);
+  await user.click(screen.getByRole("button", { name: /Commit diff/ }));
+
+  expect(screen.getByLabelText("Target commit")).toHaveValue("c".repeat(40));
+  await user.selectOptions(screen.getByLabelText("Target branch"), "main");
+
+  expect(await screen.findByRole("option", { name: /Author 100 · Commit message 100/ })).toBeVisible();
+  expect(screen.getByLabelText("Base commit")).toHaveValue(commit(100).oid);
+  expect(screen.queryByRole("option", { name: /Author 0 · Commit message 0/ })).not.toBeInTheDocument();
+  expect(screen.getByLabelText("Target commit")).toHaveValue("d".repeat(40));
+  const catalogCalls = fetchMock.mock.calls.filter(([url]) => url === "/api/repositories/catalog");
+  expect(JSON.parse(String(catalogCalls.at(-1)?.[1]?.body))).toMatchObject({
+    target_ref: "main",
+    commit_offset: 0,
+  });
 });

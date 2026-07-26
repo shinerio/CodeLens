@@ -41,6 +41,7 @@ def _parser() -> argparse.ArgumentParser:
         dest="repository_roots",
     )
     parser.add_argument("--data-dir", type=Path, default=defaults.data_dir)
+    parser.add_argument("--port", type=int, default=8800)
     return parser
 
 
@@ -122,7 +123,7 @@ def main(arguments: Sequence[str] | None = None) -> None:
         repository_roots=tuple(Path(value) for value in values.repository_roots),
     )
     app = asyncio.run(_build_app(settings))
-    uvicorn.run(app, host="127.0.0.1", port=8800)
+    uvicorn.run(app, host="127.0.0.1", port=values.port)
 
 
 if __name__ == "__main__":

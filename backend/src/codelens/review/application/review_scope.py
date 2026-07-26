@@ -14,7 +14,7 @@ class ReviewScopeLimitError(ReviewScopeError):
 
 @dataclass(frozen=True)
 class ReviewLineRange:
-    """Expose one new-side range where a Finding may be submitted."""
+    """Expose one immutable changed range where a Finding may be submitted."""
 
     start_line: int
     end_line: int
@@ -29,6 +29,7 @@ class ReviewFileInput:
 
     path: str
     change_type: ReviewFileChangeType
+    old_ranges: tuple[ReviewLineRange, ...]
     new_ranges: tuple[ReviewLineRange, ...]
     old_path: str | None = None
 
@@ -36,6 +37,7 @@ class ReviewFileInput:
         payload: dict[str, object] = {
             "path": self.path,
             "change_type": self.change_type,
+            "old_ranges": [item.as_payload() for item in self.old_ranges],
             "new_ranges": [item.as_payload() for item in self.new_ranges],
         }
         if self.old_path is not None:
@@ -75,22 +77,26 @@ def build_review_files(
         raise ReviewScopeError("Review target has no immutable file change metadata")
 
     changes_by_path = {change.path: change for change in active_changes}
-    ranges_by_path: dict[str, set[tuple[int, int]]] = {
-        path: set() for path in changes_by_path
+    ranges_by_path: dict[str, dict[str, set[tuple[int, int]]]] = {
+        path: {"old": set(), "new": set()} for path in changes_by_path
     }
     for hunk in snapshot.change_index.hunks:
         if not _is_normalized_relative(hunk.path):
             raise ReviewScopeError("Review hunk path is unsafe")
-        if hunk.side != "new":
-            continue
         change = changes_by_path.get(hunk.path)
         if change is None:
-            raise ReviewScopeError("new-side Review hunk has no file metadata")
-        if change.change_type == "deleted":
+            raise ReviewScopeError("Review hunk has no file metadata")
+        if hunk.side == "new" and change.change_type == "deleted":
             raise ReviewScopeError("deleted Review file has a new-side range")
-        ranges_by_path[hunk.path].add((hunk.start_line, hunk.end_line))
+        if hunk.side == "old" and change.change_type == "added":
+            raise ReviewScopeError("added Review file has an old-side range")
+        ranges_by_path[hunk.path][hunk.side].add((hunk.start_line, hunk.end_line))
 
-    range_count = sum(len(ranges) for ranges in ranges_by_path.values())
+    range_count = sum(
+        len(ranges)
+        for ranges_by_side in ranges_by_path.values()
+        for ranges in ranges_by_side.values()
+    )
     if range_count > max_ranges:
         raise ReviewScopeLimitError("Review range limit exceeded")
 
@@ -105,9 +111,13 @@ def build_review_files(
                 path=change.path,
                 change_type=change.change_type,
                 old_path=change.old_path,
+                old_ranges=tuple(
+                    ReviewLineRange(start_line, end_line)
+                    for start_line, end_line in sorted(ranges_by_path[change.path]["old"])
+                ),
                 new_ranges=tuple(
                     ReviewLineRange(start_line, end_line)
-                    for start_line, end_line in sorted(ranges_by_path[change.path])
+                    for start_line, end_line in sorted(ranges_by_path[change.path]["new"])
                 ),
             )
         )

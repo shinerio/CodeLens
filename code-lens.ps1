@@ -41,6 +41,7 @@ function Stop-ProcessTree {
 try {
     $uvCommand = Get-Command uv -ErrorAction Stop
     $pnpmCommand = Get-Command pnpm -ErrorAction Stop
+    $gitCommand = Get-Command git -ErrorAction Stop
 
     Push-Location $scriptRoot
     $locationPushed = $true
@@ -116,7 +117,7 @@ try {
     throw "Frontend process stopped with exit code $($frontendProcess.ExitCode)."
 }
 catch [System.Management.Automation.CommandNotFoundException] {
-    Write-Error "uv and pnpm are required. Install uv from https://docs.astral.sh/uv/ and pnpm from https://pnpm.io/installation."
+    Write-Error "uv, pnpm, and git are required. Install them before starting CodeLens."
     exit 1
 }
 catch {

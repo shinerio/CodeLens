@@ -2,25 +2,29 @@ import { defineConfig } from "@playwright/test";
 import path from "node:path";
 
 const dataDir = process.env.CODELENS_E2E_DATA_DIR ?? path.resolve(process.cwd(), ".tmp", "codelens-e2e");
+const backendPort = Number(process.env.CODELENS_E2E_BACKEND_PORT ?? "8810");
+const frontendPort = Number(process.env.CODELENS_E2E_FRONTEND_PORT ?? "5183");
 
 export default defineConfig({
   testDir: "./e2e",
+  workers: 1,
   use: {
-    baseURL: "http://127.0.0.1:5173",
+    baseURL: `http://127.0.0.1:${frontendPort}`,
     trace: "retain-on-failure",
     screenshot: "only-on-failure",
   },
   webServer: [
     {
-      command: `uv run --project backend python backend/scripts/run_fake_server.py --data-dir ${dataDir}`,
+      command: `uv run --project backend python backend/scripts/run_fake_server.py --data-dir ${dataDir} --port ${backendPort}`,
       cwd: "..",
-      port: 8800,
+      port: backendPort,
       reuseExistingServer: false,
     },
     {
-      command: "pnpm --dir frontend dev --host 127.0.0.1",
+      command: `pnpm --dir frontend dev --host 127.0.0.1 --port ${frontendPort} --strictPort`,
       cwd: "..",
-      port: 5173,
+      env: { CODELENS_API_PORT: String(backendPort) },
+      port: frontendPort,
       reuseExistingServer: false,
     },
   ],

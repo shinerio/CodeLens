@@ -318,8 +318,8 @@ export function ReviewRunPage() {
       ) : null}
 
       {activeTab === "findings" ? (
-        <section className="run-layout run-layout--findings">
-          <article className="run-panel">
+        <section className="finding-workspace">
+          <header className="finding-workspace__navigation">
             <div className="run-panel__heading">
               <div>
                 <p className="run-panel__eyebrow">{reviewTitle}</p>
@@ -334,8 +334,8 @@ export function ReviewRunPage() {
               selectedFindingId={selectedFindingId}
               onSelect={setSelectedFindingId}
             />
-          </article>
-          <article className="run-panel run-panel--detail">
+          </header>
+          <article className="finding-workspace__detail">
             <FindingDetail finding={selectedFinding} source={sourceQuery.data ?? null} />
             {selectedFinding !== null ? <div className="run-preview-actions"><button type="button" onClick={handleUnsupported}>{t("run.suppress")}</button><button type="button" onClick={handleUnsupported}>{t("run.acknowledge")}</button></div> : null}
           </article>

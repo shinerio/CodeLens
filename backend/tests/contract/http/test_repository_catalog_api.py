@@ -9,29 +9,48 @@ from codelens.interface.http.app import create_app
 from tests.fixtures.git_repository import _run_git
 
 
-def _add_catalog_history(repository: Path) -> None:
+def _commit_file(repository: Path, content: str, message: str) -> str:
+    (repository / "history.txt").write_text(content, encoding="utf-8")
+    _run_git("-C", str(repository), "add", "history.txt")
+    _run_git("-C", str(repository), "commit", "-m", message)
+    return _run_git("-C", str(repository), "rev-parse", "HEAD").stdout.decode().strip()
+
+
+def _add_catalog_history(repository: Path) -> tuple[str, str]:
     for index in range(12):
-        (repository / "history.txt").write_text(f"revision {index}\n", encoding="utf-8")
-        _run_git("-C", str(repository), "add", "history.txt")
-        _run_git("-C", str(repository), "commit", "-m", f"catalog commit {index:02d}")
-    _run_git("-C", str(repository), "branch", "feature/catalog")
+        _commit_file(repository, f"revision {index}\n", f"catalog commit {index:02d}")
+    _run_git("-C", str(repository), "checkout", "-b", "feature/catalog")
+    feature_tip = _commit_file(repository, "feature revision\n", "feature-only commit")
+    _run_git("-C", str(repository), "checkout", "main")
+    main_tip = _commit_file(repository, "main revision\n", "main-only commit")
+    return feature_tip, main_tip
 
 
-def test_repository_catalog_lists_all_branches_and_paginates_commit_summaries(
+def test_repository_catalog_lists_selected_branch_history_and_paginates_commit_summaries(
     tmp_path: Path,
     git_repository: Path,
 ) -> None:
-    _add_catalog_history(git_repository)
+    feature_tip, main_tip = _add_catalog_history(git_repository)
     app = create_app(Settings(data_dir=tmp_path / "data"))
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
         first = client.post(
             "/api/repositories/catalog",
-            json={"path": str(git_repository), "commit_offset": 0, "commit_limit": 10},
+            json={
+                "path": str(git_repository),
+                "target_ref": "feature/catalog",
+                "commit_offset": 0,
+                "commit_limit": 10,
+            },
         )
         second = client.post(
             "/api/repositories/catalog",
-            json={"path": str(git_repository), "commit_offset": 10, "commit_limit": 10},
+            json={
+                "path": str(git_repository),
+                "target_ref": "feature/catalog",
+                "commit_offset": 10,
+                "commit_limit": 10,
+            },
         )
 
     assert first.status_code == 200, first.text
@@ -46,11 +65,35 @@ def test_repository_catalog_lists_all_branches_and_paginates_commit_summaries(
     assert newest["author"] == "Test User"
     assert newest["message"] == "catalog commit 11"
     assert newest["committed_at"]
+    returned_oids = {
+        commit["oid"] for commit in first.json()["commits"] + second.json()["commits"]
+    }
+    assert feature_tip not in returned_oids
+    assert main_tip not in returned_oids
     assert second.status_code == 200, second.text
     assert len(second.json()["commits"]) >= 3
     assert {
         commit["oid"] for commit in first.json()["commits"]
     }.isdisjoint(commit["oid"] for commit in second.json()["commits"])
+
+
+def test_repository_catalog_rejects_a_target_outside_selectable_branches(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    app = create_app(Settings(data_dir=tmp_path / "data"))
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        response = client.post(
+            "/api/repositories/catalog",
+            json={
+                "path": str(git_repository),
+                "target_ref": "refs/tags/not-a-selectable-branch",
+            },
+        )
+
+    assert response.status_code == 422
+    assert response.json()["code"] == "invalid_repository"
 
 
 def test_filesystem_browser_starts_at_system_roots_and_marks_git_directories(

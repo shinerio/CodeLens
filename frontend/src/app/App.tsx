@@ -46,7 +46,7 @@ export function App() {
         </nav>
         <div className="sidebar-footer"><div className="sidebar-boundary">
           <span className="boundary-dot state-dot" aria-hidden="true" />
-          {t("nav.loopback")}
+          <span>{t("nav.loopback")}</span>
         </div></div>
       </aside>
 

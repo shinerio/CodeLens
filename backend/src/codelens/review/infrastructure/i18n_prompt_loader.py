@@ -14,12 +14,10 @@ from codelens.review.application.i18n_prompt_loader import (
 
 _REQUIRED_TOOL_NAMES = frozenset(
     {
-        "explore",
-        "glob",
+        "find_files",
         "grep",
         "read_file",
         "get_diff",
-        "read_revision",
         "comment",
         "task_done",
     }
@@ -87,12 +85,14 @@ class I18nPromptLoader(I18nPromptLoaderPort):
         for name, raw_tool in raw_tools.items():
             if not isinstance(name, str) or not isinstance(raw_tool, dict):
                 raise SystemPromptLoadError(f"invalid system tool prompt: {tool_path}")
-            values = {
-                field: raw_tool.get(field) for field in ("purpose", "parameters", "description")
-            }
-            if any(not isinstance(value, str) or not value.strip() for value in values.values()):
+            description = raw_tool.get("description")
+            if (
+                set(raw_tool) != {"description"}
+                or not isinstance(description, str)
+                or not description.strip()
+            ):
                 raise SystemPromptLoadError(f"incomplete system tool prompt: {tool_path}#{name}")
-            tools[name] = SystemToolPrompt(name=name, **values)  # type: ignore[arg-type]
+            tools[name] = SystemToolPrompt(name=name, description=description)
         if set(tools) != _REQUIRED_TOOL_NAMES:
             raise SystemPromptLoadError(
                 "system tool prompts must define the complete stable tool set"

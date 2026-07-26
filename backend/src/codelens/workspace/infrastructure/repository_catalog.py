@@ -19,10 +19,11 @@ class GitRepositoryCatalogAdapter:
         self,
         repository: Path,
         *,
+        target_ref: str | None,
         commit_offset: int,
         commit_limit: int,
     ) -> RepositoryCatalog:
-        """Return every branch and one ``--all`` commit page without mutating refs."""
+        """Return every branch and one selected-branch history page without its tip."""
 
         branch_result = await self._git.run(
             repository,
@@ -32,13 +33,20 @@ class GitRepositoryCatalogAdapter:
             "refs/remotes",
         )
         branches = self._parse_branches(branch_result.stdout)
+        target_branch = self._select_target_branch(branches, target_ref)
+        if target_branch is None:
+            return RepositoryCatalog(
+                branches=branches,
+                commits=(),
+                next_commit_offset=None,
+            )
         commit_result = await self._git.run(
             repository,
             "log",
-            "--all",
-            f"--skip={commit_offset}",
+            f"--skip={commit_offset + 1}",
             f"--max-count={commit_limit + 1}",
             "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e",
+            target_branch.oid,
         )
         commits = self._parse_commits(commit_result.stdout)
         has_more = len(commits) > commit_limit
@@ -46,6 +54,21 @@ class GitRepositoryCatalogAdapter:
             branches=branches,
             commits=commits[:commit_limit],
             next_commit_offset=commit_offset + commit_limit if has_more else None,
+        )
+
+    @staticmethod
+    def _select_target_branch(
+        branches: tuple[RepositoryBranch, ...],
+        target_ref: str | None,
+    ) -> RepositoryBranch | None:
+        if target_ref is not None:
+            for branch in branches:
+                if branch.name == target_ref:
+                    return branch
+            raise InvalidRepositoryError("selected target is not a repository branch")
+        return next(
+            (branch for branch in branches if branch.is_current),
+            branches[0] if branches else None,
         )
 
     @staticmethod

@@ -51,6 +51,7 @@ async def get_repository_catalog(
 
     catalog = await components.repository_catalog.handle(
         request.path,
+        target_ref=request.target_ref,
         commit_offset=request.commit_offset,
         commit_limit=request.commit_limit,
     )

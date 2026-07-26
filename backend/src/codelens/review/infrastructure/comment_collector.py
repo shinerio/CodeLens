@@ -12,10 +12,12 @@ from codelens.review.infrastructure.line_resolver import (
     resolve_from_hunk,
 )
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
+from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 from codelens.workspace.domain.models import ReviewSnapshot
 
 _ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 _LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000)]
+_TaskSummary = Annotated[str, Field(min_length=1, max_length=8_000)]
 
 
 class ReviewCommentSubmission(BaseModel):
@@ -24,13 +26,14 @@ class ReviewCommentSubmission(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     path: _ShortText
+    side: Literal["old", "new"]
     existing_code: _LongText
     title: _ShortText
     content: _LongText
     recommendation: _LongText
-    category: _ShortText = "correctness"
-    severity: Literal["critical", "high", "medium", "low", "info"] = "medium"
-    confidence: float = Field(default=0.85, ge=0.0, le=1.0)
+    category: _ShortText
+    severity: Literal["critical", "high", "medium", "low", "info"]
+    confidence: float = Field(ge=0.0, le=1.0)
 
 
 class ReviewCompletionSubmission(BaseModel):
@@ -42,13 +45,19 @@ class ReviewCompletionSubmission(BaseModel):
     reviewed_changed_files: int = Field(ge=0, le=10_000)
 
 
+_CommentBatch = Annotated[
+    list[ReviewCommentSubmission],
+    Field(min_length=1, max_length=20),
+]
+
+
 @dataclass
 class ReviewCommentCollector:
     """Task-local stateful tool that resolves accepted comments into Finding candidates.
 
     The collector has no persistence, workspace, network, or arbitrary-process access.
-    It accepts comments only when their complete new-side range is inside one frozen
-    changed hunk, then derives the hunk ID and excerpt hash from that Snapshot.
+    It accepts comments only when their complete selected-side range is inside one
+    frozen changed hunk, then derives trusted location metadata from that Snapshot.
     """
 
     snapshot: ReviewSnapshot
@@ -66,7 +75,7 @@ class ReviewCommentCollector:
             name_override="comment",
             description_override=self.tool_descriptions["comment"],
         )
-        async def comment_tool(comments: list[ReviewCommentSubmission]) -> str:
+        async def comment_tool(comments: _CommentBatch) -> str:
             """Submit one or more concrete changed-code comments for deterministic resolution."""
 
             return await self.submit_many(comments)
@@ -75,7 +84,10 @@ class ReviewCommentCollector:
             name_override="task_done",
             description_override=self.tool_descriptions["task_done"],
         )
-        async def task_done_tool(summary: str, reviewed_changed_files: int) -> str:
+        async def task_done_tool(
+            summary: _TaskSummary,
+            reviewed_changed_files: Annotated[int, Field(ge=0, le=10_000)],
+        ) -> str:
             """Declare that changed-file investigation is complete without creating a Finding."""
 
             return self.complete(
@@ -84,7 +96,10 @@ class ReviewCommentCollector:
                 )
             )
 
-        return [comment_tool, task_done_tool]
+        return [
+            reject_unknown_arguments(comment_tool),
+            reject_unknown_arguments(task_done_tool),
+        ]
 
     async def submit(self, submission: ReviewCommentSubmission) -> str:
         """Resolve one candidate or return a bounded tool error without retaining it."""
@@ -94,7 +109,7 @@ class ReviewCommentCollector:
 
         # Resolve line numbers from quoted code
         start_line, end_line = await self._resolve_line_numbers(
-            submission.path, submission.existing_code
+            submission.path, submission.existing_code, submission.side
         )
 
         hunks = tuple(
@@ -102,19 +117,21 @@ class ReviewCommentCollector:
             for hunk in self.snapshot.change_index.hunks
             if (
                 hunk.path == submission.path
-                and hunk.side == "new"
+                and hunk.side == submission.side
                 and start_line >= hunk.start_line
                 and end_line <= hunk.end_line
             )
         )
         if len(hunks) != 1:
             raise ValueError(
-                "existing_code must be fully contained in exactly one changed new-side hunk"
+                f"existing_code must quote only consecutive changed {submission.side}-side "
+                "lines without diff markers; do not include unchanged context lines"
             )
         excerpt_hash, excerpt_truncated = await self.tools.excerpt_identity(
             submission.path,
             start_line,
             end_line,
+            "base" if submission.side == "old" else "current",
         )
         if excerpt_truncated:
             raise ValueError("comment location cannot be resolved to a complete frozen excerpt")
@@ -135,8 +152,9 @@ class ReviewCommentCollector:
                     "path": submission.path,
                     "start_line": start_line,
                     "end_line": end_line,
-                    "side": "new",
+                    "side": submission.side,
                     "excerpt_hash": excerpt_hash,
+                    "is_deleted": self._is_deleted_path(submission.path),
                 },
                 "changed_hunk_id": hunk.hunk_id,
                 "change_origin": "introduced",
@@ -200,23 +218,37 @@ class ReviewCommentCollector:
 
         return self._completion is not None
 
-    async def _resolve_line_numbers(self, path: str, existing_code: str) -> tuple[int, int]:
+    async def _resolve_line_numbers(
+        self,
+        path: str,
+        existing_code: str,
+        side: Literal["old", "new"],
+    ) -> tuple[int, int]:
         """Resolve line numbers from quoted code via diff hunk or file content matching."""
 
         # Tier 1: Try hunk matching
         diff_result = json.loads(await self.tools.get_diff(path))
         diff_text = diff_result.get("content", "")
-        resolved = resolve_from_hunk(diff_text, existing_code)
+        resolved = resolve_from_hunk(diff_text, existing_code, side=side)
         if resolved is not None:
             return resolved
 
         # Tier 2: Try full file content matching
-        file_content = await self.tools.read_full_file(path)
+        file_content = await self.tools.read_full_file(
+            path,
+            "base" if side == "old" else "current",
+        )
         resolved = resolve_from_file_content(file_content, existing_code)
         if resolved is not None:
             return resolved
 
         raise ValueError("existing_code cannot be resolved to a line range")
+
+    def _is_deleted_path(self, path: str) -> bool:
+        entry = next((item for item in self.snapshot.manifest.entries if item.path == path), None)
+        if entry is None:
+            raise ValueError("comment path is outside the frozen Snapshot")
+        return entry.kind == "deleted"
 
     def finding_batch(self) -> dict[str, object]:
         """Return only resolved candidates in the stable output envelope."""

@@ -3,7 +3,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Protocol
+from typing import Literal, Protocol
 
 from codelens.findings.domain.models import Finding
 from codelens.review.domain.ports import ReviewExecutionRecord
@@ -16,25 +16,37 @@ class _ReviewStorePort(Protocol):
 
 
 class _RevisionReaderPort(Protocol):
-    async def read_revision(self, repository: Path, revision: str, path: str) -> bytes: ...
+    async def read_revision_optional(
+        self,
+        repository: Path,
+        revision: str,
+        path: str,
+    ) -> bytes | None: ...
+
+
+@dataclass(frozen=True)
+class PinnedSourceVersion:
+    """One complete file from a fixed Review revision."""
+
+    path: str
+    revision: str
+    content: str
 
 
 @dataclass(frozen=True)
 class FindingSourcePreview:
     """One complete source file anchored to a trusted Finding location.
 
-    The content always comes from the review's pinned base or head revision,
-    never from the mutable source workspace. Highlight bounds identify where the
-    client should place the review annotation without replacing source lines.
+    Both available contents come from the Review's pinned revisions, never from
+    the mutable source workspace. Added and deleted files have one missing side.
     """
 
     path: str
-    revision: str
-    start_line: int
-    end_line: int
+    base: PinnedSourceVersion | None
+    target: PinnedSourceVersion | None
+    highlight_side: Literal["old", "new"]
     highlight_start_line: int
     highlight_end_line: int
-    content: str
 
 
 class FindingSourcePreviewService:
@@ -53,18 +65,38 @@ class FindingSourcePreviewService:
         if finding is None:
             raise KeyError(finding_id)
         location = finding.primary_location
-        revision = execution.base_oid if location.side == "old" else execution.head_oid
-        source = await self._reader.read_revision(
-            execution.repository_path, revision, location.path
+        highlight_side: Literal["old", "new"]
+        if location.side == "old":
+            highlight_side = "old"
+        elif location.side == "new":
+            highlight_side = "new"
+        else:
+            raise ValueError("Finding location has an unsupported source side")
+        base_source = await self._reader.read_revision_optional(
+            execution.repository_path,
+            execution.base_oid,
+            location.path,
         )
-        content = source.decode("utf-8", errors="replace")
-        lines = content.splitlines()
+        target_source = await self._reader.read_revision_optional(
+            execution.repository_path,
+            execution.head_oid,
+            location.path,
+        )
         return FindingSourcePreview(
             path=location.path,
-            revision=revision,
-            start_line=1,
-            end_line=len(lines),
+            base=self._version(location.path, execution.base_oid, base_source),
+            target=self._version(location.path, execution.head_oid, target_source),
+            highlight_side=highlight_side,
             highlight_start_line=location.start_line,
             highlight_end_line=location.end_line,
-            content=content,
+        )
+
+    @staticmethod
+    def _version(path: str, revision: str, source: bytes | None) -> PinnedSourceVersion | None:
+        if source is None:
+            return None
+        return PinnedSourceVersion(
+            path=path,
+            revision=revision,
+            content=source.decode("utf-8", errors="replace"),
         )

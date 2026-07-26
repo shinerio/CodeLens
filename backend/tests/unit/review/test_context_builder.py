@@ -150,6 +150,7 @@ def test_serializes_complete_review_files_and_active_repository_instructions() -
             {
                 "change_type": "added",
                 "new_ranges": [{"end_line": 3, "start_line": 1}],
+                "old_ranges": [],
                 "path": "src/added.py",
             },
             {
@@ -158,13 +159,20 @@ def test_serializes_complete_review_files_and_active_repository_instructions() -
                     {"end_line": 6, "start_line": 5},
                     {"end_line": 22, "start_line": 20},
                 ],
+                "old_ranges": [],
                 "path": "src/changed.py",
             },
-            {"change_type": "deleted", "new_ranges": [], "path": "src/deleted.py"},
+            {
+                "change_type": "deleted",
+                "new_ranges": [],
+                "old_ranges": [{"end_line": 2, "start_line": 1}],
+                "path": "src/deleted.py",
+            },
             {
                 "change_type": "renamed",
                 "new_ranges": [{"end_line": 8, "start_line": 7}],
                 "old_path": "src/original.py",
+                "old_ranges": [],
                 "path": "src/renamed.py",
             },
         ]

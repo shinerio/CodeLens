@@ -17,6 +17,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import IntEnum
+from typing import Literal
 
 _HUNK_HEADER = re.compile(r"^@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 
@@ -157,11 +158,16 @@ def match_consecutive(
     return None
 
 
-def resolve_from_hunk(diff_text: str, existing_code: str) -> tuple[int, int] | None:
+def resolve_from_hunk(
+    diff_text: str,
+    existing_code: str,
+    *,
+    side: Literal["old", "new"] | None = None,
+) -> tuple[int, int] | None:
     """Tier 1: resolve line range by matching against diff hunks.
 
-    Tries new-side (context + added) first, then falls back to old-side
-    (context + deleted). Returns (start_line, end_line) or None.
+    When side is explicit, match only that diff side. The optional fallback mode
+    remains available to non-tool callers that do not need an unambiguous side.
     """
     hunks = parse_hunks(diff_text)
     if not hunks:
@@ -171,19 +177,13 @@ def resolve_from_hunk(diff_text: str, existing_code: str) -> tuple[int, int] | N
     if not target_lines:
         return None
 
-    # New-side first
-    for hunk in hunks:
-        new_side = extract_side_lines(hunk, new_side=True)
-        result = match_consecutive(new_side, target_lines)
-        if result is not None:
-            return result
-
-    # Old-side fallback
-    for hunk in hunks:
-        old_side = extract_side_lines(hunk, new_side=False)
-        result = match_consecutive(old_side, target_lines)
-        if result is not None:
-            return result
+    requested_sides = (side,) if side is not None else ("new", "old")
+    for requested_side in requested_sides:
+        for hunk in hunks:
+            side_lines = extract_side_lines(hunk, new_side=requested_side == "new")
+            result = match_consecutive(side_lines, target_lines)
+            if result is not None:
+                return result
 
     return None
 

@@ -16,7 +16,6 @@ from codelens.workspace.domain.ports import ScopePlan
 from codelens.workspace.infrastructure.git_cli import GitCli
 
 _FULL_OID = re.compile(r"(?:[0-9a-f]{40}|[0-9a-f]{64})\Z")
-_NON_ANCESTOR_WARNING = "base commit is not an ancestor of target; using direct diff"
 
 
 @dataclass(frozen=True)
@@ -110,7 +109,7 @@ class GitWorkspaceAdapter:
                 ok_codes=(0, 1),
             )
             if ancestor.returncode == 1:
-                warnings = (_NON_ANCESTOR_WARNING,)
+                raise InvalidRepositoryError("base commit is not an ancestor of target commit")
             target_paths = await self._diff_paths(repository, base_oid, head_oid)
             capture_overlay = scope.include_workspace_changes
         elif isinstance(scope, UncommittedScope):

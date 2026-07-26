@@ -199,7 +199,7 @@ async def get_finding_source(
     finding_id: str,
     components: Annotated[HttpComponents, Depends(get_components)],
 ) -> FindingSourcePreviewResponse:
-    """Return the complete pinned source file for one persisted review opinion."""
+    """Return both available pinned source versions for one persisted review opinion."""
 
     try:
         preview = await components.finding_source_preview.get(task_id, finding_id)

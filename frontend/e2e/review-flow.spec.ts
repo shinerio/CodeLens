@@ -6,25 +6,39 @@ function fixtureRepositoryPath() {
   return path.join(dataDir, "e2e-fixture", "simple-branch");
 }
 
-async function assertNoOverlap(page: import("@playwright/test").Page) {
-  const list = await page.locator(".run-panel").first().boundingBox();
-  const detail = await page.locator(".run-panel--detail").boundingBox();
-  if (list === null || detail === null) {
-    throw new Error("run panels are not visible");
+async function assertFindingWorkspaceLayout(page: import("@playwright/test").Page) {
+  const navigation = await page.locator(".finding-workspace__navigation").boundingBox();
+  const detail = await page.locator(".finding-workspace__detail").boundingBox();
+  const baseHeader = await page.locator(".finding-review__pane-header--base").boundingBox();
+  const targetHeader = await page.locator(".finding-review__pane-header--target").boundingBox();
+  if (navigation === null || detail === null || baseHeader === null || targetHeader === null) {
+    throw new Error("finding workspace is not visible");
   }
-  const intersects = !(
-    list.x + list.width <= detail.x ||
-    detail.x + detail.width <= list.x ||
-    list.y + list.height <= detail.y ||
-    detail.y + detail.height <= list.y
-  );
-  expect(intersects).toBeFalsy();
-  const nav = await page.locator(".review-run-page__tabs").boundingBox();
-  if (nav !== null) {
-    const header = await page.locator(".review-run-page__header").boundingBox();
-    if (header !== null) {
-      expect(nav.y).toBeGreaterThanOrEqual(header.y + header.height - 1);
-    }
+
+  expect(detail.y).toBeGreaterThanOrEqual(navigation.y + navigation.height - 1);
+  expect(Math.abs(detail.width - navigation.width)).toBeLessThanOrEqual(1);
+  expect(Math.abs(baseHeader.width - targetHeader.width)).toBeLessThanOrEqual(1);
+  expect(targetHeader.x).toBeGreaterThanOrEqual(baseHeader.x + baseHeader.width - 1);
+  expect(Math.abs(targetHeader.y - baseHeader.y)).toBeLessThanOrEqual(1);
+  await expect(page.locator(".finding-review__editor .monaco-diff-editor")).toBeVisible({
+    timeout: 15000,
+  });
+  const originalEditor = await page.locator(".monaco-diff-editor .editor.original").boundingBox();
+  const modifiedEditor = await page.locator(".monaco-diff-editor .editor.modified").boundingBox();
+  if (originalEditor === null || modifiedEditor === null) {
+    throw new Error("side-by-side source editors are not visible");
+  }
+  expect(Math.abs(originalEditor.width - modifiedEditor.width)).toBeLessThanOrEqual(2);
+  const comment = page.locator(".finding-comment-zone--new");
+  await expect(comment).toBeVisible();
+  expect(
+    await comment.evaluate((element) => element.scrollHeight <= element.clientHeight + 1),
+  ).toBeTruthy();
+  if ((page.viewportSize()?.width ?? 0) > 760) {
+    const collapsedSidebar = await page.locator(".sidebar").boundingBox();
+    expect(collapsedSidebar?.width).toBeLessThanOrEqual(55);
+    await page.locator(".sidebar").hover();
+    await expect(page.locator(".sidebar")).toHaveCSS("width", "216px");
   }
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 }
@@ -95,5 +109,5 @@ test("streams the correctness fixture from inspect to validated findings", async
   await expect(
     page.getByText("Restore the draft-only guard before allowing the reviewing transition."),
   ).toBeVisible();
-  await assertNoOverlap(page);
+  await assertFindingWorkspaceLayout(page);
 });

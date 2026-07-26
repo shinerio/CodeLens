@@ -31,14 +31,19 @@ class StrictDto(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
 
-class FindingSourcePreviewResponse(StrictDto):
+class PinnedSourceVersionResponse(StrictDto):
     path: str
     revision: str
-    start_line: int
-    end_line: int
+    content: str
+
+
+class FindingSourcePreviewResponse(StrictDto):
+    path: str
+    base: PinnedSourceVersionResponse | None
+    target: PinnedSourceVersionResponse | None
+    highlight_side: Literal["old", "new"]
     highlight_start_line: int
     highlight_end_line: int
-    content: str
 
 
 class RuntimeLogLevelResponse(StrictDto):
@@ -167,6 +172,7 @@ class RepositoryCatalogRequest(StrictDto):
     """Request selectable refs for one validated exact repository root."""
 
     path: Path
+    target_ref: RefLabel | None = None
     commit_offset: Annotated[int, Field(ge=0, le=1_000_000)] = 0
     commit_limit: Annotated[int, Field(ge=1, le=50)] = 10
 

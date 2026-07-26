@@ -19,11 +19,17 @@ export async function inspectRepository(path: string): Promise<RepositoryInspect
 
 export async function getRepositoryCatalog(
   path: string,
+  targetRef: string | null,
   commitOffset = 0,
 ): Promise<RepositoryCatalog> {
   return api<RepositoryCatalog>("/repositories/catalog", {
     method: "POST",
-    body: JSON.stringify({ path, commit_offset: commitOffset, commit_limit: 10 }),
+    body: JSON.stringify({
+      path,
+      target_ref: targetRef,
+      commit_offset: commitOffset,
+      commit_limit: 10,
+    }),
   });
 }
 

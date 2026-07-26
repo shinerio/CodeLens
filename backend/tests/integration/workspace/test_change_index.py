@@ -64,7 +64,9 @@ async def test_builds_typed_file_changes_and_all_new_ranges_from_real_git_diff(
         ("added.py", 1, 1, "new"),
         ("deleted.py", 1, 1, "old"),
         ("modified.py", 2, 2, "new"),
+        ("modified.py", 2, 2, "old"),
         ("modified.py", 10, 10, "new"),
+        ("modified.py", 10, 10, "old"),
     ]
 
 
@@ -100,7 +102,8 @@ async def test_builds_hunks_for_git_c_quoted_utf8_paths(tmp_path: Path) -> None:
 
     assert index.files == (ReviewFileChange(path, "modified"),)
     assert [(hunk.path, hunk.start_line, hunk.end_line, hunk.side) for hunk in index.hunks] == [
-        (path, 1, 1, "new")
+        (path, 1, 1, "new"),
+        (path, 1, 1, "old"),
     ]
 
 

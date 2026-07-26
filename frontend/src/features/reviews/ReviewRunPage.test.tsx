@@ -8,6 +8,13 @@ import { FakeEventSource } from "../../test/FakeEventSource";
 
 const fetchMock = vi.fn();
 
+vi.mock("@monaco-editor/react", () => ({
+  loader: { config: vi.fn() },
+  DiffEditor: () => <div data-testid="review-diff-editor" />,
+}));
+
+vi.mock("monaco-editor", () => ({}));
+
 function jsonResponse(payload: unknown, status = 200) {
   return new Response(JSON.stringify(payload), {
     status,
@@ -317,4 +324,79 @@ it("shows the process report after a review has completed", async () => {
   expect(screen.getAllByText("150")).toHaveLength(2);
   expect(screen.getByText("get_diff")).toBeInTheDocument();
   expect(screen.getByText("gpt-5.1")).toBeInTheDocument();
+});
+
+it("places finding navigation above a full-width source comparison", async () => {
+  const finding = {
+    finding_id: "finding_1",
+    fingerprint: "e".repeat(64),
+    reviewer_id: "correctness",
+    category: "logic",
+    title: "Removed guard",
+    severity: "high",
+    disposition: "blocking",
+    confidence: 0.98,
+    primary_location: {
+      path: "feature.py",
+      start_line: 2,
+      end_line: 2,
+      side: "old",
+      excerpt_hash: "f".repeat(64),
+      is_deleted: false,
+    },
+    related_locations: [],
+    changed_hunk_id: "hunk-1",
+    change_origin: "introduced",
+    evidence: [],
+    impact: "Requests can bypass the guard.",
+    explanation: "The target revision removes the required guard.",
+    reproduction: null,
+    recommendation: "Keep the guard.",
+    rule_sources: [],
+  };
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/findings/finding_1/source")) {
+      return jsonResponse({
+        path: "feature.py",
+        base: { path: "feature.py", revision: "a".repeat(40), content: "guard()\nrun()\n" },
+        target: { path: "feature.py", revision: "b".repeat(40), content: "run()\n" },
+        highlight_side: "old",
+        highlight_start_line: 2,
+        highlight_end_line: 2,
+      });
+    }
+    if (url.endsWith("/findings")) return jsonResponse([finding]);
+    if (url.endsWith("/transcript")) return jsonResponse([]);
+    return jsonResponse({
+      task_id: "review_1",
+      status: "completed",
+      scope_type: "branch",
+      base_oid: "a".repeat(40),
+      head_oid: "b".repeat(40),
+      selected_agents: ["correctness:v1"],
+      worktree_status: "pending",
+      repository_id: "repository-1",
+      repository_realpath_hash: "c".repeat(64),
+      git_common_dir_hash: "d".repeat(64),
+      cancellation_requested: false,
+    });
+  });
+
+  render(<ReviewRunPage />, {
+    wrapper: ({ children }) => (
+      <TestProviders initialEntries={["/runs/review_1"]}>
+        <Routes>
+          <Route path="/runs/:taskId" element={children} />
+        </Routes>
+      </TestProviders>
+    ),
+  });
+
+  await screen.findByRole("heading", { name: "Correctness Reviewer" });
+  screen.getByRole("button", { name: /Findings/ }).click();
+
+  expect(await screen.findByRole("navigation", { name: "Finding navigation" })).toBeVisible();
+  expect(screen.getByTestId("review-diff-editor")).toBeVisible();
+  expect(document.querySelector(".finding-workspace__detail")).not.toBeNull();
 });

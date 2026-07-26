@@ -28,26 +28,29 @@ export function FindingList({
   }
 
   return (
-    <ul className="finding-list" aria-label={t("finding.list")}>
-      {findings.map((finding) => {
-        const isSelected = finding.finding_id === selectedFindingId;
-        return (
-          <li key={finding.finding_id}>
-            <button
-              className={isSelected ? "finding-list__item finding-list__item--active" : "finding-list__item"}
-              type="button"
-              onClick={() => onSelect(finding.finding_id)}
-            >
-              <span className="finding-list__severity">{formatSeverity(finding.severity)}</span>
-              <span className="finding-list__title">{finding.title}</span>
-              <span className="finding-list__meta">
-                {formatLocation(finding)} · {formatConfidence(finding.confidence)} ·{" "}
-                {finding.reviewer_id}
-              </span>
-            </button>
-          </li>
-        );
-      })}
-    </ul>
+    <nav aria-label={t("finding.navigation")}>
+      <ul className="finding-list" aria-label={t("finding.list")}>
+        {findings.map((finding) => {
+          const isSelected = finding.finding_id === selectedFindingId;
+          return (
+            <li key={finding.finding_id}>
+              <button
+                aria-current={isSelected ? "true" : undefined}
+                className={isSelected ? "finding-list__item finding-list__item--active" : "finding-list__item"}
+                type="button"
+                onClick={() => onSelect(finding.finding_id)}
+              >
+                <span className="finding-list__severity">{formatSeverity(finding.severity)}</span>
+                <span className="finding-list__title">{finding.title}</span>
+                <span className="finding-list__meta">
+                  {formatLocation(finding)} · {formatConfidence(finding.confidence)} ·{" "}
+                  {finding.reviewer_id}
+                </span>
+              </button>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
   );
 }

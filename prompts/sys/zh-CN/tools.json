@@ -1,10 +1,8 @@
 {
-  "explore": {"purpose": "列出一个目录下可见的 Snapshot 文件。", "parameters": "path?: 相对目录", "description": "列出相对目录下可见的 Snapshot 文件。"},
-  "glob": {"purpose": "按 POSIX glob 查找可见的 Snapshot 路径。", "parameters": "pattern: POSIX glob", "description": "按 POSIX glob 查找可见的 Snapshot 路径。"},
-  "grep": {"purpose": "用正则表达式搜索可见的 Snapshot 文本。", "parameters": "pattern: 正则表达式", "description": "用正则表达式搜索可见的 Snapshot 文本。"},
-  "read_file": {"purpose": "读取可见 Snapshot 文件的有限行范围。", "parameters": "path, start_line, end_line", "description": "读取可见 Snapshot 文件的有限行范围。"},
-  "get_diff": {"purpose": "读取固定 base 到 head 的单文件 diff。", "parameters": "path", "description": "读取一个已变更可见文件固定 base 到 head 的 diff。"},
-  "read_revision": {"purpose": "读取固定 base 或 head revision 的有限行范围。", "parameters": "path, revision: base|head, start_line, end_line", "description": "读取可见 Snapshot 路径固定 base 或 head revision 的有限行范围。"},
-  "comment": {"purpose": "提交已解析的审查意见。", "parameters": "comments", "description": "提交一条或多条具体的变更代码审查意见，供系统确定性定位。"},
-  "task_done": {"purpose": "完成审查调查。", "parameters": "summary, reviewed_changed_files", "description": "声明变更文件调查已完成；该操作不会创建 Finding。"}
+  "find_files": {"description": "查找一个目录下的可见文件。两个参数都必填：path 是 Git 风格的规范化仓库相对目录，在包括 Windows 的所有系统上都使用 /，仓库根目录使用空字符串；pattern 使用相同路径格式且相对于 path，* 匹配一个路径段，** 匹配任意层级，查找全部后代使用 **。最多返回 200 个路径。"},
+  "grep": {"description": "搜索可见的 UTF-8 文本。必填 pattern 是最长 512 个字符的 Python 正则表达式；正则计算超过时限会被终止，最多扫描 1 MiB 并返回 200 个匹配。"},
+  "read_file": {"description": "读取可见文件。path、从 1 开始且首尾都包含的 start_line/end_line，以及 current|base|head 的 version 都必填；最多读取 500 行。current 是经过验证的冻结内容，可能包含捕获的 overlay；base 和 head 是固定 Git revision。拒绝二进制文件，输出上限为 64 KiB。"},
+  "get_diff": {"description": "读取一个已变更可见 path 经过验证的 base-to-current diff。current 是冻结的 Review 内容，可能包含捕获的工作区 overlay；base 是固定的基线 revision。输出上限为 64 KiB。"},
+  "comment": {"description": "通过 comments 提交 1 到 20 条具体 Finding。每项必须提供 path、side、existing_code、title、content、recommendation、category、severity 和 confidence。评论基准版本中被删除的 - 行使用 side=old，评论目标版本中新增的 + 行使用 side=new。existing_code 必须引用仅由对应侧实际变更行组成的最小精确连续片段，不包含 diff 标记。不得包含未修改的 diff 上下文行。severity 为 critical|high|medium|low|info，confidence 范围为 0 到 1。"},
+  "task_done": {"description": "必须且只能调用一次以结束调查，不创建 Finding。summary 必填且长度为 1 到 8000 个字符；reviewed_changed_files 必填，表示已调查变更文件数，范围为 0 到 10000。"}
 }

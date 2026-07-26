@@ -141,10 +141,11 @@ class RepositoryCatalogPort(Protocol):
         self,
         repository: Path,
         *,
+        target_ref: str | None,
         commit_offset: int,
         commit_limit: int,
     ) -> RepositoryCatalog:
-        """Return all branch refs and one bounded recent-commit page."""
+        """Return all branches and one bounded base-commit page for a selected branch."""
 
         raise NotImplementedError
 

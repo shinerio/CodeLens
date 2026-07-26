@@ -205,7 +205,7 @@ class GitChangeIndexBuilder:
             base_oid,
             "--",
         )
-        hunks = await self._parse_hunks(worktree, diff_result.stdout, target_set)
+        hunks = await self._parse_hunks(worktree, diff_result.stdout, target_set, base_oid)
         hunk_paths = {hunk.path for hunk in hunks}
         for path in untracked_paths:
             if path in hunk_paths:
@@ -258,11 +258,14 @@ class GitChangeIndexBuilder:
         worktree: TaskWorktree,
         output: bytes,
         target_paths: set[str],
+        base_oid: str,
     ) -> list[ChangedHunk]:
         lines = output.decode("utf-8", errors="replace").splitlines()
         old_path: str | None = None
         new_path: str | None = None
         hunks: list[ChangedHunk] = []
+        old_lines_by_path: dict[str, tuple[bytes, ...]] = {}
+        new_lines_by_path: dict[str, tuple[bytes, ...]] = {}
         for line in lines:
             if line.startswith("--- "):
                 old_path = _diff_header_path(line[4:])
@@ -278,18 +281,38 @@ class GitChangeIndexBuilder:
                 old_start, old_count_raw, new_start, new_count_raw = match.groups()
                 old_count = int(old_count_raw or "1")
                 new_count = int(new_count_raw or "1")
+                if old_count > 0:
+                    if old_path is None:
+                        raise InvalidRepositoryError("old-side hunk has no source path")
+                    old_line = int(old_start)
+                    old_lines = old_lines_by_path.get(old_path)
+                    if old_lines is None:
+                        old_result = await self._git.run(
+                            worktree.root,
+                            "show",
+                            f"{base_oid}:{old_path}",
+                        )
+                        old_lines = tuple(old_result.stdout.splitlines(keepends=True))
+                        old_lines_by_path[old_path] = old_lines
+                    old_excerpt = b"".join(old_lines[old_line - 1 : old_line + old_count - 1])
+                    hunks.append(
+                        self._hunk(
+                            path,
+                            old_line,
+                            old_line + old_count - 1,
+                            "old",
+                            old_excerpt,
+                        )
+                    )
                 if new_count > 0:
-                    side: Literal["old", "new"] = "new"
                     start_line = int(new_start)
                     end_line = start_line + new_count - 1
-                    file_lines = await asyncio.to_thread(_read_lines, worktree.root / path)
+                    file_lines = new_lines_by_path.get(path)
+                    if file_lines is None:
+                        file_lines = await asyncio.to_thread(_read_lines, worktree.root / path)
+                        new_lines_by_path[path] = file_lines
                     excerpt = b"".join(file_lines[start_line - 1 : end_line])
-                else:
-                    side = "old"
-                    start_line = int(old_start)
-                    end_line = start_line + max(old_count, 1) - 1
-                    excerpt = line.encode("utf-8")
-                hunks.append(self._hunk(path, start_line, end_line, side, excerpt))
+                    hunks.append(self._hunk(path, start_line, end_line, "new", excerpt))
         return hunks
 
     @staticmethod

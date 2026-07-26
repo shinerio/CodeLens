@@ -11,6 +11,7 @@ os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
 from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.settings import Settings
+from codelens.workspace.infrastructure.git_cli import GitCli
 
 
 @dataclass(frozen=True)
@@ -45,8 +46,8 @@ def parse_command(arguments: Sequence[str]) -> ParsedCommand:
     return ParsedCommand(settings=settings)
 
 
-async def prepare_runtime(settings: Settings) -> None:
-    """Validate and create the contained application data directory before startup."""
+async def prepare_runtime(settings: Settings, *, git: GitCli | None = None) -> None:
+    """Validate external prerequisites and create the contained data directory."""
 
     data_dir = settings.data_dir.expanduser().resolve()
     try:
@@ -55,6 +56,7 @@ async def prepare_runtime(settings: Settings) -> None:
         raise ValueError("configured data directory is not a directory") from None
     if not await asyncio.to_thread(data_dir.is_dir):
         raise ValueError("configured data directory is not a directory")
+    await (git or GitCli()).verify_available(Path.cwd())
 
 
 def main(arguments: Sequence[str] | None = None) -> None:

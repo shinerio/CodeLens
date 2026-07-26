@@ -154,8 +154,6 @@ class ContextBuilder:
                 raise ContextContainmentError("Snapshot target has no target entry")
 
         for hunk in snapshot.change_index.hunks:
-            if hunk.side == "old":
-                continue
             entry = entries.get(hunk.path)
             if (
                 not ContextBuilder._is_normalized_relative(hunk.path)

@@ -121,7 +121,7 @@ async def load_simple_branch_batch(repository: Path, *, base_oid: str) -> Findin
     matching_hunks = [
         hunk
         for hunk in change_index.hunks
-        if hunk.path == "src/state.py" and hunk.start_line == 7
+        if hunk.path == "src/state.py" and hunk.start_line == 7 and hunk.side == "new"
     ]
     if len(matching_hunks) != 1:
         raise AssertionError(

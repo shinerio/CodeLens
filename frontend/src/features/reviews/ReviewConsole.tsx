@@ -12,6 +12,7 @@ type ConsoleVisibility = {
   reasoning: boolean;
   output: boolean;
   tools: boolean;
+  rawResponses: boolean;
 };
 
 const DEFAULT_VISIBILITY: ConsoleVisibility = {
@@ -19,6 +20,7 @@ const DEFAULT_VISIBILITY: ConsoleVisibility = {
   reasoning: true,
   output: true,
   tools: false,
+  rawResponses: false,
 };
 
 /** Render the durable execution transcript as a lossless, collapsible conversation. */
@@ -54,6 +56,7 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
         <FilterOption label="Thinking" checked={visibility.reasoning} onChange={(checked) => setVisibility((value) => ({ ...value, reasoning: checked }))} />
         <FilterOption label="Model output" checked={visibility.output} onChange={(checked) => setVisibility((value) => ({ ...value, output: checked }))} />
         <FilterOption label="Tools" checked={visibility.tools} onChange={(checked) => setVisibility((value) => ({ ...value, tools: checked }))} />
+        <FilterOption label="Raw responses" checked={visibility.rawResponses} onChange={(checked) => setVisibility((value) => ({ ...value, rawResponses: checked }))} />
       </fieldset>
       <button type="button" onClick={() => setCollapsed(new Set(messages.map((entry) => entry.messageKey)))}>Collapse all</button>
       <button type="button" onClick={() => setCollapsed(new Set())}>Expand all</button>
@@ -63,7 +66,7 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
         const isCollapsed = collapsed.has(entry.messageKey);
         const isTool = isToolEntry(entry);
         const isReasoning = entry.kind === "model_reasoning_delta";
-        const isModel = isReasoning || entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_completed";
+        const isModel = isReasoning || entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_completed" || entry.kind === "model_raw_output";
         const isFinalizedStream = isDelta(entry)
           && entry.metadata.message_id !== undefined
           && completedMessages.has(entry.metadata.message_id);
@@ -71,7 +74,7 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
           <button className="review-console__message-head" type="button" onClick={() => toggle(entry.messageKey)} aria-expanded={!isCollapsed}>
             {isCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
             {isTool ? <Wrench aria-hidden="true" /> : isReasoning ? <Brain aria-hidden="true" /> : <span className="review-console__avatar">{isModel ? "AI" : "SYS"}</span>}
-            <span>{labelFor(entry.kind)}</span><time dateTime={entry.created_at}>#{entry.sequence}</time>
+            <span>{labelFor(entry)}</span><time dateTime={entry.created_at}>#{entry.sequence}</time>
           </button>
           {!isCollapsed ? <ConsoleContent entry={entry} locale={locale} isFinalizedStream={isFinalizedStream} parseFailed={parseFailed} /> : null}
           {entry.redacted ? <small>Credential redacted</small> : null}
@@ -114,7 +117,10 @@ function completedMessageKeys(entries: TranscriptEntry[]): Set<string> {
 function isVisible(entry: ConsoleMessage, visibility: ConsoleVisibility) {
   if (entry.kind === "prompt") return visibility.prompt;
   if (entry.kind === "model_reasoning_delta") return visibility.reasoning;
-  if (entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_raw_output") return visibility.output;
+  if (entry.kind === "model_output" || entry.kind === "model_output_delta") return visibility.output;
+  if (entry.kind === "model_raw_output") {
+    return entry.metadata.parse_failed === "true" ? visibility.output : visibility.rawResponses;
+  }
   return false;
 }
 
@@ -130,12 +136,16 @@ function FilterOption({ label, checked, onChange }: { label: string; checked: bo
   return <label><input type="checkbox" checked={checked} onChange={(event) => onChange(event.currentTarget.checked)} />{label}</label>;
 }
 
-function labelFor(kind: TranscriptEntry["kind"]) {
-  if (kind === "model_reasoning_delta") return "AI thinking summary";
-  if (kind === "model_output_delta") return "AI output";
-  if (kind === "model_output") return "Final structured output";
-  if (kind === "model_raw_output") return "Model raw output (parsing failed)";
-  return kind.replaceAll("_", " ");
+function labelFor(entry: TranscriptEntry) {
+  if (entry.kind === "model_reasoning_delta") return "AI thinking summary";
+  if (entry.kind === "model_output_delta") return "AI output";
+  if (entry.kind === "model_output") return "Final structured output";
+  if (entry.kind === "model_raw_output") {
+    return entry.metadata.parse_failed === "true"
+      ? "Model raw output (parsing failed)"
+      : "Provider raw response";
+  }
+  return entry.kind.replaceAll("_", " ");
 }
 
 function ConsoleContent({ entry, locale, isFinalizedStream, parseFailed }: { entry: ConsoleMessage; locale: "en" | "zh-CN"; isFinalizedStream: boolean; parseFailed: boolean }) {

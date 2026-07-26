@@ -10,8 +10,6 @@ class SystemToolPrompt:
     """Describe one stable tool in a localized model-visible form."""
 
     name: str
-    purpose: str
-    parameters: str
     description: str
 
 
@@ -23,20 +21,6 @@ class LocalizedSystemPrompts:
     review_policy: str
     review_workflow: str
     tools: Mapping[str, SystemToolPrompt]
-
-    @property
-    def tool_catalog(self) -> tuple[dict[str, str], ...]:
-        """Return the canonical input catalog without exposing implementation state."""
-
-        return tuple(
-            {
-                "name": prompt.name,
-                "purpose": prompt.purpose,
-                "parameters": prompt.parameters,
-            }
-            for prompt in self.tools.values()
-            if prompt.name not in {"comment", "task_done"}
-        )
 
 
 class I18nPromptLoaderPort(Protocol):

@@ -248,7 +248,10 @@ class OpenAIAgentRuntime:
                             AgentRuntimeEvent(
                                 "model_raw_output",
                                 _json_value(response),
-                                {"response_index": str(response_index)},
+                                {
+                                    "response_index": str(response_index),
+                                    "parse_failed": "false",
+                                },
                             )
                         )
             except APIStatusError as provider_error:

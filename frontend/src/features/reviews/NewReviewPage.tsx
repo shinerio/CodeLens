@@ -13,7 +13,7 @@ import {
   ShieldCheck,
   Wrench,
 } from "lucide-react";
-import { useState, type FormEvent, type KeyboardEvent } from "react";
+import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { formatUserDateTime } from "../../shared/i18n/format-user-date-time";
@@ -133,6 +133,7 @@ export function NewReviewPage() {
   const [commitBaseRef, setCommitBaseRef] = useState("");
   const [commitBranchRef, setCommitBranchRef] = useState("");
   const [commitTargetRef, setCommitTargetRef] = useState("");
+  const selectedCommitBranchRef = useRef("");
   const [fullTargetRef, setFullTargetRef] = useState("");
   const [correctnessEnabled, setCorrectnessEnabled] = useState(true);
 
@@ -147,10 +148,8 @@ export function NewReviewPage() {
 
   const inspectMutation = useMutation({
     mutationFn: async (path: string) => {
-      const [repository, repositoryCatalog] = await Promise.all([
-        inspectRepository(path),
-        getRepositoryCatalog(path),
-      ]);
+      const repository = await inspectRepository(path);
+      const repositoryCatalog = await getRepositoryCatalog(path, repository.current_branch);
       return { repository, repositoryCatalog };
     },
     onSuccess: ({ repository, repositoryCatalog }) => {
@@ -164,24 +163,46 @@ export function NewReviewPage() {
       setCommits(repositoryCatalog.commits);
       setNextCommitOffset(repositoryCatalog.next_commit_offset);
       setBranchTargetRef(target);
-      setCommitTargetRef(target);
       setCommitBranchRef(target);
+      selectedCommitBranchRef.current = target;
       setFullTargetRef(target);
       setBranchBaseRef(preferredBase(branchNames, target));
-      setCommitBaseRef("");
+      setCommitBaseRef(repositoryCatalog.commits[0]?.oid ?? "");
       setCommitTargetRef(
         repositoryCatalog.branches.find((branch) => branch.name === target)?.oid ?? "",
       );
     },
   });
 
-  const loadMoreMutation = useMutation({
-    mutationFn: async (offset: number) => getRepositoryCatalog(repositoryPath, offset),
-    onSuccess: (nextCatalog) => {
-      setCommits((current) => {
-        const existing = new Set(current.map((commit) => commit.oid));
-        return [...current, ...nextCatalog.commits.filter((commit) => !existing.has(commit.oid))];
-      });
+  const commitCatalogMutation = useMutation({
+    mutationFn: async ({
+      targetRef,
+      offset,
+    }: {
+      targetRef: string;
+      offset: number;
+      shouldReplace: boolean;
+    }) => getRepositoryCatalog(repositoryPath, targetRef, offset),
+    onSuccess: (nextCatalog, { targetRef, shouldReplace }) => {
+      if (selectedCommitBranchRef.current !== targetRef) {
+        return;
+      }
+      if (shouldReplace) {
+        setCatalog(nextCatalog);
+        setCommits(nextCatalog.commits);
+        setCommitBaseRef(nextCatalog.commits[0]?.oid ?? "");
+        setCommitTargetRef(
+          nextCatalog.branches.find((branch) => branch.name === targetRef)?.oid ?? "",
+        );
+      } else {
+        setCommits((current) => {
+          const existing = new Set(current.map((commit) => commit.oid));
+          return [
+            ...current,
+            ...nextCatalog.commits.filter((commit) => !existing.has(commit.oid)),
+          ];
+        });
+      }
       setNextCommitOffset(nextCatalog.next_commit_offset);
     },
   });
@@ -211,7 +232,7 @@ export function NewReviewPage() {
     createMutation.isPending;
   const errorMessage = [
     inspectMutation.error,
-    loadMoreMutation.error,
+    commitCatalogMutation.error,
     createMutation.error,
     gatewayQuery.error,
   ].find((error): error is Error => error instanceof Error)?.message;
@@ -424,11 +445,18 @@ export function NewReviewPage() {
                       disabled={branchNames.length === 0}
                       value={commitBranchRef}
                       onChange={(event) => {
-                        const branch = catalog?.branches.find(
-                          (candidate) => candidate.name === event.currentTarget.value,
-                        );
-                        setCommitBranchRef(event.currentTarget.value);
-                        setCommitTargetRef(branch?.oid ?? "");
+                        const targetRef = event.currentTarget.value;
+                        selectedCommitBranchRef.current = targetRef;
+                        setCommitBranchRef(targetRef);
+                        setCommitTargetRef("");
+                        setCommitBaseRef("");
+                        setCommits([]);
+                        setNextCommitOffset(null);
+                        commitCatalogMutation.mutate({
+                          targetRef,
+                          offset: 0,
+                          shouldReplace: true,
+                        });
                       }}
                     >
                       {branchNames.map((branch) => <option key={branch} value={branch}>{branch}</option>)}
@@ -452,11 +480,15 @@ export function NewReviewPage() {
                   {nextCommitOffset !== null ? (
                     <button
                       className="load-more-button"
-                      disabled={loadMoreMutation.isPending}
+                      disabled={commitCatalogMutation.isPending}
                       type="button"
-                      onClick={() => loadMoreMutation.mutate(nextCommitOffset)}
+                      onClick={() => commitCatalogMutation.mutate({
+                        targetRef: commitBranchRef,
+                        offset: nextCommitOffset,
+                        shouldReplace: false,
+                      })}
                     >
-                      {loadMoreMutation.isPending ? t("common.loading") : t("review.moreCommits")}
+                      {commitCatalogMutation.isPending ? t("common.loading") : t("review.moreCommits")}
                     </button>
                   ) : null}
                   <label className="field">
