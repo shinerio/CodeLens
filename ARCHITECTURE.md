@@ -58,7 +58,7 @@
 - `GET/PUT /api/settings/repositories` 读取或更新最近 Review 仓库目录容量，字段为 `recent_repository_limit`，允许 1–20，默认 10。更新必须持久化并立即按当前 LRU 顺序裁剪溢出目录。
 - `GET/PUT /api/settings/instruction-files` 读取或更新仓库规则文件的行数上限，字段为 `root_max_lines` 和 `nested_max_lines`，均允许 1–10000，默认分别为 500 和 200，且根目录上限不得低于嵌套目录上限。更新必须原子持久化，并在后续规则解析时无需重启即可生效。
 - `/api/repositories/browse` 只返回系统根目录、目录项和 Git 仓库标记；`/api/repositories/catalog` 返回全部可选分支，并按请求中的目标分支返回该分支 tip 之前的分页 Commit 元数据。目标分支必须来自后端枚举的分支，Commit 候选不得混入目标分支不可达的提交或目标 tip 本身。两者都不能返回文件正文。
-- `GET /api/repositories/recent` 返回独立持久化的最近 Review 仓库目录、名称和最近使用时间，用于本机仓库快捷选择。目录按 LRU 维护，Review 创建成功时提升对应目录，并按持久化设置保留 1–20 个，默认 10 个；Review tombstone 不得删除或降级目录项。该列表不读取文件系统；选中路径后仍必须通过既有 inspect/catalog 契约重新执行允许根目录、Git 仓库和身份校验。
+- `GET /api/repositories/recent` 返回独立持久化的最近 Review 仓库目录、名称和最近使用时间，用于本机仓库快捷选择；`DELETE /api/repositories/recent` 按请求中的 `repository_path` 幂等删除单个快捷记录，不得删除或修改关联 Review 工作空间。目录按 LRU 维护，Review 创建成功时提升对应目录，并按持久化设置保留 1–20 个，默认 10 个；Review tombstone 不得删除或降级目录项。该列表不读取文件系统；选中路径后仍必须通过既有 inspect/catalog 契约重新执行允许根目录、Git 仓库和身份校验。
 - `GET /api/reviews/{task_id}/findings/{finding_id}/source` 同时返回该 Finding 所在文件在 Review 固定 base/head revision 的可用完整正文、评论所属 old/new 侧及高亮行范围；新增或删除文件允许一侧为空。它不得读取可变原始工作区，也不得用模型输出决定文件路径或 revision。Review 页面只提供一种等宽并排对比方式：base/old 位于左侧，target/new 位于右侧；纯删除使用红色，纯新增使用绿色，替换修改使用高对比蓝色。old 评论完整内嵌在左侧对应变更行后，new 评论完整内嵌在右侧对应变更行后，不显示重复的侧别提示。意见导航位于代码区上方；桌面全局导航默认折叠并在 hover 或键盘聚焦时展开，不能挤占代码横向空间。
 - `GET /api/reviews/{task_id}/process-report` 仅在 Review 到达终态后返回由完整脱敏转录确定性聚合的执行指标，包括 LLM 调用与 token、Agent、工具 call/result、时长和 Finding 数；旧转录或失败执行缺少供应商 usage 时必须通过 `usage_is_complete=false` 显式表达，不得估算为精确用量。
 - `GET /api/reviews` 返回未删除的持久化 Review 工作空间；`DELETE /api/reviews/{task_id}` 使用软删除语义，活动任务必须同时持久化取消意图。

@@ -20,3 +20,9 @@ it("formats the same timestamp differently across system time zones", () => {
   expect(formatUserDateTime(timestamp, "en", "Asia/Shanghai")).toContain("8:00:00 PM");
   expect(formatUserDateTime(timestamp, "en", "America/New_York")).toContain("8:00:00 AM");
 });
+
+it("treats legacy API timestamps without an offset as UTC", () => {
+  expect(formatUserDateTime("2026-07-18T12:00:00", "en", "Asia/Shanghai")).toContain(
+    "8:00:00 PM",
+  );
+});

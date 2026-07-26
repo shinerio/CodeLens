@@ -43,7 +43,15 @@ function commit(index: number) {
   };
 }
 
-function installApiMock({ configured = true, nextOffset = null as number | null } = {}) {
+function installApiMock({
+  configured = true,
+  nextOffset = null as number | null,
+  recentRepositories = [] as Array<{
+    repository_path: string;
+    repository_name: string;
+    last_reviewed_at: string;
+  }>,
+} = {}) {
   fetchMock.mockImplementation((input: string | URL | Request, init?: RequestInit) => {
     const url = String(input);
     if (url === "/api/settings/model-gateways") {
@@ -63,7 +71,10 @@ function installApiMock({ configured = true, nextOffset = null as number | null 
       });
     }
     if (url === "/api/repositories/recent") {
-      return jsonResponse([]);
+      if (init?.method === "DELETE") {
+        return Promise.resolve(new Response(null, { status: 204 }));
+      }
+      return jsonResponse(recentRepositories);
     }
     if (url === "/api/repositories/browse") {
       const body = JSON.parse(String(init?.body)) as { path: string | null };
@@ -227,4 +238,70 @@ it("reloads base commits and target tip when the target branch changes", async (
     target_ref: "main",
     commit_offset: 0,
   });
+});
+
+it("deletes a recent repository shortcut without selecting it", async () => {
+  installApiMock({
+    recentRepositories: [
+      {
+        repository_path: "/app",
+        repository_name: "app",
+        last_reviewed_at: "2026-07-18T12:00:00Z",
+      },
+    ],
+  });
+  const user = userEvent.setup();
+
+  render(<NewReviewPage />, { wrapper: TestProviders });
+
+  await user.click(await screen.findByRole("button", { name: "Remove recent repository app" }));
+
+  const dialog = screen.getByRole("dialog", { name: "Remove recent repository?" });
+  expect(dialog).toBeVisible();
+  expect(within(dialog).getByText("Remove app from recent repositories?")).toBeVisible();
+  expect(within(dialog).getByRole("button", { name: "Remove repository" })).toHaveFocus();
+  expect(fetchMock).not.toHaveBeenCalledWith(
+    "/api/repositories/recent",
+    expect.objectContaining({ method: "DELETE" }),
+  );
+
+  await user.click(within(dialog).getByRole("button", { name: "Remove repository" }));
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/repositories/recent",
+    expect.objectContaining({
+      method: "DELETE",
+      body: JSON.stringify({ repository_path: "/app" }),
+    }),
+  );
+  expect(await screen.findByText("Recent Review repositories will appear here.")).toBeVisible();
+  expect(fetchMock).not.toHaveBeenCalledWith(
+    "/api/repositories/inspect",
+    expect.anything(),
+  );
+});
+
+it("closes the recent repository delete dialog without deleting", async () => {
+  installApiMock({
+    recentRepositories: [
+      {
+        repository_path: "/app",
+        repository_name: "app",
+        last_reviewed_at: "2026-07-18T12:00:00Z",
+      },
+    ],
+  });
+  const user = userEvent.setup();
+
+  render(<NewReviewPage />, { wrapper: TestProviders });
+
+  await user.click(await screen.findByRole("button", { name: "Remove recent repository app" }));
+  await user.keyboard("{Escape}");
+
+  expect(screen.queryByRole("dialog", { name: "Remove recent repository?" })).not.toBeInTheDocument();
+  expect(fetchMock).not.toHaveBeenCalledWith(
+    "/api/repositories/recent",
+    expect.objectContaining({ method: "DELETE" }),
+  );
+  expect(screen.getByRole("button", { name: "Select recent repository app" })).toBeVisible();
 });

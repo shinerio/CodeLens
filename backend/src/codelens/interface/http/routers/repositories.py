@@ -1,9 +1,10 @@
 from typing import Annotated
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Depends, Response
 
 from codelens.interface.http.dependencies import HttpComponents, get_components
 from codelens.interface.http.dto import (
+    DeleteRecentRepositoryRequest,
     DirectoryBrowseRequest,
     DirectoryEntryResponse,
     DirectoryListingResponse,
@@ -29,6 +30,17 @@ async def list_recent_repositories(
         RecentRepositoryResponse.from_domain(repository)
         for repository in await components.list_recent_repositories.handle()
     ]
+
+
+@router.delete("/recent", status_code=204)
+async def delete_recent_repository(
+    request: DeleteRecentRepositoryRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> Response:
+    """Remove one recent-use shortcut without deleting its Review workspaces."""
+
+    await components.delete_recent_repository.handle(request.repository_path)
+    return Response(status_code=204)
 
 
 @router.post("/inspect", response_model=RepositoryResponse)

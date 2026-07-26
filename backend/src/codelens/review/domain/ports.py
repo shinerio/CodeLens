@@ -153,7 +153,7 @@ class ReviewEvent:
 
 
 class RecentRepositoryStorePort(Protocol):
-    """Read the repository-use catalog independently from Review visibility."""
+    """Manage the repository-use catalog independently from Review visibility."""
 
     async def get_limit(self) -> int:
         """Return the persisted LRU capacity."""
@@ -170,6 +170,11 @@ class RecentRepositoryStorePort(Protocol):
         limit: int,
     ) -> tuple[RecentRepositoryRecord, ...]:
         """Return repository directories from most to least recently used."""
+
+        raise NotImplementedError
+
+    async def delete_recent_repository(self, repository_path: Path) -> None:
+        """Idempotently remove one repository directory from the recent-use catalog."""
 
         raise NotImplementedError
 

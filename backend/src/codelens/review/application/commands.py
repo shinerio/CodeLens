@@ -3,6 +3,7 @@ import uuid
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from pathlib import Path
 
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import (
@@ -137,6 +138,18 @@ class ListRecentRepositoriesHandler:
 
         limit = await self._store.get_limit()
         return await self._store.list_recent_repositories(limit)
+
+
+class DeleteRecentRepositoryHandler:
+    """Remove one repository shortcut without changing any Review workspace."""
+
+    def __init__(self, store: RecentRepositoryStorePort) -> None:
+        self._store = store
+
+    async def handle(self, repository_path: Path) -> None:
+        """Idempotently remove the exact persisted recent repository entry."""
+
+        await self._store.delete_recent_repository(repository_path)
 
 
 class GetRecentRepositorySettingsHandler:

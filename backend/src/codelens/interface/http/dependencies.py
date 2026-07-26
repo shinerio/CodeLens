@@ -11,6 +11,7 @@ from codelens.instruction_policy.infrastructure.file_settings import (
 from codelens.review.application.commands import (
     CancelReviewHandler,
     CreateReviewHandler,
+    DeleteRecentRepositoryHandler,
     DeleteReviewHandler,
     GetRecentRepositorySettingsHandler,
     GetReviewHandler,
@@ -75,6 +76,7 @@ class HttpComponents:
     get_review: GetReviewHandler
     list_reviews: ListReviewsHandler
     list_recent_repositories: ListRecentRepositoriesHandler
+    delete_recent_repository: DeleteRecentRepositoryHandler
     get_recent_repository_settings: GetRecentRepositorySettingsHandler
     update_recent_repository_settings: UpdateRecentRepositorySettingsHandler
     instruction_settings: InstructionSettingsService
@@ -143,6 +145,7 @@ def build_components(settings: Settings) -> HttpComponents:
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
         list_recent_repositories=ListRecentRepositoriesHandler(recent_repository_store),
+        delete_recent_repository=DeleteRecentRepositoryHandler(recent_repository_store),
         get_recent_repository_settings=GetRecentRepositorySettingsHandler(recent_repository_store),
         update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
             recent_repository_store

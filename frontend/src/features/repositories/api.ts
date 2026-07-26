@@ -10,6 +10,13 @@ export async function listRecentRepositories(): Promise<RecentRepository[]> {
   return api<RecentRepository[]>("/repositories/recent");
 }
 
+export async function deleteRecentRepository(repositoryPath: string): Promise<void> {
+  return api<void>("/repositories/recent", {
+    method: "DELETE",
+    body: JSON.stringify({ repository_path: repositoryPath }),
+  });
+}
+
 export async function inspectRepository(path: string): Promise<RepositoryInspectionResponse> {
   return api<RepositoryInspectionResponse>("/repositories/inspect", {
     method: "POST",

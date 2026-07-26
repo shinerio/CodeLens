@@ -430,4 +430,4 @@ Runtime 在模型调用前还会扫描工具名称、说明和 Schema，禁止�
 2. **模型最小权限**：模型只能读取允许的仓库相对路径、提交评论和声明完成，不能写文件、执行任意进程、访问网络或选择任意 Git ref。
 3. **输出确定化**：模型负责提供问题内容和原样代码证据，宿主负责解析位置、校验 changed hunk、派生哈希和构造最终 FindingBatch。
 
-更高层的架构边界和稳定契约见 [`ARCHITECTURE.md`](../ARCHITECTURE.md) 的“MVP 内置 Review 工具”与“数据、安全与执行边界”。
+更高层的架构边界和稳定契约见 [`../ARCHITECTURE.md`](../ARCHITECTURE.md) 的“MVP 内置 Review 工具”与“数据、安全与执行边界”。

@@ -183,6 +183,16 @@ async def test_recent_repository_store_uses_a_ten_entry_lru(tmp_path: Path) -> N
             tmp_path / "repository-1",
             tmp_path / "repository-10",
         ]
+
+        await recent_store.delete_recent_repository(tmp_path / "repository-1")
+        await recent_store.delete_recent_repository(tmp_path / "repository-1")
+
+        remaining = await recent_store.list_recent_repositories(limit=3)
+        assert [item.repository_path for item in remaining] == [
+            tmp_path / "repository-11",
+            tmp_path / "repository-10",
+        ]
+        assert all(item.last_reviewed_at.tzinfo is UTC for item in remaining)
     finally:
         await database.dispose()
 

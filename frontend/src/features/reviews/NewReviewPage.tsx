@@ -11,14 +11,23 @@ import {
   History,
   Lock,
   ShieldCheck,
+  Trash2,
   Wrench,
 } from "lucide-react";
-import { useRef, useState, type FormEvent, type KeyboardEvent } from "react";
+import {
+  useEffect,
+  useRef,
+  useState,
+  type FormEvent,
+  type KeyboardEvent,
+  type MouseEvent,
+} from "react";
 import { Link, useNavigate } from "react-router-dom";
 
 import { formatUserDateTime } from "../../shared/i18n/format-user-date-time";
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import {
+  deleteRecentRepository,
   getRepositoryCatalog,
   inspectRepository,
   listRecentRepositories,
@@ -28,6 +37,7 @@ import type {
   RepositoryCatalog,
   RepositoryCommit,
   RepositoryInspectionResponse,
+  RecentRepository,
 } from "../repositories/types";
 import { listModelGateways } from "../settings/api";
 import { createReview } from "./api";
@@ -136,6 +146,10 @@ export function NewReviewPage() {
   const selectedCommitBranchRef = useRef("");
   const [fullTargetRef, setFullTargetRef] = useState("");
   const [correctnessEnabled, setCorrectnessEnabled] = useState(true);
+  const [repositoryPendingDeletion, setRepositoryPendingDeletion] =
+    useState<RecentRepository | null>(null);
+  const deleteDialogConfirmRef = useRef<HTMLButtonElement>(null);
+  const deleteDialogTriggerRef = useRef<HTMLButtonElement | null>(null);
 
   const gatewayQuery = useQuery({
     queryKey: ["model-gateways"],
@@ -145,6 +159,37 @@ export function NewReviewPage() {
     queryKey: ["recent-repositories"],
     queryFn: listRecentRepositories,
   });
+  const deleteRecentRepositoryMutation = useMutation({
+    mutationFn: deleteRecentRepository,
+    onSuccess: (_result, deletedPath) => {
+      queryClient.setQueryData<RecentRepository[]>(["recent-repositories"], (repositories) =>
+        repositories?.filter((repository) => repository.repository_path !== deletedPath),
+      );
+      closeDeleteRecentRepositoryDialog();
+    },
+  });
+
+  useEffect(() => {
+    if (repositoryPendingDeletion === null) {
+      return;
+    }
+
+    const previousOverflow = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    deleteDialogConfirmRef.current?.focus();
+
+    function handleKeyDown(event: globalThis.KeyboardEvent) {
+      if (event.key === "Escape" && !deleteRecentRepositoryMutation.isPending) {
+        closeDeleteRecentRepositoryDialog();
+      }
+    }
+
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [repositoryPendingDeletion, deleteRecentRepositoryMutation.isPending]);
 
   const inspectMutation = useMutation({
     mutationFn: async (path: string) => {
@@ -235,6 +280,7 @@ export function NewReviewPage() {
     commitCatalogMutation.error,
     createMutation.error,
     gatewayQuery.error,
+    deleteRecentRepositoryMutation.error,
   ].find((error): error is Error => error instanceof Error)?.message;
 
   function selectRepository(path: string) {
@@ -259,6 +305,29 @@ export function NewReviewPage() {
     const path = event.currentTarget.value.trim();
     if (path !== "") {
       selectRepository(path);
+    }
+  }
+
+  function closeDeleteRecentRepositoryDialog() {
+    setRepositoryPendingDeletion(null);
+    queueMicrotask(() => deleteDialogTriggerRef.current?.focus());
+  }
+
+  function handleRequestDeleteRecentRepository(
+    event: MouseEvent<HTMLButtonElement>,
+    repository: RecentRepository,
+  ) {
+    deleteDialogTriggerRef.current = event.currentTarget;
+    deleteRecentRepositoryMutation.reset();
+    setRepositoryPendingDeletion(repository);
+  }
+
+  function handleDeleteDialogBackdrop(event: MouseEvent<HTMLDivElement>) {
+    if (
+      event.target === event.currentTarget &&
+      !deleteRecentRepositoryMutation.isPending
+    ) {
+      closeDeleteRecentRepositoryDialog();
     }
   }
 
@@ -607,36 +676,116 @@ export function NewReviewPage() {
             {recentRepositoriesQuery.data?.map((repository) => {
               const isSelected = repositoryPath === repository.repository_path;
               return (
-                <button
-                  aria-label={t("review.selectRecentRepository", {
-                    name: repository.repository_name,
-                  })}
+                <div
                   className={
                     isSelected
                       ? "recent-repository recent-repository--selected"
                       : "recent-repository"
                   }
                   key={repository.repository_path}
-                  type="button"
-                  onClick={() => selectRepository(repository.repository_path)}
                 >
-                  <span className="recent-repository__icon">
-                    <FolderGit2 aria-hidden="true" />
-                  </span>
-                  <span className="recent-repository__content">
-                    <strong>{repository.repository_name}</strong>
-                    <code title={repository.repository_path}>{repository.repository_path}</code>
-                    <time dateTime={repository.last_reviewed_at}>
-                      {formatUserDateTime(repository.last_reviewed_at, locale)}
-                    </time>
-                  </span>
-                  {isSelected ? <Check aria-hidden="true" className="recent-repository__check" /> : null}
-                </button>
+                  <button
+                    aria-label={t("review.selectRecentRepository", {
+                      name: repository.repository_name,
+                    })}
+                    className="recent-repository__select"
+                    type="button"
+                    onClick={() => selectRepository(repository.repository_path)}
+                  >
+                    <span className="recent-repository__icon">
+                      <FolderGit2 aria-hidden="true" />
+                    </span>
+                    <span className="recent-repository__content">
+                      <strong>{repository.repository_name}</strong>
+                      <code title={repository.repository_path}>{repository.repository_path}</code>
+                      <time dateTime={repository.last_reviewed_at}>
+                        {formatUserDateTime(repository.last_reviewed_at, locale)}
+                      </time>
+                    </span>
+                    {isSelected ? (
+                      <Check aria-hidden="true" className="recent-repository__check" />
+                    ) : null}
+                  </button>
+                  <button
+                    aria-label={t("review.deleteRecentRepository", {
+                      name: repository.repository_name,
+                    })}
+                    className="recent-repository__delete"
+                    disabled={deleteRecentRepositoryMutation.isPending}
+                    title={t("common.delete")}
+                    type="button"
+                    onClick={(event) => handleRequestDeleteRecentRepository(event, repository)}
+                  >
+                    <Trash2 aria-hidden="true" />
+                  </button>
+                </div>
               );
             })}
           </div>
         </aside>
       </div>
+      {repositoryPendingDeletion !== null ? (
+        <div
+          className="recent-repository-dialog-backdrop"
+          role="presentation"
+          onMouseDown={handleDeleteDialogBackdrop}
+        >
+          <section
+            aria-describedby="recent-repository-dialog-description"
+            aria-labelledby="recent-repository-dialog-title"
+            aria-modal="true"
+            className="recent-repository-dialog"
+            role="dialog"
+          >
+            <div className="recent-repository-dialog__icon" aria-hidden="true">
+              <Trash2 />
+            </div>
+            <div className="recent-repository-dialog__content">
+              <h2 id="recent-repository-dialog-title">
+                {t("review.deleteRecentRepositoryTitle")}
+              </h2>
+              <p id="recent-repository-dialog-description">
+                {t("review.deleteRecentRepositoryConfirm", {
+                  name: repositoryPendingDeletion.repository_name,
+                })}
+              </p>
+              <code title={repositoryPendingDeletion.repository_path}>
+                {repositoryPendingDeletion.repository_path}
+              </code>
+              {deleteRecentRepositoryMutation.isError ? (
+                <p className="recent-repository-dialog__error" role="alert">
+                  {t("review.deleteRecentRepositoryError")}
+                </p>
+              ) : null}
+            </div>
+            <div className="recent-repository-dialog__actions">
+              <button
+                disabled={deleteRecentRepositoryMutation.isPending}
+                type="button"
+                onClick={closeDeleteRecentRepositoryDialog}
+              >
+                {t("common.cancel")}
+              </button>
+              <button
+                className="recent-repository-dialog__confirm"
+                disabled={deleteRecentRepositoryMutation.isPending}
+                ref={deleteDialogConfirmRef}
+                type="button"
+                onClick={() =>
+                  deleteRecentRepositoryMutation.mutate(
+                    repositoryPendingDeletion.repository_path,
+                  )
+                }
+              >
+                <Trash2 aria-hidden="true" />
+                {deleteRecentRepositoryMutation.isPending
+                  ? t("review.deletingRecentRepository")
+                  : t("review.confirmDeleteRecentRepository")}
+              </button>
+            </div>
+          </section>
+        </div>
+      ) : null}
     </section>
   );
 }

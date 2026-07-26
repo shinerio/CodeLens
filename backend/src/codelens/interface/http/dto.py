@@ -146,6 +146,12 @@ class RepositoryInspectionRequest(StrictDto):
     path: Path
 
 
+class DeleteRecentRepositoryRequest(StrictDto):
+    """Identify one recent repository shortcut by its canonical local path."""
+
+    repository_path: Path
+
+
 class RepositoryResponse(StrictDto):
     repository_id: str
     repository_realpath_hash: str

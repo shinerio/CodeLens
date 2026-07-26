@@ -64,7 +64,8 @@ async function chooseRepository(
   }
 }
 
-test("streams the correctness fixture from inspect to validated findings", async ({ page }) => {
+test("streams the correctness fixture from inspect to validated findings", async ({ page }, testInfo) => {
+  test.setTimeout(60_000);
   const repository = fixtureRepositoryPath();
   await page.goto("/settings");
 
@@ -112,4 +113,38 @@ test("streams the correctness fixture from inspect to validated findings", async
     page.getByText("Restore the draft-only guard before allowing the reviewing transition."),
   ).toBeVisible();
   await assertFindingWorkspaceLayout(page);
+
+  await page.goto("/reviews/new");
+  const recentRepository = page.locator(".recent-repository").filter({ hasText: "simple-branch" });
+  await expect(recentRepository).toBeVisible();
+  const timestamp = recentRepository.locator("time");
+  const apiTimestamp = await timestamp.getAttribute("datetime");
+  expect(apiTimestamp).toMatch(/(?:Z|\+00:00)$/);
+  expect(await timestamp.textContent()).toBe(
+    await timestamp.evaluate((element) => {
+      const value = element.getAttribute("datetime");
+      if (value === null) {
+        throw new Error("recent repository timestamp is missing");
+      }
+      return new Intl.DateTimeFormat("en", {
+        dateStyle: "medium",
+        timeStyle: "medium",
+        timeZone: Intl.DateTimeFormat().resolvedOptions().timeZone,
+      }).format(new Date(value));
+    }),
+  );
+  const deleteButton = recentRepository.getByRole("button", {
+    name: "Remove recent repository simple-branch",
+  });
+  await expect(deleteButton).toBeVisible();
+  await deleteButton.click();
+  const deleteDialog = page.getByRole("dialog", { name: "Remove recent repository?" });
+  await expect(deleteDialog).toBeVisible();
+  await page.screenshot({
+    fullPage: true,
+    path: testInfo.outputPath("recent-repository-delete-dialog.png"),
+  });
+  await deleteDialog.getByRole("button", { name: "Remove repository" }).click();
+  await expect(page.getByText("Recent Review repositories will appear here.")).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 });

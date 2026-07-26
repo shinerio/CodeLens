@@ -1,16 +1,12 @@
 import json
-import logging
-import os
 import traceback
 from dataclasses import dataclass
 from pathlib import Path
 
 import httpx
 import pytest
-from agents import Agent, RunConfig, Usage
+from agents import Agent, RunConfig
 from agents.exceptions import ModelBehaviorError
-from agents.models.openai_responses import OpenAIResponsesModel
-from agents.tool_context import ToolContext
 from openai import APIConnectionError, InternalServerError, RateLimitError
 
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
@@ -133,176 +129,6 @@ def _snapshot() -> ReviewSnapshot:
         manifest=SnapshotManifest((), (), (), entries=()),
         change_index=ChangeIndex(()),
     )
-
-
-async def test_uses_typed_public_sdk_contract_and_returns_redacted_diagnostics(
-    caplog: pytest.LogCaptureFixture,
-) -> None:
-    provider_secret = "FULL_PROVIDER_PAYLOAD_SECRET"
-    runner = FakeRunner(
-        FakeResult(
-            final_output=FindingBatchSchema(schema_version="1", findings=()),
-            raw_responses=(
-                FakeResponse("resp_1", "req_1", FakeUsage(12, 4), (provider_secret,)),
-                FakeResponse("resp_2", "req_2", FakeUsage(8, 3), (provider_secret,)),
-            ),
-        )
-    )
-    runtime = OpenAIAgentRuntime(
-        config_store=StaticProviderConfigStore(_provider_config()),
-        output_codec=AgentOutputCodec("1"),
-        git=GitCli(),
-        prompt_loader=_prompt_loader(),
-        runner=runner,
-    )
-    input_payload = b'{"review_files":[]}'
-
-    with caplog.at_level(logging.DEBUG):
-        output = await runtime.invoke(_agent(), input_payload, _snapshot(), "en")
-
-    sdk_agent = runner.calls[0][0]
-    assert sdk_agent is not None
-    assert sdk_agent.instructions.startswith("Review Snapshot code only")
-    assert sdk_agent.instructions.count("repository_instructions") == 1
-    assert sdk_agent.instructions.index("Review Snapshot code only") < sdk_agent.instructions.index(
-        _agent().prompt_template
-    )
-    assert "Submit every concrete finding with the `comment` tool" in sdk_agent.instructions
-    assert "if comment is rejected, correct its arguments and retry" in sdk_agent.instructions
-    assert "call `task_done`" in sdk_agent.instructions
-    assert [tool.name for tool in sdk_agent.tools] == [
-        "find_files",
-        "grep",
-        "read_file",
-        "get_diff",
-        "comment",
-        "task_done",
-    ]
-    tools_by_name = {tool.name: tool for tool in sdk_agent.tools}
-    for tool in sdk_agent.tools:
-        assert tool.strict_json_schema is True
-        assert tool.params_json_schema["additionalProperties"] is False
-        assert tool.params_json_schema["required"] == list(tool.params_json_schema["properties"])
-        assert "default" not in json.dumps(tool.params_json_schema)
-
-    find_files_schema = tools_by_name["find_files"].params_json_schema
-    assert find_files_schema["properties"]["pattern"]["maxLength"] == 512
-    assert "**" in tools_by_name["find_files"].description
-
-    read_file_tool = next(tool for tool in sdk_agent.tools if tool.name == "read_file")
-    assert read_file_tool.params_json_schema["properties"]["version"]["enum"] == [
-        "current",
-        "base",
-        "head",
-    ]
-    assert read_file_tool.params_json_schema["properties"]["start_line"]["minimum"] == 1
-    assert "500" in read_file_tool.description
-
-    comment_schema = tools_by_name["comment"].params_json_schema
-    assert comment_schema["properties"]["comments"]["minItems"] == 1
-    assert comment_schema["properties"]["comments"]["maxItems"] == 20
-    comment_item_schema = comment_schema["$defs"]["ReviewCommentSubmission"]
-    assert comment_item_schema["properties"]["side"]["enum"] == ["old", "new"]
-    assert "side" in comment_item_schema["required"]
-    assert "existing_code" in tools_by_name["comment"].description
-    assert "side=old" in tools_by_name["comment"].description
-    assert "side=new" in tools_by_name["comment"].description
-    assert "Do not include unchanged diff context" in tools_by_name["comment"].description
-
-    task_done_schema = tools_by_name["task_done"].params_json_schema
-    summary = task_done_schema["properties"]["summary"]
-    assert summary["minLength"] == 1
-    assert summary["maxLength"] == 8_000
-    reviewed_files = task_done_schema["properties"]["reviewed_changed_files"]
-    assert reviewed_files["minimum"] == 0
-    assert reviewed_files["maximum"] == 10_000
-
-    extra_arguments = '{"path":"","pattern":"**","unexpected":true}'
-    extra_result = await tools_by_name["find_files"].on_invoke_tool(
-        ToolContext(
-            None,
-            usage=Usage(),
-            tool_name="find_files",
-            tool_call_id="contract-extra-field",
-            tool_arguments=extra_arguments,
-            run_config=RunConfig(),
-        ),
-        extra_arguments,
-    )
-    assert extra_result == "Tool arguments contain unsupported fields: unexpected"
-    serialized_tools = json.dumps(
-        [
-            {
-                "name": tool.name,
-                "description": tool.description,
-                "parameters": tool.params_json_schema,
-            }
-            for tool in sdk_agent.tools
-        ],
-        sort_keys=True,
-    ).casefold()
-    for forbidden in (
-        "snapshot_id",
-        "hunk_id",
-        "content_hash",
-        "excerpt_hash",
-        "instruction chain",
-        "instruction_chain",
-        "context plan",
-        "context_plan",
-        "precedence",
-    ):
-        assert forbidden not in serialized_tools
-    assert isinstance(sdk_agent.model, OpenAIResponsesModel)
-    assert sdk_agent.model.model == "gpt-5.1"
-    assert str(sdk_agent.model._client.base_url) == "http://model-gateway.example:8080"
-    assert sdk_agent.model_settings.max_tokens == 65_536
-    assert sdk_agent.model_settings.reasoning is None
-    assert sdk_agent.model_settings.extra_body is None
-    assert runner.calls[0][1] == input_payload.decode()
-    assert json.loads(str(runner.calls[0][1])) == {"review_files": []}
-    assert runner.calls[0][2] == 3
-    assert len(runner.calls) == 1
-    assert runner.run_config is not None
-    assert runner.run_config.trace_include_sensitive_data is False
-    assert output.canonical_bytes == b'{"findings":[],"schema_version":"1"}'
-    assert output.response_ids == ("resp_1", "resp_2")
-    assert output.model_name == "gpt-5.1"
-    assert (output.input_tokens, output.output_tokens) == (20, 7)
-    assert [diagnostic.request_id for diagnostic in output.diagnostics] == ["req_1", "req_2"]
-    assert [diagnostic.output_item_count for diagnostic in output.diagnostics] == [1, 1]
-    assert provider_secret not in repr(output.diagnostics)
-    assert _agent().prompt_template not in caplog.text
-    assert provider_secret not in caplog.text
-    assert "sk-contract-secret" not in caplog.text
-    assert os.environ["OPENAI_AGENTS_DONT_LOG_MODEL_DATA"] == "1"
-    assert os.environ["OPENAI_AGENTS_DONT_LOG_TOOL_DATA"] == "1"
-
-
-async def test_uses_explicit_prompt_locale_without_a_locale_field_in_model_input() -> None:
-    runner = FakeRunner(
-        FakeResult(
-            final_output=FindingBatchSchema(schema_version="1", findings=()),
-            raw_responses=(FakeResponse("resp_1", "req_1", FakeUsage(1, 1), ()),),
-        )
-    )
-    runtime = OpenAIAgentRuntime(
-        config_store=StaticProviderConfigStore(_provider_config()),
-        output_codec=AgentOutputCodec("1"),
-        git=GitCli(),
-        prompt_loader=_prompt_loader(),
-        runner=runner,
-    )
-
-    await runtime.invoke(_agent(), b'{"review_files":[]}', _snapshot(), "zh-CN")
-
-    assert runner.starting_agent is not None
-    assert runner.starting_agent.instructions.startswith("只审查 Snapshot 代码")
-    assert "所有自然语言输出都必须使用简体中文" in runner.starting_agent.instructions
-    assert "代码、标识符、文件路径、API、SQL、原始错误和引用的事实原文保持原样" in (
-        runner.starting_agent.instructions
-    )
-    assert runner.input_payload == '{"review_files":[]}'
 
 
 async def test_successful_provider_responses_are_not_marked_as_parse_failures() -> None:

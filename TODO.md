@@ -1,17 +1,5 @@
 # CodeLens TODO
 
-## 待优化
-
-codelens.worker.singleton.WorkerAlreadyRunningError: another Worker owns the singleton lock 这个报错是什么情况？每个仓库同时只能有一个review吗？需要支持并发创建多个review的，使用不同worktree即可。review任务被删除后，清理对应worktree即可。
-
-【精简测试用例】梳理并清理一下存量测试用例，删除一些已经删除的，不再使用的代码逻辑的测试，删除一些没必要的、已经不存在代码实现的兼容性测试。举例：校验不存在的代码或已删除的，输出不包含xxx之类的测试用例都可以删了，只是重构过程中残留下的无用测试用例。
-
-检查目前的输出中是否包含了标题、说明、建议、类别、严重性和置信度，comment工具是否完整支持了这些能力，这些都是是否都已经在web页面给用户看到的了。不同的严重性意见应该用不同颜色的背景色来加以区分。
-
-大模型的激活按钮超出显示区域了。最右边仅保留日志级别即可，下面的凭证相关说明不需要在web页面体现。
-
-限制每个review.md和agents.md的最大行数，根目录可以适当放端，支持settings页面可配置，并提示建议值。
-
 ## 后续功能
 
 - 支持用户人工划词 review，并学习用户的 review 意见，放到根目录 `REVIEW.md`、当前文件夹下`REVIEW.md` 或指定文件的 `<filename>.review.md` 中（放到最合适的一处即可）。

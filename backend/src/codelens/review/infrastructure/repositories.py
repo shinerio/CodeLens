@@ -77,6 +77,14 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
+def _as_utc(timestamp: datetime) -> datetime:
+    """Restore UTC metadata that SQLite drops from timezone-aware columns."""
+
+    if timestamp.tzinfo is None:
+        return timestamp.replace(tzinfo=UTC)
+    return timestamp.astimezone(UTC)
+
+
 def _resolve_path(value: str) -> Path:
     return Path(value).expanduser().resolve()
 
@@ -198,13 +206,13 @@ def _review_record(row: Any) -> ReviewRecord:
             if row["repository_path"] is not None
             else str(row["repository_id"])[-12:]
         ),
-        created_at=cast(datetime, row["created_at"]),
+        created_at=_as_utc(cast(datetime, row["created_at"])),
         is_deleted=row["deleted_at"] is not None,
     )
 
 
 class SqlRecentRepositoryStore:
-    """Read the bounded repository LRU without consulting Review tombstones."""
+    """Manage the bounded repository LRU without consulting Review tombstones."""
 
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -266,10 +274,24 @@ class SqlRecentRepositoryStore:
             RecentRepositoryRecord(
                 repository_path=Path(str(row["repository_path"])),
                 repository_name=Path(str(row["repository_path"])).name,
-                last_reviewed_at=cast(datetime, row["last_reviewed_at"]),
+                last_reviewed_at=_as_utc(cast(datetime, row["last_reviewed_at"])),
             )
             for row in rows
         )
+
+    async def delete_recent_repository(self, repository_path: Path) -> None:
+        """Idempotently remove one shortcut without consulting or changing Reviews."""
+
+        resolved_path = _resolve_path(str(repository_path))
+
+        async def operation(session: AsyncSession) -> None:
+            await session.execute(
+                delete(recent_repositories).where(
+                    recent_repositories.c.repository_path == str(resolved_path)
+                )
+            )
+
+        await self._database.run_transaction(operation)
 
 
 class SqlReviewStore:

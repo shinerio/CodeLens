@@ -122,6 +122,46 @@ def test_recent_repositories_deduplicates_review_paths(
             "last_reviewed_at": response.json()[0]["last_reviewed_at"],
         }
     ]
+    assert response.json()[0]["last_reviewed_at"].endswith(("Z", "+00:00"))
+
+
+def test_recent_repository_can_be_removed_without_deleting_reviews(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    _prepared_repository(git_repository)
+    settings = _settings(tmp_path, tmp_path)
+    request = _request(
+        git_repository,
+        {
+            "type": "branch",
+            "base_ref": "main",
+            "target_ref": "feature-one",
+            "include_workspace_changes": False,
+        },
+    )
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
+        created = client.post("/api/reviews", json=request)
+        removed = client.request(
+            "DELETE",
+            "/api/repositories/recent",
+            json={"repository_path": str(git_repository.resolve())},
+        )
+        removed_again = client.request(
+            "DELETE",
+            "/api/repositories/recent",
+            json={"repository_path": str(git_repository.resolve())},
+        )
+        recent = client.get("/api/repositories/recent")
+        reviews = client.get("/api/reviews")
+
+    assert created.status_code == 202
+    assert removed.status_code == 204
+    assert removed_again.status_code == 204
+    assert recent.json() == []
+    assert [review["task_id"] for review in reviews.json()] == [created.json()["task_id"]]
+    assert reviews.json()[0]["created_at"].endswith(("Z", "+00:00"))
 
 
 @pytest.mark.parametrize(

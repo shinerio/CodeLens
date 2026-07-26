@@ -232,6 +232,7 @@ def build_unified_backend(
     from codelens.review.application.commands import (
         CancelReviewHandler,
         CreateReviewHandler,
+        DeleteRecentRepositoryHandler,
         DeleteReviewHandler,
         GetRecentRepositorySettingsHandler,
         GetReviewHandler,
@@ -278,6 +279,7 @@ def build_unified_backend(
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
         list_recent_repositories=ListRecentRepositoriesHandler(recent_repository_store),
+        delete_recent_repository=DeleteRecentRepositoryHandler(recent_repository_store),
         get_recent_repository_settings=GetRecentRepositorySettingsHandler(recent_repository_store),
         update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
             recent_repository_store
