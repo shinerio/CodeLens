@@ -135,7 +135,7 @@ class FindingValidator:
             ):
                 raise FindingValidationError("Finding references an unknown changed hunk")
 
-        if self._excerpt_reader is not None and primary.side == "new":
+        if self._excerpt_reader is not None:
             excerpt = await self._excerpt_reader.read(
                 self._snapshot,
                 primary.path,

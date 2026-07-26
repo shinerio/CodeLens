@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import subprocess
 from collections.abc import AsyncIterator, Sequence
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -25,7 +24,7 @@ from codelens.interface.http.routers.settings import router as settings_router
 from codelens.shared.domain.errors import DomainError
 from codelens.testing.correctness_fixture import (
     FixtureRuntime,
-    load_simple_branch_batch,
+    load_simple_branch_comments,
     prepare_simple_branch_repository,
 )
 
@@ -50,24 +49,14 @@ async def _build_app(settings: Settings) -> FastAPI:
         if len(settings.repository_roots) != 1:
             raise ValueError("fake server expects exactly one repository root")
         repository = settings.repository_roots[0]
-        head_oid = (
-            await asyncio.to_thread(
-                lambda: subprocess.run(
-                    ["git", "-C", str(repository), "rev-parse", "HEAD"],
-                    check=True,
-                    capture_output=True,
-                    text=True,
-                    timeout=30.0,
-                ).stdout.strip()
-            )
-        )
-        batch = await load_simple_branch_batch(repository, base_oid=head_oid)
     else:
         fixture = await prepare_simple_branch_repository(settings.data_dir / "e2e-fixture")
         repository = fixture.repository
-        batch = fixture.batch
         settings = settings.model_copy(update={"repository_roots": (repository,)})
-    backend = build_unified_backend(settings, runtime=FixtureRuntime(batch))
+    backend = build_unified_backend(
+        settings,
+        runtime=FixtureRuntime(load_simple_branch_comments()),
+    )
     components = backend.components
     stop_event = asyncio.Event()
     scheduler_task: asyncio.Task[None] | None = None

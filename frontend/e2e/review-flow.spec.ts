@@ -80,7 +80,8 @@ test("streams the correctness fixture from inspect to validated findings", async
   await chooseRepository(page, repository);
   await expect(page.getByText("Inspection ready")).toBeVisible();
 
-  await page.getByRole("button", { name: /Uncommitted/ }).click();
+  await page.getByLabel("Base branch").selectOption("main");
+  await page.getByLabel("Target branch").selectOption("fixture-change");
   await page.getByRole("button", { name: "Start review", exact: true }).click();
 
   await expect(page.getByText("Live review run")).toBeVisible();
@@ -91,21 +92,22 @@ test("streams the correctness fixture from inspect to validated findings", async
     timeout: 15000,
   });
 
-  await expect(page.getByRole("region", { name: "Tool usage" })).toContainText(
-    "No tools were called.",
-  );
+  const toolUsage = page.getByRole("region", { name: "Tool usage" });
+  await expect(toolUsage).toContainText("comment");
+  await expect(toolUsage).toContainText("task_done");
 
   await page.getByRole("button", { name: /Findings/ }).click();
+  await page
+    .getByRole("button", { name: /Inverted transition guard allows invalid states/ })
+    .click();
   await expect(
     page.getByRole("heading", { name: "Inverted transition guard allows invalid states", level: 3 }),
   ).toBeVisible({
     timeout: 15000,
   });
-
-  await page
-    .getByRole("button", { name: /Inverted transition guard allows invalid states/ })
-    .click();
-  await expect(page.getByText("Invalid states can now enter the reviewing state.")).toBeVisible();
+  await expect(
+    page.getByText("The guard now allows every non-draft state to reach reviewing."),
+  ).toBeVisible();
   await expect(
     page.getByText("Restore the draft-only guard before allowing the reviewing transition."),
   ).toBeVisible();

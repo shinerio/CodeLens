@@ -7,6 +7,7 @@ from pathlib import Path, PurePosixPath
 
 from codelens.review.domain.ports import SnapshotRead
 from codelens.workspace.domain.models import ReviewSnapshot, SnapshotEntry
+from codelens.workspace.infrastructure.git_cli import GitCli
 
 
 def _normalized_relative(path: str) -> bool:
@@ -34,7 +35,10 @@ def _read_entry(root: Path, entry: SnapshotEntry) -> bytes:
 
 
 class FilesystemSnapshotReader:
-    """Read only hash-verified target and context paths from one Snapshot."""
+    """Read hash-verified current or pinned-base excerpts from one Snapshot."""
+
+    def __init__(self, git: GitCli) -> None:
+        self._git = git
 
     async def read(
         self,
@@ -47,7 +51,7 @@ class FilesystemSnapshotReader:
     ) -> SnapshotRead:
         if (
             not _normalized_relative(path)
-            or side != "new"
+            or side not in {"old", "new"}
             or start_line < 1
             or end_line < start_line
             or max_bytes < 1
@@ -63,9 +67,16 @@ class FilesystemSnapshotReader:
         )
         if entry is None:
             raise ValueError("Snapshot context path is not visible")
-        payload = await asyncio.to_thread(_read_entry, snapshot.worktree.root, entry)
-        if hashlib.sha256(payload).hexdigest() != entry.content_hash:
-            raise ValueError("Snapshot context content changed")
+        if side == "old":
+            payload = await self._git.read_revision(
+                snapshot.worktree.root,
+                snapshot.target.base_oid,
+                path,
+            )
+        else:
+            payload = await asyncio.to_thread(_read_entry, snapshot.worktree.root, entry)
+            if hashlib.sha256(payload).hexdigest() != entry.content_hash:
+                raise ValueError("Snapshot context content changed")
         selected = b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])
         return SnapshotRead(
             content=selected[:max_bytes],

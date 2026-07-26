@@ -38,6 +38,10 @@ function formatLocation(finding: FindingRecord) {
   return `${finding.primary_location.path}:${finding.primary_location.start_line}-${finding.primary_location.end_line}`;
 }
 
+function formatConfidence(value: number) {
+  return `${Math.round(value * 100)}%`;
+}
+
 function normalizeText(content: string) {
   return content.replaceAll(/\s+/g, " ").trim();
 }
@@ -89,7 +93,11 @@ function FindingOpinion({
 }) {
   const hasDistinctImpact = hasDistinctContent(finding.impact, [finding.explanation]);
   return (
-    <section className="finding-detail__opinion" aria-label={labels.explanation}>
+    <section
+      className={`finding-detail__opinion finding-detail__opinion--${finding.severity}`}
+      aria-label={labels.explanation}
+      data-severity={finding.severity}
+    >
       <div>
         <span>{labels.explanation}</span>
         <MarkdownContent content={finding.explanation} />
@@ -120,8 +128,10 @@ function SourceComparison({
 }) {
   const { t } = useI18n();
   const editorRef = useRef<MonacoEditor.IStandaloneDiffEditor | null>(null);
+  const reviewRef = useRef<HTMLDivElement | null>(null);
   const decorationRefs = useRef<readonly MonacoEditor.IEditorDecorationsCollection[]>([]);
   const diffSubscriptionRef = useRef<IDisposable | null>(null);
+  const modelRefs = useRef<readonly MonacoEditor.ITextModel[]>([]);
   const commentZoneRef = useRef<{
     editor: MonacoEditor.ICodeEditor;
     frameId: number;
@@ -141,6 +151,10 @@ function SourceComparison({
     impact: t("finding.impact"),
     recommendation: t("finding.recommendation"),
   }), [t]);
+  const modelPaths = useMemo(() => ({
+    base: `codelens-review://finding/${finding.finding_id}/base/${source.path}`,
+    target: `codelens-review://finding/${finding.finding_id}/target/${source.path}`,
+  }), [finding.finding_id, source.path]);
 
   const clearDecorations = useCallback(() => {
     for (const decorations of decorationRefs.current) {
@@ -158,7 +172,7 @@ function SourceComparison({
     cancelAnimationFrame(commentZone.frameId);
     commentZone.observer.disconnect();
     commentZone.editor.changeViewZones((accessor) => accessor.removeZone(commentZone.id));
-    commentZone.root.unmount();
+    queueMicrotask(() => commentZone.root.unmount());
   }, []);
 
   const decorateChanges = useCallback(() => {
@@ -276,6 +290,8 @@ function SourceComparison({
 
   const handleMount: DiffOnMount = (editor, monaco) => {
     editorRef.current = editor;
+    const models = editor.getModel();
+    modelRefs.current = models === null ? [] : [models.original, models.modified];
     rangeRef.current = monaco.Range;
     diffSubscriptionRef.current?.dispose();
     diffSubscriptionRef.current = editor.onDidUpdateDiff(decorateChanges);
@@ -291,6 +307,30 @@ function SourceComparison({
   }, [clearCommentZone, clearDecorations, synchronizeEditor]);
 
   useEffect(() => () => diffSubscriptionRef.current?.dispose(), []);
+
+  useEffect(() => {
+    const frameId = requestAnimationFrame(() => {
+      const scroller = reviewRef.current?.parentElement;
+      if (scroller !== undefined && scroller !== null) {
+        scroller.scrollLeft = source.highlight_side === "new"
+          ? scroller.scrollWidth - scroller.clientWidth
+          : 0;
+      }
+    });
+    return () => cancelAnimationFrame(frameId);
+  }, [source.highlight_side]);
+
+  useEffect(() => () => {
+    const models = modelRefs.current;
+    modelRefs.current = [];
+    queueMicrotask(() => {
+      for (const model of models) {
+        if (!model.isDisposed()) {
+          model.dispose();
+        }
+      }
+    });
+  }, [modelPaths]);
 
   const baseContent = source.base?.content ?? "";
   const targetContent = source.target?.content ?? "";
@@ -312,6 +352,7 @@ function SourceComparison({
       aria-label="Pinned source comparison"
       className="finding-review"
       data-comment-side={source.highlight_side}
+      ref={reviewRef}
     >
       <header className="finding-review__pane-header finding-review__pane-header--base">
         <span className="finding-review__path">
@@ -337,9 +378,12 @@ function SourceComparison({
       <div className="finding-review__editor">
         <DiffEditor
           height="100%"
+          keepCurrentModifiedModel
+          keepCurrentOriginalModel
           language={language}
           modified={targetContent}
           modifiedLanguage={language}
+          modifiedModelPath={modelPaths.target}
           onMount={handleMount}
           options={{
             ...editorOptions,
@@ -351,6 +395,7 @@ function SourceComparison({
           }}
           original={baseContent}
           originalLanguage={language}
+          originalModelPath={modelPaths.base}
           theme="vs-dark"
         />
       </div>
@@ -369,10 +414,14 @@ export function FindingDetail({ finding, source }: { finding: FindingRecord | nu
   );
 
   return (
-    <article className="finding-detail">
+    <article className="finding-detail" data-severity={finding.severity}>
       <header className="finding-detail__header">
         <div>
-          <p className="finding-detail__eyebrow">{finding.severity}</p>
+          <p className="finding-detail__eyebrow">
+            <span>{finding.severity}</span>
+            <span>{finding.category}</span>
+            <span>{formatConfidence(finding.confidence)}</span>
+          </p>
           <h3>{finding.title}</h3>
         </div>
         <div className="finding-detail__meta">
@@ -384,7 +433,7 @@ export function FindingDetail({ finding, source }: { finding: FindingRecord | nu
       <section className="finding-detail__source">
         {source === null
           ? <p className="finding-detail__loading">{t("finding.loadingSource")}</p>
-          : <SourceComparison finding={finding} source={source} />}
+          : <SourceComparison key={finding.finding_id} finding={finding} source={source} />}
       </section>
 
       {uniqueEvidence.length > 0 ? (

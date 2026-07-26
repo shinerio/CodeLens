@@ -387,17 +387,44 @@
 }
 
 .finding-list__item {
+  --finding-surface: #f0f4f5;
+  --finding-border: #9caaaf;
   display: grid;
   gap: 6px;
   width: 100%;
   min-height: 106px;
   padding: 12px 14px;
-  border: 1px solid var(--run-line);
-  background: var(--run-paper-strong);
+  border: 1px solid var(--finding-border);
+  background: var(--finding-surface);
   text-align: left;
   overflow-wrap: anywhere;
   scroll-snap-align: start;
   transition: border-color 140ms ease, background 140ms ease;
+}
+
+.finding-list__item--critical {
+  --finding-surface: #fde8e7;
+  --finding-border: #c6423b;
+}
+
+.finding-list__item--high {
+  --finding-surface: #fff0e1;
+  --finding-border: #c66a2b;
+}
+
+.finding-list__item--medium {
+  --finding-surface: #fff7d6;
+  --finding-border: #a77b12;
+}
+
+.finding-list__item--low {
+  --finding-surface: #e8f3fb;
+  --finding-border: #367da5;
+}
+
+.finding-list__item--info {
+  --finding-surface: #edf1f2;
+  --finding-border: #718087;
 }
 
 .finding-list__item:hover {
@@ -405,9 +432,9 @@
 }
 
 .finding-list__item--active {
-  border-color: var(--run-accent);
-  background: #edf8f8;
-  box-shadow: inset 3px 0 0 var(--run-accent);
+  border-color: var(--finding-border);
+  background: var(--finding-surface);
+  box-shadow: inset 4px 0 0 var(--finding-border), inset 0 0 0 1px var(--finding-border);
 }
 
 .finding-list__severity,
@@ -452,7 +479,16 @@
 }
 
 .finding-detail__eyebrow {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 7px;
   margin: 0 0 6px;
+}
+
+.finding-detail__eyebrow > span {
+  padding: 3px 6px;
+  border: 1px solid currentColor;
+  background: #fff;
 }
 
 .finding-detail__header h3 {
@@ -478,6 +514,36 @@
   border-left: 4px solid #e7c168;
   background: #203239;
   color: #e9f0ed;
+}
+
+.finding-detail__opinion--critical {
+  border-color: #82403f;
+  border-left-color: #ff6b63;
+  background: #351f24;
+}
+
+.finding-detail__opinion--high {
+  border-color: #83523b;
+  border-left-color: #f59e62;
+  background: #35272a;
+}
+
+.finding-detail__opinion--medium {
+  border-color: #72643b;
+  border-left-color: #e7c168;
+  background: #343126;
+}
+
+.finding-detail__opinion--low {
+  border-color: #3e6376;
+  border-left-color: #6bb8df;
+  background: #1f3038;
+}
+
+.finding-detail__opinion--info {
+  border-color: #4c5f67;
+  border-left-color: #9aadb5;
+  background: #273238;
 }
 
 .finding-detail__opinion > div {
@@ -507,6 +573,11 @@
 .finding-detail__source,
 .finding-detail__evidence {
   min-width: 0;
+}
+
+.finding-detail__source {
+  overflow-x: auto;
+  overscroll-behavior-inline: contain;
 }
 
 .finding-detail__evidence h4 {
@@ -774,6 +845,10 @@
 
   .finding-list {
     grid-auto-columns: minmax(230px, 82vw);
+  }
+
+  .finding-review {
+    min-width: 800px;
   }
 
   .finding-review__pane-header {

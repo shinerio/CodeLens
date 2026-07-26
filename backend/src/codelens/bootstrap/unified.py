@@ -168,7 +168,7 @@ def build_unified_backend(
         instructions=InstructionResolver(MarkdownInstructionParser()),
         structured_skip=StructuredSkipMatcher(),
     )
-    snapshot_reader = FilesystemSnapshotReader()
+    snapshot_reader = FilesystemSnapshotReader(git)
     codec = AgentOutputCodec("1")
     system_prompts = I18nPromptLoader.load(settings.prompt_dir)
     provider_runtime = runtime or OpenAIAgentRuntime(
