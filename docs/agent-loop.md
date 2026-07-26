@@ -454,7 +454,7 @@ ToolExecutionLimiter
 
 项目级工具预算、超时或重复循环异常发生在最外层，会使 Agent Run 失败。普通工具参数或业务校验错误通常由 SDK FunctionTool 失败处理器转换成模型可见错误文本，模型可以修正参数后重试。
 
-这里还有一层异常转换需要注意：这些项目异常继承 CodeLens `DomainError`，并不继承 SDK `AgentsException`。SDK 函数工具批处理器会把它们包装为 `UserError`；`OpenAIAgentRuntime` 当前再把 `UserError` 归类为 `invalid_model_output`。因此它们能够中止循环，但 `tool_call_limit_exceeded`、`tool_invocation_timeout` 等项目异常身份当前不会原样穿透 Runner。这是现有实现行为，不应仅根据异常类名推断最终 Transcript 错误码。
+这里还有一层异常转换需要注意：这些项目异常继承 CodeLens `DomainError`，并不继承 SDK `AgentsException`。SDK 函数工具批处理器会把它们包装为 `UserError`；`OpenAIAgentRuntime` 当前再把 `UserError` 归类为 `invalid_model_output`。因此它们能够中止循环，但 `max_tool_calls_exceeded`、`tool_invocation_timed_out`、`identical_tool_result_loop` 等项目 `reason_code` 当前不会原样穿透 Runner。这是现有实现行为，不应仅根据异常类名推断最终 Transcript 错误码。
 
 ## 10. 同一轮多个工具如何执行
 

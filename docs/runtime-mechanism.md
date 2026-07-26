@@ -10,7 +10,7 @@
 4. 模型与工具之间的多轮循环由谁驱动、如何停止；
 5. 模型输出如何转换为可信 Finding，并最终展示到前端。
 
-本文描述当前代码实现，不把规划中的 MCP、Skills、多 Reviewer 汇总或通用沙箱当作已实现能力。工具参数和返回值的详细说明见 [`build-in-tool.md`](./build-in-tool.md)，系统边界和长期约束以根目录 [`ARCHITECTURE.md`](../ARCHITECTURE.md) 为准。
+本文描述当前代码实现，不把规划中的 MCP、Skills、多 Reviewer 汇总或通用沙箱当作已实现能力。工具参数和返回值的详细说明见 [`build-in-tool.md`](./build-in-tool.md)，系统边界和长期约束以 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 为准。
 
 ## 2. 先建立整体认识
 
@@ -37,7 +37,7 @@ OpenAIAgentRuntime
     +-- 读取当前激活的模型网关
     +-- 选择 Provider Adapter
     +-- 取得已加载的本地化系统 Prompt
-    +-- 创建 4 个证据工具和 2 个状态工具
+    +-- 创建 4 个证据工具和 3 个状态工具
     +-- 组合 Agent instructions
     |
     v
@@ -130,7 +130,7 @@ HTTP 查询 Findings/Transcript，SSE 通知 Review 生命周期变化
     {
       "path": "AGENTS.md",
       "content": "完整且已经冻结的规则正文",
-      "applies_to": ["backend/src/example.py"]
+      "applies_to": ["."]
     }
   ]
 }
@@ -157,7 +157,7 @@ Runtime 会把这一字段单独序列化为首次用户输入。模型首轮知
 - 规则适用范围和优先级顺序有效；
 - Snapshot Manifest 中的规则条目与解析结果一致。
 
-相同规则正文只注入一次，`applies_to` 精确列出它作用于哪些 Review 文件。完成冻结、路径、正文哈希、作用域和顺序校验后，这组 `repository_instructions` 被视为可信 Review 配置，由 Runtime 放入系统指令。内部 precedence 数值、Snapshot ID、内容哈希和规则链标识不会暴露给模型。
+相同规则正文只注入一次，`applies_to` 只包含该规则的单一规范化作用域路径：`.` 表示仓库根目录，目录规则使用其生效目录，文件专属规则使用对应目标文件。作用域只在本次 `review_files` 内解释，不会展开为逐目标文件列表。完成冻结、路径、正文哈希、作用域和顺序校验后，这组 `repository_instructions` 被视为可信 Review 配置，由 Runtime 放入系统指令。内部 precedence 数值、Snapshot ID、内容哈希和规则链标识不会暴露给模型。
 
 ### 5.3 确定性序列化
 
@@ -302,7 +302,7 @@ ReviewCommentCollector
 
 工具通过 Agents SDK 的 `@function_tool` 暴露。Python 参数注解、Pydantic Model、`Literal` 和 `Annotated[Field(...)]` 被转换成模型可见 JSON Schema。
 
-以 `read_file` 为例，模型看到的是工具名、`tools.json` 中的描述，以及包含以下必填字段的严格 schema：
+以 `read_file` 为例，模型看到的是工具名、`tools.json` 中的描述，以及包含以下字段的 schema；只有 `path` 和 `version` 必填，`start_line` 与 `end_line` 必须同时提供或同时省略：
 
 ```json
 {
@@ -313,7 +313,7 @@ ReviewCommentCollector
 }
 ```
 
-`reject_unknown_arguments()` 在本地边界再次检查额外字段。即使供应商对 strict schema 的支持不完整，未声明参数也不会直接进入工具实现。
+为允许真正省略两个行号，`read_file` 特意使用非严格 provider schema；生成的 Pydantic 参数适配器仍校验字段类型和行号配对，`reject_unknown_arguments()` 在本地边界再次拒绝额外字段。其余 6 个工具使用严格 schema。
 
 ### 8.3 证据工具
 
@@ -590,11 +590,13 @@ async def execute_review(task_id: str) -> None:
         tools=tools,
     )
 
-    sdk_result = await Runner.run_streamed(
+    sdk_result = Runner.run_streamed(
         starting_agent=agent,
         input=review_files,
         max_turns=provider.max_agent_turns,
     )
+    async for event in sdk_result.stream_events():
+        await transcript.record(event)
 
     canonical_output = output_codec.encode(collector.finding_batch())
     artifact = await artifact_store.write(canonical_output)

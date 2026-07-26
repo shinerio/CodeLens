@@ -14,7 +14,7 @@
 - FastAPI 提供 HTTP API 和 SSE 事件流；Pydantic v2 负责边界数据校验。
 - SQLAlchemy 2 负责持久化适配，Alembic 管理数据库迁移。
 - SQLite 使用 WAL 模式；大对象写入 Artifact Store，数据库仅保存元数据、内容哈希和不透明引用。
-- OpenAI Agents SDK、Git、文件系统、Skill、MCP、沙箱、代码检索和 Secret Store 均作为外部能力，通过 Port/Adapter 接入。MVP 的代码检索仅由 CodeLens 内置、只读的 Snapshot 工具提供，不依赖本机预装的第三方CodeGraph、LSP 或 MCP 工具。
+- OpenAI Agents SDK、Git、文件系统、Skill、MCP、沙箱、代码检索和 Secret Store 均作为外部能力，通过 Port/Adapter 接入。MVP 的代码检索仅由 CodeLens 内置、只读的 Snapshot 工具提供，不依赖本机预装的第三方 CodeGraph、LSP 或 MCP 工具。
 - Git 是内置 Snapshot 工具唯一需要的外部可执行文件；macOS、Linux 和 Windows 启动入口都必须在服务就绪前验证 Git 可执行文件及版本响应。`find_files`、`grep` 和文件读取不得依赖操作系统提供的 `find`、`grep`、`glob` 或 Shell。
 - 所有静态的平台系统提示词、仓库规则优先级、通用 Review 工作流、输出约束与工具说明必须存放在 `prompts/sys/<locale>/`；每个语言包固定包含合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md` 和结构化工具说明 `tools.json`，避免跨文件重复约束。组合根在启动时通过 `I18nPromptLoader` 完整校验并加载为不可变语言包。Context Builder 产生包含完整 `review_files` 与冻结 `repository_instructions` 的确定性内部信封；Review Runtime 在供应商边界拆分该信封，并按“平台边界与仓库规则策略、可信 `repository_instructions`、通用工作流与输出契约、Agent 专属策略”的固定顺序组成系统指令，首次用户输入只保留 `review_files`。设置页面只能覆盖 `prompts/<agent_id>/<locale>.md` 对应的 Agent 专属策略，不能覆盖通用系统层或仓库规则。Review 运行时只按任务 `prompt_locale` 读取已加载语言包，未知语言回退至配置的默认语言；新增语言不得要求在模型 Runtime 中拼接或硬编码自然语言提示词。
 - 模型 Provider 配置由本机 Web Settings API 在运行期写入 Secret Store；API Key 是只写字段，不进入普通配置、数据库、日志、事件或 API 响应。
@@ -71,7 +71,7 @@
 
 ### 3.4 CLI 可扩展约束
 
-当前产品交互入口是 Web，当前交付范围不包含用于创建 Review的 CLI，模型设计必须保证前后端分离，支持通过API调用或者CLI调用的方式完整替代Web入口
+当前产品交互入口是 Web，当前交付范围不包含用于创建 Review 的 CLI。系统设计必须保持前后端分离；未来 CLI 应复用稳定 API 或 Application 用例完整替代 Web 入口，不得复制业务流程或绕过安全边界。
 
 ## 4. DDD 领域分层
 
@@ -212,4 +212,4 @@ frontend/src/
 - API、事件、数据库和持久化任务变更已覆盖兼容、迁移、幂等及恢复。
 - 数据所有权、Secret、仓库访问和执行隔离没有突破既有安全与信任边界。
 - 进程职责、启动关系、事件传递和持久化策略与既定运行拓扑一致。
-- 架构调整已同步更新本文档；实施与验证要求交由 `AGENTS.md` 维护。
+- 架构调整已同步更新本文档；实施与验证要求交由根目录 [`AGENTS.md`](../AGENTS.md) 维护。

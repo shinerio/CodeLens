@@ -55,7 +55,7 @@ powershell -ExecutionPolicy Bypass -File .\code-lens.ps1
 - 后端 API：`http://127.0.0.1:8800`
 - OpenAPI 文档：`http://127.0.0.1:8800/docs`
 
-按 `Ctrl+C` 会同时停止前后端。首次启动后，先打开 Web 页面中的 **Settings / 设置** 添加模型网关；服务启动和浏览仓库都不依赖模型配置。
+Windows 脚本会保持前台运行，按 `Ctrl+C` 会同时停止前后端；macOS/Linux 脚本在服务就绪后退出，应使用 `./code-lens stop` 停止后台服务。首次启动后，先打开 Web 页面中的 **Settings / 设置** 添加模型网关；服务启动和浏览仓库都不依赖模型配置。
 
 ### 手动启动
 
@@ -150,12 +150,10 @@ Branch 和 Full repository 的引用通过分支下拉框选择。Commit diff �
 
 CodeLens 会随任务快照冻结适用于目标文件的规则，按从仓库根目录到目标文件的顺序解析：
 
-- 根目录 `AGENTS.md`
-- 根目录 `REVIEW.md`
-- 目标文件各级父目录中的 `REVIEW.md`
-- 文件级 `<relative/path/to/file>.review.md`
+- 从仓库根目录到目标文件所在目录的每一级，以大小写不敏感方式发现 `AGENTS.md` 和 `REVIEW.md`
+- 以大小写不敏感方式发现文件级 `<relative/path/to/file>.review.md`
 
-`REVIEW.md` 可以通过 YAML frontmatter 的 `exclude` 字段或 Markdown 的 `## Skip` 列表排除路径。仓库内容和规则文件都会被视为不可信输入，不能扩大 Reviewer 权限。
+同一目录中的规则按 `AGENTS.md`、`REVIEW.md` 顺序应用，更深目录优先级更高，文件级规则最高；同一目录出现仅大小写不同的同名规则文件会被拒绝。`REVIEW.md` 可以通过 YAML frontmatter 的 `exclude` 字段或 Markdown 的 `## Skip` 列表排除路径。仓库内容和规则文件都会被视为不可信输入，不能扩大 Reviewer 权限。
 
 ## 安全与数据隔离
 
@@ -164,7 +162,7 @@ CodeLens 会随任务快照冻结适用于目标文件的规则，按从仓库�
 - REVIEW 模式对源仓库只读。任务只在应用数据目录下创建由 CodeLens 管理的 detached worktree。
 - 模型不会获得用户原始工作区路径；持久化记录和事件使用哈希或不透明引用表示敏感路径与 Artifact。
 - OpenAI Agents SDK 的模型数据和工具数据日志默认关闭，但仍应避免在规则文件和源码中放置密钥。
-- Web 保存的模型网关配置位于 data directory 的 `secrets/model-gateways.json`，目录权限为 `0700`、文件权限为 `0600`，API 只返回网关名称、模型和 Base URL，绝不返回 API Key。
+- Web 保存的模型网关配置位于 data directory 的 `secrets/model-gateways.json`，目录权限为 `0700`、文件权限为 `0600`。读取 API 返回网关 ID、名称、模型 ID、Base URL、供应商、API 类型、激活状态和非 Secret 的模型与执行策略，绝不返回 API Key。
 
 ## 配置
 
@@ -208,7 +206,10 @@ CodeLens/
 ├── frontend/
 │   ├── src/                # React 应用与领域 feature
 │   └── e2e/                # Playwright 端到端流程
-├── ARCHITECTURE.md         # 强制架构约束
+├── docs/
+│   ├── ARCHITECTURE.md     # 强制架构约束
+│   ├── CodeLens-白皮书.md  # 产品白皮书
+│   └── ...                 # 机制与实现文档
 └── TODO.md                 # 延期功能与路线图
 ```
 
@@ -219,7 +220,7 @@ interface / infrastructure -> application -> domain
 bootstrap -----------------> interface / infrastructure / application
 ```
 
-前端只通过 HTTP/JSON 和 SSE 与后端通信，不直接访问仓库、数据库、Artifact Store 或模型运行时。完整约束见 [ARCHITECTURE.md](./ARCHITECTURE.md)。
+前端只通过 HTTP/JSON 和 SSE 与后端通信，不直接访问仓库、数据库、Artifact Store 或模型运行时。完整约束见 [ARCHITECTURE.md](./docs/ARCHITECTURE.md)。
 
 ## 测试与质量门禁
 
@@ -252,8 +253,8 @@ pnpm --dir frontend exec playwright test
 
 更多背景和后续计划：
 
-- [产品白皮书](./CodeLens-白皮书.md)
-- [架构约束](./ARCHITECTURE.md)
+- [产品白皮书](./docs/CodeLens-白皮书.md)
+- [架构约束](./docs/ARCHITECTURE.md)
 - [与 Open Code Review 的实现与能力对比](./docs/open-code-review-comparison.md)
 - [TODO 与延期事项](./TODO.md)
 
@@ -261,4 +262,4 @@ pnpm --dir frontend exec playwright test
 
 CodeLens 采用 [Apache License 2.0](./LICENSE) 开源。第三方来源、版权归属和修改说明见 [NOTICE](./NOTICE)。
 
-本项目的任务内评论收集思路参考了 [Alibaba Open Code Review](https://github.com/alibaba/open-code-review) 的 `code_comment` 模式；`backend/src/codelens/review/infrastructure/line_resolver.py` 对其 `internal/diff/resolver.go` 中的确定性行号定位算法进行了 Python 改编。CodeLens 在此基础上增加了冻结 Snapshot、Manifest 内容哈希校验、唯一新侧变更 hunk 约束，以及由后端派生 hunk ID 和 excerpt hash 的验证链路。参考版本、逐项差异和可借鉴结论见[完整对比报告](./docs/open-code-review-comparison.md)。
+本项目的任务内评论收集思路参考了 [Alibaba Open Code Review](https://github.com/alibaba/open-code-review) 的 `code_comment` 模式；`backend/src/codelens/review/infrastructure/line_resolver.py` 对其 `internal/diff/resolver.go` 中的确定性行号定位算法进行了 Python 改编。CodeLens 在此基础上增加了冻结 Snapshot、Manifest 内容哈希校验、模型显式选择的 old/new 侧唯一变更 hunk 约束，以及由后端派生 hunk ID 和 excerpt hash 的验证链路。参考版本、逐项差异和可借鉴结论见[完整对比报告](./docs/open-code-review-comparison.md)。

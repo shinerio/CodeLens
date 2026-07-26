@@ -6,7 +6,7 @@
 
 | 项目 | 对比版本 | 对比日期 |
 | --- | --- | --- |
-| CodeLens | [`5ae033abef1f5baabbced5c6dd31e4e391594b36`](https://github.com/shinerio/CodeLens/commit/5ae033abef1f5baabbced5c6dd31e4e391594b36) | 2026-07-26 |
+| CodeLens | 当前工作树，基于 [`0916275e85a7e3a95074fb8b7955d58886102247`](https://github.com/shinerio/CodeLens/commit/0916275e85a7e3a95074fb8b7955d58886102247) | 2026-07-26 |
 | Alibaba Open Code Review（下称 OCR） | [`c9b145635c6b6343b108941c2a627ac636836c6b`](https://github.com/alibaba/open-code-review/commit/c9b145635c6b6343b108941c2a627ac636836c6b) | 2026-07-26 |
 
 主要证据来自双方的运行时、Prompt、工具、diff 定位和测试代码。OCR 的产品范围和公开基准以其该版本的 [`README.zh-CN.md`](https://github.com/alibaba/open-code-review/blob/c9b145635c6b6343b108941c2a627ac636836c6b/README.zh-CN.md) 为补充。双方技术栈、产品入口和目标不同，因此本文不把功能数量直接等同于审查质量，也不把 OCR 公布的基准成绩外推为 CodeLens 的相对成绩。
@@ -18,13 +18,13 @@ OCR 使用 Apache License 2.0。CodeLens 同样使用 Apache License 2.0，第�
 CodeLens 对 OCR 的参考分为两类：
 
 1. **实现思路参考**：在 Agent 调查过程中使用有状态评论工具收集候选意见，最终文本不作为结构化 Review 结果。对应 CodeLens 的 `ReviewCommentCollector` 和 OCR 的 [`CodeCommentProvider`](https://github.com/alibaba/open-code-review/blob/c9b145635c6b6343b108941c2a627ac636836c6b/internal/tool/code_comment.go)。两者的数据模型、校验边界和最终产物并不相同。
-2. **算法改编**：CodeLens 的 [`line_resolver.py`](../backend/src/codelens/review/infrastructure/line_resolver.py) 将 OCR 的 [`internal/diff/resolver.go`](https://github.com/alibaba/open-code-review/blob/c9b145635c6b6343b108941c2a627ac636836c6b/internal/diff/resolver.go) 从 Go 改写为 Python。保留的核心算法是：规范化模型引用的 `existing_code`，优先在 diff hunk 中滑窗匹配，再回退到完整新文件内容。
+2. **算法改编**：CodeLens 的 [`line_resolver.py`](../backend/src/codelens/review/infrastructure/line_resolver.py) 将 OCR 的 [`internal/diff/resolver.go`](https://github.com/alibaba/open-code-review/blob/c9b145635c6b6343b108941c2a627ac636836c6b/internal/diff/resolver.go) 从 Go 改写为 Python。保留的核心算法是：规范化模型引用的 `existing_code`，优先在 diff hunk 中滑窗匹配，再回退到模型所选 old/new 侧的完整文件内容。
 
 CodeLens 没有复制 OCR 的 CLI、Prompt 模板、规则库、MCP、并发调度、二次定位或评论过滤实现。改编后的定位器被接入 CodeLens 自己的冻结 Snapshot 和 Finding 验证链路，并增加以下约束：
 
 - 工具只能读取 Snapshot Manifest 可见路径，每次读取重新验证内容哈希；
 - 首次输入已包含目标文件适用的完整冻结仓库规则；
-- 定位结果必须完整落在且只落在一个新侧变更 hunk；
+- 定位结果必须完整落在且只落在模型显式选择的一个 old/new 侧变更 hunk；
 - hunk ID 和 excerpt hash 由后端从 Snapshot 派生，模型不能提交；
 - 无法定位或不满足约束的评论直接拒绝，不进入最终 FindingBatch。
 
@@ -42,8 +42,9 @@ CodeLens 没有复制 OCR 的 CLI、Prompt 模板、规则库、MCP、并发调�
   -> 单个 Reviewer Run 调查全部目标
        -> 按需 get_diff/read_file/grep/... 获取证据
        -> comment 提交候选 Finding
+       -> review_file_done 声明已经完成调查的文件
        -> task_done 显式结束
-  -> 后端定位 existing_code 并校验唯一新侧 hunk
+  -> 后端定位 existing_code 并校验所选 old/new 侧的唯一 hunk
   -> 派生 hunk ID/excerpt hash，再做领域校验与去重
   -> 持久化任务、事件、Finding 和终态转录，通过 Web/SSE 展示
 ```
@@ -78,15 +79,15 @@ CLI 启动
 | Review 范围 | 分支差异、Commit、未提交改动、全仓；可冻结 overlay | workspace、range、commit、全文件 `scan`，另有 delegate | 范围接近；OCR 的 scan、delegate 与 CI 使用更成熟 |
 | 执行粒度 | 一个 Agent Run 查看完整 `review_files` | 每个文件独立 plan/main subtask，并发执行 | OCR 对大变更吞吐和覆盖更有优势；CodeLens 更利于跨文件统一推理，但容易受单一上下文和回合预算影响 |
 | 输入一致性 | 任务专属 detached worktree + immutable Snapshot + Manifest/hash | 按运行模式读取 Git 对象或当前工作区；有路径约束，但没有等价的内容哈希 Snapshot | CodeLens 的复现、隔离和证据完整性更强；OCR workspace 模式更轻但运行中工作区变化的影响更大 |
-| 首次提示 | 系统指令包含正文去重并带精确目标映射的可信 `repository_instructions`；用户消息只包含完整、排序后的 `review_files`，不含完整 diff 和内部 ID | 每文件的 plan/main 用户消息直接含完整 diff、当前路径、其他变更文件、规则、背景和可选计划 | CodeLens 规则首轮可用且避免逐文件工具往返；OCR 首轮还包含当前完整 diff，可直接分析但大 diff 成本更高 |
+| 首次提示 | 系统指令包含正文去重并带紧凑作用域的可信 `repository_instructions`；用户消息只包含完整、排序后的 `review_files`，不含完整 diff 和内部 ID | 每文件的 plan/main 用户消息直接含完整 diff、当前路径、其他变更文件、规则、背景和可选计划 | CodeLens 规则首轮可用且避免逐文件工具往返；OCR 首轮还包含当前完整 diff，可直接分析但大 diff 成本更高 |
 | Prompt 加载 | 启动时完整校验本地化 `review-policy`、`review-workflow` 和工具说明；运行时在两者之间插入可信仓库规则，再组合 Reviewer 策略 | 编译期嵌入 task manifest 和 Markdown Prompt，启动时解析；语言指令追加到 system 消息 | 两者都避免运行中散乱拼接；CodeLens 的本地化完整性校验更严格，OCR 的多阶段模板更丰富 |
-| 仓库指令 | 冻结每个目标的 `AGENTS.md`、`REVIEW.md`、文件级规则链；宿主按规则正文去重并附带精确 `applies_to` 目标映射 | 内嵌语言规则库，叠加命令行、项目和全局 `.opencodereview/rule.json`，按路径匹配且可合并系统规则 | CodeLens 更适合仓库原生、层级化规则并可审计适用范围；OCR 内建规则覆盖和集中配置成熟度更高 |
+| 仓库指令 | 冻结每个目标的 `AGENTS.md`、`REVIEW.md`、文件级规则链；宿主按规则正文去重，`applies_to` 只携带根目录、目录或精确文件的单一规范化作用域 | 内嵌语言规则库，叠加命令行、项目和全局 `.opencodereview/rule.json`，按路径匹配且可合并系统规则 | CodeLens 更适合仓库原生、层级化规则并可审计适用范围；OCR 内建规则覆盖和集中配置成熟度更高 |
 | 规则强制 | Context Builder 在模型调用前确定性校验并完整注入所有适用规则，模型不参与规则加载 | 规则正文直接进入当前文件 Prompt，不需要加载工具 | 两者都避免规则加载工具往返；CodeLens 额外保留 Snapshot 哈希与多目标作用域校验 |
 | 内置调查工具 | `find_files`、`grep`、`read_file`、`get_diff` | `file_read`、`code_search`、`file_read_diff`、`file_find` | CodeLens 通过 `read_file` 支持 current/base/head 版本读取；OCR 的代码搜索参数、Git pathspec 与跨文件 diff 批量读取更强 |
-| 输出工具 | `comment`、`task_done` | `code_comment`、`task_done` | 核心模式一致；CodeLens 的提交 schema 和后端拒绝规则更严格 |
+| 输出与完成工具 | `comment`、`review_file_done`、`task_done` | `code_comment`、`task_done` | 核心模式一致；CodeLens 额外记录逐文件完成声明，提交 schema 和后端拒绝规则也更严格 |
 | 外部工具 | 当前明确不启用 MCP、Skills、LSP 或代码图 | 支持 stdio MCP，动态工具同时加入 plan/main 阶段，可配置 allowlist | OCR 扩展性显著领先，但 MCP 子进程、环境变量和工具结果扩大了信任面；CodeLens 当前能力较窄但边界清晰 |
-| 工具选择 | 六个工具固定暴露给整个 Run，由模型按需选择；平台未做阶段裁剪 | plan 阶段只描述搜索/查找/diff/MCP 工具并生成建议，不实际执行；main 阶段暴露六个内置工具和 MCP | OCR 的阶段化工具集降低无关选择并让大变更先规划；CodeLens 链路更短，但所有工具常驻会增加选择噪声 |
-| 工具限制 | Snapshot allowlist/hash、路径规范化、单次输出上限、模型回合上限和取消；当前工具次数不另设上限 | 路径 containment、Git 参数约束、输出上限、每文件最多 30 个工具回合，可设并发任务超时 | CodeLens 对“读到什么版本的什么内容”保证更强；OCR 对每文件资源上限更明确 |
+| 工具选择 | 7 个工具固定暴露给整个 Run，由模型按需选择；平台未做阶段裁剪 | plan 阶段只描述搜索/查找/diff/MCP 工具并生成建议，不实际执行；main 阶段暴露六个内置工具和 MCP | OCR 的阶段化工具集降低无关选择并让大变更先规划；CodeLens 链路更短，但所有工具常驻会增加选择噪声 |
+| 工具限制 | Snapshot allowlist/hash、路径规范化、单次输出上限、模型回合上限和取消；全部 7 个工具共享网关配置的调用次数、单次超时和重复结果熔断阈值 | 路径 containment、Git 参数约束、输出上限、每文件最多 30 个工具回合，可设并发任务超时 | CodeLens 对证据版本和 Run 级资源预算的约束更强；OCR 对每文件资源上限更直接 |
 | 上下文管理 | 按需读取，超出完整 scope 上限则在模型调用前失败，不静默截断；目前无模型上下文压缩 | 超大 diff 预过滤，循环中支持 memory compression | CodeLens 不会把跳过误作完整覆盖，但大任务可用性偏弱；OCR 更能跑完超长会话，但过滤文件会损失覆盖 |
 | 并发与恢复 | Worker 有持久任务、租约、重启恢复和 SSE 续传；当前单 Reviewer Run 内不按文件并发 | 文件 subtask 并发、单文件失败隔离、session resume 和异步评论后处理 | OCR 的 Review 计算吞吐更成熟；CodeLens 的 Web 任务状态、事件和数据生命周期更系统化 |
 | 评论质量后处理 | 确定性 schema/位置/证据校验、置信度门槛、去重；不再用第二次模型输出决定结果 | 确定性定位 + LLM re-location + diff-only REVIEW_FILTER；scan 另有批次 dedup 和项目总结 | OCR 以额外模型调用提高召回和过滤误报；CodeLens 的最终信任链更短、更可解释，但缺少反思层 |
@@ -99,7 +100,7 @@ CLI 启动
 
 ### 5.1 CodeLens
 
-CodeLens 在进程启动时由 `I18nPromptLoader` 校验每个 locale 的固定语言包：合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md` 和六个工具说明。Context Builder 在模型调用前验证冻结规则并构造内部信封：`review_files` 提供路径、变化类型、可选旧路径和允许 Finding 的 old/new 侧范围；`repository_instructions` 提供正文去重的完整规则和精确 `applies_to` 目标映射。Runtime 将信封拆分，按 `review-policy`、可信 `repository_instructions`、`review-workflow`、Reviewer 专属策略的顺序组成系统指令，用户输入仅保留 `review_files`。
+CodeLens 在进程启动时由 `I18nPromptLoader` 校验每个 locale 的固定语言包：合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md` 和 7 个工具说明。Context Builder 在模型调用前验证冻结规则并构造内部信封：`review_files` 提供路径、变化类型、可选旧路径和允许 Finding 的 old/new 侧范围；`repository_instructions` 提供正文去重的完整规则，每条规则的 `applies_to` 只包含单一规范化作用域。Runtime 将信封拆分，按 `review-policy`、可信 `repository_instructions`、`review-workflow`、Reviewer 专属策略的顺序组成系统指令，用户输入仅保留 `review_files`。
 
 优点：
 
@@ -180,9 +181,7 @@ OCR 的原则是“阶段裁剪、面向代码审查优化、允许扩展”：p
 - **第一处匹配歧义**：重复代码出现多次时，两边都取第一处，没有要求文本匹配唯一。CodeLens 的“唯一 hunk 包含范围”只验证行号属于一个 hunk，不证明引用片段在文件中唯一。
 - **过度规范化**：去掉所有首尾空白、忽略空行会把 Python 缩进或空行分隔等有意义差异抹平；去掉首字符 `+`/`-` 也可能改变真实源码。
 - **侧别选择错误**：CodeLens 同时允许 old/new 侧 Finding；若模型把删除代码标成 `new` 或把新增代码标成 `old`，确定性门禁会拒绝，但仍会消耗一次模型工具调用。
-- **完整文件回退**：CodeLens 会读取整个文件用于内部定位，虽不暴露给模型且有 hash 校验，但当前没有独立字节上限；超大文本文件会增加内存和匹配成本。
-
-CodeLens 应优先修正其余定位缺口：返回全部候选并要求唯一；保留原始行内容做二次精确确认；为内部完整文件回退设置明确上限。之后再考虑 OCR 式 LLM re-location，而且二次结果仍必须通过同一确定性门禁。
+CodeLens 应优先修正其余定位缺口：返回全部候选并要求唯一，并保留原始行内容做二次精确确认。内部完整文件回退和模型可见源码读取均受 1 MiB 的 Snapshot 源文件上限约束。之后再考虑 OCR 式 LLM re-location，而且二次结果仍必须通过同一确定性门禁。
 
 ## 8. 综合优缺点
 
@@ -231,7 +230,7 @@ CodeLens 应优先修正其余定位缺口：返回全部候选并要求唯一�
 
 按优先级建议：
 
-1. **P0：修正定位器歧义**。先解决新/旧侧混用、第一匹配和超大文件回退问题，再扩展定位召回。
+1. **P0：修正定位器歧义**。让定位器返回全部候选并要求唯一，同时保留原始行内容做二次精确确认，减少过度规范化造成的误匹配。
 2. **P0：建立同模型同数据集评测**。至少覆盖 precision、recall、F1、位置准确率、工具调用数、token、耗时和未完成文件率；否则无法判断新增 plan/filter 是否真正改善结果。
 3. **P1：宿主确定性分片并发**。按文件或关联文件组创建隔离 Agent Run，同时保留同一 Snapshot、逐目标规则链和最终 FindingValidator；不要把“遍历所有文件”只交给单个模型完成。
 4. **P1：按风险启用轻量 plan**。只对大文件或高风险变化启用，计划只引用 `review_files` 和按需工具结果，避免 plan/main 重复塞完整 diff。
