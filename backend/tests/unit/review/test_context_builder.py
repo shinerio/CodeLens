@@ -136,12 +136,7 @@ def test_serializes_complete_review_files_and_active_repository_instructions() -
     assert json.loads(agent_input.canonical_bytes()) == {
         "repository_instructions": [
             {
-                "applies_to": [
-                    "src/added.py",
-                    "src/changed.py",
-                    "src/deleted.py",
-                    "src/renamed.py",
-                ],
+                "applies_to": ["."],
                 "content": "Follow the repository rules.\n",
                 "path": "AGENTS.md",
             }
@@ -193,7 +188,7 @@ def test_serializes_complete_review_files_and_active_repository_instructions() -
         assert forbidden not in serialized
 
 
-def test_serializes_each_repository_instruction_once_with_its_exact_targets() -> None:
+def test_serializes_each_repository_instruction_once_with_its_scope_path() -> None:
     snapshot, instructions = _snapshot()
     file_rule = "Check added-file migrations.\n"
     rule_path = "src/added.py.review.md"
@@ -242,12 +237,7 @@ def test_serializes_each_repository_instruction_once_with_its_exact_targets() ->
 
     assert payload["repository_instructions"] == [
         {
-            "applies_to": [
-                "src/added.py",
-                "src/changed.py",
-                "src/deleted.py",
-                "src/renamed.py",
-            ],
+            "applies_to": ["."],
             "content": "Follow the repository rules.\n",
             "path": "AGENTS.md",
         },

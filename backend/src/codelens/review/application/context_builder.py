@@ -37,7 +37,7 @@ class ReviewScopeLimits:
 
 @dataclass(frozen=True)
 class RepositoryInstructionInput:
-    """Carry one trusted frozen rule body and its exact Review targets."""
+    """Carry one trusted frozen rule body and its compact Review scope."""
 
     path: str
     content: str
@@ -105,19 +105,20 @@ class ContextBuilder:
         instructions: ResolvedInstructionSet,
         review_file_paths: tuple[str, ...],
     ) -> tuple[RepositoryInstructionInput, ...]:
-        """Deduplicate rule bodies while preserving exact target scope and precedence."""
+        """Deduplicate rule bodies while preserving compact scope and precedence."""
 
         chains_by_target = {chain.target_path: chain for chain in instructions.chains}
-        applies_to_by_rule: dict[str, list[str]] = {}
-        for target_path in review_file_paths:
-            for rule_path in chains_by_target[target_path].rule_paths:
-                applies_to_by_rule.setdefault(rule_path, []).append(target_path)
+        active_rule_paths = {
+            rule_path
+            for target_path in review_file_paths
+            for rule_path in chains_by_target[target_path].rule_paths
+        }
 
         active_documents = sorted(
             (
                 document
                 for document in instructions.documents
-                if document.relative_path in applies_to_by_rule
+                if document.relative_path in active_rule_paths
             ),
             key=lambda document: (document.precedence, document.relative_path),
         )
@@ -125,7 +126,7 @@ class ContextBuilder:
             RepositoryInstructionInput(
                 path=document.relative_path,
                 content=document.content,
-                applies_to=tuple(applies_to_by_rule[document.relative_path]),
+                applies_to=(document.scope_path or ".",),
             )
             for document in active_documents
         )

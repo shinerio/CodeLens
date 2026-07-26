@@ -294,12 +294,12 @@ async def test_full_scope_builds_complete_agent_input_and_freezes_only_active_ru
     assert json.loads(payload) == {
         "repository_instructions": [
             {
-                "applies_to": ["README.md", "src/service.py"],
+                "applies_to": ["."],
                 "content": "---\nexclude:\n  - tests/**\n---\nRoot rules.\n",
                 "path": "AGENTS.md",
             },
             {
-                "applies_to": ["src/service.py"],
+                "applies_to": ["src"],
                 "content": "Source rules.\n",
                 "path": "src/REVIEW.md",
             },
