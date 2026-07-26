@@ -88,6 +88,10 @@ it("creates the first persistent model gateway without retaining its API key", a
     max_tokens: 65536,
     thinking_level: "disabled",
     agent_timeout: 1800,
+    max_agent_turns: 100,
+    max_tool_calls: 300,
+    max_identical_tool_results: 3,
+    tool_timeout_seconds: 30,
   });
   expect(await screen.findByText("Active gateway")).toBeInTheDocument();
   expect(screen.getByLabelText("API Key")).toHaveValue("");
@@ -160,6 +164,100 @@ it("switches the active gateway without asking for the stored key", async () => 
     gateway_id: "gateway_secondary",
   });
   expect(await within(secondary).findByText("Active gateway")).toBeInTheDocument();
+});
+
+it("updates the selected model execution limits from the runtime rail", async () => {
+  const gateway = {
+    gateway_id: "gateway_primary",
+    name: "Primary gateway",
+    model: "gpt-primary",
+    base_url: "https://primary.example/v1",
+    vendor: "openai",
+    is_active: true,
+    api_type: "responses",
+    max_tokens: 65536,
+    thinking_level: "medium",
+    agent_timeout: 1800,
+    max_agent_turns: 100,
+    max_tool_calls: 300,
+    max_identical_tool_results: 3,
+    tool_timeout_seconds: 30,
+  };
+  fetchMock
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ active_gateway_id: gateway.gateway_id, gateways: [gateway] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 10 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(
+      new Response(
+        JSON.stringify({
+          active_gateway_id: gateway.gateway_id,
+          gateways: [{ ...gateway, max_agent_turns: 80, max_tool_calls: 240 }],
+        }),
+        { status: 200, headers: { "Content-Type": "application/json" } },
+      ),
+    );
+  const user = userEvent.setup();
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  await waitFor(() =>
+    expect(screen.getByLabelText("Execution model")).toHaveValue("gateway_primary"),
+  );
+  await user.clear(screen.getByLabelText("Maximum agent turns"));
+  await user.type(screen.getByLabelText("Maximum agent turns"), "80");
+  await user.clear(screen.getByLabelText("Maximum tool calls"));
+  await user.type(screen.getByLabelText("Maximum tool calls"), "240");
+  expect(screen.getByLabelText("Agent Timeout (s)")).toHaveValue(1800);
+  expect(screen.getByLabelText("Maximum agent turns")).toHaveValue(80);
+  expect(screen.getByLabelText("Maximum tool calls")).toHaveValue(240);
+  expect(screen.getByLabelText("Identical result limit")).toHaveValue(3);
+  expect(screen.getByLabelText("Tool timeout (s)")).toHaveValue(30);
+  const saveButton = screen.getByRole("button", { name: "Save model execution limits" });
+  expect(saveButton).toBeEnabled();
+  await user.click(saveButton);
+
+  await waitFor(() =>
+    expect(
+      fetchMock.mock.calls.some(
+        ([url, init]) =>
+          url === "/api/settings/model-gateways/gateway_primary" && init?.method === "PUT",
+      ),
+    ).toBe(true),
+  );
+  const updateCall = fetchMock.mock.calls.find(
+    ([url, init]) =>
+      url === "/api/settings/model-gateways/gateway_primary" && init?.method === "PUT",
+  );
+  expect(JSON.parse(String(updateCall?.[1]?.body))).toEqual({
+    name: "Primary gateway",
+    model: "gpt-primary",
+    base_url: "https://primary.example/v1",
+    vendor: "openai",
+    api_type: "responses",
+    max_tokens: 65536,
+    thinking_level: "medium",
+    agent_timeout: 1800,
+    max_agent_turns: 80,
+    max_tool_calls: 240,
+    max_identical_tool_results: 3,
+    tool_timeout_seconds: 30,
+  });
 });
 
 it("sends a connectivity test request when the test connectivity button is clicked", async () => {

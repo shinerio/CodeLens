@@ -368,6 +368,11 @@ GatewayModel = Annotated[
     str,
     StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
 ]
+AgentTimeoutSeconds = Annotated[int, Field(ge=60, le=7200)]
+MaxAgentTurns = Annotated[int, Field(ge=1, le=500)]
+MaxToolCalls = Annotated[int, Field(ge=1, le=5000)]
+MaxIdenticalToolResults = Annotated[int, Field(ge=2, le=20)]
+ToolTimeoutSeconds = Annotated[int, Field(ge=1, le=300)]
 
 
 class CreateModelGatewayRequest(StrictDto):
@@ -381,7 +386,11 @@ class CreateModelGatewayRequest(StrictDto):
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
-    agent_timeout: int = 1800
+    agent_timeout: AgentTimeoutSeconds = 1800
+    max_agent_turns: MaxAgentTurns = 100
+    max_tool_calls: MaxToolCalls = 300
+    max_identical_tool_results: MaxIdenticalToolResults = 3
+    tool_timeout_seconds: ToolTimeoutSeconds = 30
 
     @field_validator("api_key")
     @classmethod
@@ -403,7 +412,11 @@ class UpdateModelGatewayRequest(StrictDto):
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
-    agent_timeout: int = 1800
+    agent_timeout: AgentTimeoutSeconds = 1800
+    max_agent_turns: MaxAgentTurns = 100
+    max_tool_calls: MaxToolCalls = 300
+    max_identical_tool_results: MaxIdenticalToolResults = 3
+    tool_timeout_seconds: ToolTimeoutSeconds = 30
 
     @field_validator("api_key")
     @classmethod
@@ -438,6 +451,10 @@ class ModelGatewayResponse(StrictDto):
     max_tokens: int
     thinking_level: Literal["disabled", "low", "medium", "high"]
     agent_timeout: int
+    max_agent_turns: int
+    max_tool_calls: int
+    max_identical_tool_results: int
+    tool_timeout_seconds: int
 
 
 class ModelGatewayCatalogResponse(StrictDto):

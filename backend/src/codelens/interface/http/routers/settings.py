@@ -58,6 +58,10 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
                 max_tokens=gateway.max_tokens,
                 thinking_level=gateway.thinking_level,
                 agent_timeout=gateway.agent_timeout,
+                max_agent_turns=gateway.max_agent_turns,
+                max_tool_calls=gateway.max_tool_calls,
+                max_identical_tool_results=gateway.max_identical_tool_results,
+                tool_timeout_seconds=gateway.tool_timeout_seconds,
             )
             for gateway in view.gateways
         ],
@@ -164,6 +168,10 @@ async def create_model_gateway(
             max_tokens=request.max_tokens,
             thinking_level=request.thinking_level,
             agent_timeout=request.agent_timeout,
+            max_agent_turns=request.max_agent_turns,
+            max_tool_calls=request.max_tool_calls,
+            max_identical_tool_results=request.max_identical_tool_results,
+            tool_timeout_seconds=request.tool_timeout_seconds,
         )
     )
 
@@ -188,6 +196,10 @@ async def update_model_gateway(
             max_tokens=request.max_tokens,
             thinking_level=request.thinking_level,
             agent_timeout=request.agent_timeout,
+            max_agent_turns=request.max_agent_turns,
+            max_tool_calls=request.max_tool_calls,
+            max_identical_tool_results=request.max_identical_tool_results,
+            tool_timeout_seconds=request.tool_timeout_seconds,
         )
     )
 

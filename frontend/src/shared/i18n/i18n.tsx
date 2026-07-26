@@ -1,5 +1,6 @@
 import {
   createContext,
+  useCallback,
   useContext,
   useEffect,
   useMemo,
@@ -64,6 +65,14 @@ const EN_MESSAGES = {
   "settings.thinkingHigh": "High",
   "settings.agentTimeout": "Agent Timeout (s)",
   "settings.agentTimeoutHint": "Max seconds for the agent to run before timing out.",
+  "settings.executionModel": "Execution model",
+  "settings.maxAgentTurns": "Maximum agent turns",
+  "settings.maxToolCalls": "Maximum tool calls",
+  "settings.maxIdenticalToolResults": "Identical result limit",
+  "settings.maxIdenticalToolResultsHint":
+    "Stops the run when the same tool arguments return the same result repeatedly.",
+  "settings.toolTimeoutSeconds": "Tool timeout (s)",
+  "settings.saveExecutionLimits": "Save model execution limits",
   "settings.enabled": "Enabled",
   "settings.disabled": "Disabled",
   "settings.rotateKey": "Leave blank to keep the saved credential.",
@@ -408,6 +417,14 @@ const ZH_MESSAGES: Record<TranslationKey, string> = {
   "settings.thinkingHigh": "高",
   "settings.agentTimeout": "Agent 超时（秒）",
   "settings.agentTimeoutHint": "Agent 运行最大超时时间，取决于审查代码量。",
+  "settings.executionModel": "执行模型",
+  "settings.maxAgentTurns": "Agent 最大回合数",
+  "settings.maxToolCalls": "工具最大调用数",
+  "settings.maxIdenticalToolResults": "相同结果熔断阈值",
+  "settings.maxIdenticalToolResultsHint":
+    "相同工具参数累计得到相同结果达到阈值时终止本次运行。",
+  "settings.toolTimeoutSeconds": "单次工具超时（秒）",
+  "settings.saveExecutionLimits": "保存模型执行限制",
   "settings.enabled": "开启",
   "settings.disabled": "关闭",
   "settings.rotateKey": "留空可继续使用已保存的凭证。",
@@ -749,11 +766,11 @@ export function I18nProvider({
     document.documentElement.lang = resolvedLocale;
   }, [resolvedLocale]);
 
-  const setLocale = (nextLocale: Locale) => {
+  const setLocale = useCallback((nextLocale: Locale) => {
     if (locale === undefined) {
       setDetectedLocale(nextLocale);
     }
-  };
+  }, [locale]);
 
   const value = useMemo<I18nContextValue>(
     () => ({
@@ -761,7 +778,7 @@ export function I18nProvider({
       setLocale,
       t: (key, values) => translate(resolvedLocale, key, values),
     }),
-    [resolvedLocale, locale],
+    [resolvedLocale, setLocale],
   );
 
   return <I18nContext.Provider value={value}>{children}</I18nContext.Provider>;

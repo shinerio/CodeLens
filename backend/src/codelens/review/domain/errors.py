@@ -53,3 +53,21 @@ class AgentMaxTurnsExceededError(PermanentAgentOutputError):
     """Signal that an Agent used all allowed turns before returning an output."""
 
     code = "agent_max_turns_exceeded"
+
+
+class ToolCallLimitExceededError(PermanentAgentOutputError):
+    """Signal that a model exhausted its configured tool-call budget."""
+
+    code = "tool_call_limit_exceeded"
+
+
+class ToolLoopDetectedError(PermanentAgentOutputError):
+    """Signal repeated identical tool arguments and results without progress."""
+
+    code = "tool_loop_detected"
+
+
+class ToolInvocationTimeoutError(PermanentAgentOutputError):
+    """Signal that one model-visible tool exceeded its configured deadline."""
+
+    code = "tool_invocation_timeout"

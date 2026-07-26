@@ -32,11 +32,12 @@ _MAX_SCAN_BYTES = 1024 * 1024
 _MAX_LINES = 500
 _MAX_PATH_CHARS = 1024
 _MAX_PATTERN_CHARS = 512
-_DEFAULT_REGEX_TIMEOUT_SECONDS = 5.0
+_DEFAULT_REGEX_TIMEOUT_SECONDS = 30.0
 _FileVersion = Literal["current", "base", "head"]
 _ModelPath = Annotated[str, Field(max_length=_MAX_PATH_CHARS)]
 _ModelPattern = Annotated[str, Field(min_length=1, max_length=_MAX_PATTERN_CHARS)]
 _ModelLine = Annotated[int, Field(ge=1)]
+_ModelCursor = Annotated[int, Field(ge=0)]
 
 
 def _matches_posix_path_glob(path: str, pattern: str) -> bool:
@@ -66,21 +67,20 @@ def _matches_posix_path_glob(path: str, pattern: str) -> bool:
 def _regex_search_worker(
     sender: Connection,
     pattern: str,
-    files: tuple[tuple[str, str], ...],
+    lines: tuple[tuple[str, int, str], ...],
 ) -> None:
     """Run untrusted regular-expression matching in a terminable child process."""
 
     try:
         expression = re.compile(pattern)
         matches: list[dict[str, object]] = []
-        for path, text in files:
-            for line_number, line in enumerate(text.splitlines(), start=1):
-                if expression.search(line):
-                    matches.append({"path": path, "line": line_number, "text": line[:200]})
-                    if len(matches) >= _MAX_RESULTS:
-                        sender.send((matches, True))
-                        return
-        sender.send((matches, False))
+        for processed_count, (path, line_number, line) in enumerate(lines, start=1):
+            if expression.search(line):
+                matches.append({"path": path, "line": line_number, "text": line[:200]})
+                if len(matches) >= _MAX_RESULTS:
+                    sender.send((matches, True, processed_count))
+                    return
+        sender.send((matches, False, len(lines)))
     finally:
         sender.close()
 
@@ -98,16 +98,16 @@ def _terminate_process(process: BaseProcess) -> None:
 
 def _search_regular_expression(
     pattern: str,
-    files: tuple[tuple[str, str], ...],
+    lines: tuple[tuple[str, int, str], ...],
     timeout_seconds: float,
-) -> tuple[list[dict[str, object]], bool]:
+) -> tuple[list[dict[str, object]], bool, int]:
     """Return bounded matches or terminate a regex evaluation that exceeds its deadline."""
 
     process_context = multiprocessing.get_context("spawn")
     receiver, sender = process_context.Pipe(duplex=False)
     process = process_context.Process(
         target=_regex_search_worker,
-        args=(sender, pattern, files),
+        args=(sender, pattern, lines),
         daemon=True,
     )
     try:
@@ -118,12 +118,13 @@ def _search_regular_expression(
         message: object = receiver.recv()
         if (
             not isinstance(message, tuple)
-            or len(message) != 2
+            or len(message) != 3
             or not isinstance(message[0], list)
             or not isinstance(message[1], bool)
+            or not isinstance(message[2], int)
         ):
             raise ValueError("grep worker returned an invalid result")
-        return message[0], message[1]
+        return message[0], message[1], message[2]
     except EOFError:
         raise ValueError("grep worker terminated without a result") from None
     finally:
@@ -192,8 +193,8 @@ class FilesystemReviewTools:
         ]
         return self._json({"paths": paths[:_MAX_RESULTS], "truncated": len(paths) > _MAX_RESULTS})
 
-    async def grep(self, pattern: str) -> str:
-        """Search visible UTF-8 text with a bounded regular expression."""
+    async def grep(self, pattern: str, path: str = "", cursor: int = 0) -> str:
+        """Search one visible path scope and return a resumable bounded result page."""
 
         self._consume()
         if len(pattern) > _MAX_PATTERN_CHARS:
@@ -202,29 +203,58 @@ class FilesystemReviewTools:
             re.compile(pattern)
         except re.error as error:
             raise ValueError("grep pattern is invalid") from error
-        files: list[tuple[str, str]] = []
+        if cursor < 0:
+            raise ValueError("grep cursor is invalid")
+        entries = self._grep_entries(path)
+        lines: list[tuple[str, int, str]] = []
         scanned = 0
-        for path, entry in sorted(self._entries.items()):
+        visited_lines = 0
+        has_more = False
+        for candidate_path, entry in entries:
             payload = await self._payload(entry)
             if b"\0" in payload:
                 continue
-            scanned += len(payload)
-            if scanned > _MAX_SCAN_BYTES:
-                break
             text = payload.decode("utf-8", errors="replace")
-            files.append((path, text))
-        matches, result_truncated = await asyncio.to_thread(
+            for line_number, line in enumerate(text.splitlines(), start=1):
+                if visited_lines < cursor:
+                    visited_lines += 1
+                    continue
+                encoded_size = len(line.encode("utf-8")) + 1
+                if lines and scanned + encoded_size > _MAX_SCAN_BYTES:
+                    has_more = True
+                    break
+                lines.append((candidate_path, line_number, line))
+                scanned += encoded_size
+                visited_lines += 1
+            if has_more:
+                break
+        if cursor > visited_lines:
+            raise ValueError("grep cursor is invalid")
+        matches, result_truncated, processed_count = await asyncio.to_thread(
             _search_regular_expression,
             pattern,
-            tuple(files),
+            tuple(lines),
             self._regex_timeout_seconds,
         )
+        is_truncated = result_truncated or has_more
+        next_cursor = cursor + processed_count if is_truncated else None
         return self._json(
             {
                 "matches": matches,
-                "truncated": result_truncated or scanned > _MAX_SCAN_BYTES,
+                "next_cursor": next_cursor,
+                "truncated": is_truncated,
             }
         )
+
+    def _grep_entries(self, path: str) -> list[tuple[str, SnapshotEntry]]:
+        if path in self._entries:
+            return [(path, self._entries[path])]
+        prefix = self._directory_prefix(path)
+        return [
+            (candidate, entry)
+            for candidate, entry in sorted(self._entries.items())
+            if candidate.startswith(prefix)
+        ]
 
     async def read_file(
         self,
@@ -304,10 +334,10 @@ class FilesystemReviewTools:
             name_override="grep",
             description_override=descriptions["grep"],
         )
-        async def grep_tool(pattern: _ModelPattern) -> str:
+        async def grep_tool(pattern: _ModelPattern, path: _ModelPath, cursor: _ModelCursor) -> str:
             """Search visible Snapshot text with a regular expression."""
 
-            return await self.grep(pattern)
+            return await self.grep(pattern, path, cursor)
 
         @function_tool(
             name_override="read_file",

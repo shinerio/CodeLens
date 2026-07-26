@@ -8,8 +8,12 @@ from typing import TypedDict, cast
 from codelens.reviewer_catalog.domain.provider_config import (
     _DEFAULT_AGENT_TIMEOUT,
     _DEFAULT_API_TYPE,
+    _DEFAULT_MAX_AGENT_TURNS,
+    _DEFAULT_MAX_IDENTICAL_TOOL_RESULTS,
     _DEFAULT_MAX_TOKENS,
+    _DEFAULT_MAX_TOOL_CALLS,
     _DEFAULT_THINKING_LEVEL,
+    _DEFAULT_TOOL_TIMEOUT_SECONDS,
     GatewayApiType,
     ModelGateway,
     ModelGatewayCatalog,
@@ -31,6 +35,10 @@ class _StoredGateway(_StoredProviderConfig):
     max_tokens: int
     thinking_level: str
     agent_timeout: int
+    max_agent_turns: int
+    max_tool_calls: int
+    max_identical_tool_results: int
+    tool_timeout_seconds: int
     vendor: ModelProviderVendor
     api_type: GatewayApiType
 
@@ -112,8 +120,21 @@ class FilesystemModelProviderConfigAdapter:
             ):
                 raise ValueError("model gateway catalog is invalid")
             raw_agent_timeout = item.get("agent_timeout", _DEFAULT_AGENT_TIMEOUT)
-            if not isinstance(raw_agent_timeout, int) or isinstance(raw_agent_timeout, bool):
-                raise ValueError("model gateway catalog is invalid")
+            raw_max_agent_turns = item.get("max_agent_turns", _DEFAULT_MAX_AGENT_TURNS)
+            raw_max_tool_calls = item.get("max_tool_calls", _DEFAULT_MAX_TOOL_CALLS)
+            raw_max_identical_tool_results = item.get(
+                "max_identical_tool_results", _DEFAULT_MAX_IDENTICAL_TOOL_RESULTS
+            )
+            raw_tool_timeout_seconds = item.get(
+                "tool_timeout_seconds", _DEFAULT_TOOL_TIMEOUT_SECONDS
+            )
+            cls._validate_execution_limit(raw_agent_timeout, minimum=60, maximum=7200)
+            cls._validate_execution_limit(raw_max_agent_turns, minimum=1, maximum=500)
+            cls._validate_execution_limit(raw_max_tool_calls, minimum=1, maximum=5000)
+            cls._validate_execution_limit(
+                raw_max_identical_tool_results, minimum=2, maximum=20
+            )
+            cls._validate_execution_limit(raw_tool_timeout_seconds, minimum=1, maximum=300)
             gateways.append(
                 ModelGateway(
                     gateway_id=cast(str, item["gateway_id"]),
@@ -126,9 +147,23 @@ class FilesystemModelProviderConfigAdapter:
                     max_tokens=raw_max_tokens,
                     thinking_level=cast(ThinkingLevel, raw_thinking_level),
                     agent_timeout=raw_agent_timeout,
+                    max_agent_turns=raw_max_agent_turns,
+                    max_tool_calls=raw_max_tool_calls,
+                    max_identical_tool_results=raw_max_identical_tool_results,
+                    tool_timeout_seconds=raw_tool_timeout_seconds,
                 )
             )
         return ModelGatewayCatalog(cast(str | None, active_gateway_id), tuple(gateways))
+
+    @staticmethod
+    def _validate_execution_limit(value: object, *, minimum: int, maximum: int) -> None:
+        if (
+            not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < minimum
+            or value > maximum
+        ):
+            raise ValueError("model gateway catalog is invalid")
 
     def _save_catalog_sync(self, catalog: ModelGatewayCatalog) -> None:
         # Windows: mkdir mode is ignored; chmod works but has different semantics.
@@ -150,6 +185,10 @@ class FilesystemModelProviderConfigAdapter:
                     "max_tokens": gateway.max_tokens,
                     "thinking_level": gateway.thinking_level,
                     "agent_timeout": gateway.agent_timeout,
+                    "max_agent_turns": gateway.max_agent_turns,
+                    "max_tool_calls": gateway.max_tool_calls,
+                    "max_identical_tool_results": gateway.max_identical_tool_results,
+                    "tool_timeout_seconds": gateway.tool_timeout_seconds,
                 }
                 for gateway in catalog.gateways
             ],

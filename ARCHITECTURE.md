@@ -54,7 +54,7 @@
 
 - API 请求、响应和模型输出必须在后端边界使用 Pydantic DTO 校验，不得直接序列化领域实体或 ORM 模型。
 - JSON 字段、错误码、事件名称和状态值属于稳定契约。变更时必须考虑向后兼容、幂等、迁移和失败恢复。
-- `/api/settings/model-gateways` 是本地模型网关集合契约，支持创建、列出、更新和删除；`PUT /api/settings/active-model-gateway` 原子切换当前网关。读取只返回网关 ID、名称、模型 ID、Base URL 和激活状态，API Key 永不通过读取契约返回。
+- `/api/settings/model-gateways` 是本地模型网关集合契约，支持创建、列出、更新和删除；`PUT /api/settings/active-model-gateway` 原子切换当前网关。读取只返回网关 ID、名称、模型 ID、Base URL、激活状态和非 Secret 的模型与执行策略，API Key 永不通过读取契约返回。每个网关独立持有 Agent 总超时、最大模型回合、最大工具调用、相同参数与结果熔断阈值和单次工具超时；默认值依次为 1800 秒、100、300、3 和 30 秒，允许范围依次为 60–7200、1–500、1–5000、2–20 和 1–300。新 Agent Run 在实际调用时读取当前激活网关的完整策略，无需重启。
 - `GET/PUT /api/settings/repositories` 读取或更新最近 Review 仓库目录容量，字段为 `recent_repository_limit`，允许 1–20，默认 10。更新必须持久化并立即按当前 LRU 顺序裁剪溢出目录。
 - `GET/PUT /api/settings/instruction-files` 读取或更新仓库规则文件的行数上限，字段为 `root_max_lines` 和 `nested_max_lines`，均允许 1–10000，默认分别为 500 和 200，且根目录上限不得低于嵌套目录上限。更新必须原子持久化，并在后续规则解析时无需重启即可生效。
 - `/api/repositories/browse` 只返回系统根目录、目录项和 Git 仓库标记；`/api/repositories/catalog` 返回全部可选分支，并按请求中的目标分支返回该分支 tip 之前的分页 Commit 元数据。目标分支必须来自后端枚举的分支，Commit 候选不得混入目标分支不可达的提交或目标 tip 本身。两者都不能返回文件正文。
@@ -146,7 +146,7 @@ Interface 层当前包含 FastAPI 路由、请求/响应 DTO、SSE 端点和 Wor
 
 ### 5.1 MVP 内置 Review 工具
 
-MVP 为每个 Agent Run 提供 CodeLens 自身实现的模型可见只读证据工具：`find_files`、`grep`、`read_file` 与 `get_diff`。严格工具 schema 要求模型显式提供每个参数。所有模型可见路径都是 Git 风格的仓库相对路径，在包括 Windows 的所有操作系统上统一使用 `/`，不包含盘符或宿主 worktree 绝对路径；`find_files` 的 `path` 使用空字符串表示仓库根目录，`pattern` 使用路径段感知的 glob，其中 `*` 匹配单个路径段、`**` 匹配任意层级。`read_file` 的 `version` 必须是 `current`、`base` 或 `head`，分别读取冻结 Snapshot 当前内容或固定 Git revision。`get_diff` 比较固定 base 与经过 Manifest 哈希验证的冻结 current 内容，因此会包含已捕获的 workspace overlay。所有证据工具的唯一数据源是该任务冻结后的 `ReviewSnapshot`。规则发现与装载是宿主 Context Builder 的职责，不作为工具暴露给模型。Context Builder 在首次模型调用前从 Snapshot 的不可变文件级变更元数据确定性构造完整 `review_files`；每项只包含规范化仓库相对路径、`added`、`modified`、`deleted` 或 `renamed` 类型、可选重命名前路径，以及允许产生 Finding 的 `old_ranges` 与 `new_ranges`。文件和范围稳定排序，超过产品上限必须在模型调用前明确失败，不得静默截断。无法可靠表达变更类型的范围也必须在 Snapshot 构建边界失败，不能根据 hunk 正文猜测。全仓 Review 使用明确的空概念基线：最终存在的目标按 `added` 处理，其完整文本范围为新侧范围，overlay 删除的目标按 `deleted` 处理；二进制文件可以没有文本范围。
+MVP 为每个 Agent Run 提供 CodeLens 自身实现的模型可见只读证据工具：`find_files`、`grep`、`read_file` 与 `get_diff`。严格工具 schema 要求模型显式提供每个参数。所有模型可见路径都是 Git 风格的仓库相对路径，在包括 Windows 的所有操作系统上统一使用 `/`，不包含盘符或宿主 worktree 绝对路径；`find_files` 的 `path` 使用空字符串表示仓库根目录，`pattern` 使用路径段感知的 glob，其中 `*` 匹配单个路径段、`**` 匹配任意层级。`grep` 必须显式接收搜索文件或目录 `path` 和从 0 开始的 `cursor`；每页在该路径范围内最多扫描 1 MiB、返回 200 个匹配，存在后续内容时返回 `next_cursor`，调用方只能把它原样用于相同路径与表达式的下一页。`read_file` 的 `version` 必须是 `current`、`base` 或 `head`，分别读取冻结 Snapshot 当前内容或固定 Git revision。`get_diff` 比较固定 base 与经过 Manifest 哈希验证的冻结 current 内容，因此会包含已捕获的 workspace overlay。所有证据工具的唯一数据源是该任务冻结后的 `ReviewSnapshot`。规则发现与装载是宿主 Context Builder 的职责，不作为工具暴露给模型。Context Builder 在首次模型调用前从 Snapshot 的不可变文件级变更元数据确定性构造完整 `review_files`；每项只包含规范化仓库相对路径、`added`、`modified`、`deleted` 或 `renamed` 类型、可选重命名前路径，以及允许产生 Finding 的 `old_ranges` 与 `new_ranges`。文件和范围稳定排序，超过产品上限必须在模型调用前明确失败，不得静默截断。无法可靠表达变更类型的范围也必须在 Snapshot 构建边界失败，不能根据 hunk 正文猜测。全仓 Review 使用明确的空概念基线：最终存在的目标按 `added` 处理，其完整文本范围为新侧范围，overlay 删除的目标按 `deleted` 处理；二进制文件可以没有文本范围。
 
 工具驱动 Agent 的首次用户输入只序列化完整 `review_files` 和去重后的 `repository_instructions`。每条仓库规则只包含规范化相对路径、完整正文和精确 `applies_to` 目标列表；正文只注入一次，不得在系统指令或同一首包其他位置重复。任务持久化的 `prompt_locale` 由 Runtime 显式接收并用于选择系统语言包，不进入模型输入。Snapshot ID、hunk ID、内容哈希、摘录哈希、内部规则链标识和优先级数字仅由后端保留，用于隔离、完整性校验、Finding 定位、转录与 Artifact，不得序列化给模型。完整 diff 和上下文 excerpt 不预加载；Agent 已在首轮获得全部适用规则，再根据调查需要从可用的只读证据工具中自行选择。
 
@@ -154,7 +154,7 @@ MVP 为每个 Agent Run 提供 CodeLens 自身实现的模型可见只读证据�
 
 内置工具的模型可见自然语言描述、参数语义与边界、平台审查规则、输出约束和运行结束要求统一由启动时加载的 `prompts/sys/<locale>` 提供；工具参数还必须在严格 JSON schema 中表达可机器校验的类型、枚举、长度和数量边界，描述与 schema 不得声明互相矛盾的默认值或可选性。工具名、JSON 字段名、路径、代码标识符与 Snapshot 返回结构属于稳定技术契约，不随本地化改变。
 
-工具实现必须位于 `review.infrastructure` 或 `workspace.infrastructure`，并通过 Review 的 Runtime Port 接入。每次证据读取必须校验 Snapshot ID、规范化相对路径、Manifest 可见性和内容哈希；返回内容必须直接来自本次已验证的字节，不能在校验后再次从可变工作树读取。必须限制读取字节数、行数、搜索结果数与 Git 输出；模型提供的正则表达式必须在可终止的隔离执行单元中运行并设置时限。工具调用不设置独立次数上限，而由可配置的模型回合数、单次工具输出上限和用户取消共同约束；Review 不设置总执行时限。必须记录总调用数用于诊断和成本治理。宿主构造 `review_files`、`repository_instructions` 和 `get_change_map` 类上下文不产生工具转录或工具计数，过程报告中的调用次数为零。所有工具不得写入文件、执行任意 Shell、访问网络、访问原始工作区或读取 Snapshot 之外的路径。
+工具实现必须位于 `review.infrastructure` 或 `workspace.infrastructure`，并通过 Review 的 Runtime Port 接入。每次证据读取必须校验 Snapshot ID、规范化相对路径、Manifest 可见性和内容哈希；返回内容必须直接来自本次已验证的字节，不能在校验后再次从可变工作树读取。必须限制读取字节数、行数、搜索结果数与 Git 输出；模型提供的正则表达式必须在可终止的隔离执行单元中运行并设置时限。一个 Agent Run 的全部模型可见工具共享当前网关的调用次数和单次超时上限；宿主只在内存中保留规范化工具名、参数与结果的哈希，相同三元组达到配置阈值时必须立即以明确的不可重试错误终止，不能继续消耗模型回合。Review 不设置跨 Agent 的任务总执行时限。必须记录总调用数用于诊断和成本治理。宿主构造 `review_files`、`repository_instructions` 和 `get_change_map` 类上下文不产生工具转录或工具计数，过程报告中的调用次数为零。所有工具不得写入文件、执行任意 Shell、访问网络、访问原始工作区或读取 Snapshot 之外的路径。
 
 MVP 不实现 Serena、CodeGraph、codebase-memory、第三方 MCP、Skills、LSP 或通用沙箱工具。未来接入这些能力时，必须经 `capabilities` 上下文的版本化 Capability Profile 与受控 Adapter 暴露稳定工具契约，不能将供应商工具、路径或权限直接泄漏给 Agent。
 

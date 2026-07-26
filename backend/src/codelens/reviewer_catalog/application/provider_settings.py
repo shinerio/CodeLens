@@ -37,6 +37,10 @@ class ModelGatewayView:
     max_tokens: int
     thinking_level: ThinkingLevel
     agent_timeout: int
+    max_agent_turns: int
+    max_tool_calls: int
+    max_identical_tool_results: int
+    tool_timeout_seconds: int
 
 
 @dataclass(frozen=True)
@@ -79,6 +83,10 @@ class ModelGatewaySettingsService:
         max_tokens: int = 65536,
         thinking_level: ThinkingLevel = "disabled",
         agent_timeout: int = 1800,
+        max_agent_turns: int = 100,
+        max_tool_calls: int = 300,
+        max_identical_tool_results: int = 3,
+        tool_timeout_seconds: int = 30,
     ) -> ModelGatewayCatalogView:
         """Append a gateway; the first created gateway becomes active automatically."""
 
@@ -95,6 +103,10 @@ class ModelGatewaySettingsService:
                 max_tokens=max_tokens,
                 thinking_level=thinking_level,
                 agent_timeout=agent_timeout,
+                max_agent_turns=max_agent_turns,
+                max_tool_calls=max_tool_calls,
+                max_identical_tool_results=max_identical_tool_results,
+                tool_timeout_seconds=tool_timeout_seconds,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id or gateway.gateway_id,
@@ -116,6 +128,10 @@ class ModelGatewaySettingsService:
         max_tokens: int = 65536,
         thinking_level: ThinkingLevel = "disabled",
         agent_timeout: int = 1800,
+        max_agent_turns: int = 100,
+        max_tool_calls: int = 300,
+        max_identical_tool_results: int = 3,
+        tool_timeout_seconds: int = 30,
     ) -> ModelGatewayCatalogView:
         """Replace gateway metadata while retaining an omitted write-only API key."""
 
@@ -133,6 +149,10 @@ class ModelGatewaySettingsService:
                 max_tokens=max_tokens,
                 thinking_level=thinking_level,
                 agent_timeout=agent_timeout,
+                max_agent_turns=max_agent_turns,
+                max_tool_calls=max_tool_calls,
+                max_identical_tool_results=max_identical_tool_results,
+                tool_timeout_seconds=tool_timeout_seconds,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id,
@@ -210,6 +230,10 @@ class ModelGatewaySettingsService:
                     max_tokens=gateway.max_tokens,
                     thinking_level=gateway.thinking_level,
                     agent_timeout=gateway.agent_timeout,
+                    max_agent_turns=gateway.max_agent_turns,
+                    max_tool_calls=gateway.max_tool_calls,
+                    max_identical_tool_results=gateway.max_identical_tool_results,
+                    tool_timeout_seconds=gateway.tool_timeout_seconds,
                 )
                 for gateway in catalog.gateways
             ),

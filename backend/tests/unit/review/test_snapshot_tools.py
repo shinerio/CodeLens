@@ -7,6 +7,7 @@ import pytest
 from agents import RunConfig, Usage
 from agents.tool_context import ToolContext
 
+from codelens.review.infrastructure import snapshot_tools as snapshot_tools_module
 from codelens.review.infrastructure.comment_collector import (
     ReviewCommentCollector,
     ReviewCommentSubmission,
@@ -189,6 +190,34 @@ async def test_exposes_only_hash_verified_snapshot_content(tmp_path: Path) -> No
         await tools.read_file("src/helper.py", 1, 1)
     with pytest.raises(ValueError, match="visible"):
         await tools.read_file(".git/config", 1, 1)
+
+
+async def test_grep_scopes_search_and_resumes_from_returned_cursor(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+    monkeypatch.setattr(snapshot_tools_module, "_MAX_SCAN_BYTES", 45)
+
+    first_page = json.loads(await tools.grep("return", path="src", cursor=0))
+    assert first_page["matches"] == [
+        {"line": 2, "path": "src/helper.py", "text": "    return 'helper'"}
+    ]
+    assert isinstance(first_page["next_cursor"], int)
+    assert first_page["truncated"] is True
+
+    second_page = json.loads(
+        await tools.grep("return", path="src", cursor=first_page["next_cursor"])
+    )
+    assert second_page["matches"] == [
+        {"line": 2, "path": "src/service.py", "text": "    return 'new'"}
+    ]
+    assert second_page["next_cursor"] is None
+    assert second_page["truncated"] is False
+
+    outside_scope = json.loads(await tools.grep("return", path="tests", cursor=0))
+    assert outside_scope == {"matches": [], "next_cursor": None, "truncated": False}
 
 
 async def test_find_files_uses_posix_path_glob_semantics(tmp_path: Path) -> None:
@@ -732,7 +761,12 @@ async def test_all_model_tools_work_through_agents_sdk_entrypoints(tmp_path: Pat
         "comment": "Submit findings.",
         "task_done": "Finish the review.",
     }
-    filesystem_tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=30)
+    filesystem_tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=30,
+        regex_timeout_seconds=30,
+    )
     collector = ReviewCommentCollector(
         snapshot=snapshot,
         reviewer_id="correctness",
@@ -771,7 +805,14 @@ async def test_all_model_tools_work_through_agents_sdk_entrypoints(tmp_path: Pat
         "src/helper.py",
         "src/service.py",
     ]
-    assert len((await invoke("grep", {"pattern": "return\\s+'new'"}))["matches"]) == 1
+    assert len(
+        (
+            await invoke(
+                "grep",
+                {"pattern": "return\\s+'new'", "path": "src", "cursor": 0},
+            )
+        )["matches"]
+    ) == 1
     for version, expected in (("current", "new"), ("base", "old"), ("head", "new")):
         read = await invoke(
             "read_file",

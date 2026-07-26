@@ -1,6 +1,7 @@
+import asyncio
 import json
 import traceback
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 
 import httpx
@@ -81,6 +82,24 @@ class FakeRunner:
         return self.result
 
 
+class SlowRunner(FakeRunner):
+    async def run(
+        self,
+        starting_agent: Agent[None],
+        input: str,
+        *,
+        max_turns: int,
+        run_config: RunConfig,
+    ) -> FakeResult:
+        await asyncio.sleep(1)
+        return await super().run(
+            starting_agent,
+            input,
+            max_turns=max_turns,
+            run_config=run_config,
+        )
+
+
 class StaticProviderConfigStore:
     def __init__(self, config: ModelProviderConfig | None = None) -> None:
         self.config = config
@@ -156,6 +175,62 @@ async def test_successful_provider_responses_are_not_marked_as_parse_failures() 
     raw_events = [event for event in events if event.kind == "model_raw_output"]
     assert len(raw_events) == 1
     assert raw_events[0].metadata == {"parse_failed": "false", "response_index": "1"}
+
+
+async def test_uses_active_gateway_execution_limits(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = FakeRunner(FakeResult(FindingBatchSchema(schema_version="1", findings=()), ()))
+    observed_limits: dict[str, int | float] = {}
+
+    def record_limits(tools: list[object], **limits: int | float) -> list[object]:
+        observed_limits.update(limits)
+        return tools
+
+    monkeypatch.setattr(
+        "codelens.review.infrastructure.openai_runtime.enforce_tool_execution_limits",
+        record_limits,
+    )
+    config = replace(
+        _provider_config(),
+        max_agent_turns=17,
+        max_tool_calls=41,
+        max_identical_tool_results=4,
+        tool_timeout_seconds=12,
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(config),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+
+    assert runner.max_turns == 17
+    assert observed_limits == {
+        "max_tool_calls": 41,
+        "max_identical_tool_results": 4,
+        "tool_timeout_seconds": 12,
+    }
+
+
+async def test_non_streamed_run_uses_active_gateway_timeout() -> None:
+    config = replace(_provider_config(), agent_timeout=0.01)
+    runner = SlowRunner(FakeResult(FindingBatchSchema(schema_version="1", findings=()), ()))
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(config),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    with pytest.raises(TransientAgentRuntimeError) as captured:
+        await runtime.invoke(_agent(), b"bounded input", _snapshot(), "en")
+
+    assert captured.value.reason_code == "agent_run_timeout"
 
 
 def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_locale() -> None:

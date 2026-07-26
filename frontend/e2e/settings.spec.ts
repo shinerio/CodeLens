@@ -56,6 +56,20 @@ test("persists the recent repository limit without layout overflow", async ({ pa
     .toEqual({ root_max_lines: 640, nested_max_lines: 240 });
   await expect(page.getByText("Credential handling")).toHaveCount(0);
 
+  const executionLimits = [
+    { name: "Agent Timeout (s)", min: "60", max: "7200" },
+    { name: "Maximum agent turns", min: "1", max: "500" },
+    { name: "Maximum tool calls", min: "1", max: "5000" },
+    { name: "Identical result limit", min: "2", max: "20" },
+    { name: "Tool timeout (s)", min: "1", max: "300" },
+  ];
+  for (const limit of executionLimits) {
+    const input = page.getByRole("spinbutton", { name: limit.name, exact: true });
+    await expect(input).toBeVisible();
+    await expect(input).toHaveAttribute("min", limit.min);
+    await expect(input).toHaveAttribute("max", limit.max);
+  }
+
   const boxes = await Promise.all([limitInput.boundingBox(), saveButton.boundingBox()]);
   expect(boxes[0]).not.toBeNull();
   expect(boxes[1]).not.toBeNull();

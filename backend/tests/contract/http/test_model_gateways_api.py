@@ -120,6 +120,50 @@ def test_model_gateway_update_rejects_unknown_gateway_without_leaking_key(
     assert "sk-missing-test-secret" not in response.text
 
 
+def test_model_execution_limits_are_validated_and_persisted_per_gateway(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "data")
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/settings/model-gateways",
+            json={
+                "name": "Bounded model",
+                "api_key": "sk-bounded-test-secret",
+                "model": "gpt-bounded",
+                "base_url": "https://bounded.example/v1",
+                "agent_timeout": 900,
+                "max_agent_turns": 80,
+                "max_tool_calls": 240,
+                "max_identical_tool_results": 4,
+                "tool_timeout_seconds": 20,
+            },
+        )
+        gateway = created.json()["gateways"][0]
+        invalid = client.put(
+            f"/api/settings/model-gateways/{gateway['gateway_id']}",
+            json={
+                "name": gateway["name"],
+                "model": gateway["model"],
+                "base_url": gateway["base_url"],
+                "max_identical_tool_results": 1,
+            },
+        )
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
+        persisted = client.get("/api/settings/model-gateways").json()["gateways"][0]
+
+    assert created.status_code == 201, created.text
+    assert gateway["agent_timeout"] == 900
+    assert gateway["max_agent_turns"] == 80
+    assert gateway["max_tool_calls"] == 240
+    assert gateway["max_identical_tool_results"] == 4
+    assert gateway["tool_timeout_seconds"] == 20
+    assert invalid.status_code == 422
+    assert persisted == gateway
+
+
 def _free_tcp_port() -> int:
     """Reserve and immediately release a TCP port for test scaffolding."""
 

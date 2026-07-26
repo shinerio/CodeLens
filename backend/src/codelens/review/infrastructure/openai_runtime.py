@@ -45,6 +45,7 @@ from codelens.review.domain.ports import (
 from codelens.review.infrastructure.comment_collector import ReviewCommentCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
+from codelens.review.infrastructure.tool_contract import enforce_tool_execution_limits
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
 from codelens.workspace.domain.models import ReviewSnapshot
@@ -176,7 +177,12 @@ class OpenAIAgentRuntime:
             .resolve(provider_config.vendor)
             .request_behavior(provider_config)
         )
-        snapshot_tools = FilesystemReviewTools(snapshot, self._git, max_tool_calls=None)
+        snapshot_tools = FilesystemReviewTools(
+            snapshot,
+            self._git,
+            max_tool_calls=None,
+            regex_timeout_seconds=max(0.1, provider_config.tool_timeout_seconds * 0.9),
+        )
         comment_collector = ReviewCommentCollector(
             snapshot=snapshot,
             reviewer_id=agent.agent_id,
@@ -184,12 +190,17 @@ class OpenAIAgentRuntime:
             tools=snapshot_tools,
             tool_descriptions={name: tool.description for name, tool in prompts.tools.items()},
         )
-        model_tools = [
-            *snapshot_tools.as_agent_tools(
-                {name: tool.description for name, tool in prompts.tools.items()}
-            ),
-            *comment_collector.as_agent_tools(),
-        ]
+        model_tools = enforce_tool_execution_limits(
+            [
+                *snapshot_tools.as_agent_tools(
+                    {name: tool.description for name, tool in prompts.tools.items()}
+                ),
+                *comment_collector.as_agent_tools(),
+            ],
+            max_tool_calls=provider_config.max_tool_calls,
+            max_identical_tool_results=provider_config.max_identical_tool_results,
+            tool_timeout_seconds=provider_config.tool_timeout_seconds,
+        )
         _validate_model_tool_contract(model_tools)
         client = AsyncOpenAI(
             api_key=provider_config.api_key,
@@ -234,7 +245,7 @@ class OpenAIAgentRuntime:
                 investigation = await self._run_observable(
                     investigation_agent,
                     input_text,
-                    agent.max_turns,
+                    provider_config.max_agent_turns,
                     run_config,
                     sink,
                     timeout_seconds=provider_config.agent_timeout,
@@ -410,12 +421,13 @@ class OpenAIAgentRuntime:
         timeout_seconds: int = 1800,
     ) -> object:
         if sink is None or not hasattr(self._runner, "run_streamed"):
-            return await self._runner.run(
-                agent,
-                input_value,
-                max_turns=max_turns,
-                run_config=run_config,
-            )
+            async with asyncio.timeout(timeout_seconds):
+                return await self._runner.run(
+                    agent,
+                    input_value,
+                    max_turns=max_turns,
+                    run_config=run_config,
+                )
         await sink(AgentRuntimeEvent("model_started", "", {"agent_name": agent.name}))
         stream = cast(Any, self._runner).run_streamed(
             agent, input_value, max_turns=max_turns, run_config=run_config

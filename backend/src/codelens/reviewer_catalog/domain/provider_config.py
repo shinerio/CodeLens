@@ -8,6 +8,10 @@ _DEFAULT_API_TYPE: GatewayApiType = "chat_completions"
 _DEFAULT_MAX_TOKENS: int = 65536
 _DEFAULT_THINKING_LEVEL: ThinkingLevel = "disabled"
 _DEFAULT_AGENT_TIMEOUT: int = 1800
+_DEFAULT_MAX_AGENT_TURNS: int = 100
+_DEFAULT_MAX_TOOL_CALLS: int = 300
+_DEFAULT_MAX_IDENTICAL_TOOL_RESULTS: int = 3
+_DEFAULT_TOOL_TIMEOUT_SECONDS: int = 30
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,10 @@ class ModelProviderConfig:
     max_tokens: int = _DEFAULT_MAX_TOKENS
     thinking_level: ThinkingLevel = _DEFAULT_THINKING_LEVEL
     agent_timeout: int = _DEFAULT_AGENT_TIMEOUT
+    max_agent_turns: int = _DEFAULT_MAX_AGENT_TURNS
+    max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS
+    max_identical_tool_results: int = _DEFAULT_MAX_IDENTICAL_TOOL_RESULTS
+    tool_timeout_seconds: int = _DEFAULT_TOOL_TIMEOUT_SECONDS
 
 
 @dataclass(frozen=True)
@@ -38,6 +46,10 @@ class ModelGateway:
     max_tokens: int = _DEFAULT_MAX_TOKENS
     thinking_level: ThinkingLevel = _DEFAULT_THINKING_LEVEL
     agent_timeout: int = _DEFAULT_AGENT_TIMEOUT
+    max_agent_turns: int = _DEFAULT_MAX_AGENT_TURNS
+    max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS
+    max_identical_tool_results: int = _DEFAULT_MAX_IDENTICAL_TOOL_RESULTS
+    tool_timeout_seconds: int = _DEFAULT_TOOL_TIMEOUT_SECONDS
 
     @property
     def provider_config(self) -> ModelProviderConfig:
@@ -52,6 +64,10 @@ class ModelGateway:
             max_tokens=self.max_tokens,
             thinking_level=self.thinking_level,
             agent_timeout=self.agent_timeout,
+            max_agent_turns=self.max_agent_turns,
+            max_tool_calls=self.max_tool_calls,
+            max_identical_tool_results=self.max_identical_tool_results,
+            tool_timeout_seconds=self.tool_timeout_seconds,
         )
 
 

@@ -13,6 +13,10 @@ export type ModelGateway = {
   max_tokens: number;
   thinking_level: ThinkingLevel;
   agent_timeout: number;
+  max_agent_turns: number;
+  max_tool_calls: number;
+  max_identical_tool_results: number;
+  tool_timeout_seconds: number;
 };
 
 export type ModelGatewayCatalog = {
@@ -45,6 +49,10 @@ export type CreateModelGateway = {
   max_tokens: number;
   thinking_level: ThinkingLevel;
   agent_timeout: number;
+  max_agent_turns: number;
+  max_tool_calls: number;
+  max_identical_tool_results: number;
+  tool_timeout_seconds: number;
 };
 
 export type UpdateModelGateway = {
@@ -57,6 +65,10 @@ export type UpdateModelGateway = {
   max_tokens: number;
   thinking_level: ThinkingLevel;
   agent_timeout: number;
+  max_agent_turns: number;
+  max_tool_calls: number;
+  max_identical_tool_results: number;
+  tool_timeout_seconds: number;
 };
 
 export type GatewayTestResult = {

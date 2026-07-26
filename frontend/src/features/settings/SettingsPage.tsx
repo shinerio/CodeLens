@@ -14,7 +14,7 @@ import {
   XCircle,
   Zap,
 } from "lucide-react";
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 
 import { useI18n } from "../../shared/i18n/i18n";
 import {
@@ -47,6 +47,11 @@ export const MODEL_GATEWAYS_QUERY_KEY = ["model-gateways"] as const;
 const RUNTIME_LOG_LEVEL_QUERY_KEY = ["runtime-log-level"] as const;
 const RECENT_REPOSITORY_SETTINGS_QUERY_KEY = ["recent-repository-settings"] as const;
 const INSTRUCTION_FILE_SETTINGS_QUERY_KEY = ["instruction-file-settings"] as const;
+const DEFAULT_AGENT_TIMEOUT = 1800;
+const DEFAULT_MAX_AGENT_TURNS = 100;
+const DEFAULT_MAX_TOOL_CALLS = 300;
+const DEFAULT_MAX_IDENTICAL_TOOL_RESULTS = 3;
+const DEFAULT_TOOL_TIMEOUT_SECONDS = 30;
 
 function errorMessage(error: unknown) {
   return error instanceof Error ? error.message : "Unable to save the gateway.";
@@ -64,7 +69,12 @@ export function SettingsPage() {
   const [apiType, setApiType] = useState<GatewayApiType>("chat_completions");
   const [maxTokens, setMaxTokens] = useState(65536);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("disabled");
-  const [agentTimeout, setAgentTimeout] = useState(1800);
+  const [runtimeGatewayId, setRuntimeGatewayId] = useState("");
+  const [agentTimeoutDraft, setAgentTimeoutDraft] = useState("1800");
+  const [maxAgentTurnsDraft, setMaxAgentTurnsDraft] = useState("100");
+  const [maxToolCallsDraft, setMaxToolCallsDraft] = useState("300");
+  const [maxIdenticalToolResultsDraft, setMaxIdenticalToolResultsDraft] = useState("3");
+  const [toolTimeoutSecondsDraft, setToolTimeoutSecondsDraft] = useState("30");
   const [recentRepositoryLimitDraft, setRecentRepositoryLimitDraft] = useState("10");
   const [rootInstructionLimitDraft, setRootInstructionLimitDraft] = useState("500");
   const [nestedInstructionLimitDraft, setNestedInstructionLimitDraft] = useState("200");
@@ -106,6 +116,17 @@ export function SettingsPage() {
       setNestedInstructionLimitDraft(String(settings.nested_max_lines));
     },
   });
+  const gateways = useMemo(
+    () => gatewayQuery.data?.gateways ?? [],
+    [gatewayQuery.data?.gateways],
+  );
+  const runtimeGateway = useMemo(
+    () =>
+      gateways.find((gateway) => gateway.gateway_id === runtimeGatewayId) ??
+      gateways.find((gateway) => gateway.is_active) ??
+      gateways[0],
+    [gateways, runtimeGatewayId],
+  );
 
   useEffect(() => {
     if (recentRepositorySettingsQuery.data !== undefined) {
@@ -122,6 +143,26 @@ export function SettingsPage() {
     }
   }, [instructionFileSettingsQuery.data]);
 
+  useEffect(() => {
+    if (runtimeGateway === undefined) {
+      return;
+    }
+    setRuntimeGatewayId(runtimeGateway.gateway_id);
+    setAgentTimeoutDraft(String(runtimeGateway.agent_timeout ?? DEFAULT_AGENT_TIMEOUT));
+    setMaxAgentTurnsDraft(
+      String(runtimeGateway.max_agent_turns ?? DEFAULT_MAX_AGENT_TURNS),
+    );
+    setMaxToolCallsDraft(String(runtimeGateway.max_tool_calls ?? DEFAULT_MAX_TOOL_CALLS));
+    setMaxIdenticalToolResultsDraft(
+      String(
+        runtimeGateway.max_identical_tool_results ?? DEFAULT_MAX_IDENTICAL_TOOL_RESULTS,
+      ),
+    );
+    setToolTimeoutSecondsDraft(
+      String(runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS),
+    );
+  }, [runtimeGateway]);
+
   const updateCatalog = (catalog: ModelGatewayCatalog) => {
     queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, catalog);
   };
@@ -135,7 +176,6 @@ export function SettingsPage() {
     setApiType("chat_completions");
     setMaxTokens(65536);
     setThinkingLevel("disabled");
-    setAgentTimeout(1800);
   };
 
   const saveMutation = useMutation({
@@ -148,13 +188,32 @@ export function SettingsPage() {
         api_type: apiType,
         max_tokens: maxTokens,
         thinking_level: thinkingLevel,
-        agent_timeout: agentTimeout,
+        agent_timeout: DEFAULT_AGENT_TIMEOUT,
+        max_agent_turns: DEFAULT_MAX_AGENT_TURNS,
+        max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
+        max_identical_tool_results: DEFAULT_MAX_IDENTICAL_TOOL_RESULTS,
+        tool_timeout_seconds: DEFAULT_TOOL_TIMEOUT_SECONDS,
       };
       if (editingGatewayId === null) {
         return createModelGateway({ ...common, api_key: apiKey });
       }
       return updateModelGateway(editingGatewayId, {
         ...common,
+        agent_timeout:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.agent_timeout ??
+          DEFAULT_AGENT_TIMEOUT,
+        max_agent_turns:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.max_agent_turns ??
+          DEFAULT_MAX_AGENT_TURNS,
+        max_tool_calls:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.max_tool_calls ??
+          DEFAULT_MAX_TOOL_CALLS,
+        max_identical_tool_results:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)
+            ?.max_identical_tool_results ?? DEFAULT_MAX_IDENTICAL_TOOL_RESULTS,
+        tool_timeout_seconds:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)
+            ?.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS,
         ...(apiKey.trim() === "" ? {} : { api_key: apiKey }),
       });
     },
@@ -195,7 +254,6 @@ export function SettingsPage() {
     },
   });
 
-  const gateways = gatewayQuery.data?.gateways ?? [];
   const isEditing = editingGatewayId !== null;
   const isSaveDisabled =
     name.trim() === "" ||
@@ -224,6 +282,60 @@ export function SettingsPage() {
   const areInstructionLimitsUnchanged =
     parsedRootInstructionLimit === instructionFileSettingsQuery.data?.root_max_lines &&
     parsedNestedInstructionLimit === instructionFileSettingsQuery.data?.nested_max_lines;
+  const parsedAgentTimeout = Number(agentTimeoutDraft);
+  const parsedMaxAgentTurns = Number(maxAgentTurnsDraft);
+  const parsedMaxToolCalls = Number(maxToolCallsDraft);
+  const parsedMaxIdenticalToolResults = Number(maxIdenticalToolResultsDraft);
+  const parsedToolTimeoutSeconds = Number(toolTimeoutSecondsDraft);
+  const areExecutionLimitsValid =
+    Number.isInteger(parsedAgentTimeout) &&
+    parsedAgentTimeout >= 60 &&
+    parsedAgentTimeout <= 7200 &&
+    Number.isInteger(parsedMaxAgentTurns) &&
+    parsedMaxAgentTurns >= 1 &&
+    parsedMaxAgentTurns <= 500 &&
+    Number.isInteger(parsedMaxToolCalls) &&
+    parsedMaxToolCalls >= 1 &&
+    parsedMaxToolCalls <= 5000 &&
+    Number.isInteger(parsedMaxIdenticalToolResults) &&
+    parsedMaxIdenticalToolResults >= 2 &&
+    parsedMaxIdenticalToolResults <= 20 &&
+    Number.isInteger(parsedToolTimeoutSeconds) &&
+    parsedToolTimeoutSeconds >= 1 &&
+    parsedToolTimeoutSeconds <= 300;
+  const areExecutionLimitsUnchanged =
+    runtimeGateway !== undefined &&
+    parsedAgentTimeout === (runtimeGateway.agent_timeout ?? DEFAULT_AGENT_TIMEOUT) &&
+    parsedMaxAgentTurns ===
+      (runtimeGateway.max_agent_turns ?? DEFAULT_MAX_AGENT_TURNS) &&
+    parsedMaxToolCalls === (runtimeGateway.max_tool_calls ?? DEFAULT_MAX_TOOL_CALLS) &&
+    parsedMaxIdenticalToolResults ===
+      (runtimeGateway.max_identical_tool_results ?? DEFAULT_MAX_IDENTICAL_TOOL_RESULTS) &&
+    parsedToolTimeoutSeconds ===
+      (runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS);
+
+  const executionLimitsMutation = useMutation({
+    mutationFn: async () => {
+      if (runtimeGateway === undefined) {
+        throw new Error("No model gateway is selected.");
+      }
+      return updateModelGateway(runtimeGateway.gateway_id, {
+        name: runtimeGateway.name,
+        model: runtimeGateway.model,
+        base_url: runtimeGateway.base_url,
+        vendor: runtimeGateway.vendor ?? "openai",
+        api_type: runtimeGateway.api_type ?? "chat_completions",
+        max_tokens: runtimeGateway.max_tokens ?? 65536,
+        thinking_level: runtimeGateway.thinking_level ?? "disabled",
+        agent_timeout: parsedAgentTimeout,
+        max_agent_turns: parsedMaxAgentTurns,
+        max_tool_calls: parsedMaxToolCalls,
+        max_identical_tool_results: parsedMaxIdenticalToolResults,
+        tool_timeout_seconds: parsedToolTimeoutSeconds,
+      });
+    },
+    onSuccess: updateCatalog,
+  });
 
   function handleEdit(gateway: ModelGateway) {
     setEditingGatewayId(gateway.gateway_id);
@@ -235,7 +347,6 @@ export function SettingsPage() {
     setApiType(gateway.api_type);
     setMaxTokens(gateway.max_tokens);
     setThinkingLevel(gateway.thinking_level);
-    setAgentTimeout(gateway.agent_timeout);
   }
 
   function handleDelete(gateway: ModelGateway) {
@@ -252,7 +363,7 @@ export function SettingsPage() {
   }
 
   const mutationError =
-    saveMutation.error ?? activateMutation.error ?? deleteMutation.error ?? connectivityMutation.error ?? availabilityMutation.error ?? gatewayQuery.error ?? logLevelQuery.error ?? logLevelMutation.error ?? recentRepositorySettingsQuery.error ?? recentRepositorySettingsMutation.error ?? instructionFileSettingsQuery.error ?? instructionFileSettingsMutation.error;
+    saveMutation.error ?? executionLimitsMutation.error ?? activateMutation.error ?? deleteMutation.error ?? connectivityMutation.error ?? availabilityMutation.error ?? gatewayQuery.error ?? logLevelQuery.error ?? logLevelMutation.error ?? recentRepositorySettingsQuery.error ?? recentRepositorySettingsMutation.error ?? instructionFileSettingsQuery.error ?? instructionFileSettingsMutation.error;
 
   return (
     <section className="settings-page">
@@ -547,18 +658,6 @@ export function SettingsPage() {
                   <option value="high">{t("settings.thinkingHigh")}</option>
                 </select>
               </label>
-              <label className="settings-field">
-                <span className="settings-field__label">
-                  <ServerCog aria-hidden="true" /> {t("settings.agentTimeout")}
-                </span>
-                <input
-                  type="number"
-                  min={60}
-                  value={agentTimeout}
-                  onChange={(event) => setAgentTimeout(Number(event.currentTarget.value) || 600)}
-                />
-                <small>{t("settings.agentTimeoutHint")}</small>
-              </label>
             </div>
 
             {mutationError !== null ? (
@@ -588,6 +687,96 @@ export function SettingsPage() {
             <p className="local-preferences__heading">
               <SlidersHorizontal aria-hidden="true" /> {t("settings.localPreferences")}
             </p>
+            <div className="local-preferences__execution-fields">
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.executionModel")}</span>
+                <select
+                  aria-label={t("settings.executionModel")}
+                  disabled={gateways.length === 0}
+                  value={runtimeGateway?.gateway_id ?? ""}
+                  onChange={(event) => setRuntimeGatewayId(event.currentTarget.value)}
+                >
+                  {gateways.map((gateway) => (
+                    <option key={gateway.gateway_id} value={gateway.gateway_id}>
+                      {gateway.name} · {gateway.model}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.agentTimeout")}</span>
+                <input
+                  aria-label={t("settings.agentTimeout")}
+                  disabled={runtimeGateway === undefined}
+                  min={60}
+                  max={7200}
+                  type="number"
+                  value={agentTimeoutDraft}
+                  onChange={(event) => setAgentTimeoutDraft(event.currentTarget.value)}
+                />
+                <small>{t("settings.agentTimeoutHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.maxAgentTurns")}</span>
+                <input
+                  aria-label={t("settings.maxAgentTurns")}
+                  disabled={runtimeGateway === undefined}
+                  min={1}
+                  max={500}
+                  type="number"
+                  value={maxAgentTurnsDraft}
+                  onChange={(event) => setMaxAgentTurnsDraft(event.currentTarget.value)}
+                />
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.maxToolCalls")}</span>
+                <input
+                  aria-label={t("settings.maxToolCalls")}
+                  disabled={runtimeGateway === undefined}
+                  min={1}
+                  max={5000}
+                  type="number"
+                  value={maxToolCallsDraft}
+                  onChange={(event) => setMaxToolCallsDraft(event.currentTarget.value)}
+                />
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.maxIdenticalToolResults")}</span>
+                <input
+                  aria-label={t("settings.maxIdenticalToolResults")}
+                  disabled={runtimeGateway === undefined}
+                  min={2}
+                  max={20}
+                  type="number"
+                  value={maxIdenticalToolResultsDraft}
+                  onChange={(event) =>
+                    setMaxIdenticalToolResultsDraft(event.currentTarget.value)
+                  }
+                />
+                <small>{t("settings.maxIdenticalToolResultsHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.toolTimeoutSeconds")}</span>
+                <input
+                  aria-label={t("settings.toolTimeoutSeconds")}
+                  disabled={runtimeGateway === undefined}
+                  min={1}
+                  max={300}
+                  type="number"
+                  value={toolTimeoutSecondsDraft}
+                  onChange={(event) => setToolTimeoutSecondsDraft(event.currentTarget.value)}
+                />
+              </label>
+              <button
+                className="local-preferences__save-limits"
+                disabled={executionLimitsMutation.isPending || runtimeGateway === undefined || !areExecutionLimitsValid || areExecutionLimitsUnchanged}
+                type="button"
+                onClick={() => executionLimitsMutation.mutate()}
+              >
+                <Check aria-hidden="true" />
+                {t("settings.saveExecutionLimits")}
+              </button>
+            </div>
             <label className="settings-field">
               <span className="settings-field__label">{t("settings.runtimeLogLevel")}</span>
               <select
