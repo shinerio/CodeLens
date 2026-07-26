@@ -1,4 +1,5 @@
 import { render, screen } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { expect, it, vi } from "vitest";
 
 import { FindingDetail } from "./FindingDetail";
@@ -94,4 +95,28 @@ it("renders one equal-width side-by-side diff with side-aware comment placement"
     "data-comment-side",
     "new",
   );
+});
+
+it("expands only the code reading area and exits with Escape", async () => {
+  const user = userEvent.setup();
+  render(<FindingDetail finding={finding} source={source} />, { wrapper: TestProviders });
+
+  const comparison = screen.getByLabelText("Pinned source comparison");
+  await user.click(screen.getByRole("button", { name: "Expand code reading area" }));
+
+  expect(comparison).toHaveClass("finding-review-viewport--expanded");
+  expect(screen.getByRole("button", { name: "Collapse code reading area" })).toHaveAttribute(
+    "aria-pressed",
+    "true",
+  );
+  expect(document.body).toHaveStyle({ overflow: "hidden" });
+
+  await user.keyboard("{Escape}");
+
+  expect(comparison).not.toHaveClass("finding-review-viewport--expanded");
+  expect(screen.getByRole("button", { name: "Expand code reading area" })).toHaveAttribute(
+    "aria-pressed",
+    "false",
+  );
+  expect(document.body).not.toHaveStyle({ overflow: "hidden" });
 });

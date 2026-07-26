@@ -7,6 +7,16 @@ import { SettingsPage } from "./SettingsPage";
 
 const fetchMock = vi.fn();
 
+function instructionSettingsResponse(rootMaxLines = 500, nestedMaxLines = 200) {
+  return new Response(JSON.stringify({
+    root_max_lines: rootMaxLines,
+    nested_max_lines: nestedMaxLines,
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
@@ -34,6 +44,7 @@ it("creates the first persistent model gateway without retaining its API key", a
         headers: { "Content-Type": "application/json" },
       }),
     )
+    .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -121,6 +132,7 @@ it("switches the active gateway without asking for the stored key", async () => 
         headers: { "Content-Type": "application/json" },
       }),
     )
+    .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -182,6 +194,7 @@ it("sends a connectivity test request when the test connectivity button is click
         headers: { "Content-Type": "application/json" },
       }),
     )
+    .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: true, latency_ms: 42, detail: "TCP connection succeeded." }),
@@ -240,6 +253,7 @@ it("sends an availability test request when the test availability button is clic
         headers: { "Content-Type": "application/json" },
       }),
     )
+    .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: false, latency_ms: 100, detail: "Connection failed." }),
@@ -286,6 +300,7 @@ it("updates the recent repository list limit", async () => {
         headers: { "Content-Type": "application/json" },
       }),
     )
+    .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ recent_repository_limit: 15 }), {
         status: 200,
@@ -309,6 +324,53 @@ it("updates the recent repository list limit", async () => {
     expect.objectContaining({
       method: "PUT",
       body: JSON.stringify({ recent_repository_limit: 15 }),
+    }),
+  );
+});
+
+it("updates instruction file limits and omits credential handling details", async () => {
+  fetchMock
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ active_gateway_id: null, gateways: [] }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ level: "info" }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(
+      new Response(JSON.stringify({ recent_repository_limit: 10 }), {
+        status: 200,
+        headers: { "Content-Type": "application/json" },
+      }),
+    )
+    .mockResolvedValueOnce(instructionSettingsResponse())
+    .mockResolvedValueOnce(instructionSettingsResponse(800, 240));
+  const user = userEvent.setup();
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  expect(await screen.findByText("Recommended: 500 lines")).toBeInTheDocument();
+  expect(screen.getByText("Recommended: 200 lines")).toBeInTheDocument();
+  expect(screen.queryByText("Credential handling")).not.toBeInTheDocument();
+  const rootLimit = screen.getByLabelText("Root instruction file limit");
+  const nestedLimit = screen.getByLabelText("Nested instruction file limit");
+  await waitFor(() => expect(rootLimit).toBeEnabled());
+  await user.clear(rootLimit);
+  await user.type(rootLimit, "800");
+  await user.clear(nestedLimit);
+  await user.type(nestedLimit, "240");
+  await user.click(screen.getByRole("button", { name: "Save instruction file limits" }));
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/settings/instruction-files",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ root_max_lines: 800, nested_max_lines: 240 }),
     }),
   );
 });

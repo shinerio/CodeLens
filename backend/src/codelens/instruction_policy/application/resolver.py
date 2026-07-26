@@ -6,6 +6,8 @@ from codelens.instruction_policy.domain.models import (
     InstructionChain,
     InstructionDocument,
     InstructionKind,
+    InstructionLineLimits,
+    InstructionLineLimitsProviderPort,
     InstructionParserPort,
     ResolvedInstructionSet,
 )
@@ -70,17 +72,28 @@ class InstructionResolver:
         parser: InstructionParserPort,
         *,
         max_instruction_bytes: int = _DEFAULT_MAX_INSTRUCTION_BYTES,
+        line_limits: InstructionLineLimits | None = None,
+        line_limits_provider: InstructionLineLimitsProviderPort | None = None,
     ) -> None:
         if max_instruction_bytes <= 0:
             raise ValueError("instruction size limit must be positive")
+        if line_limits is not None and line_limits_provider is not None:
+            raise ValueError("instruction line limits must have only one source")
         self._parser = parser
         self._max_instruction_bytes = max_instruction_bytes
+        self._line_limits = line_limits or InstructionLineLimits()
+        self._line_limits_provider = line_limits_provider
 
     def resolve(self, repository: Path, target_path: str) -> ResolvedInstructionSet:
         """Load the applicable frozen rule chain independently of ignore filtering."""
 
         repository_root = repository.resolve()
         target = _normalize_target_path(target_path)
+        line_limits = (
+            self._line_limits_provider.get_line_limits()
+            if self._line_limits_provider is not None
+            else self._line_limits
+        )
         candidates: list[_InstructionCandidate] = []
         discovery_rules: tuple[tuple[InstructionKind, str, int], ...] = (
             ("agents", "agents.md", 0),
@@ -135,6 +148,15 @@ class InstructionResolver:
 
             raw = resolved.read_bytes()
             text = raw.decode("utf-8")
+            max_lines = (
+                line_limits.root_max_lines
+                if relative.parent == Path(".")
+                else line_limits.nested_max_lines
+            )
+            if len(text.splitlines()) > max_lines:
+                raise ValueError(
+                    f"instruction document {relative.as_posix()} exceeds the {max_lines} line limit"
+                )
             parsed = self._parser.parse(text)
             documents.append(
                 InstructionDocument(

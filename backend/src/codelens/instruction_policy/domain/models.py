@@ -4,6 +4,37 @@ from typing import Literal, Protocol
 
 type InstructionKind = Literal["agents", "review", "file_review"]
 
+DEFAULT_ROOT_INSTRUCTION_MAX_LINES = 500
+DEFAULT_NESTED_INSTRUCTION_MAX_LINES = 200
+MAX_INSTRUCTION_LINE_LIMIT = 10_000
+
+
+@dataclass(frozen=True)
+class InstructionLineLimits:
+    """Bound instruction files by scope while allowing broader root guidance."""
+
+    root_max_lines: int = DEFAULT_ROOT_INSTRUCTION_MAX_LINES
+    nested_max_lines: int = DEFAULT_NESTED_INSTRUCTION_MAX_LINES
+
+    def __post_init__(self) -> None:
+        for field_name, value in (
+            ("root_max_lines", self.root_max_lines),
+            ("nested_max_lines", self.nested_max_lines),
+        ):
+            if value < 1 or value > MAX_INSTRUCTION_LINE_LIMIT:
+                raise ValueError(f"{field_name} must be between 1 and 10000")
+        if self.root_max_lines < self.nested_max_lines:
+            raise ValueError("root_max_lines must be greater than or equal to nested_max_lines")
+
+
+class InstructionLineLimitsProviderPort(Protocol):
+    """Provide the current instruction limits at rule-resolution time."""
+
+    def get_line_limits(self) -> InstructionLineLimits:
+        """Load the limits that apply to the next instruction resolution."""
+
+        raise NotImplementedError
+
 
 @dataclass(frozen=True)
 class InstructionDocument:

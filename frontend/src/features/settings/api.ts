@@ -2,6 +2,7 @@ import { api } from "../../shared/api/client";
 import type {
   CreateModelGateway,
   GatewayTestResult,
+  InstructionFileSettings,
   ModelGatewayCatalog,
   RecentRepositorySettings,
   RuntimeLogLevel,
@@ -36,6 +37,19 @@ export async function updateRecentRepositoryLimit(
   return api<RecentRepositorySettings>("/settings/repositories", {
     method: "PUT",
     body: JSON.stringify({ recent_repository_limit: recentRepositoryLimit }),
+  });
+}
+
+export async function getInstructionFileSettings(): Promise<InstructionFileSettings> {
+  return api<InstructionFileSettings>("/settings/instruction-files");
+}
+
+export async function updateInstructionFileSettings(
+  settings: InstructionFileSettings,
+): Promise<InstructionFileSettings> {
+  return api<InstructionFileSettings>("/settings/instruction-files", {
+    method: "PUT",
+    body: JSON.stringify(settings),
   });
 }
 

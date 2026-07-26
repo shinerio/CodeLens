@@ -12,10 +12,12 @@ from codelens.interface.http.dto import (
     CreateModelGatewayRequest,
     GatewayAvailabilityTestResponse,
     GatewayConnectivityTestResponse,
+    InstructionFileSettingsResponse,
     ModelGatewayCatalogResponse,
     ModelGatewayResponse,
     RecentRepositorySettingsResponse,
     RuntimeLogLevelResponse,
+    UpdateInstructionFileSettingsRequest,
     UpdateModelGatewayRequest,
     UpdateRecentRepositorySettingsRequest,
     UpdateRuntimeLogLevelRequest,
@@ -29,6 +31,16 @@ GatewayId = Annotated[
     str,
     StringConstraints(pattern=r"^gateway_[A-Za-z0-9_-]{3,64}$", max_length=72),
 ]
+
+
+def _instruction_settings_response(
+    root_max_lines: int,
+    nested_max_lines: int,
+) -> InstructionFileSettingsResponse:
+    return InstructionFileSettingsResponse(
+        root_max_lines=root_max_lines,
+        nested_max_lines=nested_max_lines,
+    )
 
 
 def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogResponse:
@@ -95,6 +107,30 @@ async def update_recent_repository_settings(
         request.recent_repository_limit
     )
     return RecentRepositorySettingsResponse(recent_repository_limit=limit)
+
+
+@router.get("/instruction-files", response_model=InstructionFileSettingsResponse)
+async def get_instruction_file_settings(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> InstructionFileSettingsResponse:
+    """Return the line limits used for repository instruction files."""
+
+    limits = await components.instruction_settings.get()
+    return _instruction_settings_response(limits.root_max_lines, limits.nested_max_lines)
+
+
+@router.put("/instruction-files", response_model=InstructionFileSettingsResponse)
+async def update_instruction_file_settings(
+    request: UpdateInstructionFileSettingsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> InstructionFileSettingsResponse:
+    """Persist replacement instruction limits for subsequent Review snapshots."""
+
+    limits = await components.instruction_settings.update(
+        root_max_lines=request.root_max_lines,
+        nested_max_lines=request.nested_max_lines,
+    )
+    return _instruction_settings_response(limits.root_max_lines, limits.nested_max_lines)
 
 
 @router.get("/model-gateways", response_model=ModelGatewayCatalogResponse)

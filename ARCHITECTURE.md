@@ -56,6 +56,7 @@
 - JSON 字段、错误码、事件名称和状态值属于稳定契约。变更时必须考虑向后兼容、幂等、迁移和失败恢复。
 - `/api/settings/model-gateways` 是本地模型网关集合契约，支持创建、列出、更新和删除；`PUT /api/settings/active-model-gateway` 原子切换当前网关。读取只返回网关 ID、名称、模型 ID、Base URL 和激活状态，API Key 永不通过读取契约返回。
 - `GET/PUT /api/settings/repositories` 读取或更新最近 Review 仓库目录容量，字段为 `recent_repository_limit`，允许 1–20，默认 10。更新必须持久化并立即按当前 LRU 顺序裁剪溢出目录。
+- `GET/PUT /api/settings/instruction-files` 读取或更新仓库规则文件的行数上限，字段为 `root_max_lines` 和 `nested_max_lines`，均允许 1–10000，默认分别为 500 和 200，且根目录上限不得低于嵌套目录上限。更新必须原子持久化，并在后续规则解析时无需重启即可生效。
 - `/api/repositories/browse` 只返回系统根目录、目录项和 Git 仓库标记；`/api/repositories/catalog` 返回全部可选分支，并按请求中的目标分支返回该分支 tip 之前的分页 Commit 元数据。目标分支必须来自后端枚举的分支，Commit 候选不得混入目标分支不可达的提交或目标 tip 本身。两者都不能返回文件正文。
 - `GET /api/repositories/recent` 返回独立持久化的最近 Review 仓库目录、名称和最近使用时间，用于本机仓库快捷选择。目录按 LRU 维护，Review 创建成功时提升对应目录，并按持久化设置保留 1–20 个，默认 10 个；Review tombstone 不得删除或降级目录项。该列表不读取文件系统；选中路径后仍必须通过既有 inspect/catalog 契约重新执行允许根目录、Git 仓库和身份校验。
 - `GET /api/reviews/{task_id}/findings/{finding_id}/source` 同时返回该 Finding 所在文件在 Review 固定 base/head revision 的可用完整正文、评论所属 old/new 侧及高亮行范围；新增或删除文件允许一侧为空。它不得读取可变原始工作区，也不得用模型输出决定文件路径或 revision。Review 页面只提供一种等宽并排对比方式：base/old 位于左侧，target/new 位于右侧；纯删除使用红色，纯新增使用绿色，替换修改使用高对比蓝色。old 评论完整内嵌在左侧对应变更行后，new 评论完整内嵌在右侧对应变更行后，不显示重复的侧别提示。意见导航位于代码区上方；桌面全局导航默认折叠并在 hover 或键盘聚焦时展开，不能挤占代码横向空间。
@@ -139,7 +140,7 @@ Interface 层当前包含 FastAPI 路由、请求/响应 DTO、SSE 端点和 Wor
 
 跨上下文协作必须使用明确的应用服务、领域事件或 Port。一个上下文不得导入另一个上下文的 `infrastructure` 实现、ORM 模型或内部可变状态。共享模块只允许放置稳定、无领域归属且被多个上下文实际复用的最小基础类型。
 
-仓库审查规则按目标文件独立解析。从仓库根目录到目标文件所在目录的每一级，都以大小写不敏感方式同时发现 `AGENTS.md` 与 `REVIEW.md`，最后发现大小写不敏感的 `<target-file>.review.md`；同一目录出现仅大小写不同的同名规则文件属于歧义并必须拒绝。每个目标的规则链按通用到具体排列：更深目录高于上级目录，同一目录 `REVIEW.md` 高于 `AGENTS.md`，文件专属规则最高。结构化 exclude 为累积并集，不允许下级规则重新包含已排除路径。
+仓库审查规则按目标文件独立解析。从仓库根目录到目标文件所在目录的每一级，都以大小写不敏感方式同时发现 `AGENTS.md` 与 `REVIEW.md`，最后发现大小写不敏感的 `<target-file>.review.md`；同一目录出现仅大小写不同的同名规则文件属于歧义并必须拒绝。每份规则文件同时受固定字节上限和可配置行数上限约束；仓库根目录中的规则使用较宽松的根目录上限，其他目录和文件专属规则使用嵌套上限，超限必须在 Snapshot 冻结前明确拒绝。每个目标的规则链按通用到具体排列：更深目录高于上级目录，同一目录 `REVIEW.md` 高于 `AGENTS.md`，文件专属规则最高。结构化 exclude 为累积并集，不允许下级规则重新包含已排除路径。
 
 多目标 Review 必须在后端分别保留每个目标的规则链，用于结构化 exclude、Snapshot 冻结、完整性与作用域校验，不得在这些确定性控制中丢失适用范围。Snapshot 只冻结最终 Review 目标实际引用的规则文件。Context Builder 在首次模型调用前校验规则路径、正文哈希、作用域和顺序，然后把所有适用规则确定性封装为 `repository_instructions`：每份规则正文只出现一次，`applies_to` 列出其精确适用的 `review_files` 路径，条目按从通用到具体稳定排序。无规则的目标不产生占位条目，无关目标的规则不得进入模型输入。模型不得看到内部规则链对象、优先级数字或内容哈希，也不提供加载规则的模型工具。仓库规则不能覆盖平台、安全、工具、Snapshot 范围或输出契约。
 

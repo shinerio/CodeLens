@@ -30,6 +30,11 @@ export type RecentRepositorySettings = {
   recent_repository_limit: number;
 };
 
+export type InstructionFileSettings = {
+  root_max_lines: number;
+  nested_max_lines: number;
+};
+
 export type CreateModelGateway = {
   name: string;
   api_key: string;

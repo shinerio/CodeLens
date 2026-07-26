@@ -25,6 +25,37 @@ test("persists the recent repository limit without layout overflow", async ({ pa
     .toEqual({ recent_repository_limit: 12 });
   await expect(limitInput).toHaveValue("12");
 
+  const rootLimitInput = page.getByRole("spinbutton", {
+    name: "Root instruction file limit",
+    exact: true,
+  });
+  const nestedLimitInput = page.getByRole("spinbutton", {
+    name: "Nested instruction file limit",
+    exact: true,
+  });
+  const saveInstructionLimits = page.getByRole("button", {
+    name: "Save instruction file limits",
+  });
+  await expect(rootLimitInput).toBeEnabled();
+  await expect(nestedLimitInput).toBeEnabled();
+  if (
+    (await rootLimitInput.inputValue()) !== "640" ||
+    (await nestedLimitInput.inputValue()) !== "240"
+  ) {
+    await rootLimitInput.fill("640");
+    await nestedLimitInput.fill("240");
+    await expect(saveInstructionLimits).toBeEnabled();
+    await saveInstructionLimits.click();
+  }
+
+  await expect
+    .poll(async () => {
+      const response = await page.request.get("/api/settings/instruction-files");
+      return response.json();
+    })
+    .toEqual({ root_max_lines: 640, nested_max_lines: 240 });
+  await expect(page.getByText("Credential handling")).toHaveCount(0);
+
   const boxes = await Promise.all([limitInput.boundingBox(), saveButton.boundingBox()]);
   expect(boxes[0]).not.toBeNull();
   expect(boxes[1]).not.toBeNull();

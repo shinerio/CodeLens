@@ -11,6 +11,10 @@ from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.settings import Settings
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.instruction_policy.application.resolver import InstructionResolver
+from codelens.instruction_policy.application.settings import InstructionSettingsService
+from codelens.instruction_policy.infrastructure.file_settings import (
+    FilesystemInstructionLineLimitsStore,
+)
 from codelens.instruction_policy.infrastructure.markdown_parser import MarkdownInstructionParser
 from codelens.instruction_policy.infrastructure.structured_skip import StructuredSkipMatcher
 from codelens.interface.http.app import create_app_with_components
@@ -139,6 +143,7 @@ def build_unified_backend(
         transcripts_store,
         model_log=ModelTranscriptLogWriter(),
     )
+    instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
 
     # Worker components
     worktree_manager = GitReviewWorktreeManager(
@@ -165,7 +170,10 @@ def build_unified_backend(
         ),
         change_index=GitChangeIndexBuilder(git),
         artifacts=input_artifacts,
-        instructions=InstructionResolver(MarkdownInstructionParser()),
+        instructions=InstructionResolver(
+            MarkdownInstructionParser(),
+            line_limits_provider=instruction_line_limits,
+        ),
         structured_skip=StructuredSkipMatcher(),
     )
     snapshot_reader = FilesystemSnapshotReader(git)
@@ -274,6 +282,7 @@ def build_unified_backend(
         update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
             recent_repository_store
         ),
+        instruction_settings=InstructionSettingsService(instruction_line_limits),
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

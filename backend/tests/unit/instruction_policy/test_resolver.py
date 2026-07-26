@@ -1,8 +1,18 @@
+from dataclasses import dataclass
 from pathlib import Path
 
 from codelens.instruction_policy.application.resolver import InstructionResolver
+from codelens.instruction_policy.domain.models import InstructionLineLimits
 from codelens.instruction_policy.infrastructure.markdown_parser import MarkdownInstructionParser
 from codelens.instruction_policy.infrastructure.structured_skip import StructuredSkipMatcher
+
+
+@dataclass
+class _MutableLineLimitsProvider:
+    limits: InstructionLineLimits
+
+    def get_line_limits(self) -> InstructionLineLimits:
+        return self.limits
 
 
 def test_resolves_ordered_instruction_chain_even_when_rule_file_is_ignored(
@@ -103,3 +113,57 @@ def test_structured_skip_matches_only_resolved_path_rules(tmp_path: Path) -> Non
 
     assert matcher.excludes("generated/api.py", instructions)
     assert not matcher.excludes("src/api.py", instructions)
+
+
+def test_root_instruction_uses_the_more_permissive_line_limit(tmp_path: Path) -> None:
+    (tmp_path / "AGENTS.md").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    target_dir = tmp_path / "src"
+    target_dir.mkdir()
+    (target_dir / "app.py").write_text("pass\n", encoding="utf-8")
+
+    resolved = InstructionResolver(
+        MarkdownInstructionParser(),
+        line_limits=InstructionLineLimits(root_max_lines=3, nested_max_lines=2),
+    ).resolve(tmp_path, "src/app.py")
+
+    assert [document.relative_path for document in resolved.documents] == ["AGENTS.md"]
+
+
+def test_nested_instruction_rejects_content_above_its_line_limit(tmp_path: Path) -> None:
+    target_dir = tmp_path / "src"
+    target_dir.mkdir()
+    (target_dir / "REVIEW.md").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    (target_dir / "app.py").write_text("pass\n", encoding="utf-8")
+
+    resolver = InstructionResolver(
+        MarkdownInstructionParser(),
+        line_limits=InstructionLineLimits(root_max_lines=3, nested_max_lines=2),
+    )
+
+    try:
+        resolver.resolve(tmp_path, "src/app.py")
+    except ValueError as error:
+        assert str(error) == "instruction document src/REVIEW.md exceeds the 2 line limit"
+    else:
+        raise AssertionError("nested instruction above the line limit must be rejected")
+
+
+def test_resolver_reloads_line_limits_for_each_resolution(tmp_path: Path) -> None:
+    target_dir = tmp_path / "src"
+    target_dir.mkdir()
+    (target_dir / "AGENTS.md").write_text("one\ntwo\nthree\n", encoding="utf-8")
+    provider = _MutableLineLimitsProvider(InstructionLineLimits(3, 3))
+    resolver = InstructionResolver(
+        MarkdownInstructionParser(),
+        line_limits_provider=provider,
+    )
+
+    resolver.resolve(tmp_path, "src/app.py")
+    provider.limits = InstructionLineLimits(3, 2)
+
+    try:
+        resolver.resolve(tmp_path, "src/app.py")
+    except ValueError as error:
+        assert str(error) == "instruction document src/AGENTS.md exceeds the 2 line limit"
+    else:
+        raise AssertionError("updated line limits must affect the next resolution")

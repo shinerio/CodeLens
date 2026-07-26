@@ -11,6 +11,7 @@ from pydantic import (
     SecretStr,
     StringConstraints,
     field_validator,
+    model_validator,
 )
 
 from codelens.review.application.process_report import ReviewProcessReport
@@ -60,6 +61,21 @@ class RecentRepositorySettingsResponse(StrictDto):
 
 class UpdateRecentRepositorySettingsRequest(RecentRepositorySettingsResponse):
     pass
+
+
+class InstructionFileSettingsResponse(StrictDto):
+    root_max_lines: Annotated[int, Field(ge=1, le=10_000)]
+    nested_max_lines: Annotated[int, Field(ge=1, le=10_000)]
+
+
+class UpdateInstructionFileSettingsRequest(InstructionFileSettingsResponse):
+    @model_validator(mode="after")
+    def validate_scope_limits(self) -> "UpdateInstructionFileSettingsRequest":
+        """Keep the root allowance at least as permissive as nested files."""
+
+        if self.root_max_lines < self.nested_max_lines:
+            raise ValueError("root_max_lines must be greater than or equal to nested_max_lines")
+        return self
 
 
 RefLabel = Annotated[str, StringConstraints(min_length=1, max_length=512)]

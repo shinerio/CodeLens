@@ -4,6 +4,10 @@ from dataclasses import dataclass
 from fastapi import Request
 
 from codelens.bootstrap.settings import Settings
+from codelens.instruction_policy.application.settings import InstructionSettingsService
+from codelens.instruction_policy.infrastructure.file_settings import (
+    FilesystemInstructionLineLimitsStore,
+)
 from codelens.review.application.commands import (
     CancelReviewHandler,
     CreateReviewHandler,
@@ -73,6 +77,7 @@ class HttpComponents:
     list_recent_repositories: ListRecentRepositoriesHandler
     get_recent_repository_settings: GetRecentRepositorySettingsHandler
     update_recent_repository_settings: UpdateRecentRepositorySettingsHandler
+    instruction_settings: InstructionSettingsService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
     events: SqlEventOutbox
@@ -122,6 +127,7 @@ def build_components(settings: Settings) -> HttpComponents:
         locks=RepositoryLockRegistry(),
     )
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
+    instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
     return HttpComponents(
@@ -141,6 +147,7 @@ def build_components(settings: Settings) -> HttpComponents:
         update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
             recent_repository_store
         ),
+        instruction_settings=InstructionSettingsService(instruction_line_limits),
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

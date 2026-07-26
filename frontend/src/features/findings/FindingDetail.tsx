@@ -1,12 +1,12 @@
 import { DiffEditor, loader, type DiffOnMount } from "@monaco-editor/react";
-import { GitCompareArrows, Lightbulb, MapPin } from "lucide-react";
+import { GitCompareArrows, Lightbulb, MapPin, Maximize2, Minimize2 } from "lucide-react";
 import CssWorker from "monaco-editor/esm/vs/language/css/css.worker?worker";
 import EditorWorker from "monaco-editor/esm/vs/editor/editor.worker?worker";
 import HtmlWorker from "monaco-editor/esm/vs/language/html/html.worker?worker";
 import JsonWorker from "monaco-editor/esm/vs/language/json/json.worker?worker";
 import TypeScriptWorker from "monaco-editor/esm/vs/language/typescript/ts.worker?worker";
 import * as localMonaco from "monaco-editor";
-import { useCallback, useEffect, useMemo, useRef } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { createRoot, type Root } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import type { editor as MonacoEditor, IDisposable, Range } from "monaco-editor";
@@ -135,6 +135,7 @@ function SourceComparison({
   source: FindingSourcePreview;
 }) {
   const { t } = useI18n();
+  const [isReadingAreaExpanded, setIsReadingAreaExpanded] = useState(false);
   const editorRef = useRef<MonacoEditor.IStandaloneDiffEditor | null>(null);
   const reviewRef = useRef<HTMLDivElement | null>(null);
   const decorationRefs = useRef<readonly MonacoEditor.IEditorDecorationsCollection[]>([]);
@@ -340,8 +341,27 @@ function SourceComparison({
   useEffect(() => () => diffSubscriptionRef.current?.dispose(), []);
 
   useEffect(() => {
+    if (!isReadingAreaExpanded) {
+      return;
+    }
+    const previousOverflow = document.body.style.overflow;
+    const handleKeyDown = (event: KeyboardEvent) => {
+      if (event.key === "Escape") {
+        setIsReadingAreaExpanded(false);
+      }
+    };
+    document.body.style.overflow = "hidden";
+    window.addEventListener("keydown", handleKeyDown);
+    return () => {
+      document.body.style.overflow = previousOverflow;
+      window.removeEventListener("keydown", handleKeyDown);
+    };
+  }, [isReadingAreaExpanded]);
+
+  useEffect(() => {
     const frameId = requestAnimationFrame(() => {
-      const scroller = reviewRef.current?.parentElement;
+      const viewport = reviewRef.current;
+      const scroller = isReadingAreaExpanded ? viewport : viewport?.parentElement;
       if (scroller !== undefined && scroller !== null) {
         scroller.scrollLeft = source.highlight_side === "new"
           ? scroller.scrollWidth - scroller.clientWidth
@@ -349,7 +369,7 @@ function SourceComparison({
       }
     });
     return () => cancelAnimationFrame(frameId);
-  }, [source.highlight_side]);
+  }, [isReadingAreaExpanded, source.highlight_side]);
 
   useEffect(() => () => {
     const models = modelRefs.current;
@@ -366,6 +386,9 @@ function SourceComparison({
   const baseContent = source.base?.content ?? "";
   const targetContent = source.target?.content ?? "";
   const language = languageFor(source.path);
+  const readingAreaActionLabel = isReadingAreaExpanded
+    ? t("finding.collapseReadingArea")
+    : t("finding.expandReadingArea");
   const editorOptions = {
     automaticLayout: true,
     fontFamily: "SFMono-Regular, Consolas, 'Liberation Mono', monospace",
@@ -381,54 +404,70 @@ function SourceComparison({
   return (
     <div
       aria-label="Pinned source comparison"
-      className="finding-review"
+      className={`finding-review-viewport${isReadingAreaExpanded ? " finding-review-viewport--expanded" : ""}`}
       data-comment-side={source.highlight_side}
       ref={reviewRef}
     >
-      <header className="finding-review__pane-header finding-review__pane-header--base">
-        <span className="finding-review__path">
-          <MapPin aria-hidden="true" />
-          <strong>{t("finding.baseVersion")}</strong>
-          <code>{source.base?.path ?? source.path}</code>
-        </span>
-        <span className="finding-review__revision">
-          {t("finding.readOnly")}
-          <code>{source.base?.revision.slice(0, 12) ?? t("finding.fileAdded")}</code>
-        </span>
-      </header>
-      <header className="finding-review__pane-header finding-review__pane-header--target">
-        <span className="finding-review__path">
-          <GitCompareArrows aria-hidden="true" />
-          <strong>{t("finding.targetVersion")}</strong>
-          <code>{source.target?.path ?? source.path}</code>
-        </span>
-        <span className="finding-review__revision">
-          <code>{source.target?.revision.slice(0, 12) ?? t("finding.fileDeleted")}</code>
-        </span>
-      </header>
-      <div className="finding-review__editor">
-        <DiffEditor
-          height="100%"
-          keepCurrentModifiedModel
-          keepCurrentOriginalModel
-          language={language}
-          modified={targetContent}
-          modifiedLanguage={language}
-          modifiedModelPath={modelPaths.target}
-          onMount={handleMount}
-          options={{
-            ...editorOptions,
-            diffWordWrap: "off",
-            ignoreTrimWhitespace: false,
-            originalEditable: false,
-            renderSideBySide: true,
-            useInlineViewWhenSpaceIsLimited: false,
-          }}
-          original={baseContent}
-          originalLanguage={language}
-          originalModelPath={modelPaths.base}
-          theme="vs-dark"
-        />
+      <div className="finding-review">
+        <header className="finding-review__pane-header finding-review__pane-header--base">
+          <span className="finding-review__path">
+            <MapPin aria-hidden="true" />
+            <strong>{t("finding.baseVersion")}</strong>
+            <code>{source.base?.path ?? source.path}</code>
+          </span>
+          <span className="finding-review__revision">
+            {t("finding.readOnly")}
+            <code>{source.base?.revision.slice(0, 12) ?? t("finding.fileAdded")}</code>
+          </span>
+        </header>
+        <header className="finding-review__pane-header finding-review__pane-header--target">
+          <span className="finding-review__path">
+            <GitCompareArrows aria-hidden="true" />
+            <strong>{t("finding.targetVersion")}</strong>
+            <code>{source.target?.path ?? source.path}</code>
+          </span>
+          <div className="finding-review__toolbar">
+            <span className="finding-review__revision">
+              <code>{source.target?.revision.slice(0, 12) ?? t("finding.fileDeleted")}</code>
+            </span>
+            <button
+              aria-label={readingAreaActionLabel}
+              aria-pressed={isReadingAreaExpanded}
+              className="finding-review__expand"
+              onClick={() => setIsReadingAreaExpanded((isExpanded) => !isExpanded)}
+              title={readingAreaActionLabel}
+              type="button"
+            >
+              {isReadingAreaExpanded
+                ? <Minimize2 aria-hidden="true" />
+                : <Maximize2 aria-hidden="true" />}
+            </button>
+          </div>
+        </header>
+        <div className="finding-review__editor">
+          <DiffEditor
+            height="100%"
+            keepCurrentModifiedModel
+            keepCurrentOriginalModel
+            language={language}
+            modified={targetContent}
+            modifiedLanguage={language}
+            modifiedModelPath={modelPaths.target}
+            onMount={handleMount}
+            options={{
+              ...editorOptions,
+              diffWordWrap: "off",
+              ignoreTrimWhitespace: false,
+              originalEditable: false,
+              renderSideBySide: true,
+              useInlineViewWhenSpaceIsLimited: false,
+            }}
+            original={baseContent}
+            originalLanguage={language}
+            originalModelPath={modelPaths.base}
+            theme="vs-dark"
+          />
+        </div>
       </div>
     </div>
   );
