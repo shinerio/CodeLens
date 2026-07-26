@@ -25,10 +25,11 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
         data_dir=tmp_path / "data",
         repository_roots=(fixture.repository,),
     )
-    backend = build_unified_backend(
-        settings,
-        runtime=FixtureRuntime(load_simple_branch_comments()),
+    runtime = FixtureRuntime(
+        load_simple_branch_comments(),
+        repeat_first_comment=True,
     )
+    backend = build_unified_backend(settings, runtime=runtime)
     stop_event = asyncio.Event()
     scheduler_task: asyncio.Task[None] | None = None
 
@@ -57,6 +58,9 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
             raise AssertionError("deterministic integration review did not reach a terminal state")
 
         assert current.status == "completed"
+        reviews = await backend.components.list_reviews.handle()
+        assert [item.task_id for item in reviews] == [review.task_id]
+        assert runtime.calls == 1
         findings = await backend.components.review_store.list_findings(review.task_id)
         assert {
             (finding.primary_location.path, finding.primary_location.side)
@@ -95,7 +99,8 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
         else:
             raise AssertionError("terminal Review transcript was not persisted")
         submitted_comments = json.loads(comment_call.content)["comments"]
-        assert len(submitted_comments) == 3
+        assert len(submitted_comments) == 4
+        assert submitted_comments[0] == submitted_comments[-1]
         assert all(
             set(comment) == {
                 "path",

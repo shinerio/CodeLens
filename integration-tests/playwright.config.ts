@@ -2,7 +2,7 @@ import { defineConfig } from "@playwright/test";
 import path from "node:path";
 
 const dataDir = process.env.CODELENS_INTEGRATION_DATA_DIR
-  ?? path.resolve(process.cwd(), ".tmp", "codelens-integration");
+  ?? path.resolve(process.cwd(), ".tmp", "codelens-integration-direct-run");
 const backendPort = Number(process.env.CODELENS_INTEGRATION_BACKEND_PORT ?? "8820");
 const frontendPort = Number(process.env.CODELENS_INTEGRATION_FRONTEND_PORT ?? "5193");
 
@@ -29,7 +29,6 @@ export default defineConfig({
     },
   ],
   projects: [
-    { name: "desktop", use: { viewport: { width: 1280, height: 800 } } },
-    { name: "mobile", use: { viewport: { width: 390, height: 844 } } },
+    { name: "single-review", use: { viewport: { width: 1280, height: 800 } } },
   ],
 });

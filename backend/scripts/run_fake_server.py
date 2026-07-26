@@ -55,7 +55,10 @@ async def _build_app(settings: Settings) -> FastAPI:
         settings = settings.model_copy(update={"repository_roots": (repository,)})
     backend = build_unified_backend(
         settings,
-        runtime=FixtureRuntime(load_simple_branch_comments()),
+        runtime=FixtureRuntime(
+            load_simple_branch_comments(),
+            repeat_first_comment=True,
+        ),
     )
     components = backend.components
     stop_event = asyncio.Event()

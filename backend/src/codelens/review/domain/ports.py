@@ -259,10 +259,25 @@ class RunArtifactPort(Protocol):
 class FindingBatchValidationPort(Protocol):
     """Convert untrusted canonical output into trusted domain Findings."""
 
+    @property
+    def warnings(self) -> tuple["FindingValidationWarning", ...]:
+        """Describe candidate-level rejections without exposing model content."""
+
+        raise NotImplementedError
+
     async def validate(self, payload: bytes) -> FindingBatch:
         """Apply schema, path, line, hunk, and evidence validation."""
 
         raise NotImplementedError
+
+
+@dataclass(frozen=True)
+class FindingValidationWarning:
+    """Identify one rejected candidate using bounded, user-safe diagnostics."""
+
+    candidate_index: int
+    reason_code: Literal["duplicate", "invalid"]
+    message: str
 
 
 class AgentRunCompletionPort(Protocol):

@@ -125,10 +125,48 @@ async def test_accepts_a_primary_excerpt_hash_for_a_subrange_of_a_changed_hunk()
     ).hexdigest()
 
 
+async def test_deduplicates_repeated_findings_in_stable_order() -> None:
+    payload = json.loads(_payload())
+    payload["findings"].append(payload["findings"][0])
+
+    validator = _validator()
+    batch = await validator.validate(json.dumps(payload).encode())
+
+    assert len(batch.findings) == 1
+    assert batch.findings[0].title == "Inverted result"
+    assert len(validator.warnings) == 1
+    assert validator.warnings[0].reason_code == "duplicate"
+
+
 @pytest.mark.parametrize(
     "payload",
     (_payload("../escape.py"), _payload(hunk_id="hunk-missing")),
 )
-async def test_rejects_paths_outside_snapshot_and_unknown_hunks(payload: bytes) -> None:
+async def test_skips_invalid_candidates_and_returns_an_empty_trusted_batch(payload: bytes) -> None:
+    validator = _validator()
+
+    batch = await validator.validate(payload)
+
+    assert batch.findings == ()
+    assert len(validator.warnings) == 1
+    assert validator.warnings[0].candidate_index == 0
+    assert validator.warnings[0].reason_code == "invalid"
+
+
+async def test_keeps_valid_candidates_when_another_candidate_is_invalid() -> None:
+    payload = json.loads(_payload())
+    invalid = json.loads(json.dumps(payload["findings"][0]))
+    invalid["primary_location"]["path"] = "../escape.py"
+    payload["findings"].insert(0, invalid)
+    validator = _validator()
+
+    batch = await validator.validate(json.dumps(payload).encode())
+
+    assert [finding.title for finding in batch.findings] == ["Inverted result"]
+    assert len(validator.warnings) == 1
+    assert validator.warnings[0].candidate_index == 0
+
+
+async def test_rejects_an_unparseable_output_envelope() -> None:
     with pytest.raises(FindingValidationError):
-        await _validator().validate(payload)
+        await _validator().validate(b"not-json")

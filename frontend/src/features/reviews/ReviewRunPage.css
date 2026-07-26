@@ -111,6 +111,35 @@
   background: rgba(255, 235, 227, 0.78);
 }
 
+.run-validation-warning {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  gap: 11px;
+  align-items: start;
+  margin-bottom: 18px;
+  padding: 12px 14px;
+  border: 1px solid rgb(168 103 9 / 34%);
+  border-left: 4px solid var(--run-partial);
+  background: #fff8e9;
+  color: #684506;
+}
+
+.run-validation-warning > svg {
+  width: 20px;
+  height: 20px;
+}
+
+.run-validation-warning strong {
+  color: #684506;
+  font-size: 0.9rem;
+}
+
+.run-validation-warning p {
+  margin: 4px 0 0;
+  font-size: 0.8rem;
+  line-height: 1.45;
+}
+
 .run-failure__summary {
   display: grid;
   grid-template-columns: 22px minmax(0, 1fr);

@@ -144,6 +144,7 @@ export function ReviewRunPage() {
     eventStatus === "loading" ? reviewQuery.data?.status ?? eventStatus : eventStatus;
   const failureEntry = latestFailureEntry(transcriptQuery.data);
   const failure = failureEntry === undefined ? undefined : failureDetails(failureEntry.metadata, locale);
+  const validationWarning = latestValidationWarningEntry(transcriptQuery.data);
   const processReportQuery = useQuery({
     queryKey: ["review-process-report", taskId],
     queryFn: () => getProcessReport(taskId ?? ""),
@@ -255,6 +256,24 @@ export function ReviewRunPage() {
           ) : null}
           {currentStatus === "failed" && failure === undefined ? t("run.failed") : null}
           {currentStatus === "canceled" ? t("run.canceled") : null}
+        </div>
+      ) : null}
+      {validationWarning !== undefined ? (
+        <div
+          aria-label={t("run.validationWarningTitle")}
+          className="run-validation-warning"
+          role="status"
+        >
+          <CircleAlert aria-hidden="true" />
+          <div>
+            <strong>{t("run.validationWarningTitle")}</strong>
+            <p>{t("run.validationWarningSummary", {
+              retained: validationWarning.metadata.retained_count ?? "0",
+              skipped: validationWarning.metadata.skipped_count ?? "0",
+              duplicates: validationWarning.metadata.duplicate_count ?? "0",
+              invalid: validationWarning.metadata.invalid_count ?? "0",
+            })}</p>
+          </div>
         </div>
       ) : null}
       {cancelMutation.isError ? <p className="run-action-error" role="alert">{cancelMutation.error instanceof Error ? cancelMutation.error.message : t("run.unableLoad")}</p> : null}
@@ -380,6 +399,19 @@ function latestFailureEntry(entries: TranscriptEntry[]): TranscriptEntry | undef
   for (let index = entries.length - 1; index >= 0; index -= 1) {
     const entry = entries[index];
     if (entry?.kind === "lifecycle" && (entry.metadata.error_code !== undefined || entry.metadata.error_type !== undefined)) {
+      return entry;
+    }
+  }
+  return undefined;
+}
+
+function latestValidationWarningEntry(entries: TranscriptEntry[]): TranscriptEntry | undefined {
+  for (let index = entries.length - 1; index >= 0; index -= 1) {
+    const entry = entries[index];
+    if (
+      entry?.kind === "lifecycle" &&
+      entry.metadata.warning_code === "finding_validation_partial"
+    ) {
       return entry;
     }
   }

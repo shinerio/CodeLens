@@ -15,7 +15,11 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
-from codelens.review.domain.ports import AgentOutputCodecPort, SnapshotFileReaderPort
+from codelens.review.domain.ports import (
+    AgentOutputCodecPort,
+    FindingValidationWarning,
+    SnapshotFileReaderPort,
+)
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.workspace.domain.models import ReviewSnapshot
 
@@ -94,21 +98,47 @@ class FindingValidator:
         self._agent = agent
         self._codec = codec
         self._excerpt_reader = excerpt_reader
+        self._warnings: tuple[FindingValidationWarning, ...] = ()
+
+    @property
+    def warnings(self) -> tuple[FindingValidationWarning, ...]:
+        """Return bounded diagnostics for candidates skipped by the latest validation."""
+
+        return self._warnings
 
     async def validate(self, payload: bytes) -> FindingBatch:
-        """Apply schema, path, hunk, evidence, and identity checks in stable order."""
+        """Validate candidates and keep the first occurrence of each trusted Finding."""
 
+        self._warnings = ()
         try:
             decoded = cast(_BatchCandidate, self._codec.decode(payload))
-            findings = tuple([await self._validate_candidate(item) for item in decoded.findings])
-        except FindingValidationError:
-            raise
         except (TypeError, ValueError, AttributeError) as error:
             raise FindingValidationError("Agent output schema is invalid") from error
-        fingerprints = [finding.fingerprint for finding in findings]
-        if len(fingerprints) != len(set(fingerprints)):
-            raise FindingValidationError("Agent output contains duplicate Findings")
-        return FindingBatch(schema_version=decoded.schema_version, findings=findings)
+
+        findings: list[Finding] = []
+        warnings: list[FindingValidationWarning] = []
+        seen_fingerprints: set[str] = set()
+        for candidate_index, candidate in enumerate(decoded.findings):
+            try:
+                finding = await self._validate_candidate(candidate)
+            except (FindingValidationError, ValueError) as error:
+                warnings.append(
+                    FindingValidationWarning(candidate_index, "invalid", str(error))
+                )
+                continue
+            if finding.fingerprint in seen_fingerprints:
+                warnings.append(
+                    FindingValidationWarning(
+                        candidate_index,
+                        "duplicate",
+                        "Finding duplicates an earlier validated candidate",
+                    )
+                )
+                continue
+            seen_fingerprints.add(finding.fingerprint)
+            findings.append(finding)
+        self._warnings = tuple(warnings)
+        return FindingBatch(schema_version=decoded.schema_version, findings=tuple(findings))
 
     async def _validate_candidate(self, candidate: _FindingCandidate) -> Finding:
         if candidate.reviewer_id != self._agent.agent_id:

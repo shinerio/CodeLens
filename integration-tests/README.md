@@ -5,9 +5,11 @@ temporary Git repository at runtime with a `main` branch and a `fixture-change` 
 branch contains one added file, one deleted file, and one modified file. No submodule, local-only
 branch, API key, or network LLM is required.
 
-The fake model runtime sends fixed review intent through the production `comment` collector. This
-keeps the test stable despite normal LLM output variation while still exercising line resolution,
-Finding validation, persistence, HTTP responses, process-report aggregation, and the React UI.
+The fake model runtime sends fixed review intent through the production `comment` collector and
+intentionally repeats one comment. The validator must deduplicate the four submitted comments into
+three Findings without failing the Review. This keeps the test stable while exercising line
+resolution, Finding validation, persistence, HTTP responses, process-report aggregation, and the
+React UI.
 
 Run both integration layers from the repository root:
 
@@ -18,7 +20,9 @@ uv run --project backend pytest integration-tests/test_review_pipeline.py -v
 pnpm --dir integration-tests test
 ```
 
-The Playwright suite starts its own loopback-only backend and frontend services, runs desktop and
-mobile projects, and fails on browser page errors. Ports and data locations can be overridden with
+The Playwright suite creates one Review, checks its three Findings at desktop and mobile viewport
+sizes, and fails if any additional Review is created. Its launcher starts loopback-only backend and
+frontend services in a fresh temporary data directory and removes that directory after success or
+failure. Ports and the temporary-directory parent can be overridden with
 `CODELENS_INTEGRATION_BACKEND_PORT`, `CODELENS_INTEGRATION_FRONTEND_PORT`, and
 `CODELENS_INTEGRATION_DATA_DIR`.

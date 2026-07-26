@@ -25,7 +25,88 @@ async function chooseRepository(page: Page, repository: string) {
   }
 }
 
-test("shows stable added, deleted, and modified findings with execution metrics", async ({ page }) => {
+const FINDING_CASES = [
+  {
+    title: "Shared cache key leaks data between users",
+    severity: "critical",
+    category: "data-isolation",
+    confidence: "99%",
+    explanation: "Every user is assigned the same cache key.",
+    recommendation: "Include the user identifier in the cache key.",
+    pathState: "file added",
+    side: "new",
+  },
+  {
+    title: "Deleting the authorization guard permits every role",
+    severity: "high",
+    category: "authorization",
+    confidence: "98%",
+    explanation: "Removing this file removes the only admin-role check.",
+    recommendation: "Keep an authorization guard in the target revision.",
+    pathState: "file deleted",
+    side: "old",
+  },
+  {
+    title: "Inverted transition guard allows invalid states",
+    severity: "medium",
+    category: "state-machine",
+    confidence: "97%",
+    explanation: "The guard now allows every non-draft state to reach reviewing.",
+    recommendation: "Restore the draft-only guard before allowing the reviewing transition.",
+    pathState: null,
+    side: "new",
+  },
+] as const;
+
+async function assertThreeFindings(page: Page) {
+  const findingButtons = page.locator(".finding-list__item");
+  await expect(findingButtons).toHaveCount(3);
+  const backgrounds = await findingButtons.evaluateAll((elements) =>
+    elements.map((element) => getComputedStyle(element).backgroundColor),
+  );
+  expect(new Set(backgrounds).size).toBe(3);
+
+  const commentBackgrounds: string[] = [];
+  for (const expected of FINDING_CASES) {
+    await page.getByRole("button", { name: new RegExp(expected.title) }).click();
+    const detail = page.locator(".finding-detail");
+    await expect(detail.getByRole("heading", { name: expected.title, level: 3 })).toBeVisible();
+    await expect(detail).toContainText(expected.severity);
+    await expect(detail).toContainText(expected.category);
+    await expect(detail).toContainText(expected.confidence);
+    await expect(detail).toContainText(expected.explanation);
+    await expect(detail).toContainText(expected.recommendation);
+    const commentZone = page.locator(`.finding-comment-zone--${expected.side}`);
+    await expect(commentZone).toBeVisible({ timeout: 15_000 });
+    commentBackgrounds.push(await commentZone.locator(".finding-detail__opinion").evaluate(
+      (element) => getComputedStyle(element).backgroundColor,
+    ));
+    const opinionBox = await commentZone.locator(".finding-detail__opinion").boundingBox();
+    expect(opinionBox?.width).toBeGreaterThanOrEqual(280);
+    const commentZoneBox = await commentZone.boundingBox();
+    expect(commentZoneBox?.height).toBeGreaterThanOrEqual(
+      opinionBox?.height ?? Number.POSITIVE_INFINITY,
+    );
+    if ((page.viewportSize()?.width ?? 0) <= 760) {
+      const readScrollLeft = () => detail.locator(".finding-detail__source").evaluate(
+        (element) => element.scrollLeft,
+      );
+      if (expected.side === "new") {
+        await expect.poll(readScrollLeft).toBeGreaterThan(0);
+      } else {
+        await expect.poll(readScrollLeft).toBe(0);
+      }
+    }
+    if (expected.pathState !== null) {
+      await expect(detail).toContainText(expected.pathState);
+    }
+  }
+  expect(new Set(commentBackgrounds).size).toBe(3);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
+    .toBeTruthy();
+}
+
+test("creates one review with three findings across desktop and mobile", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto("/settings");
@@ -53,89 +134,25 @@ test("shows stable added, deleted, and modified findings with execution metrics"
     .toContainText("3");
   await expect(report).toContainText("comment");
   await expect(report).toContainText("task_done");
+  await expect(page.getByRole("status", { name: "Some model findings were skipped" }))
+    .toContainText("1 duplicate");
 
   await page.getByRole("button", { name: /Findings/ }).click();
-  const findingButtons = page.locator(".finding-list__item");
-  await expect(findingButtons).toHaveCount(3);
+  await assertThreeFindings(page);
+  const reviewUrl = page.url();
 
-  const backgrounds = await findingButtons.evaluateAll((elements) =>
-    elements.map((element) => getComputedStyle(element).backgroundColor),
-  );
-  expect(new Set(backgrounds).size).toBe(3);
+  await page.setViewportSize({ width: 390, height: 844 });
+  await page.reload();
+  expect(page.url()).toBe(reviewUrl);
+  await page.getByRole("button", { name: /Findings/ }).click();
+  await assertThreeFindings(page);
 
-  const cases = [
-    {
-      title: "Shared cache key leaks data between users",
-      severity: "critical",
-      category: "data-isolation",
-      confidence: "99%",
-      explanation: "Every user is assigned the same cache key.",
-      recommendation: "Include the user identifier in the cache key.",
-      pathState: "file added",
-      side: "new",
-    },
-    {
-      title: "Deleting the authorization guard permits every role",
-      severity: "high",
-      category: "authorization",
-      confidence: "98%",
-      explanation: "Removing this file removes the only admin-role check.",
-      recommendation: "Keep an authorization guard in the target revision.",
-      pathState: "file deleted",
-      side: "old",
-    },
-    {
-      title: "Inverted transition guard allows invalid states",
-      severity: "medium",
-      category: "state-machine",
-      confidence: "97%",
-      explanation: "The guard now allows every non-draft state to reach reviewing.",
-      recommendation: "Restore the draft-only guard before allowing the reviewing transition.",
-      pathState: null,
-      side: "new",
-    },
-  ] as const;
-  const commentBackgrounds: string[] = [];
-
-  for (const expected of cases) {
-    await page.getByRole("button", { name: new RegExp(expected.title) }).click();
-    const detail = page.locator(".finding-detail");
-    await expect(detail.getByRole("heading", { name: expected.title, level: 3 })).toBeVisible();
-    await expect(detail).toContainText(expected.severity);
-    await expect(detail).toContainText(expected.category);
-    await expect(detail).toContainText(expected.confidence);
-    await expect(detail).toContainText(expected.explanation);
-    await expect(detail).toContainText(expected.recommendation);
-    const commentZone = page.locator(`.finding-comment-zone--${expected.side}`);
-    await expect(commentZone).toBeVisible({
-      timeout: 15_000,
-    });
-    commentBackgrounds.push(await commentZone.locator(".finding-detail__opinion").evaluate(
-      (element) => getComputedStyle(element).backgroundColor,
-    ));
-    const opinionBox = await commentZone.locator(".finding-detail__opinion").boundingBox();
-    expect(opinionBox?.width).toBeGreaterThanOrEqual(280);
-    const commentZoneBox = await commentZone.boundingBox();
-    expect(commentZoneBox?.height).toBeGreaterThanOrEqual(
-      opinionBox?.height ?? Number.POSITIVE_INFINITY,
-    );
-    if ((page.viewportSize()?.width ?? 0) <= 760) {
-      const readScrollLeft = () => detail.locator(".finding-detail__source").evaluate(
-        (element) => element.scrollLeft,
-      );
-      if (expected.side === "new") {
-        await expect.poll(readScrollLeft).toBeGreaterThan(0);
-      } else {
-        await expect.poll(readScrollLeft).toBe(0);
-      }
-    }
-    if (expected.pathState !== null) {
-      await expect(detail).toContainText(expected.pathState);
-    }
+  const reviewsResponse = await page.request.get("/api/reviews");
+  expect(reviewsResponse.ok()).toBeTruthy();
+  const reviews: unknown = await reviewsResponse.json();
+  if (!Array.isArray(reviews)) {
+    throw new Error("Review list response must be an array");
   }
-  expect(new Set(commentBackgrounds).size).toBe(3);
-
-  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth))
-    .toBeTruthy();
+  expect(reviews).toHaveLength(1);
   expect(pageErrors).toEqual([]);
 });

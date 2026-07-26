@@ -169,8 +169,9 @@ class FixtureRuntime:
         *,
         model_name: str = "fixture-model",
         delay_seconds: float = 0.15,
+        repeat_first_comment: bool = False,
     ) -> None:
-        self._comments = comments
+        self._comments = comments + comments[:1] if repeat_first_comment else comments
         self._codec = AgentOutputCodec("1")
         self.calls = 0
         self.model_name = model_name

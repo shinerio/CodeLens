@@ -12,6 +12,7 @@ from codelens.review.domain.ports import (
     AgentRuntimeEvent,
     AgentRuntimeEventSink,
     AgentRuntimePort,
+    FindingValidationWarning,
     RunArtifactPort,
 )
 from codelens.reviewer_catalog.domain.models import AgentVersion
@@ -85,6 +86,9 @@ class _CheckpointPort(Protocol[_CheckpointViewT]):
 
 
 class _ValidatorPort(Protocol):
+    @property
+    def warnings(self) -> tuple[FindingValidationWarning, ...]: ...
+
     async def validate(self, payload: bytes) -> FindingBatch: ...
 
 
@@ -309,6 +313,27 @@ class ReviewOrchestrator:
         )
         validator = self._validator_factory(task_id, node_key, prepared, agent)
         findings = await validator.validate(payload)
+        if validator.warnings:
+            duplicate_count = sum(
+                warning.reason_code == "duplicate" for warning in validator.warnings
+            )
+            invalid_count = len(validator.warnings) - duplicate_count
+            await self._record(
+                task_id,
+                "lifecycle",
+                (
+                    f"Finding validation retained {len(findings.findings)} and skipped "
+                    f"{len(validator.warnings)} model candidates"
+                ),
+                {
+                    "agent": self._agent_key(agent),
+                    "warning_code": "finding_validation_partial",
+                    "retained_count": str(len(findings.findings)),
+                    "skipped_count": str(len(validator.warnings)),
+                    "duplicate_count": str(duplicate_count),
+                    "invalid_count": str(invalid_count),
+                },
+            )
         await self._completion.complete_with_findings(task_id, node_key, findings)
         await self._hit("after_finding_completion")
 

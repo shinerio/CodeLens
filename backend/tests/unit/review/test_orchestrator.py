@@ -14,6 +14,7 @@ from codelens.review.application.validate_findings import FindingValidationError
 from codelens.review.domain.ports import (
     AgentResponseDiagnostic,
     AgentRuntimeEvent,
+    FindingValidationWarning,
     RunOutputArtifact,
     UnvalidatedAgentOutput,
 )
@@ -188,13 +189,27 @@ class MemoryArtifacts:
 
 
 class EmptyValidator:
+    warnings: tuple[FindingValidationWarning, ...] = ()
+
     async def validate(self, _payload: bytes) -> FindingBatch:
         return FindingBatch("1", ())
 
 
 class FailingValidator:
+    warnings: tuple[FindingValidationWarning, ...] = ()
+
     async def validate(self, _payload: bytes) -> FindingBatch:
         raise FindingValidationError("Agent output schema is invalid")
+
+
+class WarningValidator:
+    warnings = (
+        FindingValidationWarning(1, "duplicate", "Finding duplicates an earlier candidate"),
+        FindingValidationWarning(2, "invalid", "Finding references an unknown changed hunk"),
+    )
+
+    async def validate(self, _payload: bytes) -> FindingBatch:
+        return FindingBatch("1", ())
 
 
 class RecordingCompletion:
@@ -408,6 +423,47 @@ async def test_finding_validation_failure_does_not_reinvoke_the_model() -> None:
     assert tuple(artifacts.payloads) == ("artifact-1",)
     assert checkpoints.value.artifact_ref == "artifact-1"
     assert completion.calls == 0
+
+
+async def test_candidate_validation_warnings_complete_the_review_and_reach_transcript() -> None:
+    workflow = MemoryWorkflow()
+    checkpoints = MemoryCheckpoints()
+    runtime = RecordingRuntime(b'{"schema_version":"1","findings":[]}')
+    artifacts = MemoryArtifacts()
+    completion = RecordingCompletion(checkpoints)
+    transcript = RecordingTranscript()
+
+    async def prepare(_task_id: str) -> PreparedReview:
+        return _prepared()
+
+    orchestrator = ReviewOrchestrator(
+        workflow=workflow,
+        prepare=prepare,
+        runtime=runtime,
+        artifacts=artifacts,
+        checkpoints=checkpoints,
+        validator_factory=lambda *_args: WarningValidator(),
+        completion=completion,
+        agent_semaphore=asyncio.Semaphore(1),
+        max_agent_runs_per_review=1,
+        transcript=transcript,
+    )
+
+    await orchestrator.execute("review-1")
+
+    entries = [entry for batch in transcript.batches for entry in batch]
+    warning = next(entry for entry in entries if entry[2] and entry[2].get("warning_code"))
+    assert warning[1] == "Finding validation retained 0 and skipped 2 model candidates"
+    assert warning[2] == {
+        "agent": "correctness:v1",
+        "warning_code": "finding_validation_partial",
+        "retained_count": "0",
+        "skipped_count": "2",
+        "duplicate_count": "1",
+        "invalid_count": "1",
+    }
+    assert workflow.status == "completed"
+    assert completion.calls == 1
 
 
 async def test_replay_before_output_saved_reinvokes_the_interrupted_model_call() -> None:

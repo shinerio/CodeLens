@@ -42,6 +42,8 @@ class Runtime:
 
 
 class Validator:
+    warnings: tuple[object, ...] = ()
+
     async def validate(self, _payload: bytes) -> FindingBatch:
         return FindingBatch("1", ())
 
