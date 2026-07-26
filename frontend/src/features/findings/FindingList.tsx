@@ -32,19 +32,24 @@ export function FindingList({
       <ul className="finding-list" aria-label={t("finding.list")}>
         {findings.map((finding) => {
           const isSelected = finding.finding_id === selectedFindingId;
+          const itemClassName = [
+            "finding-list__item",
+            `finding-list__item--${finding.severity}`,
+            isSelected ? "finding-list__item--active" : "",
+          ].filter(Boolean).join(" ");
           return (
             <li key={finding.finding_id}>
               <button
                 aria-current={isSelected ? "true" : undefined}
-                className={isSelected ? "finding-list__item finding-list__item--active" : "finding-list__item"}
+                className={itemClassName}
+                data-severity={finding.severity}
                 type="button"
                 onClick={() => onSelect(finding.finding_id)}
               >
                 <span className="finding-list__severity">{formatSeverity(finding.severity)}</span>
                 <span className="finding-list__title">{finding.title}</span>
                 <span className="finding-list__meta">
-                  {formatLocation(finding)} · {formatConfidence(finding.confidence)} ·{" "}
-                  {finding.reviewer_id}
+                  {finding.category} · {formatConfidence(finding.confidence)} · {formatLocation(finding)}
                 </span>
               </button>
             </li>

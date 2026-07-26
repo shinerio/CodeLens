@@ -14,7 +14,7 @@ from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
 )
 from codelens.testing.correctness_fixture import prepare_simple_branch_repository
-from codelens.workspace.domain.models import UncommittedScope
+from codelens.workspace.domain.models import BranchScope
 
 
 async def _run() -> int:
@@ -62,7 +62,11 @@ async def _run() -> int:
             review = await components.create_review.handle(
                 CreateReviewCommand(
                     repository=repository,
-                    scope=UncommittedScope(),
+                    scope=BranchScope(
+                        base_ref="main",
+                        target_ref="fixture-change",
+                        include_workspace_changes=False,
+                    ),
                     selected_agent_versions=("correctness:v1",),
                 )
             )

@@ -20,5 +20,9 @@ backend/dist/
 backend/*.egg-info/
 frontend/node_modules/
 frontend/dist/
+frontend/.tmp/
 frontend/playwright-report/
 frontend/test-results/
+integration-tests/.tmp/
+integration-tests/playwright-report/
+integration-tests/test-results/
