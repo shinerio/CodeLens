@@ -148,24 +148,27 @@ agent = Agent(
         read_file,
         get_diff,
         comment,
+        review_file_done,
         task_done,
     ],
+    tool_use_behavior=completion_tool_use_behavior,
 )
 ```
 
-### 3.2 没有显式配置的 SDK 默认值
+### 3.2 SDK 默认值与显式完成策略
 
-理解默认值对判断停止条件很重要。CodeLens 当前没有设置以下 `Agent` 字段：
+理解默认值对判断停止条件很重要。除 `tool_use_behavior` 外，CodeLens 当前没有设置以下 `Agent` 字段：
 
 | 字段 | SDK 默认值 | 对 CodeLens 的影响 |
 | --- | --- | --- |
 | `output_type` | `None`，等价于普通字符串输出 | 没有工具调用时，模型文本成为 SDK final output |
-| `tool_use_behavior` | `"run_llm_again"` | 工具结果会送回模型，并继续下一轮 |
 | `handoffs` | 空列表 | 当前不会切换到另一个 Agent |
 | `input_guardrails` | 空列表 | SDK 不运行输入 guardrail |
 | `output_guardrails` | 空列表 | SDK final output 不经过 SDK output guardrail |
 | `hooks` | `None` | CodeLens 主要通过 stream events 观测，不依赖 Agent hooks |
 | `reset_tool_choice` | `True` | 工具调用后重置强制 tool choice，降低持续调用同一工具的风险 |
+
+CodeLens 显式把 `tool_use_behavior` 设置为自定义函数：被接受的 `task_done` 直接成为 final output，其他函数工具结果仍返回模型继续下一轮。
 
 CodeLens 也没有向 `Runner` 传入 `session`、`conversation_id`、`previous_response_id`、handoff 或人工审批状态。因此本文会先解释 SDK 完整状态机，再指出 CodeLens 实际走到的分支。
 
@@ -245,12 +248,10 @@ turn 3: 模型读取 comment acknowledgement -> review_file_done
 
 turn 4: 模型读取文件完成结果 -> task_done
         SDK -> 执行 task_done
-
-turn 5: 模型读取 task_done acknowledgement -> 普通文本
-        SDK -> FinalOutput
+        CodeLens 自定义 tool_use_behavior -> FinalOutput
 ```
 
-这是 5 个模型 turn、5 次模型请求；工具调用数量则是 5 次。若 `task_done` 因覆盖不完整被拒绝，模型继续取证和声明文件，实际 turn 与工具调用数会继续增加。
+这是 4 个模型 turn、4 次模型请求；工具调用数量是 5 次。若 `task_done` 因覆盖不完整被拒绝，模型继续取证和声明文件，实际 turn 与工具调用数会继续增加。
 
 ## 6. 主循环状态机
 
@@ -491,7 +492,7 @@ SDK支持四种策略：
 | `StopAtTools` | 指定工具被调用时，其结果直接成为 final output |
 | 自定义函数 | 根据全部函数工具结果决定是否结束 |
 
-CodeLens 使用默认 `run_llm_again`。因此 `get_diff`、`comment`、`review_file_done`、`task_done` 对 SDK 来说没有控制级别差异：它们都是普通函数工具，结果都会回送模型。完成有效性由 CodeLens 在工具实现和 Runner 返回后另外校验。
+CodeLens 使用自定义 `ToolsToFinalOutputFunction`。函数工具执行后，它检查任务内 Collector 状态：`task_done` 已被宿主接受时返回 `ToolsToFinalOutputResult(is_final_output=True)`，立即结束 Agent Loop；其他工具以及被拒绝的 `task_done` 返回 `is_final_output=False`，工具结果进入历史并触发下一轮。
 
 下一轮请求会包含类似的逻辑历史：
 
@@ -513,19 +514,19 @@ CodeLens 没有配置结构化 `output_type`，因此走 plain-text 分支：
 
 - 如果本轮没有工具调用，最后一个 message 的文本成为 `NextStepFinalOutput`；
 - 如果本轮没有工具调用且没有文本，空字符串也可成为 final output；
-- 如果本轮包含工具调用，即使同时出现文本，也会先执行工具并按默认策略进入下一轮；
+- 如果本轮包含工具调用，即使同时出现文本，也会先执行工具，再由 CodeLens 的自定义 `tool_use_behavior` 决定结束或进入下一轮；
 - SDK final output 只表示 Agent Loop 已经结束，不表示 CodeLens 已接受任何 Finding。
 
 进入 `NextStepFinalOutput` 后，SDK运行 output guardrails 和结束 hooks，设置：
 
 ```text
-stream.final_output = 模型最终文本
+stream.final_output = 模型最终文本或 accepted task_done 对应的空字符串
 stream.is_complete = True
 ```
 
 然后向事件队列写入完成 sentinel，`stream_events()` 消费完剩余事件后退出。
 
-## 13. `task_done` 为什么不会直接停止 SDK
+## 13. `task_done` 如何有条件地停止 SDK
 
 `task_done` 是 CodeLens 定义的 FunctionTool，不是 Agents SDK 内置的终止指令。
 
@@ -534,20 +535,20 @@ stream.is_complete = True
 1. SDK按普通工具解析参数；
 2. `ReviewCommentCollector.complete()` 将 Snapshot 的全部 Review 文件与已经通过 `review_file_done` 记录的文件比较；
 3. 覆盖完整时返回 `accepted: true`；覆盖不完整时返回 `accepted: false`、`missing_evidence_files` 和 `undeclared_files`；
-4. SDK因 `tool_use_behavior="run_llm_again"` 产生 `NextStepRunAgain`；
-5. acknowledgement 被送入下一轮模型请求；被拒绝时，模型可以继续取证、调用 `review_file_done` 并重试 `task_done`；
-6. 只有模型随后返回不含工具调用的普通文本，SDK才产生 `FinalOutput`；
-7. Runner 返回后，`OpenAIAgentRuntime` 强制检查 `comment_collector.is_completed`，没有被接受的 `task_done` 时以 `review_completion_not_declared` 失败。
+4. 自定义 `ToolsToFinalOutputFunction` 检查 `comment_collector.is_completed`；
+5. 完成已接受时直接产生 `NextStepFinalOutput`，不再调用一次模型生成最终文本；
+6. 完成被拒绝时产生 `NextStepRunAgain`，acknowledgement 被送入下一轮，模型可以继续取证、调用 `review_file_done` 并重试 `task_done`；
+7. Runner 因普通最终文本提前结束时，`OpenAIAgentRuntime` 仍强制检查 `comment_collector.is_completed`，没有被接受的 `task_done` 就以 `review_completion_not_declared` 失败。
 
-当前 Runtime 没有把 Agent 配置为：
+Runtime 没有使用下面这种仅按工具名称停止的配置：
 
 ```python
 tool_use_behavior={"stop_at_tool_names": ["task_done"]}
 ```
 
-也没有自定义 `ToolsToFinalOutputFunction` 直接停止 SDK。因此 `task_done` 不是 SDK 硬停止开关，但它是 CodeLens 强制执行的业务完成协议。
+因为 `StopAtTools` 无法区分 `accepted: false`，它会错误终止被打回的完成请求。当前自定义函数依据 Collector 的宿主状态决策，只有真正被接受的 `task_done` 才是停止开关。
 
-如果模型调用 `task_done` 后继续调用其他工具，SDK仍会执行，除非触发工具预算、重复循环、模型回合数或其他错误边界。为避免模型无限打回，每个 Run 使用启动时读取的 `max_incomplete_review_retries`；超过上限后，下一次不完整的 `task_done` 会被强制接受，并通过 `incomplete_files` 和 `review_coverage_incomplete` 告警显式保留覆盖缺口。
+为避免模型无限打回，每个 Run 使用启动时读取的 `max_incomplete_review_retries`；超过上限后，下一次不完整的 `task_done` 会被强制接受并立即停止，覆盖状态持久化为 `incomplete`。最终聚合时，全部 Agent 为 `complete` 才进入 `completed`；任一 Agent 为 `incomplete` 则进入 `partial`，并通过 `incomplete_files` 和 `review_coverage_incomplete` 显式保留覆盖缺口。
 
 ## 14. 最大回合数如何停止
 
@@ -695,10 +696,11 @@ process_model_response
     |      +-- Run 级限制错误 -> 整体失败
     |      |
     |      v
-    |   tool outputs 加入历史
+    |   自定义 tool_use_behavior
     |      |
-    |      v
-    |   NextStepRunAgain -> 下一轮
+    |      +-- accepted task_done -> NextStepFinalOutput
+    |      |
+    |      +-- 其他结果 -> tool outputs 加入历史 -> NextStepRunAgain
     |
     +-- 无 function calls
            |
@@ -741,9 +743,9 @@ process_model_response
 
 CodeLens 的业务结果通道是 `comment`，不是模型最后一条 assistant message。排查“控制台有问题但报告为空”时，首先检查是否发生了成功的 `comment` 工具调用。
 
-### 19.5 `task_done` 同时受模型反馈循环和宿主校验约束
+### 19.5 `task_done` 同时控制循环退出和任务终态
 
-它没有配置成 SDK stop tool，因此拒绝结果依靠下一轮模型继续处理；Runtime 返回后则会强制校验是否存在一次被接受的 `task_done`。排查完成异常时，应同时查看：
+自定义工具策略只让被接受的 `task_done` 停止 SDK；拒绝结果进入下一轮模型继续处理。Runtime 返回后仍强制校验完成声明，并把覆盖状态持久化到 checkpoint，供最终聚合选择 `completed` 或 `partial`。排查完成异常时，应同时查看：
 
 - `task_done` 返回的是 `accepted: true` 还是 `accepted: false`；
 - `missing_evidence_files` 和 `undeclared_files` 是否得到后续处理；
@@ -819,13 +821,18 @@ async def codelens_agent_loop(agent, initial_input, limits):
             history.extend(parsed.output_items)
             history.extend(tool_results)
 
-            # CodeLens 使用默认 run_llm_again。
+            if collector.is_completed:
+                sdk_final_output = ""
+                break
             continue
 
         sdk_final_output = parsed.last_text or ""
         break
 
-    # SDK final output 只结束循环，不生成业务结果。
+    if not collector.is_completed:
+        raise ReviewCompletionNotDeclared
+
+    # 覆盖状态随 Artifact checkpoint 持久化，最终决定 completed 或 partial。
     return output_codec.encode(collector.finding_batch())
 ```
 

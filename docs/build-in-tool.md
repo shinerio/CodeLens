@@ -461,7 +461,7 @@ glob 语义：
 
 ### 9.4 重试耗尽
 
-`GET/PUT /api/settings/review-completion` 的 `max_incomplete_review_retries` 控制每个 Agent Run 最多打回多少次，允许 0–20，默认 3。每个 Run 启动时读取当前设置；超过该次数后，下一次不完整的 `task_done` 会被接受并返回 `forced_completion: true` 和精确的 `incomplete_files`。Runtime 保留当前已验证 Finding 并让任务成功完成，同时写入 `review_coverage_incomplete` 生命周期告警；Web 会合并所有 Agent 的未完成路径并提示用户。若模型在任何 `task_done` 被接受前自行结束，Runtime 会把该 Agent Run 判为失败。
+`GET/PUT /api/settings/review-completion` 的 `max_incomplete_review_retries` 控制每个 Agent Run 最多打回多少次，允许 0–20，默认 3。每个 Run 启动时读取当前设置；超过该次数后，下一次不完整的 `task_done` 会被接受并返回 `forced_completion: true` 和精确的 `incomplete_files`。Runtime 保留当前已验证 Finding，把该 Agent 的不完整覆盖状态持久化到 checkpoint，并立即结束 SDK Agent Loop。最终聚合时，全部 Agent 覆盖完整的任务进入 `completed`，任一 Agent 强制完成的任务进入 `partial`，同时写入 `review_coverage_incomplete` 生命周期告警；Web 会合并所有 Agent 的未完成路径并提示用户。若模型在任何 `task_done` 被接受前自行结束，Runtime 会把该 Agent Run 判为失败。
 
 ## 10. 契约装载与可观测性
 

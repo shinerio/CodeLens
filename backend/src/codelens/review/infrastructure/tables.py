@@ -110,6 +110,7 @@ dag_checkpoints = Table(
     Column("validation_attempts", Integer, nullable=False, default=0),
     Column("artifact_ref", String(128)),
     Column("artifact_hash", String(64)),
+    Column("review_completion_status", String(32), nullable=False, server_default="complete"),
     Column("error_code", String(128)),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),

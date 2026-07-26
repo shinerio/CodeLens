@@ -349,6 +349,8 @@ for turn in range(max_turns):
 
     if response.has_tool_calls:
         tool_results = await execute_tools(response.tool_calls)
+        if completion_behavior(tool_results).is_final_output:
+            break
         messages.extend([response.tool_calls, tool_results])
         continue
 
@@ -377,9 +379,10 @@ for turn in range(max_turns):
 工具执行：重新定位 existing_code -> 返回 accepted/rejected
 
 第 4 轮：模型完成剩余文件调查
+         -> 调用 review_file_done(...)
          -> 调用 task_done(...)
 
-第 5 轮：模型返回普通最终文本
+工具执行：task_done 被接受 -> 自定义 tool_use_behavior 返回 FinalOutput
          -> Runner 结束
 ```
 
@@ -484,9 +487,9 @@ comment_collector.finding_batch()
 
 ## 12. 容易误解的当前实现细节
 
-### 12.1 `task_done` 不是 Runner 的硬停止开关
+### 12.1 被接受的 `task_done` 是业务停止开关
 
-`task_done` 是普通 FunctionTool，CodeLens 没有把它配置成 SDK 的 stop tool。因此无论完成请求被接受还是拒绝，工具结果都会先返回模型；只有模型随后给出不含工具调用的最终响应，Runner 才结束。
+`task_done` 是普通 FunctionTool，但 CodeLens 为 Agent 配置了自定义 `tool_use_behavior`。该策略不根据工具名称盲目停止，而是在整批工具执行完成后读取 `ReviewCommentCollector.is_completed`：宿主接受完成时立即返回 `FinalOutput`，拒绝完成时仍把工具结果送回模型继续调查。
 
 但业务完成条件由宿主强制执行，而不是只依赖 Prompt：
 
@@ -494,11 +497,12 @@ comment_collector.finding_batch()
 2. `review_file_done` 只能记录已经取得上述证据的文件；
 3. `task_done` 比较 Snapshot 的完整目标集合与已记录文件，未完成时返回 `accepted: false`，并分别给出尚未取证的 `missing_evidence_files` 和已取证但未声明的 `undeclared_files`；
 4. SDK 把拒绝结果送回模型，模型补充调查后可再次调用 `task_done`；
-5. Runner 结束后，`OpenAIAgentRuntime` 检查 `comment_collector.is_completed`。如果从未出现一次被接受的 `task_done`，Agent Run 以 `review_completion_not_declared` 失败。
+5. 一旦 `task_done` 被接受，自定义策略直接结束 Agent Loop，不再为无业务价值的最终文本增加一次模型调用；
+6. Runner 结束后，`OpenAIAgentRuntime` 仍检查 `comment_collector.is_completed`。如果模型先输出普通最终文本、从未出现一次被接受的 `task_done`，Agent Run 以 `review_completion_not_declared` 失败。
 
-每个 Run 启动时读取 `max_incomplete_review_retries`，默认值为 3。超过打回次数后，宿主会接受下一次不完整的 `task_done`，保留已经验证的 Finding，并把精确的 `incomplete_files` 带到 Runtime 输出；Orchestrator 随后记录 `review_coverage_incomplete` 告警。该降级路径用于避免模型无限循环，不会把未检查文件伪装成完整覆盖。
+每个 Run 启动时读取 `max_incomplete_review_retries`，默认值为 3。超过打回次数后，宿主会接受下一次不完整的 `task_done`，保留已经验证的 Finding，并把精确的 `incomplete_files` 带到 Runtime 输出。Orchestrator 将 `complete` 或 `incomplete` 随输出 Artifact 身份持久化到 Agent checkpoint，因此重启后仍能确定最终状态：全部 Agent 完整时任务进入 `completed`，任一 Agent 强制完成时进入 `partial`；同时记录 `review_coverage_incomplete` 告警。该降级路径用于避免模型无限循环，不会把未检查文件伪装成完整覆盖。
 
-因此应区分两层退出：SDK 的 Agent Loop 仍由最终文本、最大回合、超时或异常结束；CodeLens 的 Review 成功还要求一次被接受的 `task_done`。`task_done` 不是代码里的 `break`，但它是宿主强制校验的业务完成协议。
+因此应区分两层状态：SDK Agent Loop 可由 accepted `task_done`、普通最终文本、最大回合、超时或异常结束；CodeLens 任务则根据持久化覆盖结果进入 `completed`、`partial` 或 `failed`。普通最终文本只能结束 SDK，不能绕过被接受的 `task_done`。
 
 ### 12.2 当前运行限制来自模型网关配置
 

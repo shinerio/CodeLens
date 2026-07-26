@@ -9,6 +9,7 @@ from typing import Literal, Protocol, TypeVar
 
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.ports import (
+    AgentReviewCompletionStatus,
     AgentRunCompletionPort,
     AgentRuntimeEvent,
     AgentRuntimeEventSink,
@@ -70,6 +71,9 @@ class CheckpointView(Protocol):
     def artifact_hash(self) -> str | None: ...
 
     @property
+    def review_completion_status(self) -> AgentReviewCompletionStatus: ...
+
+    @property
     def execution_attempts(self) -> int: ...
 
 
@@ -81,7 +85,12 @@ class _CheckpointPort(Protocol[_CheckpointViewT]):
     async def get(self, task_id: str, node_key: str) -> _CheckpointViewT: ...
     async def mark_running(self, task_id: str, node_key: str) -> None: ...
     async def mark_output_saved(
-        self, task_id: str, node_key: str, reference: str, content_hash: str
+        self,
+        task_id: str,
+        node_key: str,
+        reference: str,
+        content_hash: str,
+        review_completion_status: AgentReviewCompletionStatus,
     ) -> None: ...
     async def mark_validating(self, task_id: str, node_key: str) -> None: ...
 
@@ -185,10 +194,16 @@ class ReviewOrchestrator:
             if status == "canceled":
                 return
             await self._hit("before_task_aggregation")
-            status = await self._advance(task_id, status, "synthesizing", "completed")
-            if status == "completed":
+            completion_status = await self._task_completion_status(task_id, prepared)
+            status = await self._advance(task_id, status, "synthesizing", completion_status)
+            if status in {"completed", "partial"}:
                 await self._workflow.complete_job(task_id)
-                await self._record(task_id, "lifecycle", "Review execution completed")
+                message = (
+                    "Review execution completed"
+                    if status == "completed"
+                    else "Review execution completed with incomplete coverage"
+                )
+                await self._record(task_id, "lifecycle", message)
         except asyncio.CancelledError:
             await self._workflow.interrupt(task_id)
             raise
@@ -305,6 +320,7 @@ class ReviewOrchestrator:
             node_key,
             artifact.reference,
             artifact.content_hash,
+            output.review_completion_status,
         )
         await self._hit("after_output_saved")
 
@@ -358,6 +374,25 @@ class ReviewOrchestrator:
             )
         await self._completion.complete_with_findings(task_id, node_key, findings)
         await self._hit("after_finding_completion")
+
+    async def _task_completion_status(
+        self,
+        task_id: str,
+        prepared: PreparedReview,
+    ) -> Literal["completed", "partial"]:
+        """Return PARTIAL when any durable Agent output has incomplete Review coverage."""
+
+        checkpoints = await asyncio.gather(
+            *(
+                self._checkpoints.get(task_id, self._node_key(agent))
+                for agent in prepared.agents
+            )
+        )
+        return (
+            "partial"
+            if any(item.review_completion_status == "incomplete" for item in checkpoints)
+            else "completed"
+        )
 
     async def _hit(self, boundary: str) -> None:
         if self._crash_injector is not None:

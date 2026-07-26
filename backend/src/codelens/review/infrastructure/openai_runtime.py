@@ -4,6 +4,7 @@ import asyncio
 import json
 import logging
 import os
+from collections.abc import Callable
 from dataclasses import fields, is_dataclass
 from typing import Any, Literal, Protocol, cast
 
@@ -12,7 +13,17 @@ import httpx
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_MODEL_DATA", "1")
 os.environ.setdefault("OPENAI_AGENTS_DONT_LOG_TOOL_DATA", "1")
 
-from agents import Agent, RawResponsesStreamEvent, RunConfig, RunItemStreamEvent, Runner, Tool
+from agents import (
+    Agent,
+    FunctionToolResult,
+    RawResponsesStreamEvent,
+    RunConfig,
+    RunContextWrapper,
+    RunItemStreamEvent,
+    Runner,
+    Tool,
+    ToolsToFinalOutputResult,
+)
 from agents.exceptions import (
     MaxTurnsExceeded,
     ModelBehaviorError,
@@ -236,6 +247,7 @@ class OpenAIAgentRuntime:
             ),
             model_settings=behavior.model_settings,
             tools=model_tools,
+            tool_use_behavior=_completion_tool_use_behavior(comment_collector),
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
         investigation: object | None = None
@@ -588,6 +600,25 @@ def _validate_model_tool_contract(tools: list[Tool]) -> None:
     leaked = next((term for term in _FORBIDDEN_TOOL_CONTRACT_TERMS if term in payload), None)
     if leaked is not None:
         raise PermanentAgentOutputError("Model tool contract exposes internal Review metadata")
+
+
+def _completion_tool_use_behavior(
+    collector: ReviewCommentCollector,
+) -> Callable[
+    [RunContextWrapper[None], list[FunctionToolResult]],
+    ToolsToFinalOutputResult,
+]:
+    """Stop the SDK loop only after the host accepted a task_done submission."""
+
+    def decide(
+        _context: RunContextWrapper[None],
+        _tool_results: list[FunctionToolResult],
+    ) -> ToolsToFinalOutputResult:
+        if collector.is_completed:
+            return ToolsToFinalOutputResult(is_final_output=True, final_output="")
+        return ToolsToFinalOutputResult(is_final_output=False)
+
+    return decide
 
 
 def _tool_metadata(value: object, *, include_name: bool = False) -> dict[str, str]:

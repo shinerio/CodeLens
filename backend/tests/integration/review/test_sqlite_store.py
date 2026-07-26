@@ -172,6 +172,39 @@ async def test_failed_review_retry_creates_an_independent_queued_task(tmp_path: 
         await database.dispose()
 
 
+async def test_partial_review_transition_closes_the_job_and_emits_terminal_event(
+    tmp_path: Path,
+) -> None:
+    database = await _database(tmp_path)
+    try:
+        store = SqlReviewStore(database)
+        jobs = SqlJobQueue(database)
+        events = SqlEventOutbox(database)
+        await store.create_with_job(_task("review-partial"))
+        for status in (
+            "provisioning_worktree",
+            "snapshotting",
+            "preparing",
+            "reviewing",
+            "validating",
+            "synthesizing",
+            "partial",
+        ):
+            await store.transition("review-partial", status)
+
+        await store.complete_job("review-partial")
+
+        review = await store.get_review("review-partial")
+        assert review is not None
+        assert review.status == "partial"
+        assert (await jobs.get("review-partial")).status == "partial"
+        assert (await events.list_after("review-partial", after_event_id=0))[-1].event_type == (
+            "review.partial"
+        )
+    finally:
+        await database.dispose()
+
+
 async def test_retry_rejects_a_review_that_has_not_failed(tmp_path: Path) -> None:
     database = await _database(tmp_path)
     try:
@@ -277,6 +310,7 @@ async def test_restart_requeues_running_nodes_but_keeps_saved_outputs(tmp_path: 
             "correctness:v1:0:root",
             "artifact-1",
             "a" * 64,
+            "incomplete",
         )
         await checkpoints.mark_output_saved(
             "review-terminal",
@@ -293,6 +327,8 @@ async def test_restart_requeues_running_nodes_but_keeps_saved_outputs(tmp_path: 
         await store.recover_after_singleton_restart()
 
         running = await checkpoints.get("review-running", "correctness:v1:0:root")
+        saved = await checkpoints.get("review-output", "correctness:v1:0:root")
+        assert saved.review_completion_status == "incomplete"
         output = await checkpoints.get("review-output", "correctness:v1:0:root")
         terminal = await checkpoints.get("review-terminal", "correctness:v1:0:root")
         assert (await jobs.get("review-running")).status == "queued"

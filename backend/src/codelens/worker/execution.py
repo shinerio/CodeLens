@@ -15,6 +15,7 @@ from codelens.review.application.validate_findings import FindingValidator
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.errors import AgentRuntimeError
 from codelens.review.domain.ports import (
+    AgentReviewCompletionStatus,
     AgentRuntimeEventSink,
     AgentRuntimePort,
     ReviewExecutionRecord,
@@ -120,12 +121,14 @@ class SqlCheckpointPortAdapter:
         node_key: str,
         reference: str,
         content_hash: str,
+        review_completion_status: AgentReviewCompletionStatus,
     ) -> None:
         await self._checkpoints.mark_output_saved(
             task_id,
             node_key,
             reference,
             content_hash,
+            review_completion_status,
         )
 
     async def mark_validating(self, task_id: str, node_key: str) -> None:

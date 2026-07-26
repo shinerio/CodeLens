@@ -13,6 +13,8 @@ DEFAULT_RECENT_REPOSITORY_LIMIT = 10
 MIN_RECENT_REPOSITORY_LIMIT = 1
 MAX_RECENT_REPOSITORY_LIMIT = 20
 
+type AgentReviewCompletionStatus = Literal["complete", "incomplete"]
+
 
 @dataclass(frozen=True)
 class SnapshotRead:
@@ -60,6 +62,12 @@ class UnvalidatedAgentOutput:
     output_tokens: int
     diagnostics: tuple[AgentResponseDiagnostic, ...]
     incomplete_review_files: tuple[str, ...] = ()
+
+    @property
+    def review_completion_status(self) -> AgentReviewCompletionStatus:
+        """Classify an accepted Agent completion without duplicating its coverage evidence."""
+
+        return "incomplete" if self.incomplete_review_files else "complete"
 
 
 @dataclass(frozen=True)

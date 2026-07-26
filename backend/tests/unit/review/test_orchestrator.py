@@ -34,6 +34,7 @@ class MemoryCheckpoint:
     status: str = "pending"
     artifact_ref: str | None = None
     artifact_hash: str | None = None
+    review_completion_status: str = "complete"
     execution_attempts: int = 0
     validation_attempts: int = 0
 
@@ -89,11 +90,13 @@ class MemoryCheckpoints:
         _node_key: str,
         reference: str,
         content_hash: str,
+        review_completion_status: str = "complete",
     ) -> None:
         assert self.value.status == "running"
         self.value.status = "output_saved"
         self.value.artifact_ref = reference
         self.value.artifact_hash = content_hash
+        self.value.review_completion_status = review_completion_status
 
     async def mark_validating(self, _task_id: str, _node_key: str) -> None:
         assert self.value.status == "output_saved"
@@ -499,7 +502,8 @@ async def test_forced_completion_warns_about_files_without_verified_review_cover
         "incomplete_file_count": "2",
         "incomplete_files": '["src/missed.py","src/unread.py"]',
     }
-    assert workflow.status == "completed"
+    assert workflow.status == "partial"
+    assert workflow.transitions[-1] == "partial"
     assert completion.calls == 1
 
 

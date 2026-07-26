@@ -195,6 +195,28 @@ async def test_successful_provider_responses_are_not_marked_as_parse_failures() 
     assert raw_events[0].metadata == {"parse_failed": "false", "response_index": "1"}
 
 
+async def test_accepted_task_done_stops_the_agent_without_another_model_turn() -> None:
+    runner = FakeRunner(FakeResult(FindingBatchSchema(schema_version="1", findings=()), ()))
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    await runtime.invoke(_agent(), b'{"review_files":[]}', _snapshot(), "en")
+
+    assert runner.starting_agent is not None
+    completion_behavior = runner.starting_agent.tool_use_behavior
+    assert callable(completion_behavior)
+    decision = completion_behavior(None, [])
+    if asyncio.iscoroutine(decision):
+        decision = await decision
+    assert decision.is_final_output is True
+    assert decision.final_output == ""
+
+
 async def test_uses_active_gateway_execution_limits(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

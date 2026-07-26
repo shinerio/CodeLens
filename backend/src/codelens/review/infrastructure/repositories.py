@@ -28,6 +28,7 @@ from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import (
     MAX_RECENT_REPOSITORY_LIMIT,
     MIN_RECENT_REPOSITORY_LIMIT,
+    AgentReviewCompletionStatus,
     RecentRepositoryRecord,
     ReviewEvent,
     ReviewExecutionRecord,
@@ -70,6 +71,7 @@ class CheckpointRecord:
     validation_attempts: int
     artifact_ref: str | None
     artifact_hash: str | None
+    review_completion_status: AgentReviewCompletionStatus
     error_code: str | None
 
 
@@ -702,6 +704,7 @@ class SqlReviewStore:
             "validating": "reviewing",
             "synthesizing": "validating",
             "completed": "synthesizing",
+            "partial": "synthesizing",
         }
         expected = predecessors.get(status)
         if expected is None:
@@ -728,11 +731,11 @@ class SqlReviewStore:
                 if current == status:
                     return
                 raise InvalidAgentRunStateError("review transition lost its expected state")
-            if status == "completed":
+            if status in {"completed", "partial"}:
                 await session.execute(
                     update(jobs)
                     .where(jobs.c.task_id == task_id, jobs.c.status.in_(("running", "queued")))
-                    .values(status="completed", finished_at=_now(), updated_at=_now())
+                    .values(status=status, finished_at=_now(), updated_at=_now())
                 )
             event_id = await session.scalar(
                 insert(events)
@@ -828,18 +831,18 @@ class SqlReviewStore:
         await self._database.run_transaction(operation)
 
     async def complete_job(self, task_id: str) -> None:
-        """Idempotently close a job whose task transition already completed atomically."""
+        """Idempotently close a job whose Review reached a successful terminal state."""
 
         async def operation(session: AsyncSession) -> None:
             status = await session.scalar(
                 select(review_tasks.c.status).where(review_tasks.c.task_id == task_id)
             )
-            if status != "completed":
+            if status not in {"completed", "partial"}:
                 raise InvalidAgentRunStateError("job cannot complete before its review")
             await session.execute(
                 update(jobs)
-                .where(jobs.c.task_id == task_id, jobs.c.status != "completed")
-                .values(status="completed", finished_at=_now(), updated_at=_now())
+                .where(jobs.c.task_id == task_id, jobs.c.status != status)
+                .values(status=status, finished_at=_now(), updated_at=_now())
             )
 
         await self._database.run_transaction(operation)
@@ -1171,8 +1174,12 @@ class SqlCheckpointStore:
         node_key: str,
         artifact_ref: str,
         artifact_hash: str,
+        review_completion_status: AgentReviewCompletionStatus = "complete",
     ) -> None:
         """Move RUNNING to OUTPUT_SAVED with an opaque hash-verified Artifact."""
+
+        if review_completion_status not in {"complete", "incomplete"}:
+            raise ValueError("review completion status is invalid")
 
         async def operation(session: AsyncSession) -> None:
             result = cast(
@@ -1188,6 +1195,7 @@ class SqlCheckpointStore:
                         status="output_saved",
                         artifact_ref=artifact_ref,
                         artifact_hash=artifact_hash,
+                        review_completion_status=review_completion_status,
                         updated_at=_now(),
                     )
                 ),
@@ -1221,6 +1229,10 @@ class SqlCheckpointStore:
             execution_attempts=int(row["execution_attempts"]),
             artifact_ref=str(row["artifact_ref"]) if row["artifact_ref"] is not None else None,
             artifact_hash=str(row["artifact_hash"]) if row["artifact_hash"] is not None else None,
+            review_completion_status=cast(
+                AgentReviewCompletionStatus,
+                str(row["review_completion_status"]),
+            ),
             error_code=str(row["error_code"]) if row["error_code"] is not None else None,
             validation_attempts=int(row["validation_attempts"]),
         )
