@@ -27,9 +27,10 @@ case "$HOOK_NAME" in
   *) exit 0 ;;
 esac
 
-curl -sf -X POST \
+curl -4 -sf -X POST \
   -H "Content-Type: application/json" \
   -d "$PAYLOAD" \
+  --noproxy "*" \
   "${CODELENS_API}/api/trigger-events" \
   --max-time 5 \
   -o /dev/null 2>/dev/null || true
