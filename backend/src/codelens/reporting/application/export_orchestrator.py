@@ -4,6 +4,7 @@ import logging
 from datetime import UTC, datetime
 from pathlib import Path
 
+from codelens.plugin.report.local_file_export.sink import LocalFileExportSink
 from codelens.reporting.domain.models import ExportResult, PluginRecord
 from codelens.reporting.domain.ports import (
     PluginLoaderPort,
@@ -12,7 +13,6 @@ from codelens.reporting.domain.ports import (
     ReviewExportStorePort,
     RevisionReaderPort,
 )
-from codelens.plugin.report.local_file_export.sink import LocalFileExportSink
 from codelens.review.application.export_findings import (
     ExportFindingsHandler,
 )

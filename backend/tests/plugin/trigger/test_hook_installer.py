@@ -49,11 +49,11 @@ async def test_install_creates_standalone_script(
 
 
 @pytest.mark.asyncio
-async def test_install_without_user_hook_creates_symlink(
+async def test_install_without_user_hook_creates_file(
     temp_repo: Path,
     hook_installer: HookInstaller,
 ) -> None:
-    """install_hooks should create symlink when no user hook exists."""
+    """install_hooks should create hook file when no user hook exists."""
     await hook_installer.install_hooks(
         temp_repo,
         (HookEvent.POST_COMMIT, HookEvent.PRE_PUSH),
@@ -63,8 +63,20 @@ async def test_install_without_user_hook_creates_symlink(
     post_commit = temp_repo / ".git" / "hooks" / "post-commit"
     pre_push = temp_repo / ".git" / "hooks" / "pre-push"
 
-    assert post_commit.is_symlink()
-    assert pre_push.is_symlink()
+    # Should create files (not symlinks) for cross-platform compatibility
+    assert post_commit.exists()
+    assert post_commit.is_file()
+    assert not post_commit.is_symlink()
+    assert os.access(post_commit, os.X_OK)
+
+    assert pre_push.exists()
+    assert pre_push.is_file()
+    assert not pre_push.is_symlink()
+    assert os.access(pre_push, os.X_OK)
+
+    # Should contain CodeLens marker
+    assert "# CodeLens Trigger Hook" in post_commit.read_text()
+    assert "# CodeLens Trigger Hook" in pre_push.read_text()
 
 
 @pytest.mark.asyncio
@@ -160,11 +172,11 @@ async def test_uninstall_restores_user_hook_unchanged(
 
 
 @pytest.mark.asyncio
-async def test_uninstall_removes_symlink(
+async def test_uninstall_removes_codelens_hook_file(
     temp_repo: Path,
     hook_installer: HookInstaller,
 ) -> None:
-    """uninstall_hooks should remove symlink."""
+    """uninstall_hooks should remove CodeLens hook file entirely."""
     await hook_installer.install_hooks(
         temp_repo,
         (HookEvent.POST_COMMIT, HookEvent.PRE_PUSH),
@@ -176,6 +188,7 @@ async def test_uninstall_removes_symlink(
     post_commit = temp_repo / ".git" / "hooks" / "post-commit"
     pre_push = temp_repo / ".git" / "hooks" / "pre-push"
 
+    # Pure CodeLens hooks should be deleted entirely
     assert not post_commit.exists()
     assert not pre_push.exists()
 

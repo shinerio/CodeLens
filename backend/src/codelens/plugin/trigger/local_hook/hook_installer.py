@@ -1,8 +1,7 @@
 """Install and uninstall git hook scripts in repositories."""
 
 import asyncio
-import os
-import shutil
+import stat
 from pathlib import Path
 
 from codelens.trigger.domain.models import HookEvent
@@ -13,15 +12,18 @@ class HookInstaller:
 
     Uses a standalone script approach to avoid overwriting user hooks:
     1. Creates a standalone script: .git/hooks/code-lens-review-hook.sh
-    2. If no user hook exists: creates symlink from hook name to standalone script
+    2. If no user hook exists: creates a new hook file that calls the standalone script
     3. If user hook exists: injects a call to standalone script after shebang
-    4. On uninstall: removes injected line and deletes standalone script
+    4. On uninstall: removes injected lines and deletes standalone script
+
+    Symlinks are not used to ensure cross-platform compatibility (Windows).
     """
 
     HOOK_SCRIPT_TEMPLATE = "hook_script.sh"
     STANDALONE_SCRIPT_NAME = "code-lens-review-hook.sh"
     MARKER_COMMENT = "# CodeLens Trigger Hook"
     INJECTION_LINE_TEMPLATE = '"$GIT_DIR/hooks/{script_name}" "$@" || true'
+    SHEBANG = "#!/usr/bin/env bash"
 
     def __init__(self, plugin_dir: Path) -> None:
         """Initialize with the plugin directory containing the hook script template.
@@ -150,7 +152,11 @@ class HookInstaller:
         standalone_path.chmod(standalone_path.stat().st_mode | 0o111)
 
     def _install_single_hook(self, hook_path: Path, standalone_path: Path) -> None:
-        """Install a single hook by symlink or injection.
+        """Install a single hook by creating a new file or injecting into existing.
+
+        If no hook exists, creates a new hook file that calls the standalone script.
+        If a user hook exists, injects a call to the standalone script after shebang.
+        Does not use symlinks for cross-platform compatibility.
 
         Args:
             hook_path: Path where the hook should be installed.
@@ -161,14 +167,15 @@ class HookInstaller:
         )
         full_injection = f"{self.MARKER_COMMENT}\n{injection_line}"
 
-        # If hook doesn't exist, create symlink
+        # If hook doesn't exist, create a new hook file
         if not hook_path.exists():
-            hook_path.symlink_to(standalone_path)
+            content = f"{self.SHEBANG}\n{full_injection}\n"
+            hook_path.write_text(content, encoding="utf-8")
+            # Make executable
+            hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
             return
 
-        # If it's already a CodeLens hook (symlink or contains injection), skip
-        if hook_path.is_symlink():
-            return
+        # If it's already a CodeLens hook, skip (idempotent)
         if self._is_codelens_hook(hook_path, standalone_path):
             return
 
@@ -177,21 +184,20 @@ class HookInstaller:
         lines = content.split("\n")
 
         # Find shebang line
-        shebang_idx = 0
         if lines and lines[0].startswith("#!"):
-            shebang_idx = 0
+            # Inject after shebang
+            lines.insert(1, full_injection)
         else:
             # No shebang, add at beginning
             lines.insert(0, full_injection)
-            hook_path.write_text("\n".join(lines), encoding="utf-8")
-            return
 
-        # Inject after shebang
-        lines.insert(shebang_idx + 1, full_injection)
         hook_path.write_text("\n".join(lines), encoding="utf-8")
 
     def _uninstall_single_hook(self, hook_path: Path) -> None:
-        """Uninstall a single hook by removing injection or symlink.
+        """Uninstall a single hook by removing injection or deleting the file.
+
+        If the hook file only contains CodeLens content (shebang + marker + injection),
+        deletes the file entirely. Otherwise, removes only the injected lines.
 
         Args:
             hook_path: Path to the hook to uninstall.
@@ -199,12 +205,7 @@ class HookInstaller:
         if not hook_path.exists():
             return
 
-        # If it's a symlink, remove it
-        if hook_path.is_symlink():
-            hook_path.unlink()
-            return
-
-        # Remove injected lines from user hook
+        # Read and remove injected lines from hook file
         try:
             content = hook_path.read_text(encoding="utf-8")
         except (OSError, UnicodeDecodeError):
@@ -220,31 +221,26 @@ class HookInstaller:
             else:
                 i += 1
 
-        hook_path.write_text("\n".join(lines), encoding="utf-8")
+        # Check if remaining content is only CodeLens boilerplate (shebang + empty)
+        remaining = "\n".join(lines).strip()
+        if remaining == self.SHEBANG or remaining == "":
+            # Pure CodeLens hook - delete the file
+            hook_path.unlink()
+        else:
+            # User hook with injection removed - write back
+            hook_path.write_text("\n".join(lines), encoding="utf-8")
 
     def _is_codelens_hook(self, hook_path: Path, standalone_path: Path) -> bool:
         """Check if a hook file is a CodeLens trigger hook.
 
         Args:
             hook_path: Path to the hook file to check.
-            standalone_path: Path to the standalone script.
+            standalone_path: Unused, kept for signature compatibility.
 
         Returns:
             True if the hook is a CodeLens trigger hook, False otherwise.
         """
-        if not hook_path.exists():
-            return False
-
-        # Check if it's a symlink to standalone script
-        if hook_path.is_symlink():
-            try:
-                target = hook_path.resolve()
-                return target == standalone_path.resolve()
-            except OSError:
-                return False
-
-        # Check if it contains the marker comment
-        if not hook_path.is_file():
+        if not hook_path.exists() or not hook_path.is_file():
             return False
 
         try:

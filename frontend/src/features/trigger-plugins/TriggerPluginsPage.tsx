@@ -1,6 +1,6 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Check, FolderGit2, Plus, Power, Webhook, X } from "lucide-react";
-import { useState } from "react";
+import { useEffect, useState } from "react";
 
 import { useI18n } from "../../shared/i18n/i18n";
 import { RepositoryBrowser } from "../repositories/RepositoryBrowser";
@@ -117,6 +117,13 @@ function TriggerPluginCard({
       getHookStatus(plugin.plugin_id, configDraft.repository_paths).then(setHookStatus);
     }
   }
+
+  // Auto-fetch hook status on mount
+  useEffect(() => {
+    if (plugin.is_enabled && plugin.config.repository_paths.length > 0) {
+      refreshHookStatus();
+    }
+  }, [plugin.plugin_id, plugin.is_enabled, plugin.config.repository_paths]);
 
   function handleRepositorySelect(path: string) {
     if (!configDraft.repository_paths.includes(path)) {

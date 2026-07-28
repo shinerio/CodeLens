@@ -86,6 +86,42 @@ class UpdateReviewCompletionSettingsRequest(ReviewCompletionSettingsResponse):
     pass
 
 
+class ToolLimitsResponse(StrictDto):
+    """Expose configurable tool-level limits for Review Agent evidence operations."""
+
+    max_results: Annotated[int, Field(ge=1, le=10_000)]
+    max_read_bytes: Annotated[int, Field(ge=1024, le=10 * 1024 * 1024)]
+    max_scan_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
+    max_source_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
+    max_lines: Annotated[int, Field(ge=10, le=10_000)]
+    max_path_chars: Annotated[int, Field(ge=64, le=4096)]
+    max_pattern_chars: Annotated[int, Field(ge=64, le=4096)]
+    regex_timeout_seconds: Annotated[float, Field(ge=1.0, le=300.0)]
+    comment_batch_size: Annotated[int, Field(ge=1, le=100)]
+    reviewed_files_batch: Annotated[int, Field(ge=1, le=10_000)]
+    short_text_max: Annotated[int, Field(ge=64, le=2048)]
+    long_text_max: Annotated[int, Field(ge=256, le=64_000)]
+    task_summary_max: Annotated[int, Field(ge=256, le=64_000)]
+
+
+class UpdateToolLimitsRequest(StrictDto):
+    """Accept partial updates for tool limits; omitted fields retain current values."""
+
+    max_results: Annotated[int | None, Field(ge=1, le=10_000)] = None
+    max_read_bytes: Annotated[int | None, Field(ge=1024, le=10 * 1024 * 1024)] = None
+    max_scan_bytes: Annotated[int | None, Field(ge=1024, le=100 * 1024 * 1024)] = None
+    max_source_bytes: Annotated[int | None, Field(ge=1024, le=100 * 1024 * 1024)] = None
+    max_lines: Annotated[int | None, Field(ge=10, le=10_000)] = None
+    max_path_chars: Annotated[int | None, Field(ge=64, le=4096)] = None
+    max_pattern_chars: Annotated[int | None, Field(ge=64, le=4096)] = None
+    regex_timeout_seconds: Annotated[float | None, Field(ge=1.0, le=300.0)] = None
+    comment_batch_size: Annotated[int | None, Field(ge=1, le=100)] = None
+    reviewed_files_batch: Annotated[int | None, Field(ge=1, le=10_000)] = None
+    short_text_max: Annotated[int | None, Field(ge=64, le=2048)] = None
+    long_text_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
+    task_summary_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
+
+
 RefLabel = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 AgentReference = Annotated[
     str,
@@ -490,3 +526,14 @@ class GatewayAvailabilityTestResponse(StrictDto):
     ok: bool
     latency_ms: int | None
     detail: str
+
+
+class ResetAllSettingsResponse(StrictDto):
+    """Aggregate response after resetting all user-facing settings to defaults."""
+
+    instruction_files: InstructionFileSettingsResponse
+    review_completion: ReviewCompletionSettingsResponse
+    recent_repositories: RecentRepositorySettingsResponse
+    tool_limits: ToolLimitsResponse
+    logging: RuntimeLogLevelResponse
+    model_gateways: ModelGatewayCatalogResponse

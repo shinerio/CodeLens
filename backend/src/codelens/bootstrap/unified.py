@@ -23,19 +23,11 @@ from codelens.interface.http.dependencies import (
     initialize_reporting_components,
     initialize_trigger_components,
 )
-from codelens.trigger.application.review_creator_adapter import (
-    ReviewCreatorAdapter,
-)
-from codelens.trigger.application.trigger_manager import TriggerPluginManager
-from codelens.trigger.application.trigger_orchestrator import TriggerOrchestrator
 from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
 from codelens.plugin.trigger.local_hook.plugin_loader import (
     BuiltinTriggerPluginLoader,
-)
-from codelens.trigger.infrastructure.trigger_store import (
-    FilesystemTriggerStore,
 )
 from codelens.reporting.application.export_orchestrator import ExportOrchestrator
 from codelens.reporting.application.plugin_manager import PluginManager
@@ -44,10 +36,12 @@ from codelens.reporting.infrastructure.plugin_loader import ImportlibPluginLoade
 from codelens.reporting.infrastructure.plugin_store import FilesystemPluginStore
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.settings import ReviewCompletionSettingsService
+from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.domain.ports import AgentRuntimePort
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.file_settings import FilesystemReviewCompletionSettingsStore
+from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.model_log import ModelTranscriptLogWriter
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
@@ -71,6 +65,14 @@ from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
 )
 from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
+)
+from codelens.trigger.application.review_creator_adapter import (
+    ReviewCreatorAdapter,
+)
+from codelens.trigger.application.trigger_manager import TriggerPluginManager
+from codelens.trigger.application.trigger_orchestrator import TriggerOrchestrator
+from codelens.trigger.infrastructure.trigger_store import (
+    FilesystemTriggerStore,
 )
 from codelens.worker.execution import SqlJobQueuePortAdapter, WorkerReviewExecutor
 from codelens.worker.scheduler import ReviewScheduler, WorkerSemaphores
@@ -174,6 +176,7 @@ def build_unified_backend(
     review_completion_settings = ReviewCompletionSettingsService(
         FilesystemReviewCompletionSettingsStore(settings.data_dir)
     )
+    tool_limits_service = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
 
     # Worker components
     worktree_manager = GitReviewWorktreeManager(
@@ -215,6 +218,7 @@ def build_unified_backend(
         git,
         system_prompts,
         completion_settings=review_completion_settings,
+        tool_limits_service=tool_limits_service,
     )
     semaphores = WorkerSemaphores.create(
         agent_limit=settings.max_active_agent_runs,
@@ -337,7 +341,9 @@ def build_unified_backend(
         repository_inspector,
     )
     trigger_plugin_loader = BuiltinTriggerPluginLoader()
-    trigger_orchestrator = TriggerOrchestrator(trigger_store, review_creator_adapter, trigger_plugin_loader)
+    trigger_orchestrator = TriggerOrchestrator(
+        trigger_store, review_creator_adapter, trigger_plugin_loader
+    )
 
     components = HttpComponents(
         settings=settings,

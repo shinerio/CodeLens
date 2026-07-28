@@ -7,6 +7,7 @@ import pytest
 from agents import RunConfig, Usage
 from agents.tool_context import ToolContext
 
+from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure import snapshot_tools as snapshot_tools_module
 from codelens.review.infrastructure.comment_collector import (
     ReviewCommentCollector,
@@ -195,11 +196,10 @@ async def test_exposes_only_hash_verified_snapshot_content(tmp_path: Path) -> No
 
 async def test_grep_reports_truncation_and_supports_narrower_retry(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = await _snapshot(tmp_path)
-    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-    monkeypatch.setattr(snapshot_tools_module, "_MAX_SCAN_BYTES", 45)
+    custom_limits = ToolLimits(max_scan_bytes=45)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20, tool_limits=custom_limits)
 
     broad_result = json.loads(await tools.grep("return", path="src"))
     assert broad_result == {
@@ -361,11 +361,10 @@ async def test_find_files_uses_posix_path_glob_semantics(tmp_path: Path) -> None
 
 async def test_find_files_reports_non_paginated_truncation(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = await _snapshot(tmp_path)
-    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-    monkeypatch.setattr(snapshot_tools_module, "_MAX_RESULTS", 1)
+    custom_limits = ToolLimits(max_results=1)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20, tool_limits=custom_limits)
 
     result = json.loads(await tools.find_files(path="src", pattern="*.py"))
 
@@ -392,11 +391,10 @@ async def test_read_file_supports_bounded_whole_file_mode(tmp_path: Path) -> Non
 
 async def test_read_file_marks_whole_file_line_limit_as_truncated(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = await _snapshot(tmp_path)
-    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-    monkeypatch.setattr(snapshot_tools_module, "_MAX_LINES", 1)
+    custom_limits = ToolLimits(max_lines=1)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20, tool_limits=custom_limits)
 
     read = json.loads(await tools.read_file("src/service.py"))
 
@@ -407,7 +405,6 @@ async def test_read_file_marks_whole_file_line_limit_as_truncated(
 
 async def test_tools_reject_oversized_snapshot_sources_before_reading(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     snapshot = await _snapshot(tmp_path)
     path = "src/helper.py"
@@ -425,8 +422,8 @@ async def test_tools_reject_oversized_snapshot_sources_before_reading(
             ),
         ),
     )
-    monkeypatch.setattr(snapshot_tools_module, "_MAX_SOURCE_BYTES", 8)
-    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+    custom_limits = ToolLimits(max_source_bytes=8)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20, tool_limits=custom_limits)
 
     with pytest.raises(ValueError, match="source file exceeds"):
         await tools.read_file(path)
@@ -577,11 +574,12 @@ async def test_grep_times_out_catastrophic_regular_expression(tmp_path: Path) ->
             ),
         ),
     )
+    custom_limits = ToolLimits(regex_timeout_seconds=0.05)
     tools = FilesystemReviewTools(
         snapshot,
         GitCli(),
         max_tool_calls=20,
-        regex_timeout_seconds=0.05,
+        tool_limits=custom_limits,
     )
 
     with pytest.raises(ValueError, match="timed out"):
@@ -590,11 +588,12 @@ async def test_grep_times_out_catastrophic_regular_expression(tmp_path: Path) ->
 
 async def test_grep_timeout_starts_after_isolated_worker_is_ready(tmp_path: Path) -> None:
     snapshot = await _snapshot(tmp_path)
+    custom_limits = ToolLimits(regex_timeout_seconds=0.05)
     tools = FilesystemReviewTools(
         snapshot,
         GitCli(),
         max_tool_calls=20,
-        regex_timeout_seconds=0.05,
+        tool_limits=custom_limits,
     )
 
     result = json.loads(await tools.grep("return"))
@@ -1161,9 +1160,9 @@ async def test_zero_completion_retries_accepts_first_incomplete_attempt_with_war
 def test_review_file_completion_accepts_paths_supported_by_evidence_tools() -> None:
     long_path = f"src/{'nested/' * 40}service.py"
 
-    submission = ReviewFileCompletionSubmission(reviewed_files=(long_path,))
+    submission = ReviewFileCompletionSubmission(reviewed_files=[long_path])
 
-    assert submission.reviewed_files == (long_path,)
+    assert list(submission.reviewed_files) == [long_path]
 
 
 @pytest.mark.parametrize("retry_limit", [-1, 21])
@@ -1194,11 +1193,12 @@ async def test_all_model_tools_work_through_agents_sdk_entrypoints(tmp_path: Pat
         "review_file_done": "Record reviewed files.",
         "task_done": "Finish the review.",
     }
+    custom_limits = ToolLimits(regex_timeout_seconds=30)
     filesystem_tools = FilesystemReviewTools(
         snapshot,
         GitCli(),
         max_tool_calls=30,
-        regex_timeout_seconds=30,
+        tool_limits=custom_limits,
     )
     collector = ReviewCommentCollector(
         snapshot=snapshot,

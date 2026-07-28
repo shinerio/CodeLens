@@ -6,6 +6,7 @@ from typing import Literal, Protocol
 
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.models import ReviewTask
+from codelens.review.domain.tool_limits import ToolLimits
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.workspace.domain.models import ReviewScopeType, ReviewSnapshot
 
@@ -314,5 +315,19 @@ class AgentRunCompletionPort(Protocol):
         findings: FindingBatch,
     ) -> None:
         """Complete only an OUTPUT_SAVED or VALIDATING run in one transaction."""
+
+        raise NotImplementedError
+
+
+class ToolLimitsStorePort(Protocol):
+    """Persist and provide configurable tool-level limits for Agent evidence operations."""
+
+    def get_tool_limits(self) -> ToolLimits:
+        """Load persisted tool limits or product defaults."""
+
+        raise NotImplementedError
+
+    def save_tool_limits(self, limits: ToolLimits) -> None:
+        """Atomically replace the persisted tool limits."""
 
         raise NotImplementedError

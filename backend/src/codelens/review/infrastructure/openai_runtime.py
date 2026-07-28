@@ -45,6 +45,7 @@ from codelens.review.application.settings import (
     ReviewCompletionSettings,
     ReviewCompletionSettingsService,
 )
+from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.domain.errors import (
     AgentMaxTurnsExceededError,
     PermanentAgentOutputError,
@@ -57,6 +58,7 @@ from codelens.review.domain.ports import (
     AgentRuntimeEventSink,
     UnvalidatedAgentOutput,
 )
+from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.comment_collector import ReviewCommentCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
@@ -138,6 +140,7 @@ class OpenAIAgentRuntime:
         prompt_loader: I18nPromptLoaderPort,
         runner: _RunnerPort | None = None,
         completion_settings: ReviewCompletionSettingsService | None = None,
+        tool_limits_service: ToolLimitsService | None = None,
     ) -> None:
         self._config_store = config_store
         self._output_codec = output_codec
@@ -145,6 +148,7 @@ class OpenAIAgentRuntime:
         self._prompt_loader = prompt_loader
         self._runner = runner or _PublicSdkRunner()
         self._completion_settings = completion_settings
+        self._tool_limits_service = tool_limits_service
 
     async def invoke(
         self,
@@ -185,6 +189,11 @@ class OpenAIAgentRuntime:
             if self._completion_settings is not None
             else ReviewCompletionSettings()
         )
+        tool_limits = (
+            await self._tool_limits_service.get()
+            if self._tool_limits_service is not None
+            else ToolLimits()
+        )
         if agent.output_contract_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
@@ -197,7 +206,7 @@ class OpenAIAgentRuntime:
             snapshot,
             self._git,
             max_tool_calls=None,
-            regex_timeout_seconds=max(0.1, provider_config.tool_timeout_seconds * 0.9),
+            tool_limits=tool_limits,
         )
         comment_collector = ReviewCommentCollector(
             snapshot=snapshot,
@@ -208,6 +217,7 @@ class OpenAIAgentRuntime:
                 completion_settings.max_incomplete_review_retries
             ),
             tool_descriptions={name: tool.description for name, tool in prompts.tools.items()},
+            tool_limits=tool_limits,
         )
         model_tools = enforce_tool_execution_limits(
             [

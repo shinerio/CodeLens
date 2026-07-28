@@ -80,3 +80,28 @@ export type GatewayTestResult = {
   latency_ms: number | null;
   detail: string;
 };
+
+export type ToolLimits = {
+  max_results: number;
+  max_read_bytes: number;
+  max_scan_bytes: number;
+  max_source_bytes: number;
+  max_lines: number;
+  max_path_chars: number;
+  max_pattern_chars: number;
+  regex_timeout_seconds: number;
+  comment_batch_size: number;
+  reviewed_files_batch: number;
+  short_text_max: number;
+  long_text_max: number;
+  task_summary_max: number;
+};
+
+export type ResetAllSettingsResponse = {
+  instruction_files: InstructionFileSettings;
+  review_completion: ReviewCompletionSettings;
+  recent_repositories: RecentRepositorySettings;
+  tool_limits: ToolLimits;
+  logging: RuntimeLogLevelSettings;
+  model_gateways: ModelGatewayCatalog;
+};

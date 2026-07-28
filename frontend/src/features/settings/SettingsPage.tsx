@@ -25,7 +25,9 @@ import {
   getRecentRepositorySettings,
   getReviewCompletionSettings,
   getRuntimeLogLevel,
+  getToolLimits,
   listModelGateways,
+  resetAllSettings,
   testGatewayAvailability,
   testGatewayConnectivity,
   updateRuntimeLogLevel,
@@ -33,7 +35,9 @@ import {
   updateRecentRepositoryLimit,
   updateReviewCompletionSettings,
   updateModelGateway,
+  updateToolLimits,
 } from "./api";
+import type { ToolLimits as ToolLimitsType } from "./types";
 import type {
   GatewayApiType,
   GatewayTestResult,
@@ -82,6 +86,7 @@ export function SettingsPage() {
   const [rootInstructionLimitDraft, setRootInstructionLimitDraft] = useState("500");
   const [nestedInstructionLimitDraft, setNestedInstructionLimitDraft] = useState("200");
   const [incompleteReviewRetryLimitDraft, setIncompleteReviewRetryLimitDraft] = useState("3");
+  const [toolLimitsDraft, setToolLimitsDraft] = useState<ToolLimitsType | null>(null);
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
     queryFn: listModelGateways,
@@ -142,6 +147,33 @@ export function SettingsPage() {
       setIncompleteReviewRetryLimitDraft(String(settings.max_incomplete_review_retries));
     },
   });
+  const toolLimitsQuery = useQuery({
+    queryKey: ["tool-limits"],
+    queryFn: getToolLimits,
+  });
+  const toolLimitsMutation = useMutation({
+    mutationFn: updateToolLimits,
+    onSuccess: (limits) => {
+      queryClient.setQueryData(["tool-limits"], limits);
+      setToolLimitsDraft(limits);
+    },
+  });
+  const resetAllMutation = useMutation({
+    mutationFn: resetAllSettings,
+    onSuccess: (response) => {
+      queryClient.setQueryData(INSTRUCTION_FILE_SETTINGS_QUERY_KEY, response.instruction_files);
+      queryClient.setQueryData(REVIEW_COMPLETION_SETTINGS_QUERY_KEY, response.review_completion);
+      queryClient.setQueryData(RECENT_REPOSITORY_SETTINGS_QUERY_KEY, response.recent_repositories);
+      queryClient.setQueryData(["tool-limits"], response.tool_limits);
+      queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, response.logging);
+      queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, response.model_gateways);
+      setToolLimitsDraft(response.tool_limits);
+      setRootInstructionLimitDraft(String(response.instruction_files.root_max_lines));
+      setNestedInstructionLimitDraft(String(response.instruction_files.nested_max_lines));
+      setIncompleteReviewRetryLimitDraft(String(response.review_completion.max_incomplete_review_retries));
+      setRecentRepositoryLimitDraft(String(response.recent_repositories.recent_repository_limit));
+    },
+  });
 
   useEffect(() => {
     if (recentRepositorySettingsQuery.data !== undefined) {
@@ -185,6 +217,12 @@ export function SettingsPage() {
       );
     }
   }, [reviewCompletionSettingsQuery.data]);
+
+  useEffect(() => {
+    if (toolLimitsQuery.data !== undefined) {
+      setToolLimitsDraft(toolLimitsQuery.data);
+    }
+  }, [toolLimitsQuery.data]);
 
   const updateCatalog = (catalog: ModelGatewayCatalog) => {
     queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, catalog);
@@ -367,6 +405,10 @@ export function SettingsPage() {
   const isIncompleteReviewRetryLimitUnchanged =
     parsedIncompleteReviewRetryLimit ===
     reviewCompletionSettingsQuery.data?.max_incomplete_review_retries;
+  const areToolLimitsValid = toolLimitsDraft !== null;
+  const areToolLimitsUnchanged =
+    toolLimitsDraft === null ||
+    JSON.stringify(toolLimitsDraft) === JSON.stringify(toolLimitsQuery.data);
 
   function handleEdit(gateway: ModelGateway) {
     setEditingGatewayId(gateway.gateway_id);
@@ -408,7 +450,10 @@ export function SettingsPage() {
     instructionFileSettingsQuery.error ??
     instructionFileSettingsMutation.error ??
     reviewCompletionSettingsQuery.error ??
-    reviewCompletionSettingsMutation.error;
+    reviewCompletionSettingsMutation.error ??
+    toolLimitsQuery.error ??
+    toolLimitsMutation.error ??
+    resetAllMutation.error;
 
   return (
     <section className="settings-page">
@@ -969,6 +1014,208 @@ export function SettingsPage() {
                 </button>
               </div>
               <small>{t("settings.incompleteReviewRetryLimitHint")}</small>
+            </div>
+
+            {toolLimitsDraft !== null && (
+              <div className="local-preferences__tool-limits">
+                <p className="local-preferences__heading">
+                  <SlidersHorizontal aria-hidden="true" /> {t("settings.toolLimits")}
+                </p>
+                <small className="local-preferences__tool-limits-hint">
+                  {t("settings.toolLimitsHint")}
+                </small>
+                <div className="local-preferences__tool-limits-grid">
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.maxResults")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10000}
+                      value={toolLimitsDraft.max_results}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, max_results: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.maxReadBytes")}</span>
+                    <input
+                      type="number"
+                      min={1024}
+                      max={10485760}
+                      value={toolLimitsDraft.max_read_bytes}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, max_read_bytes: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.maxScanBytes")}</span>
+                    <input
+                      type="number"
+                      min={1024}
+                      max={104857600}
+                      value={toolLimitsDraft.max_scan_bytes}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, max_scan_bytes: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.maxSourceBytes")}</span>
+                    <input
+                      type="number"
+                      min={1024}
+                      max={104857600}
+                      value={toolLimitsDraft.max_source_bytes}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, max_source_bytes: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.maxLines")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={100000}
+                      value={toolLimitsDraft.max_lines}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, max_lines: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.maxPathChars")}</span>
+                    <input
+                      type="number"
+                      min={100}
+                      max={10000}
+                      value={toolLimitsDraft.max_path_chars}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, max_path_chars: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.maxPatternChars")}</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={10000}
+                      value={toolLimitsDraft.max_pattern_chars}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, max_pattern_chars: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.regexTimeoutSeconds")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={300}
+                      step={0.1}
+                      value={toolLimitsDraft.regex_timeout_seconds}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, regex_timeout_seconds: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.commentBatchSize")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={1000}
+                      value={toolLimitsDraft.comment_batch_size}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, comment_batch_size: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.reviewedFilesBatch")}</span>
+                    <input
+                      type="number"
+                      min={1}
+                      max={10000}
+                      value={toolLimitsDraft.reviewed_files_batch}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, reviewed_files_batch: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.shortTextMax")}</span>
+                    <input
+                      type="number"
+                      min={10}
+                      max={10000}
+                      value={toolLimitsDraft.short_text_max}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, short_text_max: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.longTextMax")}</span>
+                    <input
+                      type="number"
+                      min={100}
+                      max={100000}
+                      value={toolLimitsDraft.long_text_max}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, long_text_max: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                  <label className="settings-field">
+                    <span className="settings-field__label">{t("settings.taskSummaryMax")}</span>
+                    <input
+                      type="number"
+                      min={100}
+                      max={100000}
+                      value={toolLimitsDraft.task_summary_max}
+                      onChange={(e) =>
+                        setToolLimitsDraft({ ...toolLimitsDraft, task_summary_max: Number(e.currentTarget.value) })
+                      }
+                    />
+                  </label>
+                </div>
+                <button
+                  className="local-preferences__save-limits"
+                  disabled={
+                    toolLimitsMutation.isPending ||
+                    !areToolLimitsValid ||
+                    areToolLimitsUnchanged
+                  }
+                  type="button"
+                  onClick={() => {
+                    if (toolLimitsDraft !== null) {
+                      toolLimitsMutation.mutate(toolLimitsDraft);
+                    }
+                  }}
+                >
+                  <Check aria-hidden="true" />
+                  {t("settings.saveToolLimits")}
+                </button>
+              </div>
+            )}
+
+            <div className="local-preferences__reset">
+              <button
+                className="local-preferences__reset-button"
+                disabled={resetAllMutation.isPending}
+                type="button"
+                onClick={() => {
+                  if (window.confirm(t("settings.resetAllConfirm"))) {
+                    resetAllMutation.mutate();
+                  }
+                }}
+              >
+                {t("settings.resetAll")}
+              </button>
             </div>
           </div>
         </aside>

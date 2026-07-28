@@ -5,9 +5,11 @@ import type {
   InstructionFileSettings,
   ModelGatewayCatalog,
   RecentRepositorySettings,
+  ResetAllSettingsResponse,
   ReviewCompletionSettings,
   RuntimeLogLevel,
   RuntimeLogLevelSettings,
+  ToolLimits,
   UpdateModelGateway,
 } from "./types";
 
@@ -109,6 +111,24 @@ export async function testGatewayConnectivity(gatewayId: string): Promise<Gatewa
 
 export async function testGatewayAvailability(gatewayId: string): Promise<GatewayTestResult> {
   return api<GatewayTestResult>(`/settings/model-gateways/${gatewayId}/test-availability`, {
+    method: "POST",
+    body: JSON.stringify({}),
+  });
+}
+
+export async function getToolLimits(): Promise<ToolLimits> {
+  return api<ToolLimits>("/settings/tool-limits");
+}
+
+export async function updateToolLimits(limits: ToolLimits): Promise<ToolLimits> {
+  return api<ToolLimits>("/settings/tool-limits", {
+    method: "PUT",
+    body: JSON.stringify(limits),
+  });
+}
+
+export async function resetAllSettings(): Promise<ResetAllSettingsResponse> {
+  return api<ResetAllSettingsResponse>("/settings/reset-all", {
     method: "POST",
     body: JSON.stringify({}),
   });

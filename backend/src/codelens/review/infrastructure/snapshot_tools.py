@@ -23,23 +23,14 @@ from agents import Tool, function_tool
 from pydantic import Field
 
 from codelens.review.application.review_scope import ReviewFileInput, build_review_files
+from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 from codelens.workspace.domain.models import ReviewSnapshot, SnapshotEntry
 from codelens.workspace.infrastructure.git_cli import GitCli
 
-_MAX_RESULTS = 200
-_MAX_READ_BYTES = 64 * 1024
-_MAX_SCAN_BYTES = 1024 * 1024
-_MAX_SOURCE_BYTES = 1024 * 1024
-_MAX_LINES = 500
-_MAX_PATH_CHARS = 1024
-_MAX_PATTERN_CHARS = 512
-_DEFAULT_REGEX_TIMEOUT_SECONDS = 30.0
 _REGEX_WORKER_STARTUP_TIMEOUT_SECONDS = 15.0
 _REGEX_WORKER_READY = "regex_worker_ready"
 _FileVersion = Literal["current", "base", "head"]
-_ModelPath = Annotated[str, Field(max_length=_MAX_PATH_CHARS)]
-_ModelPattern = Annotated[str, Field(min_length=1, max_length=_MAX_PATTERN_CHARS)]
 _ModelLine = Annotated[int, Field(ge=1)]
 
 
@@ -71,6 +62,7 @@ def _regex_search_worker(
     sender: Connection,
     pattern: str,
     lines: tuple[tuple[str, int, str], ...],
+    max_results: int,
 ) -> None:
     """Run untrusted regular-expression matching in a terminable child process."""
 
@@ -81,7 +73,7 @@ def _regex_search_worker(
         for path, line_number, line in lines:
             match = expression.search(line)
             if match is not None:
-                if len(matches) >= _MAX_RESULTS:
+                if len(matches) >= max_results:
                     sender.send((matches, True))
                     return
                 window_start = max(0, min(match.start() - 100, len(line) - 200))
@@ -112,6 +104,7 @@ def _search_regular_expression(
     pattern: str,
     lines: tuple[tuple[str, int, str], ...],
     timeout_seconds: float,
+    max_results: int,
 ) -> tuple[list[dict[str, object]], bool]:
     """Bound worker startup separately, then terminate regex evaluation at its deadline."""
 
@@ -119,7 +112,7 @@ def _search_regular_expression(
     receiver, sender = process_context.Pipe(duplex=False)
     process = process_context.Process(
         target=_regex_search_worker,
-        args=(sender, pattern, lines),
+        args=(sender, pattern, lines, max_results),
         daemon=True,
     )
     try:
@@ -162,17 +155,15 @@ class FilesystemReviewTools:
         git: GitCli,
         *,
         max_tool_calls: int | None,
-        regex_timeout_seconds: float = _DEFAULT_REGEX_TIMEOUT_SECONDS,
+        tool_limits: ToolLimits | None = None,
     ) -> None:
         if max_tool_calls is not None and max_tool_calls <= 0:
             raise ValueError("tool call budget must be positive when configured")
-        if regex_timeout_seconds <= 0:
-            raise ValueError("regex timeout must be positive")
         self._snapshot = snapshot
         self._git = git
         self._root = snapshot.worktree.root.resolve()
         self._remaining_calls = max_tool_calls
-        self._regex_timeout_seconds = regex_timeout_seconds
+        self._limits = tool_limits if tool_limits is not None else ToolLimits()
         self._entries = {
             entry.path: entry
             for entry in snapshot.manifest.entries
@@ -198,7 +189,10 @@ class FilesystemReviewTools:
             if candidate.startswith(prefix)
             and _matches_posix_path_glob(candidate[len(prefix) :], pattern)
         ]
-        return self._json({"paths": paths[:_MAX_RESULTS], "truncated": len(paths) > _MAX_RESULTS})
+        return self._json({
+            "paths": paths[: self._limits.max_results],
+            "truncated": len(paths) > self._limits.max_results,
+        })
 
     async def grep(
         self,
@@ -209,7 +203,7 @@ class FilesystemReviewTools:
         """Search one visible path scope and return bounded non-paginated matches."""
 
         self._consume()
-        if len(pattern) > _MAX_PATTERN_CHARS:
+        if len(pattern) > self._limits.max_pattern_chars:
             raise ValueError("grep pattern is invalid")
         try:
             re.compile(pattern)
@@ -227,7 +221,7 @@ class FilesystemReviewTools:
             text = payload.decode("utf-8", errors="replace")
             for line_number, line in enumerate(text.splitlines(), start=1):
                 encoded_size = len(line.encode("utf-8")) + 1
-                if lines and scanned + encoded_size > _MAX_SCAN_BYTES:
+                if lines and scanned + encoded_size > self._limits.max_scan_bytes:
                     has_more = True
                     break
                 lines.append((candidate_path, line_number, line))
@@ -238,7 +232,8 @@ class FilesystemReviewTools:
             _search_regular_expression,
             pattern,
             tuple(lines),
-            self._regex_timeout_seconds,
+            self._limits.regex_timeout_seconds,
+            self._limits.max_results,
         )
         is_truncated = result_truncated or has_more
         return self._json(
@@ -287,17 +282,17 @@ class FilesystemReviewTools:
             effective_start_line = 1
             payload = await self._file_payload(path, version)
             lines = payload.splitlines(keepends=True)
-            selected_lines = lines[:_MAX_LINES]
+            selected_lines = lines[:self._limits.max_lines]
             selected = b"".join(selected_lines)
             effective_end_line = len(selected_lines)
-            is_line_truncated = len(lines) > _MAX_LINES
+            is_line_truncated = len(lines) > self._limits.max_lines
         else:
             assert start_line is not None and end_line is not None
             effective_start_line = start_line
             effective_end_line = end_line
             selected = await self._selected_file_lines(path, start_line, end_line, version)
             is_line_truncated = False
-        raw_content = selected[:_MAX_READ_BYTES].decode("utf-8", errors="replace")
+        raw_content = selected[:self._limits.max_read_bytes].decode("utf-8", errors="replace")
         content = self._add_line_prefixes(raw_content, effective_start_line)
         if path in self._review_files_by_path:
             self._evidence_viewed_paths.add(path)
@@ -308,7 +303,7 @@ class FilesystemReviewTools:
                 "start_line": effective_start_line,
                 "end_line": effective_end_line,
                 "content": content,
-                "truncated": is_line_truncated or len(selected) > _MAX_READ_BYTES,
+                "truncated": is_line_truncated or len(selected) > self._limits.max_read_bytes,
             }
         )
 
@@ -322,7 +317,7 @@ class FilesystemReviewTools:
         """Derive a bounded excerpt identity for backend Finding resolution only."""
 
         selected = await self._selected_file_lines(path, start_line, end_line, version)
-        return hashlib.sha256(selected).hexdigest(), len(selected) > _MAX_READ_BYTES
+        return hashlib.sha256(selected).hexdigest(), len(selected) > self._limits.max_read_bytes
 
     async def get_diff(self, path: str) -> str:
         """Read the bounded base-to-verified-current diff for one changed visible file."""
@@ -351,12 +346,12 @@ class FilesystemReviewTools:
             else await self._revision_payload(path, "base")
         )
         output = self._build_verified_diff(entry, review_file, base_payload, current_payload)
-        content = output[:_MAX_READ_BYTES]
+        content = output[:self._limits.max_read_bytes]
         return self._json(
             {
                 "path": path,
                 "content": content.decode("utf-8", errors="replace"),
-                "truncated": len(output) > _MAX_READ_BYTES,
+                "truncated": len(output) > self._limits.max_read_bytes,
             }
         )
 
@@ -375,11 +370,16 @@ class FilesystemReviewTools:
     def as_agent_tools(self, descriptions: dict[str, str]) -> list[Tool]:
         """Expose the stable read-only contract using startup-loaded descriptions."""
 
+        ModelPath = Annotated[str, Field(max_length=self._limits.max_path_chars)]
+        ModelPattern = Annotated[
+            str, Field(min_length=1, max_length=self._limits.max_pattern_chars)
+        ]
+
         @function_tool(
             name_override="find_files",
             description_override=descriptions["find_files"],
         )
-        async def find_files_tool(path: _ModelPath, pattern: _ModelPattern) -> str:
+        async def find_files_tool(path: ModelPath, pattern: ModelPattern) -> str:
             """Find visible files below a directory using a relative POSIX glob pattern."""
 
             return await self.find_files(path, pattern)
@@ -389,9 +389,9 @@ class FilesystemReviewTools:
             description_override=descriptions["grep"],
         )
         async def grep_tool(
-            pattern: _ModelPattern,
-            path: _ModelPath,
-            file_pattern: _ModelPattern,
+            pattern: ModelPattern,
+            path: ModelPath,
+            file_pattern: ModelPattern,
         ) -> str:
             """Search visible Snapshot text with a regular expression."""
 
@@ -402,7 +402,7 @@ class FilesystemReviewTools:
             description_override=descriptions["read_file"],
         )
         async def read_file_tool(
-            path: _ModelPath,
+            path: ModelPath,
             version: _FileVersion,
             start_line: _ModelLine | None = None,
             end_line: _ModelLine | None = None,
@@ -421,7 +421,7 @@ class FilesystemReviewTools:
             name_override="get_diff",
             description_override=descriptions["get_diff"],
         )
-        async def get_diff_tool(path: _ModelPath) -> str:
+        async def get_diff_tool(path: ModelPath) -> str:
             """Read the base-to-current diff for a changed visible file."""
 
             return await self.get_diff(path)
@@ -446,7 +446,7 @@ class FilesystemReviewTools:
 
     async def _payload(self, entry: SnapshotEntry) -> bytes:
         absolute = self._root / entry.path
-        if entry.size_bytes > _MAX_SOURCE_BYTES:
+        if entry.size_bytes > self._limits.max_source_bytes:
             raise ValueError("Snapshot source file exceeds the tool limit")
         if entry.kind == "deleted":
             if await asyncio.to_thread(os.path.lexists, absolute):
@@ -464,23 +464,24 @@ class FilesystemReviewTools:
             metadata = await asyncio.to_thread(absolute.stat)
             if not stat.S_ISREG(metadata.st_mode):
                 raise ValueError("Snapshot context content changed")
-            if metadata.st_size > _MAX_SOURCE_BYTES:
+            if metadata.st_size > self._limits.max_source_bytes:
                 raise ValueError("Snapshot source file exceeds the tool limit")
             payload = await asyncio.to_thread(
                 self._read_bounded_regular_file,
                 absolute,
+                self._limits.max_source_bytes,
             )
         if hashlib.sha256(payload).hexdigest() != entry.content_hash:
             raise ValueError("Snapshot context content changed")
         return payload
 
     @staticmethod
-    def _read_bounded_regular_file(path: Path) -> bytes:
+    def _read_bounded_regular_file(path: Path, max_source_bytes: int) -> bytes:
         """Read at most one source limit plus a sentinel byte to contain races."""
 
         with path.open("rb") as source:
-            payload = source.read(_MAX_SOURCE_BYTES + 1)
-        if len(payload) > _MAX_SOURCE_BYTES:
+            payload = source.read(max_source_bytes + 1)
+        if len(payload) > max_source_bytes:
             raise ValueError("Snapshot source file exceeds the tool limit")
         return payload
 
@@ -535,7 +536,11 @@ class FilesystemReviewTools:
         end_line: int,
         version: _FileVersion = "current",
     ) -> bytes:
-        if start_line < 1 or end_line < start_line or end_line - start_line >= _MAX_LINES:
+        if (
+            start_line < 1
+            or end_line < start_line
+            or end_line - start_line >= self._limits.max_lines
+        ):
             raise ValueError("line range is invalid")
         payload = await self._file_payload(path, version)
         return b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])
@@ -590,23 +595,21 @@ class FilesystemReviewTools:
             and candidate.as_posix() == path
         )
 
-    @classmethod
-    def _directory_prefix(cls, path: str) -> str:
+    def _directory_prefix(self, path: str) -> str:
         if not path:
             return ""
-        if len(path) > _MAX_PATH_CHARS:
+        if len(path) > self._limits.max_path_chars:
             raise ValueError("directory path is invalid")
         normalized = path[:-1] if path.endswith("/") else path
-        if not cls._is_normalized_relative(normalized):
+        if not self._is_normalized_relative(normalized):
             raise ValueError("directory path is invalid")
         return f"{normalized}/"
 
-    @staticmethod
-    def _validate_file_pattern(pattern: str) -> None:
+    def _validate_file_pattern(self, pattern: str) -> None:
         normalized_pattern = PurePosixPath(pattern)
         if (
             not pattern
-            or len(pattern) > _MAX_PATTERN_CHARS
+            or len(pattern) > self._limits.max_pattern_chars
             or pattern.startswith("/")
             or "\\" in pattern
             or ".." in normalized_pattern.parts

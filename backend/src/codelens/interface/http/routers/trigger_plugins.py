@@ -1,6 +1,7 @@
 """HTTP router for trigger plugin management."""
 
 import logging
+from pathlib import Path
 from typing import Annotated
 
 from fastapi import APIRouter, Depends
@@ -185,14 +186,38 @@ async def update_trigger_config(
 
     # Merge with existing config
     new_config = TriggerConfig(
-        repository_paths=tuple(request.repository_paths) if request.repository_paths is not None else current.config.repository_paths,
-        events=validated_events if validated_events is not None else current.config.events,
-        scope_type=request.scope_type if request.scope_type is not None else current.config.scope_type,
-        base_ref=request.base_ref if request.base_ref is not None else current.config.base_ref,
-        target_ref=request.target_ref if request.target_ref is not None else current.config.target_ref,
-        selected_agents=tuple(request.selected_agents) if request.selected_agents is not None else current.config.selected_agents,
-        prompt_locale=request.prompt_locale if request.prompt_locale is not None else current.config.prompt_locale,
-        debounce_seconds=request.debounce_seconds if request.debounce_seconds is not None else current.config.debounce_seconds,
+        repository_paths=(
+            tuple(request.repository_paths)
+            if request.repository_paths is not None
+            else current.config.repository_paths
+        ),
+        events=(
+            validated_events if validated_events is not None else current.config.events
+        ),
+        scope_type=(
+            request.scope_type if request.scope_type is not None else current.config.scope_type
+        ),
+        base_ref=(
+            request.base_ref if request.base_ref is not None else current.config.base_ref
+        ),
+        target_ref=(
+            request.target_ref if request.target_ref is not None else current.config.target_ref
+        ),
+        selected_agents=(
+            tuple(request.selected_agents)
+            if request.selected_agents is not None
+            else current.config.selected_agents
+        ),
+        prompt_locale=(
+            request.prompt_locale
+            if request.prompt_locale is not None
+            else current.config.prompt_locale
+        ),
+        debounce_seconds=(
+            request.debounce_seconds
+            if request.debounce_seconds is not None
+            else current.config.debounce_seconds
+        ),
         extra=current.config.extra,
     )
 
@@ -204,12 +229,11 @@ async def update_trigger_config(
 
     # Auto-install/uninstall hooks based on repository path changes
     new_paths = set(record.config.repository_paths)
-    added_paths = new_paths - old_paths
     removed_paths = old_paths - new_paths
 
-    # Auto-install for added paths (only if plugin is enabled)
+    # Auto-install for all configured paths (idempotent, handles both installed and not installed)
     if record.is_enabled:
-        for path_str in added_paths:
+        for path_str in new_paths:
             repo_path = Path(path_str)
             try:
                 await components.hook_installer.install_hooks(

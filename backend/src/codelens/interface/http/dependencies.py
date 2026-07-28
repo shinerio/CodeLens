@@ -8,19 +8,11 @@ from codelens.instruction_policy.application.settings import InstructionSettings
 from codelens.instruction_policy.infrastructure.file_settings import (
     FilesystemInstructionLineLimitsStore,
 )
-from codelens.trigger.application.review_creator_adapter import (
-    ReviewCreatorAdapter,
-)
-from codelens.trigger.application.trigger_manager import TriggerPluginManager
-from codelens.trigger.application.trigger_orchestrator import TriggerOrchestrator
 from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
 from codelens.plugin.trigger.local_hook.plugin_loader import (
     BuiltinTriggerPluginLoader,
-)
-from codelens.trigger.infrastructure.trigger_store import (
-    FilesystemTriggerStore,
 )
 from codelens.reporting.application.export_orchestrator import ExportOrchestrator
 from codelens.reporting.application.plugin_manager import PluginManager
@@ -41,9 +33,11 @@ from codelens.review.application.commands import (
 )
 from codelens.review.application.settings import ReviewCompletionSettingsService
 from codelens.review.application.source_preview import FindingSourcePreviewService
+from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.file_settings import FilesystemReviewCompletionSettingsStore
+from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
     SqlRecentRepositoryStore,
@@ -66,6 +60,14 @@ from codelens.reviewer_catalog.infrastructure.file_provider_config import (
 )
 from codelens.reviewer_catalog.infrastructure.model_gateway_probe import (
     OpenAIModelGatewayProbeAdapter,
+)
+from codelens.trigger.application.review_creator_adapter import (
+    ReviewCreatorAdapter,
+)
+from codelens.trigger.application.trigger_manager import TriggerPluginManager
+from codelens.trigger.application.trigger_orchestrator import TriggerOrchestrator
+from codelens.trigger.infrastructure.trigger_store import (
+    FilesystemTriggerStore,
 )
 from codelens.workspace.application.browse_directories import BrowseDirectoriesService
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
@@ -103,6 +105,7 @@ class HttpComponents:
     update_recent_repository_settings: UpdateRecentRepositorySettingsHandler
     instruction_settings: InstructionSettingsService
     review_completion_settings: ReviewCompletionSettingsService
+    tool_limits: ToolLimitsService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
     retry_review: RetryReviewHandler
@@ -162,6 +165,7 @@ def build_components(settings: Settings) -> HttpComponents:
     review_completion_settings = ReviewCompletionSettingsService(
         FilesystemReviewCompletionSettingsStore(settings.data_dir)
     )
+    tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
     plugins_dir = settings.data_dir / "plugins"
@@ -185,13 +189,17 @@ def build_components(settings: Settings) -> HttpComponents:
 
     trigger_store = FilesystemTriggerStore(settings.data_dir)
     trigger_plugin_manager = TriggerPluginManager(trigger_store)
-    hook_installer = HookInstaller(Path(__file__).parent.parent.parent / "plugin" / "trigger" / "local_hook")
+    hook_installer = HookInstaller(
+        Path(__file__).parent.parent.parent / "plugin" / "trigger" / "local_hook"
+    )
     review_creator_adapter = ReviewCreatorAdapter(
         CreateReviewHandler(planner, capture, review_store, input_artifacts),
         repository_inspector,
     )
     trigger_plugin_loader = BuiltinTriggerPluginLoader()
-    trigger_orchestrator = TriggerOrchestrator(trigger_store, review_creator_adapter, trigger_plugin_loader)
+    trigger_orchestrator = TriggerOrchestrator(
+        trigger_store, review_creator_adapter, trigger_plugin_loader
+    )
 
     return HttpComponents(
         settings=settings,
@@ -213,6 +221,7 @@ def build_components(settings: Settings) -> HttpComponents:
         ),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
         review_completion_settings=review_completion_settings,
+        tool_limits=tool_limits,
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

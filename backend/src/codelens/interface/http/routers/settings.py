@@ -16,14 +16,18 @@ from codelens.interface.http.dto import (
     ModelGatewayCatalogResponse,
     ModelGatewayResponse,
     RecentRepositorySettingsResponse,
+    ResetAllSettingsResponse,
     ReviewCompletionSettingsResponse,
     RuntimeLogLevelResponse,
+    ToolLimitsResponse,
     UpdateInstructionFileSettingsRequest,
     UpdateModelGatewayRequest,
     UpdateRecentRepositorySettingsRequest,
     UpdateReviewCompletionSettingsRequest,
     UpdateRuntimeLogLevelRequest,
+    UpdateToolLimitsRequest,
 )
+from codelens.review.domain.tool_limits import ToolLimits
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -67,6 +71,24 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
             )
             for gateway in view.gateways
         ],
+    )
+
+
+def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
+    return ToolLimitsResponse(
+        max_results=limits.max_results,
+        max_read_bytes=limits.max_read_bytes,
+        max_scan_bytes=limits.max_scan_bytes,
+        max_source_bytes=limits.max_source_bytes,
+        max_lines=limits.max_lines,
+        max_path_chars=limits.max_path_chars,
+        max_pattern_chars=limits.max_pattern_chars,
+        regex_timeout_seconds=limits.regex_timeout_seconds,
+        comment_batch_size=limits.comment_batch_size,
+        reviewed_files_batch=limits.reviewed_files_batch,
+        short_text_max=limits.short_text_max,
+        long_text_max=limits.long_text_max,
+        task_summary_max=limits.task_summary_max,
     )
 
 
@@ -286,4 +308,138 @@ async def test_gateway_availability(
         ok=result.ok,
         latency_ms=result.latency_ms,
         detail=result.detail,
+    )
+
+
+@router.get("/tool-limits", response_model=ToolLimitsResponse)
+async def get_tool_limits(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ToolLimitsResponse:
+    """Return the configured tool-level limits for Review Agent evidence operations."""
+
+    limits = await components.tool_limits.get()
+    return _tool_limits_response(limits)
+
+
+@router.put("/tool-limits", response_model=ToolLimitsResponse)
+async def update_tool_limits(
+    request: UpdateToolLimitsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ToolLimitsResponse:
+    """Persist replacement tool limits for subsequent Agent runs."""
+
+    limits = await components.tool_limits.update(
+        max_results=request.max_results,
+        max_read_bytes=request.max_read_bytes,
+        max_scan_bytes=request.max_scan_bytes,
+        max_source_bytes=request.max_source_bytes,
+        max_lines=request.max_lines,
+        max_path_chars=request.max_path_chars,
+        max_pattern_chars=request.max_pattern_chars,
+        regex_timeout_seconds=request.regex_timeout_seconds,
+        comment_batch_size=request.comment_batch_size,
+        reviewed_files_batch=request.reviewed_files_batch,
+        short_text_max=request.short_text_max,
+        long_text_max=request.long_text_max,
+        task_summary_max=request.task_summary_max,
+    )
+    return _tool_limits_response(limits)
+
+
+@router.post("/reset-all", response_model=ResetAllSettingsResponse)
+async def reset_all_settings(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ResetAllSettingsResponse:
+    """Reset all user-configurable settings to their product defaults.
+
+    Does not affect gateway identities, credentials, reviewer prompt customizations,
+    or trigger plugin configurations.
+    """
+
+    from codelens.bootstrap.logging import get_runtime_log_level, set_runtime_log_level
+    from codelens.instruction_policy.domain.models import (
+        DEFAULT_NESTED_INSTRUCTION_MAX_LINES,
+        DEFAULT_ROOT_INSTRUCTION_MAX_LINES,
+    )
+    from codelens.review.application.settings import DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
+    from codelens.review.domain.ports import DEFAULT_RECENT_REPOSITORY_LIMIT
+    from codelens.review.domain.tool_limits import ToolLimits
+
+    # Reset instruction file limits
+    instruction_limits = await components.instruction_settings.update(
+        root_max_lines=DEFAULT_ROOT_INSTRUCTION_MAX_LINES,
+        nested_max_lines=DEFAULT_NESTED_INSTRUCTION_MAX_LINES,
+    )
+
+    # Reset review completion settings
+    review_completion = await components.review_completion_settings.update(
+        max_incomplete_review_retries=DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
+    )
+
+    # Reset recent repository limit
+    recent_repo_limit = await components.update_recent_repository_settings.handle(
+        DEFAULT_RECENT_REPOSITORY_LIMIT
+    )
+
+    # Reset tool limits
+    default_tool_limits = ToolLimits()
+    tool_limits = await components.tool_limits.update(
+        max_results=default_tool_limits.max_results,
+        max_read_bytes=default_tool_limits.max_read_bytes,
+        max_scan_bytes=default_tool_limits.max_scan_bytes,
+        max_source_bytes=default_tool_limits.max_source_bytes,
+        max_lines=default_tool_limits.max_lines,
+        max_path_chars=default_tool_limits.max_path_chars,
+        max_pattern_chars=default_tool_limits.max_pattern_chars,
+        regex_timeout_seconds=default_tool_limits.regex_timeout_seconds,
+        comment_batch_size=default_tool_limits.comment_batch_size,
+        reviewed_files_batch=default_tool_limits.reviewed_files_batch,
+        short_text_max=default_tool_limits.short_text_max,
+        long_text_max=default_tool_limits.long_text_max,
+        task_summary_max=default_tool_limits.task_summary_max,
+    )
+
+    # Reset log level
+    await asyncio.to_thread(set_runtime_log_level, components.settings.data_dir, "info")
+    log_level = await asyncio.to_thread(get_runtime_log_level, components.settings.data_dir)
+
+    # Reset active gateway execution limits (if a gateway is active)
+    gateway_catalog = await components.model_gateways.list()
+    if gateway_catalog.active_gateway_id:
+        active_gw = next(
+            (gw for gw in gateway_catalog.gateways if gw.is_active),
+            None,
+        )
+        if active_gw:
+            gateway_catalog = await components.model_gateways.update(
+                gateway_id=active_gw.gateway_id,
+                name=active_gw.name,
+                api_key=None,  # retain existing key
+                model=active_gw.model,
+                base_url=active_gw.base_url,
+                vendor=active_gw.vendor,
+                api_type=active_gw.api_type,
+                max_tokens=active_gw.max_tokens,
+                thinking_level=active_gw.thinking_level,
+                agent_timeout=1800,
+                max_agent_turns=100,
+                max_tool_calls=300,
+                max_identical_tool_results=3,
+                tool_timeout_seconds=30,
+            )
+
+    return ResetAllSettingsResponse(
+        instruction_files=_instruction_settings_response(
+            instruction_limits.root_max_lines,
+            instruction_limits.nested_max_lines,
+        ),
+        review_completion=ReviewCompletionSettingsResponse(
+            max_incomplete_review_retries=review_completion.max_incomplete_review_retries,
+        ),
+        recent_repositories=RecentRepositorySettingsResponse(
+            recent_repository_limit=recent_repo_limit,
+        ),
+        tool_limits=_tool_limits_response(tool_limits),
+        logging=RuntimeLogLevelResponse(level=log_level),
+        model_gateways=_catalog_response(gateway_catalog),
     )

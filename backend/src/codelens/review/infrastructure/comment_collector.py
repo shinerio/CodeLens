@@ -5,12 +5,13 @@ from dataclasses import dataclass, field
 from typing import Annotated, Literal
 
 from agents import Tool, function_tool
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, create_model
 
 from codelens.review.application.settings import (
     MAX_MAX_INCOMPLETE_REVIEW_RETRIES,
     MIN_MAX_INCOMPLETE_REVIEW_RETRIES,
 )
+from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.line_resolver import (
     resolve_from_file_content,
     resolve_from_hunk,
@@ -19,51 +20,68 @@ from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 from codelens.workspace.domain.models import ReviewSnapshot
 
-_ShortText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
+_DEFAULT_LIMITS = ToolLimits()
+
+_ShortText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=_DEFAULT_LIMITS.short_text_max
+    ),
+]
 _ReviewPath = Annotated[
     str,
-    StringConstraints(strip_whitespace=True, min_length=1, max_length=1_024),
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=_DEFAULT_LIMITS.max_path_chars
+    ),
 ]
-_LongText = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=8_000)]
-_TaskSummary = Annotated[str, Field(min_length=1, max_length=8_000)]
-
-
-class ReviewCommentSubmission(BaseModel):
-    """Validate one evidence-backed Review comment submission."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    path: _ReviewPath
-    side: Literal["old", "new"]
-    existing_code: _LongText
-    title: _ShortText
-    content: _LongText
-    recommendation: _LongText
-    category: _ShortText
-    severity: Literal["critical", "high", "medium", "low", "info"]
-    confidence: float = Field(ge=0.0, le=1.0)
-
-
-class ReviewCompletionSubmission(BaseModel):
-    """Validate the model's bounded review-completion declaration."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    summary: _LongText
-
-
-class ReviewFileCompletionSubmission(BaseModel):
-    """Validate a bounded batch of canonical Review paths declared complete."""
-
-    model_config = ConfigDict(frozen=True, extra="forbid")
-
-    reviewed_files: Annotated[tuple[_ReviewPath, ...], Field(min_length=1, max_length=2_000)]
-
-
-_CommentBatch = Annotated[
-    list[ReviewCommentSubmission],
-    Field(min_length=1, max_length=20),
+_LongText = Annotated[
+    str,
+    StringConstraints(
+        strip_whitespace=True, min_length=1, max_length=_DEFAULT_LIMITS.long_text_max
+    ),
 ]
+
+ReviewCommentSubmission = create_model(
+    "ReviewCommentSubmission",
+    __config__=ConfigDict(frozen=True, extra="forbid"),
+    path=(_ReviewPath, ...),
+    side=(Literal["old", "new"], ...),
+    existing_code=(_LongText, ...),
+    title=(_ShortText, ...),
+    content=(_LongText, ...),
+    recommendation=(_LongText, ...),
+    category=(_ShortText, ...),
+    severity=(Literal["critical", "high", "medium", "low", "info"], ...),
+    confidence=(Annotated[float, Field(ge=0.0, le=1.0)], ...),
+)
+
+ReviewCompletionSubmission = create_model(
+    "ReviewCompletionSubmission",
+    __config__=ConfigDict(frozen=True, extra="forbid"),
+    summary=(
+        Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True,
+                min_length=1,
+                max_length=_DEFAULT_LIMITS.task_summary_max,
+            ),
+        ],
+        ...,
+    ),
+)
+
+ReviewFileCompletionSubmission = create_model(
+    "ReviewFileCompletionSubmission",
+    __config__=ConfigDict(frozen=True, extra="forbid"),
+    reviewed_files=(
+        Annotated[
+            list[_ReviewPath],
+            Field(min_length=1, max_length=_DEFAULT_LIMITS.reviewed_files_batch),
+        ],
+        ...,
+    ),
+)
 
 
 class CommentCandidateRejectedError(ValueError):
@@ -85,8 +103,9 @@ class ReviewCommentCollector:
     tools: FilesystemReviewTools
     max_incomplete_review_retries: int = 3
     tool_descriptions: dict[str, str] = field(default_factory=dict)
+    tool_limits: ToolLimits | None = None
     _findings: list[dict[str, object]] = field(default_factory=list)
-    _completion: ReviewCompletionSubmission | None = None
+    _completion: object | None = None
     _reviewed_files: set[str] = field(default_factory=set)
     _incomplete_retry_count: int = 0
     _incomplete_review_files: tuple[str, ...] = ()
@@ -101,15 +120,85 @@ class ReviewCommentCollector:
             or value > MAX_MAX_INCOMPLETE_REVIEW_RETRIES
         ):
             raise ValueError("max incomplete review retries must be between 0 and 20")
+        if self.tool_limits is None:
+            self.tool_limits = ToolLimits()
 
     def as_agent_tools(self) -> list[Tool]:
         """Expose bounded comment collection and explicit completion through the SDK."""
+
+        limits = self.tool_limits
+
+        ShortText = Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True, min_length=1, max_length=limits.short_text_max
+            ),
+        ]
+        ReviewPath = Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True, min_length=1, max_length=limits.max_path_chars
+            ),
+        ]
+        LongText = Annotated[
+            str,
+            StringConstraints(
+                strip_whitespace=True, min_length=1, max_length=limits.long_text_max
+            ),
+        ]
+
+        ReviewCommentSubmissionModel = create_model(
+            "ReviewCommentSubmission",
+            __config__=ConfigDict(frozen=True, extra="forbid"),
+            path=(ReviewPath, ...),
+            side=(Literal["old", "new"], ...),
+            existing_code=(LongText, ...),
+            title=(ShortText, ...),
+            content=(LongText, ...),
+            recommendation=(LongText, ...),
+            category=(ShortText, ...),
+            severity=(Literal["critical", "high", "medium", "low", "info"], ...),
+            confidence=(Annotated[float, Field(ge=0.0, le=1.0)], ...),
+        )
+
+        ReviewCompletionSubmissionModel = create_model(
+            "ReviewCompletionSubmission",
+            __config__=ConfigDict(frozen=True, extra="forbid"),
+            summary=(
+                Annotated[
+                    str,
+                    StringConstraints(
+                        strip_whitespace=True,
+                        min_length=1,
+                        max_length=limits.task_summary_max,
+                    ),
+                ],
+                ...,
+            ),
+        )
+
+        ReviewFileCompletionSubmissionModel = create_model(
+            "ReviewFileCompletionSubmission",
+            __config__=ConfigDict(frozen=True, extra="forbid"),
+            reviewed_files=(
+                Annotated[
+                    list[ReviewPath],
+                    Field(min_length=1, max_length=limits.reviewed_files_batch),
+                ],
+                ...,
+            ),
+        )
+
+        CommentBatch = Annotated[
+            list[ReviewCommentSubmissionModel],
+            Field(min_length=1, max_length=limits.comment_batch_size),
+        ]
 
         @function_tool(
             name_override="comment",
             description_override=self.tool_descriptions["comment"],
         )
-        async def comment_tool(comments: _CommentBatch) -> str:
+        async def comment_tool(comments: CommentBatch) -> str:
             """Submit one or more concrete changed-code comments for deterministic resolution."""
 
             return await self.submit_many(comments)
@@ -119,12 +208,15 @@ class ReviewCommentCollector:
             description_override=self.tool_descriptions["review_file_done"],
         )
         async def review_file_done_tool(
-            reviewed_files: Annotated[list[_ReviewPath], Field(min_length=1, max_length=2_000)],
+            reviewed_files: Annotated[
+                list[ReviewPath],
+                Field(min_length=1, max_length=limits.reviewed_files_batch),
+            ],
         ) -> str:
             """Record files reviewed after successful model-visible evidence access."""
 
             return self.complete_files(
-                ReviewFileCompletionSubmission.model_validate(
+                ReviewFileCompletionSubmissionModel.model_validate(
                     {"reviewed_files": reviewed_files}
                 )
             )
@@ -134,12 +226,19 @@ class ReviewCommentCollector:
             description_override=self.tool_descriptions["task_done"],
         )
         async def task_done_tool(
-            summary: _TaskSummary,
+            summary: Annotated[
+                str,
+                StringConstraints(
+                    strip_whitespace=True,
+                    min_length=1,
+                    max_length=limits.task_summary_max,
+                ),
+            ],
         ) -> str:
             """Declare that changed-file investigation is complete without creating a Finding."""
 
             return self.complete(
-                ReviewCompletionSubmission.model_validate({"summary": summary})
+                ReviewCompletionSubmissionModel.model_validate({"summary": summary})
             )
 
         return [
@@ -148,7 +247,7 @@ class ReviewCommentCollector:
             reject_unknown_arguments(task_done_tool),
         ]
 
-    async def submit(self, submission: ReviewCommentSubmission) -> str:
+    async def submit(self, submission: BaseModel) -> str:
         """Resolve one candidate or return a bounded tool error without retaining it."""
 
         if submission.confidence < self.confidence_floor:
@@ -230,11 +329,13 @@ class ReviewCommentCollector:
             separators=(",", ":"),
         )
 
-    async def submit_many(self, submissions: list[ReviewCommentSubmission]) -> str:
+    async def submit_many(self, submissions: list[BaseModel]) -> str:
         """Resolve a bounded batch while retaining only individually accepted comments."""
 
-        if not submissions or len(submissions) > 20:
-            raise ValueError("comment requires between one and twenty comments")
+        if not submissions or len(submissions) > self.tool_limits.comment_batch_size:
+            raise ValueError(
+                f"comment requires between one and {self.tool_limits.comment_batch_size} comments"
+            )
         accepted_count = 0
         rejected_comments: list[dict[str, object]] = []
         for index, submission in enumerate(submissions):
@@ -257,7 +358,7 @@ class ReviewCommentCollector:
             separators=(",", ":"),
         )
 
-    def complete(self, submission: ReviewCompletionSubmission) -> str:
+    def complete(self, submission: BaseModel) -> str:
         """Accept final completion only after every evidenced Review file was declared."""
 
         if self._completion is not None:
@@ -297,7 +398,7 @@ class ReviewCommentCollector:
             separators=(",", ":"),
         )
 
-    def complete_files(self, submission: ReviewFileCompletionSubmission) -> str:
+    def complete_files(self, submission: BaseModel) -> str:
         """Record only known paths already exposed by a successful evidence tool call."""
 
         if self._completion is not None:
