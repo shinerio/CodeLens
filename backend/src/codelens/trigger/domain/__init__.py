@@ -1,0 +1,1 @@
+"""Trigger domain layer."""

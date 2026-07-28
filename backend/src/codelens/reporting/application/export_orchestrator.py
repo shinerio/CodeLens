@@ -12,7 +12,7 @@ from codelens.reporting.domain.ports import (
     ReviewExportStorePort,
     RevisionReaderPort,
 )
-from codelens.reporting.infrastructure.local_file_sink import LocalFileExportSink
+from codelens.plugin.report.local_file_export.sink import LocalFileExportSink
 from codelens.review.application.export_findings import (
     ExportFindingsHandler,
 )

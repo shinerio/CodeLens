@@ -14,12 +14,15 @@ from codelens.interface.http.dependencies import (
     HttpProblem,
     build_components,
     initialize_reporting_components,
+    initialize_trigger_components,
 )
 from codelens.interface.http.routers.report_plugins import router as report_plugins_router
 from codelens.interface.http.routers.repositories import router as repositories_router
 from codelens.interface.http.routers.reviewer_prompts import router as reviewer_prompts_router
 from codelens.interface.http.routers.reviews import router as reviews_router
 from codelens.interface.http.routers.settings import router as settings_router
+from codelens.interface.http.routers.trigger_events import router as trigger_events_router
+from codelens.interface.http.routers.trigger_plugins import router as trigger_plugins_router
 from codelens.review.application.commands import ReviewNotFoundError
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayNotFoundError
@@ -148,6 +151,7 @@ def create_app_with_components(
         if manage_components:
             await components.start()
             await initialize_reporting_components(components)
+            await initialize_trigger_components(components)
         try:
             yield
         finally:
@@ -198,6 +202,8 @@ def create_app_with_components(
     app.include_router(settings_router)
     app.include_router(reviewer_prompts_router)
     app.include_router(report_plugins_router)
+    app.include_router(trigger_plugins_router)
+    app.include_router(trigger_events_router)
     return app
 
 
