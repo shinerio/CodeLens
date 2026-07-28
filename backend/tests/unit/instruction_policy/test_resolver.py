@@ -129,7 +129,9 @@ def test_root_instruction_uses_the_more_permissive_line_limit(tmp_path: Path) ->
     assert [document.relative_path for document in resolved.documents] == ["AGENTS.md"]
 
 
-def test_nested_instruction_rejects_content_above_its_line_limit(tmp_path: Path) -> None:
+def test_nested_instruction_truncates_content_above_its_line_limit_with_warning(
+    tmp_path: Path,
+) -> None:
     target_dir = tmp_path / "src"
     target_dir.mkdir()
     (target_dir / "REVIEW.md").write_text("one\ntwo\nthree\n", encoding="utf-8")
@@ -140,12 +142,11 @@ def test_nested_instruction_rejects_content_above_its_line_limit(tmp_path: Path)
         line_limits=InstructionLineLimits(root_max_lines=3, nested_max_lines=2),
     )
 
-    try:
-        resolver.resolve(tmp_path, "src/app.py")
-    except ValueError as error:
-        assert str(error) == "instruction document src/REVIEW.md exceeds the 2 line limit"
-    else:
-        raise AssertionError("nested instruction above the line limit must be rejected")
+    resolved = resolver.resolve(tmp_path, "src/app.py")
+
+    assert [document.relative_path for document in resolved.documents] == ["src/REVIEW.md"]
+    assert resolved.documents[0].content == "one\ntwo"
+    assert any("src/REVIEW.md" in w and "2 line limit" in w for w in resolved.warnings)
 
 
 def test_resolver_reloads_line_limits_for_each_resolution(tmp_path: Path) -> None:
@@ -158,12 +159,13 @@ def test_resolver_reloads_line_limits_for_each_resolution(tmp_path: Path) -> Non
         line_limits_provider=provider,
     )
 
-    resolver.resolve(tmp_path, "src/app.py")
-    provider.limits = InstructionLineLimits(3, 2)
+    first = resolver.resolve(tmp_path, "src/app.py")
+    assert [d.relative_path for d in first.documents] == ["src/AGENTS.md"]
+    assert first.documents[0].content == "one\ntwo\nthree\n"
 
-    try:
-        resolver.resolve(tmp_path, "src/app.py")
-    except ValueError as error:
-        assert str(error) == "instruction document src/AGENTS.md exceeds the 2 line limit"
-    else:
-        raise AssertionError("updated line limits must affect the next resolution")
+    provider.limits = InstructionLineLimits(3, 2)
+    second = resolver.resolve(tmp_path, "src/app.py")
+
+    assert [d.relative_path for d in second.documents] == ["src/AGENTS.md"]
+    assert second.documents[0].content == "one\ntwo"
+    assert any("src/AGENTS.md" in w and "2 line limit" in w for w in second.warnings)

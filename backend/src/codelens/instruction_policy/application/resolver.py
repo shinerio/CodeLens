@@ -1,4 +1,5 @@
 import hashlib
+import logging
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -13,6 +14,7 @@ from codelens.instruction_policy.domain.models import (
 )
 
 _DEFAULT_MAX_INSTRUCTION_BYTES = 256 * 1024
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -144,7 +146,13 @@ class InstructionResolver:
             if not resolved.is_relative_to(repository_root):
                 raise ValueError("instruction path escapes repository")
             if resolved.stat().st_size > self._max_instruction_bytes:
-                raise ValueError("instruction document exceeds the configured size limit")
+                message = (
+                    f"instruction document {relative.as_posix()} exceeds the"
+                    f" {self._max_instruction_bytes} byte size limit, skipping"
+                )
+                _LOGGER.warning(message)
+                warnings.append(message)
+                continue
 
             raw = resolved.read_bytes()
             text = raw.decode("utf-8")
@@ -154,9 +162,14 @@ class InstructionResolver:
                 else line_limits.nested_max_lines
             )
             if len(text.splitlines()) > max_lines:
-                raise ValueError(
-                    f"instruction document {relative.as_posix()} exceeds the {max_lines} line limit"
+                text = "\n".join(text.splitlines()[:max_lines])
+                raw = text.encode("utf-8")
+                message = (
+                    f"instruction document {relative.as_posix()} exceeds the"
+                    f" {max_lines} line limit, truncated"
                 )
+                _LOGGER.warning(message)
+                warnings.append(message)
             parsed = self._parser.parse(text)
             documents.append(
                 InstructionDocument(
