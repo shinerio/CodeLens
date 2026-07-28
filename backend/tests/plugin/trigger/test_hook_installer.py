@@ -32,11 +32,28 @@ def hook_installer() -> HookInstaller:
 
 
 @pytest.mark.asyncio
-async def test_install_hooks_creates_files(
+async def test_install_creates_standalone_script(
     temp_repo: Path,
     hook_installer: HookInstaller,
 ) -> None:
-    """install_hooks should create hook script files."""
+    """install_hooks should create standalone script."""
+    await hook_installer.install_hooks(
+        temp_repo,
+        (HookEvent.POST_COMMIT,),
+        port=8000,
+    )
+
+    standalone = temp_repo / ".git" / "hooks" / "code-lens-review-hook.sh"
+    assert standalone.exists()
+    assert os.access(standalone, os.X_OK)
+
+
+@pytest.mark.asyncio
+async def test_install_without_user_hook_creates_symlink(
+    temp_repo: Path,
+    hook_installer: HookInstaller,
+) -> None:
+    """install_hooks should create symlink when no user hook exists."""
     await hook_installer.install_hooks(
         temp_repo,
         (HookEvent.POST_COMMIT, HookEvent.PRE_PUSH),
@@ -46,37 +63,16 @@ async def test_install_hooks_creates_files(
     post_commit = temp_repo / ".git" / "hooks" / "post-commit"
     pre_push = temp_repo / ".git" / "hooks" / "pre-push"
 
-    assert post_commit.exists()
-    assert pre_push.exists()
-    assert os.access(post_commit, os.X_OK)
-    assert os.access(pre_push, os.X_OK)
+    assert post_commit.is_symlink()
+    assert pre_push.is_symlink()
 
 
 @pytest.mark.asyncio
-async def test_install_hooks_replaces_port(
+async def test_install_with_user_hook_injects_call(
     temp_repo: Path,
     hook_installer: HookInstaller,
 ) -> None:
-    """install_hooks should replace __PORT__ placeholder."""
-    await hook_installer.install_hooks(
-        temp_repo,
-        (HookEvent.POST_COMMIT,),
-        port=9000,
-    )
-
-    post_commit = temp_repo / ".git" / "hooks" / "post-commit"
-    content = post_commit.read_text()
-
-    assert "9000" in content
-    assert "__PORT__" not in content
-
-
-@pytest.mark.asyncio
-async def test_install_hooks_backs_up_existing(
-    temp_repo: Path,
-    hook_installer: HookInstaller,
-) -> None:
-    """install_hooks should back up existing non-CodeLens hooks."""
+    """install_hooks should inject call when user hook exists."""
     post_commit = temp_repo / ".git" / "hooks" / "post-commit"
     original_content = "#!/bin/bash\necho 'original hook'"
     post_commit.write_text(original_content)
@@ -88,40 +84,87 @@ async def test_install_hooks_backs_up_existing(
         port=8000,
     )
 
-    backup = temp_repo / ".git" / "hooks" / "post-commit.codelens-backup"
-    assert backup.exists()
-    assert backup.read_text() == original_content
+    content = post_commit.read_text()
+    assert "# CodeLens Trigger Hook" in content
+    assert "code-lens-review-hook.sh" in content
+    assert "echo 'original hook'" in content
 
 
 @pytest.mark.asyncio
-async def test_install_hooks_does_not_backup_codelens_hooks(
+async def test_install_replaces_port(
     temp_repo: Path,
     hook_installer: HookInstaller,
 ) -> None:
-    """install_hooks should not back up existing CodeLens hooks."""
-    await hook_installer.install_hooks(
-        temp_repo,
-        (HookEvent.POST_COMMIT,),
-        port=8000,
-    )
-
-    # Install again
+    """install_hooks should replace __PORT__ placeholder in standalone script."""
     await hook_installer.install_hooks(
         temp_repo,
         (HookEvent.POST_COMMIT,),
         port=9000,
     )
 
-    backup = temp_repo / ".git" / "hooks" / "post-commit.codelens-backup"
-    assert not backup.exists()
+    standalone = temp_repo / ".git" / "hooks" / "code-lens-review-hook.sh"
+    content = standalone.read_text()
+
+    assert "9000" in content
+    assert "__PORT__" not in content
 
 
 @pytest.mark.asyncio
-async def test_uninstall_hooks_removes_files(
+async def test_uninstall_removes_injected_line_and_script(
     temp_repo: Path,
     hook_installer: HookInstaller,
 ) -> None:
-    """uninstall_hooks should remove CodeLens hook files."""
+    """uninstall_hooks should remove injected line and standalone script."""
+    post_commit = temp_repo / ".git" / "hooks" / "post-commit"
+    original_content = "#!/bin/bash\necho 'original hook'"
+    post_commit.write_text(original_content)
+    post_commit.chmod(0o755)
+
+    await hook_installer.install_hooks(
+        temp_repo,
+        (HookEvent.POST_COMMIT,),
+        port=8000,
+    )
+
+    await hook_installer.uninstall_hooks(temp_repo)
+
+    standalone = temp_repo / ".git" / "hooks" / "code-lens-review-hook.sh"
+    assert not standalone.exists()
+
+    content = post_commit.read_text()
+    assert "# CodeLens Trigger Hook" not in content
+    assert "code-lens-review-hook.sh" not in content
+
+
+@pytest.mark.asyncio
+async def test_uninstall_restores_user_hook_unchanged(
+    temp_repo: Path,
+    hook_installer: HookInstaller,
+) -> None:
+    """uninstall_hooks should leave user hook unchanged."""
+    post_commit = temp_repo / ".git" / "hooks" / "post-commit"
+    original_content = "#!/bin/bash\necho 'original hook'\nexit 0"
+    post_commit.write_text(original_content)
+    post_commit.chmod(0o755)
+
+    await hook_installer.install_hooks(
+        temp_repo,
+        (HookEvent.POST_COMMIT,),
+        port=8000,
+    )
+
+    await hook_installer.uninstall_hooks(temp_repo)
+
+    assert post_commit.exists()
+    assert post_commit.read_text() == original_content
+
+
+@pytest.mark.asyncio
+async def test_uninstall_removes_symlink(
+    temp_repo: Path,
+    hook_installer: HookInstaller,
+) -> None:
+    """uninstall_hooks should remove symlink."""
     await hook_installer.install_hooks(
         temp_repo,
         (HookEvent.POST_COMMIT, HookEvent.PRE_PUSH),
@@ -138,11 +181,29 @@ async def test_uninstall_hooks_removes_files(
 
 
 @pytest.mark.asyncio
-async def test_uninstall_hooks_restores_backup(
+async def test_uninstall_ignores_non_codelens(
     temp_repo: Path,
     hook_installer: HookInstaller,
 ) -> None:
-    """uninstall_hooks should restore backed up hooks."""
+    """uninstall_hooks should not modify non-CodeLens hooks."""
+    post_commit = temp_repo / ".git" / "hooks" / "post-commit"
+    original_content = "#!/bin/bash\necho 'original hook'"
+    post_commit.write_text(original_content)
+    post_commit.chmod(0o755)
+
+    # Try to uninstall without installing first
+    await hook_installer.uninstall_hooks(temp_repo)
+
+    assert post_commit.exists()
+    assert post_commit.read_text() == original_content
+
+
+@pytest.mark.asyncio
+async def test_reinstall_updates_script_only(
+    temp_repo: Path,
+    hook_installer: HookInstaller,
+) -> None:
+    """Reinstalling should update standalone script without duplicating injection."""
     post_commit = temp_repo / ".git" / "hooks" / "post-commit"
     original_content = "#!/bin/bash\necho 'original hook'"
     post_commit.write_text(original_content)
@@ -154,28 +215,20 @@ async def test_uninstall_hooks_restores_backup(
         port=8000,
     )
 
-    await hook_installer.uninstall_hooks(temp_repo)
+    # Install again with different port
+    await hook_installer.install_hooks(
+        temp_repo,
+        (HookEvent.POST_COMMIT,),
+        port=9000,
+    )
 
-    assert post_commit.exists()
-    assert post_commit.read_text() == original_content
+    content = post_commit.read_text()
+    # Should only have one injection
+    assert content.count("# CodeLens Trigger Hook") == 1
 
-
-@pytest.mark.asyncio
-async def test_uninstall_hooks_ignores_non_codelens(
-    temp_repo: Path,
-    hook_installer: HookInstaller,
-) -> None:
-    """uninstall_hooks should not remove non-CodeLens hooks."""
-    post_commit = temp_repo / ".git" / "hooks" / "post-commit"
-    original_content = "#!/bin/bash\necho 'original hook'"
-    post_commit.write_text(original_content)
-    post_commit.chmod(0o755)
-
-    # Try to uninstall without installing first
-    await hook_installer.uninstall_hooks(temp_repo)
-
-    assert post_commit.exists()
-    assert post_commit.read_text() == original_content
+    # Standalone script should have new port
+    standalone = temp_repo / ".git" / "hooks" / "code-lens-review-hook.sh"
+    assert "9000" in standalone.read_text()
 
 
 @pytest.mark.asyncio

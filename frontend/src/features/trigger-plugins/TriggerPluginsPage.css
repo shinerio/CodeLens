@@ -340,35 +340,6 @@
   color: var(--muted);
 }
 
-.trigger-hook-actions {
-  display: flex;
-  gap: 8px;
-}
-
-.trigger-hook-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 6px 12px;
-  border: 1px solid var(--line);
-  border-radius: 4px;
-  background: transparent;
-  color: var(--ink);
-  font-size: 0.8125rem;
-  cursor: pointer;
-}
-
-.trigger-hook-button:disabled {
-  opacity: 0.5;
-  cursor: not-allowed;
-}
-
-.trigger-hook-button--primary {
-  background: var(--accent);
-  color: #fff;
-  border-color: var(--accent);
-}
-
 .trigger-plugins-loading,
 .trigger-plugins-error {
   font-size: 0.875rem;

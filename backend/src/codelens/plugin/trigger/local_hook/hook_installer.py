@@ -1,6 +1,7 @@
 """Install and uninstall git hook scripts in repositories."""
 
 import asyncio
+import os
 import shutil
 from pathlib import Path
 
@@ -10,13 +11,17 @@ from codelens.trigger.domain.models import HookEvent
 class HookInstaller:
     """Manage git hook script installation and uninstallation in repositories.
 
-    Installs CodeLens trigger hooks (post-commit, pre-push) into .git/hooks/
-    directories. Backs up existing hooks to preserve user customizations.
+    Uses a standalone script approach to avoid overwriting user hooks:
+    1. Creates a standalone script: .git/hooks/code-lens-review-hook.sh
+    2. If no user hook exists: creates symlink from hook name to standalone script
+    3. If user hook exists: injects a call to standalone script after shebang
+    4. On uninstall: removes injected line and deletes standalone script
     """
 
     HOOK_SCRIPT_TEMPLATE = "hook_script.sh"
-    BACKUP_SUFFIX = ".codelens-backup"
+    STANDALONE_SCRIPT_NAME = "code-lens-review-hook.sh"
     MARKER_COMMENT = "# CodeLens Trigger Hook"
+    INJECTION_LINE_TEMPLATE = '"$GIT_DIR/hooks/{script_name}" "$@" || true'
 
     def __init__(self, plugin_dir: Path) -> None:
         """Initialize with the plugin directory containing the hook script template.
@@ -48,21 +53,27 @@ class HookInstaller:
         hooks_dir = git_dir / "hooks"
         await asyncio.to_thread(hooks_dir.mkdir, parents=True, exist_ok=True)
 
+        # Write standalone script
         template_content = await asyncio.to_thread(
             self._template_path.read_text, encoding="utf-8"
         )
         hook_content = template_content.replace("__PORT__", str(port))
+        standalone_path = hooks_dir / self.STANDALONE_SCRIPT_NAME
+        await asyncio.to_thread(
+            self._write_standalone_script, standalone_path, hook_content
+        )
 
+        # Install each event hook
         for event in events:
             hook_path = hooks_dir / event.value
             await asyncio.to_thread(
-                self._install_single_hook, hook_path, hook_content
+                self._install_single_hook, hook_path, standalone_path
             )
 
     async def uninstall_hooks(self, repository_path: Path) -> None:
         """Uninstall all CodeLens hook scripts from a repository.
 
-        Restores backed-up hooks if they exist.
+        Removes injected lines from user hooks and deletes standalone script.
 
         Args:
             repository_path: Absolute path to the git repository.
@@ -72,13 +83,16 @@ class HookInstaller:
         """
         git_dir = await self._get_git_dir(repository_path)
         hooks_dir = git_dir / "hooks"
+        standalone_path = hooks_dir / self.STANDALONE_SCRIPT_NAME
 
+        # Remove injection from each event hook
         for event in HookEvent:
             hook_path = hooks_dir / event.value
-            backup_path = hooks_dir / f"{event.value}{self.BACKUP_SUFFIX}"
-            await asyncio.to_thread(
-                self._uninstall_single_hook, hook_path, backup_path
-            )
+            await asyncio.to_thread(self._uninstall_single_hook, hook_path)
+
+        # Delete standalone script
+        if standalone_path.exists():
+            await asyncio.to_thread(standalone_path.unlink)
 
     async def is_installed(self, repository_path: Path) -> dict[HookEvent, bool]:
         """Check which hooks are currently installed in a repository.
@@ -91,11 +105,18 @@ class HookInstaller:
         """
         git_dir = await self._get_git_dir(repository_path)
         hooks_dir = git_dir / "hooks"
+        standalone_path = hooks_dir / self.STANDALONE_SCRIPT_NAME
+
+        # Check if standalone script exists
+        if not standalone_path.exists():
+            return {event: False for event in HookEvent}
 
         result: dict[HookEvent, bool] = {}
         for event in HookEvent:
             hook_path = hooks_dir / event.value
-            installed = await asyncio.to_thread(self._is_codelens_hook, hook_path)
+            installed = await asyncio.to_thread(
+                self._is_codelens_hook, hook_path, standalone_path
+            )
             result[event] = installed
         return result
 
@@ -118,60 +139,111 @@ class HookInstaller:
             raise ValueError(f".git is not a directory: {git_dir}")
         return git_dir
 
-    def _install_single_hook(self, hook_path: Path, hook_content: str) -> None:
-        """Install a single hook script, backing up existing hooks if needed.
+    def _write_standalone_script(self, standalone_path: Path, hook_content: str) -> None:
+        """Write the standalone CodeLens hook script.
+
+        Args:
+            standalone_path: Path where standalone script should be written.
+            hook_content: Content of the hook script.
+        """
+        standalone_path.write_text(hook_content, encoding="utf-8")
+        standalone_path.chmod(standalone_path.stat().st_mode | 0o111)
+
+    def _install_single_hook(self, hook_path: Path, standalone_path: Path) -> None:
+        """Install a single hook by symlink or injection.
 
         Args:
             hook_path: Path where the hook should be installed.
-            hook_content: Content of the hook script to install.
+            standalone_path: Path to the standalone CodeLens script.
         """
-        backup_path = hook_path.with_name(hook_path.name + self.BACKUP_SUFFIX)
+        injection_line = self.INJECTION_LINE_TEMPLATE.format(
+            script_name=self.STANDALONE_SCRIPT_NAME
+        )
+        full_injection = f"{self.MARKER_COMMENT}\n{injection_line}"
 
-        # If hook exists and is not already a CodeLens hook, back it up
-        if hook_path.exists():
-            existing_content = hook_path.read_text(encoding="utf-8")
-            if self.MARKER_COMMENT not in existing_content:
-                # Not a CodeLens hook, back it up
-                if not backup_path.exists():
-                    shutil.copy2(hook_path, backup_path)
-            # If it's already a CodeLens hook, skip backup to avoid duplicating backups
+        # If hook doesn't exist, create symlink
+        if not hook_path.exists():
+            hook_path.symlink_to(standalone_path)
+            return
 
-        # Write the new hook
-        hook_path.write_text(hook_content, encoding="utf-8")
-        hook_path.chmod(hook_path.stat().st_mode | 0o111)  # Make executable
+        # If it's already a CodeLens hook (symlink or contains injection), skip
+        if hook_path.is_symlink():
+            return
+        if self._is_codelens_hook(hook_path, standalone_path):
+            return
 
-    def _uninstall_single_hook(self, hook_path: Path, backup_path: Path) -> None:
-        """Uninstall a single hook script, restoring backup if it exists.
+        # User hook exists, inject call after shebang
+        content = hook_path.read_text(encoding="utf-8")
+        lines = content.split("\n")
+
+        # Find shebang line
+        shebang_idx = 0
+        if lines and lines[0].startswith("#!"):
+            shebang_idx = 0
+        else:
+            # No shebang, add at beginning
+            lines.insert(0, full_injection)
+            hook_path.write_text("\n".join(lines), encoding="utf-8")
+            return
+
+        # Inject after shebang
+        lines.insert(shebang_idx + 1, full_injection)
+        hook_path.write_text("\n".join(lines), encoding="utf-8")
+
+    def _uninstall_single_hook(self, hook_path: Path) -> None:
+        """Uninstall a single hook by removing injection or symlink.
 
         Args:
             hook_path: Path to the hook to uninstall.
-            backup_path: Path to the backup hook to restore.
         """
         if not hook_path.exists():
             return
 
-        # Only uninstall if it's a CodeLens hook
-        if not self._is_codelens_hook(hook_path):
+        # If it's a symlink, remove it
+        if hook_path.is_symlink():
+            hook_path.unlink()
             return
 
-        # Remove the CodeLens hook
-        hook_path.unlink()
+        # Remove injected lines from user hook
+        try:
+            content = hook_path.read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError):
+            return
 
-        # Restore backup if it exists
-        if backup_path.exists():
-            shutil.move(str(backup_path), str(hook_path))
+        lines = content.split("\n")
+        # Find and remove marker comment and injection line
+        i = 0
+        while i < len(lines) - 1:
+            if lines[i].strip() == self.MARKER_COMMENT:
+                # Remove marker and next line (injection)
+                del lines[i : i + 2]
+            else:
+                i += 1
 
-    def _is_codelens_hook(self, hook_path: Path) -> bool:
+        hook_path.write_text("\n".join(lines), encoding="utf-8")
+
+    def _is_codelens_hook(self, hook_path: Path, standalone_path: Path) -> bool:
         """Check if a hook file is a CodeLens trigger hook.
 
         Args:
             hook_path: Path to the hook file to check.
+            standalone_path: Path to the standalone script.
 
         Returns:
             True if the hook is a CodeLens trigger hook, False otherwise.
         """
         if not hook_path.exists():
             return False
+
+        # Check if it's a symlink to standalone script
+        if hook_path.is_symlink():
+            try:
+                target = hook_path.resolve()
+                return target == standalone_path.resolve()
+            except OSError:
+                return False
+
+        # Check if it contains the marker comment
         if not hook_path.is_file():
             return False
 

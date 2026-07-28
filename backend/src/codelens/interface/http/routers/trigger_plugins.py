@@ -166,6 +166,9 @@ async def update_trigger_config(
             404, "plugin_not_found", f"Trigger plugin '{plugin_id}' is not installed."
         ) from None
 
+    # Track old repository paths for auto-install/uninstall
+    old_paths = set(current.config.repository_paths)
+
     # Validate event values before merging
     valid_event_values = {e.value for e in HookEvent}
     if request.events is not None:
@@ -198,6 +201,35 @@ async def update_trigger_config(
         raise HttpProblem(
             500, "config_update_failed", "Failed to update trigger plugin configuration."
         ) from None
+
+    # Auto-install/uninstall hooks based on repository path changes
+    new_paths = set(record.config.repository_paths)
+    added_paths = new_paths - old_paths
+    removed_paths = old_paths - new_paths
+
+    # Auto-install for added paths (only if plugin is enabled)
+    if record.is_enabled:
+        for path_str in added_paths:
+            repo_path = Path(path_str)
+            try:
+                await components.hook_installer.install_hooks(
+                    repository_path=repo_path,
+                    events=record.config.events,
+                    port=components.settings.port,
+                )
+                _LOGGER.info("Auto-installed hooks for %s in %s", plugin_id, repo_path)
+            except Exception as error:
+                _LOGGER.warning("Failed to auto-install hooks in %s: %s", repo_path, error)
+
+    # Auto-uninstall for removed paths (always, regardless of enabled state)
+    for path_str in removed_paths:
+        repo_path = Path(path_str)
+        try:
+            await components.hook_installer.uninstall_hooks(repository_path=repo_path)
+            _LOGGER.info("Auto-uninstalled hooks from %s", repo_path)
+        except Exception as error:
+            _LOGGER.warning("Failed to auto-uninstall hooks from %s: %s", repo_path, error)
+
     return _to_response(record)
 
 

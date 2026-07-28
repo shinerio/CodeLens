@@ -1,5 +1,5 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, FolderGit2, Plus, Power, Trash2, Webhook, X } from "lucide-react";
+import { Check, FolderGit2, Plus, Power, Webhook, X } from "lucide-react";
 import { useState } from "react";
 
 import { useI18n } from "../../shared/i18n/i18n";
@@ -8,10 +8,8 @@ import {
   disableTriggerPlugin,
   enableTriggerPlugin,
   getHookStatus,
-  installHooks,
   listTriggerPlugins,
   TRIGGER_PLUGIN_QUERY_KEY,
-  uninstallHooks,
   updateTriggerConfig,
 } from "./api";
 import type { HookStatusResponse, TriggerConfig, TriggerRecord } from "./types";
@@ -105,27 +103,6 @@ function TriggerPluginCard({
     onSuccess: () => {
       setError(null);
       onConfigUpdate();
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-    },
-  });
-
-  const installHooksMutation = useMutation({
-    mutationFn: (paths: string[]) => installHooks(plugin.plugin_id, { repository_paths: paths }),
-    onSuccess: () => {
-      setError(null);
-      refreshHookStatus();
-    },
-    onError: (err: Error) => {
-      setError(err.message);
-    },
-  });
-
-  const uninstallHooksMutation = useMutation({
-    mutationFn: (paths: string[]) => uninstallHooks(plugin.plugin_id, { repository_paths: paths }),
-    onSuccess: () => {
-      setError(null);
       refreshHookStatus();
     },
     onError: (err: Error) => {
@@ -378,25 +355,6 @@ function TriggerPluginCard({
                 </span>
               </div>
             ))}
-          </div>
-          <div className="trigger-hook-actions">
-            <button
-              className="trigger-hook-button trigger-hook-button--primary"
-              disabled={installHooksMutation.isPending}
-              onClick={() => installHooksMutation.mutate(configDraft.repository_paths)}
-              type="button"
-            >
-              {t("triggerPlugins.installHooks")}
-            </button>
-            <button
-              className="trigger-hook-button"
-              disabled={uninstallHooksMutation.isPending}
-              onClick={() => uninstallHooksMutation.mutate(configDraft.repository_paths)}
-              type="button"
-            >
-              <Trash2 aria-hidden="true" />
-              {t("triggerPlugins.uninstallHooks")}
-            </button>
           </div>
         </div>
       )}
