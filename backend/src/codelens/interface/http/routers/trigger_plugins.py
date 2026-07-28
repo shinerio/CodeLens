@@ -166,10 +166,24 @@ async def update_trigger_config(
             404, "plugin_not_found", f"Trigger plugin '{plugin_id}' is not installed."
         ) from None
 
+    # Validate event values before merging
+    valid_event_values = {e.value for e in HookEvent}
+    if request.events is not None:
+        invalid = [e for e in request.events if e not in valid_event_values]
+        if invalid:
+            raise HttpProblem(
+                400,
+                "invalid_event_type",
+                f"Unknown event type(s): {invalid}. Valid values: {[e.value for e in HookEvent]}",
+            )
+        validated_events = tuple(HookEvent(e) for e in request.events)
+    else:
+        validated_events = None
+
     # Merge with existing config
     new_config = TriggerConfig(
         repository_paths=tuple(request.repository_paths) if request.repository_paths is not None else current.config.repository_paths,
-        events=tuple(HookEvent(e) for e in request.events) if request.events is not None else current.config.events,
+        events=validated_events if validated_events is not None else current.config.events,
         scope_type=request.scope_type if request.scope_type is not None else current.config.scope_type,
         base_ref=request.base_ref if request.base_ref is not None else current.config.base_ref,
         target_ref=request.target_ref if request.target_ref is not None else current.config.target_ref,

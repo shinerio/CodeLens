@@ -18,6 +18,10 @@ class BuiltinTriggerPluginLoader(TriggerPluginLoaderPort):
     a composite loader.
     """
 
+    def __init__(self) -> None:
+        """Initialize with an empty plugin instance cache."""
+        self._instances: dict[str, TriggerSinkPort] = {}
+
     def load_plugin(
         self,
         plugin_id: str,
@@ -35,8 +39,13 @@ class BuiltinTriggerPluginLoader(TriggerPluginLoaderPort):
         Raises:
             ValueError: If the plugin_id is not a supported built-in plugin.
         """
+        if plugin_id in self._instances:
+            return self._instances[plugin_id]
+
         if plugin_id == LocalHookTriggerAdapter.TRIGGER_ID:
-            return LocalHookTriggerAdapter(review_creator)
+            instance = LocalHookTriggerAdapter(review_creator)
+            self._instances[plugin_id] = instance
+            return instance
 
         raise ValueError(
             f"Unsupported trigger plugin: {plugin_id}. "
