@@ -156,6 +156,7 @@ class HookInstaller:
 
         If no hook exists, creates a new hook file that calls the standalone script.
         If a user hook exists, injects a call to the standalone script after shebang.
+        If an old symlink exists (from previous version), replaces it with a regular file.
         Does not use symlinks for cross-platform compatibility.
 
         Args:
@@ -166,6 +167,14 @@ class HookInstaller:
             script_name=self.STANDALONE_SCRIPT_NAME
         )
         full_injection = f"{self.MARKER_COMMENT}\n{injection_line}"
+
+        # If hook is a symlink (from old version), remove it and create a regular file
+        if hook_path.is_symlink():
+            hook_path.unlink()
+            content = f"{self.SHEBANG}\n{full_injection}\n"
+            hook_path.write_text(content, encoding="utf-8")
+            hook_path.chmod(hook_path.stat().st_mode | stat.S_IXUSR | stat.S_IXGRP | stat.S_IXOTH)
+            return
 
         # If hook doesn't exist, create a new hook file
         if not hook_path.exists():
