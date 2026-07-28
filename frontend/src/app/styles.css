@@ -51,7 +51,7 @@ a { color: inherit; }
 .sidebar-boundary > span:last-child { opacity: 0; transition: opacity 100ms ease; }
 .sidebar:hover .sidebar-boundary > span:last-child, .sidebar:focus-within .sidebar-boundary > span:last-child { opacity: 1; }
 .boundary-dot { width: 8px; height: 8px; border-radius: 50%; background: #53c48a; box-shadow: 0 0 0 3px rgb(83 196 138 / 12%); }
-.workspace { min-width: 0; min-height: 100vh; display: grid; grid-template-rows: 58px minmax(0, 1fr); }
+.workspace { min-width: 0; height: 100vh; display: grid; grid-template-rows: 58px minmax(0, 1fr); }
 .topbar { position: sticky; top: 0; z-index: 15; display: flex; height: 58px; align-items: center; gap: 12px; padding: 0 24px; border-bottom: 1px solid var(--line); background: rgb(255 255 255 / 96%); backdrop-filter: blur(12px); }
 .breadcrumb { display: flex; min-width: 0; align-items: center; gap: 7px; color: var(--muted); font-size: 12px; }
 .breadcrumb strong { max-width: 420px; overflow: hidden; color: var(--ink); text-overflow: ellipsis; white-space: nowrap; }
