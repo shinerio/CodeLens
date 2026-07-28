@@ -26,6 +26,27 @@ function reviewCompletionSettingsResponse(maxIncompleteReviewRetries = 3) {
   });
 }
 
+function toolLimitsResponse() {
+  return new Response(JSON.stringify({
+    max_results: 200,
+    max_read_bytes: 65536,
+    max_scan_bytes: 1048576,
+    max_source_bytes: 1048576,
+    max_lines: 500,
+    max_path_chars: 1024,
+    max_pattern_chars: 512,
+    regex_timeout_seconds: 30.0,
+    comment_batch_size: 20,
+    reviewed_files_batch: 2000,
+    short_text_max: 240,
+    long_text_max: 8000,
+    task_summary_max: 8000,
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 beforeEach(() => {
   fetchMock.mockReset();
   vi.stubGlobal("fetch", fetchMock);
@@ -55,6 +76,7 @@ it("creates the first persistent model gateway without retaining its API key", a
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -148,6 +170,7 @@ it("switches the active gateway without asking for the stored key", async () => 
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -305,6 +328,7 @@ it("sends a connectivity test request when the test connectivity button is click
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: true, latency_ms: 42, detail: "TCP connection succeeded." }),
@@ -365,6 +389,7 @@ it("sends an availability test request when the test availability button is clic
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: false, latency_ms: 100, detail: "Connection failed." }),
@@ -413,6 +438,7 @@ it("updates the recent repository list limit", async () => {
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ recent_repository_limit: 15 }), {
         status: 200,
@@ -462,6 +488,7 @@ it("updates instruction file limits and omits credential handling details", asyn
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(instructionSettingsResponse(800, 240));
   const user = userEvent.setup();
 
@@ -510,6 +537,7 @@ it("updates the maximum incomplete review retry count", async () => {
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse(5));
   const user = userEvent.setup();
 

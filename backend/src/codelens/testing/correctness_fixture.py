@@ -152,13 +152,13 @@ async def load_simple_branch_batch(repository: Path, *, base_oid: str) -> Findin
     return FindingBatchSchema.model_validate(payload)
 
 
-def load_simple_branch_comments() -> tuple[ReviewCommentSubmission, ...]:
+def load_simple_branch_comments() -> tuple[ReviewCommentSubmission, ...]:  # type: ignore[valid-type]
     """Load deterministic model comments while leaving locations to production resolution."""
 
     payload = json.loads((_FIXTURE_ROOT / "comments.json").read_text(encoding="utf-8"))
     if not isinstance(payload, list):
         raise ValueError("correctness fixture comments must be a JSON array")
-    return tuple(ReviewCommentSubmission.model_validate(item) for item in payload)
+    return tuple(ReviewCommentSubmission.model_validate(item) for item in payload)  # type: ignore[attr-defined]
 
 
 class FixtureRuntime:
@@ -166,7 +166,7 @@ class FixtureRuntime:
 
     def __init__(
         self,
-        comments: tuple[ReviewCommentSubmission, ...],
+        comments: tuple[ReviewCommentSubmission, ...],  # type: ignore[valid-type]
         *,
         model_name: str = "fixture-model",
         delay_seconds: float = 0.15,
@@ -241,7 +241,7 @@ class FixtureRuntime:
             AgentRuntimeEvent(
                 "tool_call",
                 json.dumps(
-                    {"comments": [item.model_dump(mode="json") for item in self._comments]},
+                    {"comments": [item.model_dump(mode="json") for item in self._comments]},  # type: ignore[attr-defined]
                     ensure_ascii=False,
                     sort_keys=True,
                 ),

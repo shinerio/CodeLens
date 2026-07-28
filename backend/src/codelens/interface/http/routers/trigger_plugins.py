@@ -275,7 +275,9 @@ async def install_hooks(
 
     if not record.is_enabled:
         raise HttpProblem(
-            400, "plugin_disabled", f"Trigger plugin '{plugin_id}' must be enabled before installing hooks."
+            400,
+            "plugin_disabled",
+            f"Trigger plugin '{plugin_id}' must be enabled before installing hooks.",
         ) from None
 
     # Install hooks for each repository

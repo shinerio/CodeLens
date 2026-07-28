@@ -66,7 +66,7 @@ class FilesystemToolLimitsStore:
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise ValueError("tool limits field regex_timeout_seconds is invalid")
         kwargs["regex_timeout_seconds"] = float(timeout)
-        return ToolLimits(**kwargs)
+        return ToolLimits(**kwargs)  # type: ignore[arg-type]
 
     def save_tool_limits(self, limits: ToolLimits) -> None:
         """Write a complete limits document and atomically replace the old one."""

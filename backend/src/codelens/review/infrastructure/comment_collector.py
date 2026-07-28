@@ -126,7 +126,7 @@ class ReviewCommentCollector:
     def as_agent_tools(self) -> list[Tool]:
         """Expose bounded comment collection and explicit completion through the SDK."""
 
-        limits = self.tool_limits
+        limits = self.tool_limits if self.tool_limits is not None else ToolLimits()
 
         ShortText = Annotated[
             str,
@@ -147,7 +147,7 @@ class ReviewCommentCollector:
             ),
         ]
 
-        ReviewCommentSubmissionModel = create_model(
+        ReviewCommentSubmissionModel = create_model(  # type: ignore[misc]
             "ReviewCommentSubmission",
             __config__=ConfigDict(frozen=True, extra="forbid"),
             path=(ReviewPath, ...),
@@ -190,7 +190,7 @@ class ReviewCommentCollector:
         )
 
         CommentBatch = Annotated[
-            list[ReviewCommentSubmissionModel],
+            list[ReviewCommentSubmissionModel],  # type: ignore[valid-type]
             Field(min_length=1, max_length=limits.comment_batch_size),
         ]
 
@@ -250,38 +250,38 @@ class ReviewCommentCollector:
     async def submit(self, submission: BaseModel) -> str:
         """Resolve one candidate or return a bounded tool error without retaining it."""
 
-        if submission.confidence < self.confidence_floor:
+        if submission.confidence < self.confidence_floor:  # type: ignore[attr-defined]
             raise CommentCandidateRejectedError(
                 "comment confidence is below this reviewer's threshold"
             )
-        if submission.path not in self.tools.review_file_paths:
+        if submission.path not in self.tools.review_file_paths:  # type: ignore[attr-defined]
             raise CommentCandidateRejectedError("comment path is outside this Review")
 
         # Resolve line numbers from quoted code
         start_line, end_line = await self._resolve_line_numbers(
-            submission.path, submission.existing_code, submission.side
+            submission.path, submission.existing_code, submission.side  # type: ignore[attr-defined]
         )
 
         hunks = tuple(
             hunk
             for hunk in self.snapshot.change_index.hunks
             if (
-                hunk.path == submission.path
-                and hunk.side == submission.side
+                hunk.path == submission.path  # type: ignore[attr-defined]
+                and hunk.side == submission.side  # type: ignore[attr-defined]
                 and start_line >= hunk.start_line
                 and end_line <= hunk.end_line
             )
         )
         if len(hunks) != 1:
             raise CommentCandidateRejectedError(
-                f"existing_code must quote only consecutive changed {submission.side}-side "
+                f"existing_code must quote only consecutive changed {submission.side}-side "  # type: ignore[attr-defined]
                 "lines without diff markers; do not include unchanged context lines"
             )
         excerpt_hash, excerpt_truncated = await self.tools.excerpt_identity(
-            submission.path,
+            submission.path,  # type: ignore[attr-defined]
             start_line,
             end_line,
-            "base" if submission.side == "old" else "current",
+            "base" if submission.side == "old" else "current",  # type: ignore[attr-defined]
         )
         if excerpt_truncated:
             raise CommentCandidateRejectedError(
@@ -291,35 +291,35 @@ class ReviewCommentCollector:
         self._findings.append(
             {
                 "reviewer_id": self.reviewer_id,
-                "category": submission.category,
-                "title": submission.title,
-                "severity": submission.severity,
+                "category": submission.category,  # type: ignore[attr-defined]
+                "title": submission.title,  # type: ignore[attr-defined]
+                "severity": submission.severity,  # type: ignore[attr-defined]
                 "disposition": (
                     "blocking"
-                    if submission.severity in {"critical", "high", "medium"}
+                    if submission.severity in {"critical", "high", "medium"}  # type: ignore[attr-defined]
                     else "non_blocking"
                 ),
-                "confidence": submission.confidence,
+                "confidence": submission.confidence,  # type: ignore[attr-defined]
                 "primary_location": {
-                    "path": submission.path,
+                    "path": submission.path,  # type: ignore[attr-defined]
                     "start_line": start_line,
                     "end_line": end_line,
-                    "side": submission.side,
+                    "side": submission.side,  # type: ignore[attr-defined]
                     "excerpt_hash": excerpt_hash,
-                    "is_deleted": self._is_deleted_path(submission.path),
+                    "is_deleted": self._is_deleted_path(submission.path),  # type: ignore[attr-defined]
                 },
                 "changed_hunk_id": hunk.hunk_id,
                 "change_origin": "introduced",
                 "evidence": (
                     {
                         "kind": "excerpt",
-                        "description": submission.content,
+                        "description": submission.content,  # type: ignore[attr-defined]
                         "excerpt_hash": excerpt_hash,
                     },
                 ),
-                "impact": submission.content,
-                "explanation": submission.content,
-                "recommendation": submission.recommendation,
+                "impact": submission.content,  # type: ignore[attr-defined]
+                "explanation": submission.content,  # type: ignore[attr-defined]
+                "recommendation": submission.recommendation,  # type: ignore[attr-defined]
             }
         )
         return json.dumps(
@@ -332,9 +332,9 @@ class ReviewCommentCollector:
     async def submit_many(self, submissions: list[BaseModel]) -> str:
         """Resolve a bounded batch while retaining only individually accepted comments."""
 
-        if not submissions or len(submissions) > self.tool_limits.comment_batch_size:
+        if not submissions or len(submissions) > self.tool_limits.comment_batch_size:  # type: ignore[union-attr]
             raise ValueError(
-                f"comment requires between one and {self.tool_limits.comment_batch_size} comments"
+                f"comment requires between one and {self.tool_limits.comment_batch_size} comments"  # type: ignore[union-attr]
             )
         accepted_count = 0
         rejected_comments: list[dict[str, object]] = []
@@ -404,7 +404,7 @@ class ReviewCommentCollector:
         if self._completion is not None:
             raise ValueError("review task has already been completed")
         targets = set(self.tools.review_file_paths)
-        requested = set(submission.reviewed_files)
+        requested = set(submission.reviewed_files)  # type: ignore[attr-defined]
         unknown = tuple(sorted(requested - targets))
         if unknown:
             raise ValueError(f"reviewed_files contains paths outside this Review: {unknown[0]}")

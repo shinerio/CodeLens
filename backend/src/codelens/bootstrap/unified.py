@@ -301,6 +301,7 @@ def build_unified_backend(
     planner = ScopePlanner(GitWorkspaceAdapter(git))
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
+    tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
 
     # Reporting context: plugin store, loader, manager, and export orchestrator.
     # The terminal hook is late-bound on the review store so that the
@@ -390,6 +391,7 @@ def build_unified_backend(
         trigger_plugin_manager=trigger_plugin_manager,
         trigger_orchestrator=trigger_orchestrator,
         hook_installer=hook_installer,
+        tool_limits=tool_limits,
     )
 
     return UnifiedBackend(
