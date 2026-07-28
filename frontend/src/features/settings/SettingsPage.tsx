@@ -770,14 +770,14 @@ export function SettingsPage() {
             </footer>
           </form>
           </div>
-        </main>
 
-        <aside className="runtime-rail">
-          <div className="local-preferences">
-            <p className="local-preferences__heading">
-              <SlidersHorizontal aria-hidden="true" /> {t("settings.localPreferences")}
-            </p>
-            <div className="local-preferences__execution-fields">
+          {/* Agent Execution Panel */}
+          <section className="settings-panel">
+            <header className="settings-panel__header">
+              <Zap className="settings-panel__icon" aria-hidden="true" />
+              <h2 className="settings-panel__title">{t("settings.executionLimits")}</h2>
+            </header>
+            <div className="settings-panel__grid">
               <label className="settings-field">
                 <span className="settings-field__label">{t("settings.executionModel")}</span>
                 <select
@@ -857,8 +857,10 @@ export function SettingsPage() {
                   onChange={(event) => setToolTimeoutSecondsDraft(event.currentTarget.value)}
                 />
               </label>
+            </div>
+            <div className="settings-panel__actions">
               <button
-                className="local-preferences__save-limits"
+                className="settings-panel__save-button"
                 disabled={executionLimitsMutation.isPending || runtimeGateway === undefined || !areExecutionLimitsValid || areExecutionLimitsUnchanged}
                 type="button"
                 onClick={() => executionLimitsMutation.mutate()}
@@ -867,28 +869,19 @@ export function SettingsPage() {
                 {t("settings.saveExecutionLimits")}
               </button>
             </div>
-            <label className="settings-field">
-              <span className="settings-field__label">{t("settings.runtimeLogLevel")}</span>
-              <select
-                aria-label={t("settings.runtimeLogLevel")}
-                disabled={logLevelQuery.isPending || logLevelMutation.isPending}
-                value={logLevelQuery.data?.level ?? "info"}
-                onChange={(event) =>
-                  logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)
-                }
-              >
-                <option value="debug">{t("settings.logDebug")}</option>
-                <option value="info">{t("settings.logInfo")}</option>
-                <option value="warning">{t("settings.logWarning")}</option>
-                <option value="error">{t("settings.logError")}</option>
-              </select>
-            </label>
+          </section>
 
-            <div className="settings-field">
-              <label className="settings-field__label" htmlFor="recent-repository-limit">
-                {t("settings.recentRepositoryLimit")}
-              </label>
-              <div className="local-preferences__number-control">
+          {/* Review Settings Panel */}
+          <section className="settings-panel">
+            <header className="settings-panel__header">
+              <SlidersHorizontal className="settings-panel__icon" aria-hidden="true" />
+              <h2 className="settings-panel__title">{t("settings.reviewSettings")}</h2>
+            </header>
+            <div className="settings-panel__grid">
+              <div className="settings-field">
+                <label className="settings-field__label" htmlFor="recent-repository-limit">
+                  {t("settings.recentRepositoryLimit")}
+                </label>
                 <input
                   aria-label={t("settings.recentRepositoryLimit")}
                   disabled={recentRepositorySettingsQuery.isPending}
@@ -901,26 +894,26 @@ export function SettingsPage() {
                   value={recentRepositoryLimitDraft}
                   onChange={(event) => setRecentRepositoryLimitDraft(event.currentTarget.value)}
                 />
-                <button
-                  aria-label={t("settings.saveRecentRepositoryLimit")}
-                  disabled={
-                    recentRepositorySettingsMutation.isPending ||
-                    !isRecentRepositoryLimitValid ||
-                    isRecentRepositoryLimitUnchanged
-                  }
-                  title={t("settings.saveRecentRepositoryLimit")}
-                  type="button"
-                  onClick={() =>
-                    recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit)
-                  }
-                >
-                  <Check aria-hidden="true" />
-                </button>
+                <small>{t("settings.recentRepositoryLimitHint")}</small>
+                <div style={{ marginTop: "8px" }}>
+                  <button
+                    aria-label={t("settings.saveRecentRepositoryLimit")}
+                    className="settings-panel__save-button"
+                    disabled={
+                      recentRepositorySettingsMutation.isPending ||
+                      !isRecentRepositoryLimitValid ||
+                      isRecentRepositoryLimitUnchanged
+                    }
+                    type="button"
+                    onClick={() =>
+                      recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit)
+                    }
+                  >
+                    <Check aria-hidden="true" />
+                  </button>
+                </div>
               </div>
-              <small>{t("settings.recentRepositoryLimitHint")}</small>
-            </div>
 
-            <div className="local-preferences__instruction-fields">
               <label className="settings-field">
                 <span className="settings-field__label">{t("settings.rootInstructionLimit")}</span>
                 <input
@@ -953,11 +946,49 @@ export function SettingsPage() {
                 <small>{t("settings.recommendedLines", { count: 200 })}</small>
               </label>
 
-              <small className="local-preferences__instruction-hint">
-                {t("settings.instructionLimitHint")}
-              </small>
+              <div className="settings-field">
+                <label className="settings-field__label" htmlFor="incomplete-review-retry-limit">
+                  {t("settings.incompleteReviewRetryLimit")}
+                </label>
+                <input
+                  aria-label={t("settings.incompleteReviewRetryLimit")}
+                  disabled={reviewCompletionSettingsQuery.isPending}
+                  id="incomplete-review-retry-limit"
+                  inputMode="numeric"
+                  max={20}
+                  min={0}
+                  step={1}
+                  type="number"
+                  value={incompleteReviewRetryLimitDraft}
+                  onChange={(event) =>
+                    setIncompleteReviewRetryLimitDraft(event.currentTarget.value)
+                  }
+                />
+                <small>{t("settings.incompleteReviewRetryLimitHint")}</small>
+                <div style={{ marginTop: "8px" }}>
+                  <button
+                    aria-label={t("settings.saveReviewCompletion")}
+                    className="settings-panel__save-button"
+                    disabled={
+                      reviewCompletionSettingsMutation.isPending ||
+                      !isIncompleteReviewRetryLimitValid ||
+                      isIncompleteReviewRetryLimitUnchanged
+                    }
+                    type="button"
+                    onClick={() =>
+                      reviewCompletionSettingsMutation.mutate({
+                        max_incomplete_review_retries: parsedIncompleteReviewRetryLimit,
+                      })
+                    }
+                  >
+                    <Check aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+            </div>
+            <div className="settings-panel__actions">
               <button
-                className="local-preferences__save-limits"
+                className="settings-panel__save-button"
                 disabled={
                   instructionFileSettingsMutation.isPending ||
                   !areInstructionLimitsValid ||
@@ -975,216 +1006,180 @@ export function SettingsPage() {
                 {t("settings.saveInstructionLimits")}
               </button>
             </div>
+          </section>
 
-            <div className="settings-field">
-              <label className="settings-field__label" htmlFor="incomplete-review-retry-limit">
-                {t("settings.incompleteReviewRetryLimit")}
-              </label>
-              <div className="local-preferences__number-control">
-                <input
-                  aria-label={t("settings.incompleteReviewRetryLimit")}
-                  disabled={reviewCompletionSettingsQuery.isPending}
-                  id="incomplete-review-retry-limit"
-                  inputMode="numeric"
-                  max={20}
-                  min={0}
-                  step={1}
-                  type="number"
-                  value={incompleteReviewRetryLimitDraft}
-                  onChange={(event) =>
-                    setIncompleteReviewRetryLimitDraft(event.currentTarget.value)
-                  }
-                />
-                <button
-                  aria-label={t("settings.saveIncompleteReviewRetryLimit")}
-                  disabled={
-                    reviewCompletionSettingsMutation.isPending ||
-                    !isIncompleteReviewRetryLimitValid ||
-                    isIncompleteReviewRetryLimitUnchanged
-                  }
-                  title={t("settings.saveIncompleteReviewRetryLimit")}
-                  type="button"
-                  onClick={() =>
-                    reviewCompletionSettingsMutation.mutate({
-                      max_incomplete_review_retries: parsedIncompleteReviewRetryLimit,
-                    })
-                  }
-                >
-                  <Check aria-hidden="true" />
-                </button>
+          {/* Tool Limits Panel */}
+          {toolLimitsDraft !== null && (
+            <section className="settings-panel">
+              <header className="settings-panel__header">
+                <SlidersHorizontal className="settings-panel__icon" aria-hidden="true" />
+                <h2 className="settings-panel__title">{t("settings.toolLimits")}</h2>
+              </header>
+              <small style={{ display: "block", marginBottom: "16px", color: "#aeb9b0" }}>
+                {t("settings.toolLimitsHint")}
+              </small>
+              <div className="settings-panel__grid">
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxResults")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={toolLimitsDraft.max_results}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_results: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxReadBytes")}</span>
+                  <input
+                    type="number"
+                    min={1024}
+                    max={10485760}
+                    value={toolLimitsDraft.max_read_bytes}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_read_bytes: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxScanBytes")}</span>
+                  <input
+                    type="number"
+                    min={1024}
+                    max={104857600}
+                    value={toolLimitsDraft.max_scan_bytes}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_scan_bytes: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxSourceBytes")}</span>
+                  <input
+                    type="number"
+                    min={1024}
+                    max={104857600}
+                    value={toolLimitsDraft.max_source_bytes}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_source_bytes: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxLines")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100000}
+                    value={toolLimitsDraft.max_lines}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_lines: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxPathChars")}</span>
+                  <input
+                    type="number"
+                    min={100}
+                    max={10000}
+                    value={toolLimitsDraft.max_path_chars}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_path_chars: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxPatternChars")}</span>
+                  <input
+                    type="number"
+                    min={10}
+                    max={10000}
+                    value={toolLimitsDraft.max_pattern_chars}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_pattern_chars: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.regexTimeoutSeconds")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    step={0.1}
+                    value={toolLimitsDraft.regex_timeout_seconds}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, regex_timeout_seconds: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.commentBatchSize")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1000}
+                    value={toolLimitsDraft.comment_batch_size}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, comment_batch_size: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.reviewedFilesBatch")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10000}
+                    value={toolLimitsDraft.reviewed_files_batch}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, reviewed_files_batch: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.shortTextMax")}</span>
+                  <input
+                    type="number"
+                    min={10}
+                    max={10000}
+                    value={toolLimitsDraft.short_text_max}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, short_text_max: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.longTextMax")}</span>
+                  <input
+                    type="number"
+                    min={100}
+                    max={100000}
+                    value={toolLimitsDraft.long_text_max}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, long_text_max: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.taskSummaryMax")}</span>
+                  <input
+                    type="number"
+                    min={100}
+                    max={100000}
+                    value={toolLimitsDraft.task_summary_max}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, task_summary_max: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
               </div>
-              <small>{t("settings.incompleteReviewRetryLimitHint")}</small>
-            </div>
-
-            {toolLimitsDraft !== null && (
-              <div className="local-preferences__tool-limits">
-                <p className="local-preferences__heading">
-                  <SlidersHorizontal aria-hidden="true" /> {t("settings.toolLimits")}
-                </p>
-                <small className="local-preferences__tool-limits-hint">
-                  {t("settings.toolLimitsHint")}
-                </small>
-                <div className="local-preferences__tool-limits-grid">
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.maxResults")}</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={10000}
-                      value={toolLimitsDraft.max_results}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, max_results: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.maxReadBytes")}</span>
-                    <input
-                      type="number"
-                      min={1024}
-                      max={10485760}
-                      value={toolLimitsDraft.max_read_bytes}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, max_read_bytes: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.maxScanBytes")}</span>
-                    <input
-                      type="number"
-                      min={1024}
-                      max={104857600}
-                      value={toolLimitsDraft.max_scan_bytes}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, max_scan_bytes: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.maxSourceBytes")}</span>
-                    <input
-                      type="number"
-                      min={1024}
-                      max={104857600}
-                      value={toolLimitsDraft.max_source_bytes}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, max_source_bytes: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.maxLines")}</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={100000}
-                      value={toolLimitsDraft.max_lines}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, max_lines: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.maxPathChars")}</span>
-                    <input
-                      type="number"
-                      min={100}
-                      max={10000}
-                      value={toolLimitsDraft.max_path_chars}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, max_path_chars: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.maxPatternChars")}</span>
-                    <input
-                      type="number"
-                      min={10}
-                      max={10000}
-                      value={toolLimitsDraft.max_pattern_chars}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, max_pattern_chars: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.regexTimeoutSeconds")}</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={300}
-                      step={0.1}
-                      value={toolLimitsDraft.regex_timeout_seconds}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, regex_timeout_seconds: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.commentBatchSize")}</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={1000}
-                      value={toolLimitsDraft.comment_batch_size}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, comment_batch_size: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.reviewedFilesBatch")}</span>
-                    <input
-                      type="number"
-                      min={1}
-                      max={10000}
-                      value={toolLimitsDraft.reviewed_files_batch}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, reviewed_files_batch: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.shortTextMax")}</span>
-                    <input
-                      type="number"
-                      min={10}
-                      max={10000}
-                      value={toolLimitsDraft.short_text_max}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, short_text_max: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.longTextMax")}</span>
-                    <input
-                      type="number"
-                      min={100}
-                      max={100000}
-                      value={toolLimitsDraft.long_text_max}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, long_text_max: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                  <label className="settings-field">
-                    <span className="settings-field__label">{t("settings.taskSummaryMax")}</span>
-                    <input
-                      type="number"
-                      min={100}
-                      max={100000}
-                      value={toolLimitsDraft.task_summary_max}
-                      onChange={(e) =>
-                        setToolLimitsDraft({ ...toolLimitsDraft, task_summary_max: Number(e.currentTarget.value) })
-                      }
-                    />
-                  </label>
-                </div>
+              <div className="settings-panel__actions">
                 <button
-                  className="local-preferences__save-limits"
+                  className="settings-panel__save-button"
                   disabled={
                     toolLimitsMutation.isPending ||
                     !areToolLimitsValid ||
@@ -1201,11 +1196,36 @@ export function SettingsPage() {
                   {t("settings.saveToolLimits")}
                 </button>
               </div>
-            )}
+            </section>
+          )}
 
-            <div className="local-preferences__reset">
+          {/* System Settings Panel */}
+          <section className="settings-panel">
+            <header className="settings-panel__header">
+              <SlidersHorizontal className="settings-panel__icon" aria-hidden="true" />
+              <h2 className="settings-panel__title">{t("settings.systemSettings")}</h2>
+            </header>
+            <div className="settings-panel__grid">
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.runtimeLogLevel")}</span>
+                <select
+                  aria-label={t("settings.runtimeLogLevel")}
+                  disabled={logLevelQuery.isPending || logLevelMutation.isPending}
+                  value={logLevelQuery.data?.level ?? "info"}
+                  onChange={(event) =>
+                    logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)
+                  }
+                >
+                  <option value="debug">{t("settings.logDebug")}</option>
+                  <option value="info">{t("settings.logInfo")}</option>
+                  <option value="warning">{t("settings.logWarning")}</option>
+                  <option value="error">{t("settings.logError")}</option>
+                </select>
+              </label>
+            </div>
+            <div className="settings-panel__actions">
               <button
-                className="local-preferences__reset-button"
+                className="settings-panel__save-button"
                 disabled={resetAllMutation.isPending}
                 type="button"
                 onClick={() => {
@@ -1217,8 +1237,8 @@ export function SettingsPage() {
                 {t("settings.resetAll")}
               </button>
             </div>
-          </div>
-        </aside>
+          </section>
+        </main>
       </div>
     </section>
   );
