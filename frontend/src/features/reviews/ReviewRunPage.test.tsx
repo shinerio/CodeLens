@@ -31,6 +31,7 @@ beforeEach(() => {
 
 it("shows the live run and refreshes findings after completion", async () => {
   fetchMock
+    .mockResolvedValueOnce(jsonResponse([]))
     .mockResolvedValueOnce(
       jsonResponse({
         task_id: "review_1",
@@ -121,6 +122,7 @@ it("keeps polling an empty transcript after completion until the worker persists
   let transcriptRequests = 0;
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith("/report-plugins")) return jsonResponse([]);
     if (url.endsWith("/process-report")) {
       return jsonResponse({ code: "process_report_not_ready", message: "not ready" }, 409);
     }
@@ -182,6 +184,7 @@ it("keeps polling an empty transcript after completion until the worker persists
 it("shows the actionable failure reason in the page banner", async () => {
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith("/report-plugins")) return jsonResponse([]);
     if (url.endsWith("/findings")) return jsonResponse([]);
     if (url.endsWith("/transcript")) {
       return jsonResponse([
@@ -242,6 +245,7 @@ it("shows the actionable failure reason in the page banner", async () => {
 it("shows candidate validation warnings without failing the completed review", async () => {
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith("/report-plugins")) return jsonResponse([]);
     if (url.endsWith("/findings")) return jsonResponse([]);
     if (url.endsWith("/transcript")) {
       return jsonResponse([
@@ -305,6 +309,7 @@ it("shows candidate validation warnings without failing the completed review", a
 it("shows files that were not verified before forced successful completion", async () => {
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith("/report-plugins")) return jsonResponse([]);
     if (url.endsWith("/findings")) return jsonResponse([]);
     if (url.endsWith("/transcript")) {
       return jsonResponse([
@@ -379,6 +384,7 @@ it("shows files that were not verified before forced successful completion", asy
 it("shows the process report after a review has completed", async () => {
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith("/report-plugins")) return jsonResponse([]);
     if (url.endsWith("/findings")) return jsonResponse([]);
     if (url.endsWith("/transcript")) {
       return jsonResponse([
@@ -492,6 +498,7 @@ it("places finding navigation above a full-width source comparison", async () =>
   };
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);
+    if (url.endsWith("/report-plugins")) return jsonResponse([]);
     if (url.endsWith("/findings/finding_1/source")) {
       return jsonResponse({
         path: "feature.py",

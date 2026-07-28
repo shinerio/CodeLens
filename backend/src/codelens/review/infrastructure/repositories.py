@@ -305,10 +305,38 @@ class SqlReviewStore:
         *,
         completion_hook: Callable[[str], Awaitable[None]] | None = None,
         event_bus: InMemoryEventBus | None = None,
+        terminal_hook: Callable[[str, str], Awaitable[None]] | None = None,
     ) -> None:
         self._database = database
         self._completion_hook = completion_hook
         self._event_bus = event_bus
+        self._terminal_hook = terminal_hook
+
+    def set_terminal_hook(self, hook: Callable[[str, str], Awaitable[None]]) -> None:
+        """Late-bind the post-terminal-status hook.
+
+        The hook fires after a review reaches a terminal status
+        (``completed``, ``partial``, ``failed``, ``canceled``) and after the
+        originating transaction has committed. It receives ``(task_id, status)``
+        and must be failure-isolated by the caller; export or notification
+        failures must not break Review persistence.
+        """
+
+        self._terminal_hook = hook
+
+    async def _fire_terminal_hook(self, task_id: str, status: str) -> None:
+        """Run the terminal hook after commit; swallow exceptions to isolate failures."""
+
+        if self._terminal_hook is None:
+            return
+        try:
+            await self._terminal_hook(task_id, status)
+        except Exception:
+            _LOGGER.exception(
+                "Terminal hook failed for task '%s' (status=%s)",
+                task_id,
+                status,
+            )
 
     async def _publish_events(self, captured: list[ReviewEvent]) -> None:
         """Publish committed events to the in-memory bus; never raises."""
@@ -754,6 +782,8 @@ class SqlReviewStore:
 
         await self._database.run_transaction(operation)
         await self._publish_events(captured)
+        if status in {"completed", "partial"}:
+            await self._fire_terminal_hook(task_id, status)
 
     async def cancel(self, task_id: str) -> None:
         await self._finish_unsuccessfully(task_id, "canceled", "review.canceled", None)
@@ -809,6 +839,7 @@ class SqlReviewStore:
 
         await self._database.run_transaction(operation)
         await self._publish_events(captured)
+        await self._fire_terminal_hook(task_id, status)
 
     async def interrupt(self, task_id: str) -> None:
         """Persist active RUNNING nodes/jobs as resumable without discarding output."""

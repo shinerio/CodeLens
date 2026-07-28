@@ -13,7 +13,9 @@ from codelens.interface.http.dependencies import (
     HttpComponents,
     HttpProblem,
     build_components,
+    initialize_reporting_components,
 )
+from codelens.interface.http.routers.report_plugins import router as report_plugins_router
 from codelens.interface.http.routers.repositories import router as repositories_router
 from codelens.interface.http.routers.reviewer_prompts import router as reviewer_prompts_router
 from codelens.interface.http.routers.reviews import router as reviews_router
@@ -145,6 +147,7 @@ def create_app_with_components(
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         if manage_components:
             await components.start()
+            await initialize_reporting_components(components)
         try:
             yield
         finally:
@@ -194,6 +197,7 @@ def create_app_with_components(
     app.include_router(reviews_router)
     app.include_router(settings_router)
     app.include_router(reviewer_prompts_router)
+    app.include_router(report_plugins_router)
     return app
 
 

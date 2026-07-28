@@ -1,4 +1,4 @@
-import { Blocks, Bot, History, Settings } from "lucide-react";
+import { Blocks, Bot, FileOutput, History, Settings } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { useI18n } from "../shared/i18n/i18n";
@@ -34,6 +34,10 @@ export function App() {
             <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/capabilities">
               <Blocks aria-hidden="true" />
               <span>{t("nav.capabilities")}</span>
+            </NavLink>
+            <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/report-plugins">
+              <FileOutput aria-hidden="true" />
+              <span>{t("nav.reportPlugins")}</span>
             </NavLink>
             <NavLink
               className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")}

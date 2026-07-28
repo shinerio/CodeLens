@@ -1,6 +1,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
   Activity,
+  ChevronDown,
   CircleAlert,
   CircleCheckBig,
   CircleStop,
@@ -19,7 +20,8 @@ import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
-import { cancelReview, getFindingSource, getProcessReport, getReview, getTranscript, listFindings, type TranscriptEntry } from "./api";
+import { listPlugins, PLUGIN_QUERY_KEY } from "../report-plugins/api";
+import { cancelReview, exportFindings, getFindingSource, getProcessReport, getReview, getTranscript, listFindings, type ExportResultResponse, type TranscriptEntry } from "./api";
 import { failureDetails } from "./failure-details";
 import { ReviewConsole } from "./ReviewConsole";
 import { ReviewProcessReport } from "./ReviewProcessReport";
@@ -90,6 +92,40 @@ export function ReviewRunPage() {
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const terminalRef = useRef<string | null>(null);
   const { status: eventStatus, events, connectionState } = useReviewEvents(taskId);
+  const [exportMenuOpen, setExportMenuOpen] = useState(false);
+  const [exportResult, setExportResult] = useState<ExportResultResponse | null>(null);
+
+  const pluginsQuery = useQuery({
+    queryKey: PLUGIN_QUERY_KEY,
+    queryFn: listPlugins,
+  });
+
+  const exportMutation = useMutation({
+    mutationFn: ({ pluginId }: { pluginId: string }) => {
+      if (taskId === undefined) {
+        throw new Error(t("run.missingTask"));
+      }
+      return exportFindings(taskId, pluginId);
+    },
+    onSuccess: (result) => {
+      setExportResult(result);
+      setExportMenuOpen(false);
+    },
+    onError: (error: Error) => {
+      setExportResult({
+        plugin_id: "",
+        task_id: taskId ?? "",
+        success: false,
+        output_path: null,
+        error: error.message,
+        exported_at: new Date().toISOString(),
+      });
+      setExportMenuOpen(false);
+    },
+  });
+
+  const enabledPlugins = (pluginsQuery.data ?? []).filter((p) => p.is_enabled);
+
   function handleUnsupported() { window.alert(t("common.notSupported")); }
 
   const reviewQuery = useQuery({
@@ -230,7 +266,38 @@ export function ReviewRunPage() {
           <button className="run-action" type="button" onClick={() => void refreshProgress()} disabled={reviewQuery.isFetching || transcriptQuery.isFetching}><RefreshCw aria-hidden="true" /> {t("runs.refresh")}</button>
           <button className="run-action run-action--cancel" type="button" disabled={TERMINAL_STATUSES.has(currentStatus) || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}><CircleStop aria-hidden="true" /> {t("run.cancel")}</button>
           <button className="run-action" type="button" onClick={handleUnsupported}><Copy aria-hidden="true" /> {t("run.copyLink")}</button>
-          <button className="run-action" type="button" onClick={handleUnsupported}><Download aria-hidden="true" /> {t("run.exportReport")}</button>
+          <div className="run-export-menu">
+            <button
+              className="run-action"
+              type="button"
+              disabled={!TERMINAL_STATUSES.has(currentStatus) || enabledPlugins.length === 0 || exportMutation.isPending}
+              onClick={() => setExportMenuOpen(!exportMenuOpen)}
+            >
+              <Download aria-hidden="true" /> {t("run.exportReport")} <ChevronDown aria-hidden="true" />
+            </button>
+            {exportMenuOpen && (
+              <div className="run-export-dropdown">
+                {enabledPlugins.map((plugin) => (
+                  <button
+                    key={plugin.plugin_id}
+                    className="run-export-option"
+                    type="button"
+                    disabled={exportMutation.isPending}
+                    onClick={() => exportMutation.mutate({ pluginId: plugin.plugin_id })}
+                  >
+                    {plugin.manifest.name}
+                  </button>
+                ))}
+              </div>
+            )}
+          </div>
+          {exportResult && (
+            <span className={`run-export-result ${exportResult.success ? "run-export-result--ok" : "run-export-result--err"}`}>
+              {exportResult.success
+                ? t("reportPlugins.exportSuccess")
+                : t("reportPlugins.exportFailed")}
+            </span>
+          )}
           <span className="run-chip">
             <PlayCircle aria-hidden="true" />
             {reviewQuery.data?.base_oid ?? t("run.waiting")}

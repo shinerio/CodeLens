@@ -8,6 +8,11 @@ from codelens.instruction_policy.application.settings import InstructionSettings
 from codelens.instruction_policy.infrastructure.file_settings import (
     FilesystemInstructionLineLimitsStore,
 )
+from codelens.reporting.application.export_orchestrator import ExportOrchestrator
+from codelens.reporting.application.plugin_manager import PluginManager
+from codelens.reporting.infrastructure.git_installer import GitPluginInstaller
+from codelens.reporting.infrastructure.plugin_loader import ImportlibPluginLoader
+from codelens.reporting.infrastructure.plugin_store import FilesystemPluginStore
 from codelens.review.application.commands import (
     CancelReviewHandler,
     CreateReviewHandler,
@@ -96,6 +101,8 @@ class HttpComponents:
     transcripts: ExecutionTranscriptStore
     worker_transcripts: WorkerTranscriptStore
     finding_source_preview: FindingSourcePreviewService
+    plugin_manager: PluginManager
+    export_orchestrator: ExportOrchestrator
 
     async def start(self) -> None:
         """Create contained runtime directories and apply migrations before serving."""
@@ -140,6 +147,15 @@ def build_components(settings: Settings) -> HttpComponents:
     )
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
+    plugins_dir = settings.data_dir / "plugins"
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    plugin_store = FilesystemPluginStore(settings.data_dir)
+    plugin_installer = GitPluginInstaller(git, plugins_dir)
+    plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir)
+    plugin_loader = ImportlibPluginLoader()
+    export_orchestrator = ExportOrchestrator(
+        review_store, git, plugin_store, plugin_loader
+    )
     return HttpComponents(
         settings=settings,
         database=database,
@@ -180,7 +196,15 @@ def build_components(settings: Settings) -> HttpComponents:
         transcripts=transcripts,
         worker_transcripts=worker_transcripts,
         finding_source_preview=FindingSourcePreviewService(review_store, git),
+        plugin_manager=plugin_manager,
+        export_orchestrator=export_orchestrator,
     )
+
+
+async def initialize_reporting_components(components: HttpComponents) -> None:
+    """Initialize built-in plugins and auto-export hooks after startup."""
+
+    await components.plugin_manager.initialize_builtin()
 
 
 def get_components(request: Request) -> HttpComponents:

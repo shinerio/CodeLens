@@ -100,3 +100,19 @@ export async function getTranscript(taskId: string): Promise<TranscriptEntry[]> 
 export async function getProcessReport(taskId: string): Promise<ReviewProcessReport> {
   return api<ReviewProcessReport>(`/reviews/${taskId}/process-report`);
 }
+
+export interface ExportResultResponse {
+  plugin_id: string;
+  task_id: string;
+  success: boolean;
+  output_path: string | null;
+  error: string | null;
+  exported_at: string;
+}
+
+export async function exportFindings(taskId: string, pluginId: string): Promise<ExportResultResponse> {
+  return api<ExportResultResponse>(`/reviews/${taskId}/export`, {
+    method: "POST",
+    body: JSON.stringify({ plugin_id: pluginId }),
+  });
+}

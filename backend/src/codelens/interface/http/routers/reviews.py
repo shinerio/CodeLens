@@ -7,7 +7,7 @@ from typing import Annotated
 
 from fastapi import APIRouter, Depends, Header, Request, Response
 from fastapi.responses import StreamingResponse
-from pydantic import StringConstraints
+from pydantic import BaseModel, ConfigDict, StringConstraints
 
 from codelens.interface.http.dependencies import (
     HttpComponents,
@@ -220,6 +220,42 @@ async def get_finding_source(
             404, "finding_source_not_found", "The requested finding source is unavailable."
         ) from None
     return FindingSourcePreviewResponse(**asdict(preview))
+
+
+class ExportRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plugin_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+
+
+class ExportResponse(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+
+    plugin_id: str
+    task_id: str
+    success: bool
+    output_path: str | None
+    error: str | None
+    exported_at: str
+
+
+@router.post("/{task_id}/export", response_model=ExportResponse)
+async def export_findings(
+    task_id: TaskId,
+    request: ExportRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ExportResponse:
+    """Trigger one report plugin export for a completed review."""
+
+    result = await components.export_orchestrator.export_manual(task_id, request.plugin_id)
+    return ExportResponse(
+        plugin_id=result.plugin_id,
+        task_id=result.task_id,
+        success=result.success,
+        output_path=result.output_path,
+        error=result.error,
+        exported_at=result.exported_at.isoformat(),
+    )
 
 
 def _parse_last_event_id(raw_event_id: str | None) -> int:

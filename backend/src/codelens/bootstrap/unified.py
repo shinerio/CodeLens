@@ -18,7 +18,15 @@ from codelens.instruction_policy.infrastructure.file_settings import (
 from codelens.instruction_policy.infrastructure.markdown_parser import MarkdownInstructionParser
 from codelens.instruction_policy.infrastructure.structured_skip import StructuredSkipMatcher
 from codelens.interface.http.app import create_app_with_components
-from codelens.interface.http.dependencies import HttpComponents
+from codelens.interface.http.dependencies import (
+    HttpComponents,
+    initialize_reporting_components,
+)
+from codelens.reporting.application.export_orchestrator import ExportOrchestrator
+from codelens.reporting.application.plugin_manager import PluginManager
+from codelens.reporting.infrastructure.git_installer import GitPluginInstaller
+from codelens.reporting.infrastructure.plugin_loader import ImportlibPluginLoader
+from codelens.reporting.infrastructure.plugin_store import FilesystemPluginStore
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.settings import ReviewCompletionSettingsService
 from codelens.review.domain.ports import AgentRuntimePort
@@ -83,6 +91,7 @@ class UnifiedBackend:
         """Create runtime directories, migrate database, and recover interrupted tasks."""
 
         await self.components.start()
+        await initialize_reporting_components(self.components)
         configure_process_logging("unified", data_directory=self.settings.data_dir)
         _LOGGER.info("Unified backend started")
 
@@ -273,6 +282,32 @@ def build_unified_backend(
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
 
+    # Reporting context: plugin store, loader, manager, and export orchestrator.
+    # The terminal hook is late-bound on the review store so that the
+    # orchestrator (which depends on the store) can wire itself after
+    # construction without circular references.
+    plugins_dir = settings.data_dir / "plugins"
+    plugins_dir.mkdir(parents=True, exist_ok=True)
+    plugin_store = FilesystemPluginStore(settings.data_dir)
+    plugin_installer = GitPluginInstaller(git, plugins_dir)
+    plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir)
+    plugin_loader = ImportlibPluginLoader()
+    export_orchestrator = ExportOrchestrator(
+        review_store, git, plugin_store, plugin_loader
+    )
+
+    async def _terminal_export_hook(task_id: str, _status: str) -> None:
+        """Adapter for SqlReviewStore.terminal_hook → ExportOrchestrator.
+
+        SqlReviewStore fires the terminal hook with (task_id, status); the
+        export orchestrator only needs task_id. Failures are isolated inside
+        ``auto_export_if_enabled`` and by ``_fire_terminal_hook``.
+        """
+
+        await export_orchestrator.auto_export_if_enabled(task_id)
+
+    review_store.set_terminal_hook(_terminal_export_hook)
+
     components = HttpComponents(
         settings=settings,
         database=database,
@@ -313,6 +348,8 @@ def build_unified_backend(
         transcripts=transcripts_store,
         worker_transcripts=worker_transcripts,
         finding_source_preview=FindingSourcePreviewService(review_store, git),
+        plugin_manager=plugin_manager,
+        export_orchestrator=export_orchestrator,
     )
 
     return UnifiedBackend(

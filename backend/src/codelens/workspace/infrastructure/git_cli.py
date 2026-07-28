@@ -132,3 +132,58 @@ class GitCli:
             or candidate.as_posix() != path
         ):
             raise InvalidRepositoryError("revision path is unsafe")
+
+    async def clone(
+        self,
+        url: str,
+        destination: Path,
+        *,
+        ref: str | None = None,
+        depth: int = 1,
+    ) -> None:
+        """Clone a remote repository into a fresh local destination.
+
+        Uses ``--depth`` for a shallow clone and an optional ``--branch`` to
+        select a specific ref. The destination's parent must exist.
+        """
+
+        if not url or "\0" in url:
+            raise InvalidRepositoryError("clone URL is invalid")
+        if depth < 1:
+            raise InvalidRepositoryError("clone depth must be positive")
+        args: list[str] = ["clone", "--depth", str(depth)]
+        if ref:
+            args.extend(["--branch", ref])
+        args.extend([url, str(destination)])
+        try:
+            process = await asyncio.create_subprocess_exec(
+                "git",
+                *args,
+                stdin=asyncio.subprocess.PIPE,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+        except FileNotFoundError:
+            raise InvalidRepositoryError("git executable is not installed or not on PATH") from None
+        except PermissionError:
+            raise InvalidRepositoryError("git executable cannot be executed") from None
+        try:
+            stdout, stderr = await asyncio.wait_for(
+                process.communicate(None),
+                timeout=self._timeout_seconds,
+            )
+        except TimeoutError:
+            try:
+                process.kill()
+            except ProcessLookupError:
+                pass
+            await process.wait()
+            raise InvalidRepositoryError("git clone timed out") from None
+        returncode = process.returncode
+        if returncode is None:
+            raise InvalidRepositoryError("git clone did not terminate")
+        if len(stdout) + len(stderr) > self._max_output_bytes:
+            raise InvalidRepositoryError("git clone exceeded the configured output limit")
+        if returncode != 0:
+            message = stderr[:4096].decode("utf-8", errors="replace").strip()
+            raise InvalidRepositoryError(message or "git clone failed")

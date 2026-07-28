@@ -87,6 +87,48 @@
 .run-action--cancel:not(:disabled) { border-color: rgb(179 58 58 / 38%); color: var(--run-failed); }
 .run-action-error { margin: -8px 0 16px; padding: 10px 12px; border: 1px solid rgb(179 58 58 / 30%); background: #fff2f2; color: var(--run-failed); font-size: .82rem; }
 
+.run-export-menu { position: relative; display: inline-flex; }
+.run-export-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  right: 0;
+  z-index: 20;
+  display: grid;
+  gap: 4px;
+  min-width: 200px;
+  padding: 6px;
+  border: 1px solid var(--run-line);
+  background: var(--run-paper);
+  box-shadow: 0 12px 32px rgba(16, 22, 16, 0.16);
+}
+.run-export-option {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid transparent;
+  background: transparent;
+  color: var(--run-ink);
+  font-size: 0.82rem;
+  text-align: left;
+  cursor: pointer;
+}
+.run-export-option:hover:not(:disabled),
+.run-export-option:focus-visible {
+  border-color: var(--run-accent);
+  color: var(--run-accent);
+}
+.run-export-option:disabled { opacity: 0.5; cursor: not-allowed; }
+.run-export-result {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 10px;
+  border: 1px solid var(--run-line);
+  font-size: 0.76rem;
+}
+.run-export-result--ok { border-color: rgba(97, 124, 35, 0.45); color: #5a6e1f; background: rgba(229, 235, 214, 0.6); }
+.run-export-result--err { border-color: rgba(138, 45, 25, 0.4); color: var(--run-failed); background: #fff2f2; }
+
 .run-chip svg {
   width: 16px;
   height: 16px;
