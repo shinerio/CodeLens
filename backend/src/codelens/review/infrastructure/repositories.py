@@ -782,7 +782,7 @@ class SqlReviewStore:
 
         await self._database.run_transaction(operation)
         await self._publish_events(captured)
-        if status in {"completed", "partial"}:
+        if captured and status in {"completed", "partial"}:
             await self._fire_terminal_hook(task_id, status)
 
     async def cancel(self, task_id: str) -> None:
@@ -839,7 +839,8 @@ class SqlReviewStore:
 
         await self._database.run_transaction(operation)
         await self._publish_events(captured)
-        await self._fire_terminal_hook(task_id, status)
+        if captured:
+            await self._fire_terminal_hook(task_id, status)
 
     async def interrupt(self, task_id: str) -> None:
         """Persist active RUNNING nodes/jobs as resumable without discarding output."""

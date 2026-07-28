@@ -51,7 +51,23 @@ class LocalFileExportSink(ReportSinkPort):
     ) -> ExportResult:
         output_dir_name = config.get("output_dir", self._DEFAULT_OUTPUT_DIR)
         formats = tuple(config.get("formats", list(self._DEFAULT_FORMATS)))
-        target_dir = repository_path / output_dir_name
+
+        def _resolve_paths() -> tuple[Path, Path]:
+            return (
+                (repository_path / output_dir_name).resolve(),
+                repository_path.resolve(),
+            )
+
+        target_dir, resolved_repo = await asyncio.to_thread(_resolve_paths)
+        if not str(target_dir).startswith(str(resolved_repo) + os.sep):
+            return ExportResult(
+                plugin_id=self.sink_id,
+                task_id=envelope.review.task_id,
+                success=False,
+                output_path=None,
+                error="output_dir must stay within the repository",
+                exported_at=datetime.now(UTC),
+            )
 
         try:
             await asyncio.to_thread(target_dir.mkdir, parents=True, exist_ok=True)

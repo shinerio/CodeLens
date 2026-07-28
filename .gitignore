@@ -27,3 +27,4 @@ integration-tests/.tmp/
 integration-tests/playwright-report/
 integration-tests/test-results/
 .codegraph
+CodeLensReview

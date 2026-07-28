@@ -156,6 +156,13 @@ def build_components(settings: Settings) -> HttpComponents:
     export_orchestrator = ExportOrchestrator(
         review_store, git, plugin_store, plugin_loader
     )
+
+    async def _terminal_export_hook(task_id: str, _status: str) -> None:
+        """Adapter for SqlReviewStore.terminal_hook → ExportOrchestrator."""
+        await export_orchestrator.auto_export_if_enabled(task_id)
+
+    review_store.set_terminal_hook(_terminal_export_hook)
+
     return HttpComponents(
         settings=settings,
         database=database,
