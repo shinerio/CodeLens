@@ -20,6 +20,7 @@ class LocalizedSystemPrompts:
     locale: str
     review_policy: str
     review_workflow: str
+    tool_loop_warning: str
     tools: Mapping[str, SystemToolPrompt]
 
 

@@ -227,8 +227,10 @@ async def test_uses_active_gateway_execution_limits(
     runner = FakeRunner(FakeResult(FindingBatchSchema(schema_version="1", findings=()), ()))
     observed_limits: dict[str, int | float] = {}
 
-    def record_limits(tools: list[object], **limits: int | float) -> list[object]:
-        observed_limits.update(limits)
+    def record_limits(tools: list[object], **limits: object) -> list[object]:
+        for key, value in limits.items():
+            if isinstance(value, (int, float)):
+                observed_limits[key] = value
         return tools
 
     monkeypatch.setattr(

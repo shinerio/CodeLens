@@ -219,6 +219,7 @@ class OpenAIAgentRuntime:
             max_tool_calls=provider_config.max_tool_calls,
             max_identical_tool_results=provider_config.max_identical_tool_results,
             tool_timeout_seconds=provider_config.tool_timeout_seconds,
+            tool_loop_warning_template=prompts.tool_loop_warning,
         )
         _validate_model_tool_contract(model_tools)
         client = AsyncOpenAI(

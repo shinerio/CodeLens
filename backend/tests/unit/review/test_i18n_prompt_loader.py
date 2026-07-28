@@ -6,6 +6,7 @@ PROMPT_ROOT = Path(__file__).parents[4] / "prompts"
 EXPECTED_BUNDLE_FILES = {
     "review-policy.md",
     "review-workflow.md",
+    "tool-loop-warning.md",
     "tools.json",
 }
 

@@ -1,0 +1,1 @@
+WARNING: You have called this tool {repeated_count} times with identical arguments and received the same result. You have {remaining} attempt(s) left before the run is aborted. Please try different arguments, a different tool, or adjust your approach.

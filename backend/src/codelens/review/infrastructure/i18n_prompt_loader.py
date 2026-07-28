@@ -102,5 +102,6 @@ class I18nPromptLoader(I18nPromptLoaderPort):
             locale=directory.name,
             review_policy=read_markdown("review-policy.md"),
             review_workflow=read_markdown("review-workflow.md"),
+            tool_loop_warning=read_markdown("tool-loop-warning.md"),
             tools=MappingProxyType(tools),
         )

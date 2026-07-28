@@ -51,6 +51,7 @@ class ToolExecutionLimiter:
         max_tool_calls: int,
         max_identical_tool_results: int,
         tool_timeout_seconds: float,
+        tool_loop_warning_template: str,
     ) -> None:
         if max_tool_calls <= 0:
             raise ValueError("tool call budget must be positive")
@@ -61,6 +62,7 @@ class ToolExecutionLimiter:
         self._remaining_calls = max_tool_calls
         self._max_identical_tool_results = max_identical_tool_results
         self._tool_timeout_seconds = tool_timeout_seconds
+        self._tool_loop_warning_template = tool_loop_warning_template
         self._result_counts: dict[str, int] = {}
         self._lock = asyncio.Lock()
 
@@ -81,7 +83,9 @@ class ToolExecutionLimiter:
                     reason_code="tool_invocation_timed_out",
                     retryable=False,
                 ) from None
-            await self._observe_result(tool.name, arguments, result)
+            warning = await self._observe_result(tool.name, arguments, result)
+            if warning is not None:
+                return self._attach_warning(result, warning)
             return result
 
         tool.on_invoke_tool = invoke_limited
@@ -98,11 +102,18 @@ class ToolExecutionLimiter:
                 )
             self._remaining_calls -= 1
 
-    async def _observe_result(self, tool_name: str, arguments: str, result: object) -> None:
+    async def _observe_result(self, tool_name: str, arguments: str, result: object) -> str | None:
+        """Check for repeated tool calls and return a warning if detected.
+
+        Returns a warning message on first detection of repetition (count == 2),
+        or raises ToolLoopDetectedError if the threshold is reached.
+        """
         fingerprint = self._fingerprint(tool_name, arguments, result)
         async with self._lock:
             repeated_count = self._result_counts.get(fingerprint, 0) + 1
             self._result_counts[fingerprint] = repeated_count
+
+            # Threshold reached: fail the run
             if repeated_count >= self._max_identical_tool_results:
                 raise ToolLoopDetectedError(
                     "The model repeated an identical tool call without making progress.",
@@ -110,6 +121,23 @@ class ToolExecutionLimiter:
                     reason_code="identical_tool_result_loop",
                     retryable=False,
                 )
+
+            # Repetition detected but below threshold: warn the model
+            if repeated_count >= 2:
+                remaining = self._max_identical_tool_results - repeated_count
+                return self._tool_loop_warning_template.format(
+                    repeated_count=repeated_count,
+                    remaining=remaining,
+                )
+
+            return None
+
+    @staticmethod
+    def _attach_warning(result: object, warning: str) -> str:
+        """Attach a warning message to the tool result."""
+        if isinstance(result, str):
+            return f"{result}\n\n[{warning}]"
+        return json.dumps({"result": result, "warning": warning}, ensure_ascii=False)
 
     @classmethod
     def _fingerprint(cls, tool_name: str, arguments: str, result: object) -> str:
@@ -137,6 +165,7 @@ def enforce_tool_execution_limits(
     max_tool_calls: int,
     max_identical_tool_results: int,
     tool_timeout_seconds: float,
+    tool_loop_warning_template: str,
 ) -> list[Tool]:
     """Apply one shared execution limiter to every function tool in an Agent run."""
 
@@ -144,6 +173,7 @@ def enforce_tool_execution_limits(
         max_tool_calls=max_tool_calls,
         max_identical_tool_results=max_identical_tool_results,
         tool_timeout_seconds=tool_timeout_seconds,
+        tool_loop_warning_template=tool_loop_warning_template,
     )
     limited: list[Tool] = []
     for tool in tools:
