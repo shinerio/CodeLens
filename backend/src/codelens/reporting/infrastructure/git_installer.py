@@ -1,4 +1,4 @@
-"""Install report plugins from remote Git repositories."""
+"""Install plugins from remote Git repositories."""
 
 import asyncio
 import json
@@ -6,7 +6,7 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from codelens.reporting.domain.models import PluginManifest
+from codelens.plugin.domain.models import PluginManifest, ReportCapability, TriggerCapability
 from codelens.workspace.infrastructure.git_cli import GitCli
 
 
@@ -57,14 +57,15 @@ class GitPluginInstaller:
         if not isinstance(raw, dict):
             raise PluginInstallError("plugin manifest must be a JSON object")
         try:
+            capabilities = self._parse_capabilities(raw.get("capabilities", {}))
             return PluginManifest(
                 plugin_id=raw["plugin_id"],
                 name=raw["name"],
                 version=raw["version"],
                 description=raw.get("description", ""),
                 author=raw.get("author", ""),
-                entry_point=raw["entry_point"],
-                config_schema=raw.get("config_schema", {}),
+                platform=raw.get("platform", "local"),
+                capabilities=capabilities,
                 min_codelens_version=raw.get("min_codelens_version"),
             )
         except KeyError as error:
@@ -72,12 +73,40 @@ class GitPluginInstaller:
                 f"plugin manifest missing required field: {error}"
             ) from error
 
+    def _parse_capabilities(self, raw_capabilities: dict) -> dict:
+        """Parse capabilities dict into TriggerCapability/ReportCapability objects."""
+        from typing import Any
+
+        capabilities: dict[str, Any] = {}
+        if "trigger" in raw_capabilities and raw_capabilities["trigger"]:
+            trigger_raw = raw_capabilities["trigger"]
+            capabilities["trigger"] = TriggerCapability(
+                trigger_type=trigger_raw.get("trigger_type", "local-hook"),
+                supported_events=tuple(trigger_raw.get("supported_events", [])),
+                entry_point=trigger_raw["entry_point"],
+                config_schema=trigger_raw.get("config_schema", {}),
+            )
+        if "report" in raw_capabilities and raw_capabilities["report"]:
+            report_raw = raw_capabilities["report"]
+            capabilities["report"] = ReportCapability(
+                entry_point=report_raw["entry_point"],
+                config_schema=report_raw.get("config_schema", {}),
+            )
+        return capabilities
+
     def _validate_manifest(self, manifest: PluginManifest) -> None:
         if not manifest.plugin_id or not manifest.plugin_id.replace("-", "_").isidentifier():
             raise PluginInstallError(
                 f"plugin_id must be a valid identifier, got: {manifest.plugin_id}"
             )
-        if ":" not in manifest.entry_point:
+        if not manifest.capabilities:
             raise PluginInstallError(
-                f"entry_point must be 'module:Class', got: {manifest.entry_point}"
+                "plugin must declare at least one capability (trigger or report)"
             )
+        for cap_name, cap in manifest.capabilities.items():
+            if cap_name not in ("trigger", "report"):
+                raise PluginInstallError(f"unknown capability: {cap_name}")
+            if not cap.entry_point or ":" not in cap.entry_point:
+                raise PluginInstallError(
+                    f"{cap_name}.entry_point must be 'module:Class', got: {cap.entry_point}"
+                )

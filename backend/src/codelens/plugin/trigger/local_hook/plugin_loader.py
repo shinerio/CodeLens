@@ -1,12 +1,15 @@
 """Built-in trigger plugin loader implementation."""
 
-from codelens.plugin.trigger.local_hook.local_hook_trigger import (
-    LocalHookTriggerAdapter,
-)
-from codelens.trigger.domain.ports import (
+from pathlib import Path
+
+from codelens.plugin.domain.models import PluginManifest
+from codelens.plugin.domain.ports import (
     ReviewCreatorPort,
     TriggerPluginLoaderPort,
     TriggerSinkPort,
+)
+from codelens.plugin.trigger.local_hook.local_hook_trigger import (
+    LocalHookTriggerAdapter,
 )
 
 
@@ -26,6 +29,9 @@ class BuiltinTriggerPluginLoader(TriggerPluginLoaderPort):
         self,
         plugin_id: str,
         review_creator: ReviewCreatorPort,
+        *,
+        manifest: PluginManifest | None = None,
+        install_path: Path | None = None,
     ) -> TriggerSinkPort:
         """Load a built-in trigger plugin by its ID.
 

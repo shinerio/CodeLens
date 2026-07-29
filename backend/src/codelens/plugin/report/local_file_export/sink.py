@@ -10,8 +10,8 @@ from codelens.findings.infrastructure.export_formatters import (
     JsonFindingExportFormatter,
     MarkdownFindingExportFormatter,
 )
-from codelens.reporting.domain.models import ExportResult
-from codelens.reporting.domain.ports import ReportSinkPort
+from codelens.plugin.domain.models import ExportResult
+from codelens.plugin.domain.ports import ReportSinkPort
 from codelens.review.application.export_findings import (
     FindingExportEnvelope,
     FindingExportFormatterPort,

@@ -83,6 +83,7 @@ class ReviewExportMeta:
     selected_agent_versions: tuple[str, ...]
     status: str
     created_at: datetime
+    external_context: dict | None = None
 
 
 @dataclass(frozen=True)
@@ -219,6 +220,7 @@ class ExportFindingsHandler:
                 selected_agent_versions=review.selected_agent_versions,
                 status=review.status,
                 created_at=review.created_at,
+                external_context=review.external_context,
             ),
             findings=tuple(export_items),
         )

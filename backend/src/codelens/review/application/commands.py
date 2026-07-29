@@ -41,6 +41,7 @@ class CreateReviewCommand:
     scope: ReviewScope
     selected_agent_versions: tuple[str, ...]
     prompt_locale: str = "en"
+    external_context: dict | None = None
 
 
 class CreateReviewHandler:
@@ -87,6 +88,7 @@ class CreateReviewHandler:
             prompt_locale=command.prompt_locale,
             created_at=self._clock(),
             overlay_artifact_ref=artifact.reference if artifact is not None else None,
+            external_context=command.external_context,
         )
         try:
             await self._store.create_with_job(task)

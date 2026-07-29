@@ -192,6 +192,9 @@ def _finding_from_payload(payload: str) -> Finding:
 def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
     scope: dict[str, object] = json.loads(str(row["scope_json"]))
     selected_agents: list[str] = json.loads(str(row["selected_agent_versions_json"]))
+    external_context = None
+    if row["external_context_json"] is not None:
+        external_context = json.loads(str(row["external_context_json"]))
     return ReviewRecord(
         task_id=str(row["task_id"]),
         repository_id=str(row["repository_id"]),
@@ -211,6 +214,7 @@ def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
         created_at=_as_utc(cast(datetime, row["created_at"])),
         is_deleted=row["deleted_at"] is not None,
         finding_count=finding_count,
+        external_context=external_context,
     )
 
 
@@ -377,6 +381,9 @@ class SqlReviewStore:
                     status=task.status.value,
                     selected_agent_versions_json=_json(task.selected_agent_versions),
                     prompt_locale=task.prompt_locale,
+                    external_context_json=(
+                        _json(task.external_context) if task.external_context else None
+                    ),
                     worktree_id=task.worktree_id,
                     snapshot_id=task.snapshot_id,
                     cancellation_requested=task.cancellation_requested,
@@ -495,7 +502,10 @@ class SqlReviewStore:
                 )
             ).mappings()
             finding_counts = {str(row["task_id"]): int(row["cnt"]) for row in count_rows}
-        return tuple(_review_record(row, finding_counts.get(str(row["task_id"]), 0)) for row in rows)
+        return tuple(
+            _review_record(row, finding_counts.get(str(row["task_id"]), 0))
+            for row in rows
+        )
 
     async def retry_failed_review(
         self,

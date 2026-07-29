@@ -1,0 +1,254 @@
+"""Composite plugin loader supporting built-in and external plugins.
+
+The loader first attempts to resolve a plugin as a built-in implementation.
+If not found, it falls back to dynamic loading via importlib from the
+plugin's install path.
+"""
+
+import importlib.util
+import sys
+from pathlib import Path
+
+from codelens.plugin.domain.models import PluginManifest
+from codelens.plugin.domain.ports import (
+    ReportSinkPort,
+    ReviewCreatorPort,
+    TriggerSinkPort,
+)
+from codelens.plugin.trigger.local_hook.local_hook_trigger import (
+    LocalHookTriggerAdapter,
+)
+
+
+class PluginLoadError(Exception):
+    """Raised when a plugin manifest's entry point cannot be loaded or validated."""
+
+
+class CompositePluginLoader:
+    """Load plugin instances from built-in registry or external install paths.
+
+    This loader implements a two-stage resolution strategy:
+    1. Check if the plugin_id matches a known built-in implementation
+    2. Fall back to importlib-based dynamic loading from install_path
+
+    Both trigger and report plugins are supported through separate methods.
+    """
+
+    _MODULE_PREFIX = "codelens_ext_plugin_"
+
+    def __init__(self) -> None:
+        """Initialize with empty instance caches."""
+        self._trigger_instances: dict[str, TriggerSinkPort] = {}
+        self._report_instances: dict[str, ReportSinkPort] = {}
+
+    def load_trigger(
+        self,
+        plugin_id: str,
+        review_creator: ReviewCreatorPort,
+        manifest: PluginManifest | None = None,
+        install_path: Path | None = None,
+    ) -> TriggerSinkPort:
+        """Load a trigger plugin instance.
+
+        Args:
+            plugin_id: Unique plugin identifier.
+            review_creator: Port for creating reviews (injected into trigger).
+            manifest: Plugin manifest (required for external plugins).
+            install_path: Plugin install directory (required for external plugins).
+
+        Returns:
+            Instantiated trigger plugin implementing TriggerSinkPort.
+
+        Raises:
+            ValueError: If plugin_id is not a supported built-in and no install_path provided.
+            PluginLoadError: If external plugin cannot be loaded.
+        """
+        if plugin_id in self._trigger_instances:
+            return self._trigger_instances[plugin_id]
+
+        # Try built-in plugins first
+        if plugin_id == LocalHookTriggerAdapter.TRIGGER_ID:
+            instance = LocalHookTriggerAdapter(review_creator)
+            self._trigger_instances[plugin_id] = instance
+            return instance
+
+        # Fall back to external plugin loading
+        if manifest is None or install_path is None:
+            raise ValueError(
+                f"Unsupported trigger plugin: {plugin_id}. "
+                f"External plugins require manifest and install_path."
+            )
+
+        trigger_cap = manifest.trigger
+        if trigger_cap is None:
+            raise PluginLoadError(
+                f"plugin {manifest.plugin_id} does not declare trigger capability"
+            )
+
+        external_instance: TriggerSinkPort = self._load_external_trigger(
+            trigger_cap.entry_point,
+            install_path,
+            review_creator,
+            plugin_id,
+        )
+        self._trigger_instances[plugin_id] = external_instance
+        return external_instance
+
+    def load_report(
+        self,
+        plugin_id: str,
+        manifest: PluginManifest,
+        install_path: Path,
+    ) -> ReportSinkPort:
+        """Load a report plugin instance.
+
+        Args:
+            plugin_id: Unique plugin identifier.
+            manifest: Plugin manifest with report capability.
+            install_path: Plugin install directory.
+
+        Returns:
+            Instantiated report plugin implementing ReportSinkPort.
+
+        Raises:
+            PluginLoadError: If plugin cannot be loaded.
+        """
+        if plugin_id in self._report_instances:
+            return self._report_instances[plugin_id]
+
+        report_cap = manifest.report
+        if report_cap is None:
+            raise PluginLoadError(
+                f"plugin {manifest.plugin_id} does not declare report capability"
+            )
+
+        instance = self._load_external_report(report_cap.entry_point, install_path, plugin_id)
+        self._report_instances[plugin_id] = instance
+        return instance
+
+    def _load_external_trigger(
+        self,
+        entry_point: str,
+        install_path: Path,
+        review_creator: ReviewCreatorPort,
+        plugin_id: str,
+    ) -> TriggerSinkPort:
+        """Load an external trigger plugin via importlib."""
+        if ":" not in entry_point:
+            raise PluginLoadError(
+                f"plugin {plugin_id} entry_point must be 'module:Class', got: {entry_point}"
+            )
+        module_name, class_name = entry_point.split(":", 1)
+        if not module_name or not class_name:
+            raise PluginLoadError(
+                f"plugin {plugin_id} entry_point has empty module or class"
+            )
+
+        module_file = install_path / module_name
+        if not module_file.exists() and not module_file.with_suffix(".py").exists():
+            resolved = module_file if module_file.exists() else module_file.with_suffix(".py")
+            raise PluginLoadError(
+                f"plugin {plugin_id} module file not found: {resolved}"
+            )
+        if not module_file.suffix:
+            module_file = module_file.with_suffix(".py")
+
+        cache_key = self._MODULE_PREFIX + plugin_id.replace("-", "_")
+        spec = importlib.util.spec_from_file_location(cache_key, module_file)
+        if spec is None or spec.loader is None:
+            raise PluginLoadError(
+                f"plugin {plugin_id} module spec could not be created"
+            )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[cache_key] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception as error:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} module failed to load: {error}"
+            ) from error
+
+        trigger_class = getattr(module, class_name, None)
+        if trigger_class is None:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} class '{class_name}' not found in module"
+            )
+        try:
+            instance = trigger_class(review_creator)
+        except Exception as error:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} trigger instantiation failed: {error}"
+            ) from error
+
+        if not hasattr(instance, "trigger_id") or not hasattr(instance, "handle_event"):
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} trigger does not implement TriggerSinkPort"
+            )
+        return instance
+
+    def _load_external_report(
+        self,
+        entry_point: str,
+        install_path: Path,
+        plugin_id: str,
+    ) -> ReportSinkPort:
+        """Load an external report plugin via importlib."""
+        if ":" not in entry_point:
+            raise PluginLoadError(
+                f"plugin {plugin_id} entry_point must be 'module:Class', got: {entry_point}"
+            )
+        module_name, class_name = entry_point.split(":", 1)
+        if not module_name or not class_name:
+            raise PluginLoadError(
+                f"plugin {plugin_id} entry_point has empty module or class"
+            )
+
+        module_file = install_path / module_name
+        if not module_file.exists() and not module_file.with_suffix(".py").exists():
+            resolved = module_file if module_file.exists() else module_file.with_suffix(".py")
+            raise PluginLoadError(
+                f"plugin {plugin_id} module file not found: {resolved}"
+            )
+        if not module_file.suffix:
+            module_file = module_file.with_suffix(".py")
+
+        cache_key = self._MODULE_PREFIX + plugin_id.replace("-", "_")
+        spec = importlib.util.spec_from_file_location(cache_key, module_file)
+        if spec is None or spec.loader is None:
+            raise PluginLoadError(
+                f"plugin {plugin_id} module spec could not be created"
+            )
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[cache_key] = module
+        try:
+            spec.loader.exec_module(module)
+        except Exception as error:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} module failed to load: {error}"
+            ) from error
+
+        sink_class = getattr(module, class_name, None)
+        if sink_class is None:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} class '{class_name}' not found in module"
+            )
+        try:
+            sink = sink_class()
+        except Exception as error:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} sink instantiation failed: {error}"
+            ) from error
+
+        if not hasattr(sink, "sink_id") or not hasattr(sink, "export"):
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} sink does not implement ReportSinkPort"
+            )
+        return sink

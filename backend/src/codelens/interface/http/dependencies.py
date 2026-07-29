@@ -8,17 +8,15 @@ from codelens.instruction_policy.application.settings import InstructionSettings
 from codelens.instruction_policy.infrastructure.file_settings import (
     FilesystemInstructionLineLimitsStore,
 )
+from codelens.plugin.application.export_orchestrator import ExportOrchestrator
+from codelens.plugin.application.plugin_manager import PluginManager
+from codelens.plugin.application.trigger_orchestrator import TriggerOrchestrator
+from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader
+from codelens.plugin.infrastructure.plugin_store import FilesystemPluginStore
 from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
-from codelens.plugin.trigger.local_hook.plugin_loader import (
-    BuiltinTriggerPluginLoader,
-)
-from codelens.reporting.application.export_orchestrator import ExportOrchestrator
-from codelens.reporting.application.plugin_manager import PluginManager
 from codelens.reporting.infrastructure.git_installer import GitPluginInstaller
-from codelens.reporting.infrastructure.plugin_loader import ImportlibPluginLoader
-from codelens.reporting.infrastructure.plugin_store import FilesystemPluginStore
 from codelens.review.application.commands import (
     CancelReviewHandler,
     CreateReviewHandler,
@@ -63,11 +61,6 @@ from codelens.reviewer_catalog.infrastructure.model_gateway_probe import (
 )
 from codelens.trigger.application.review_creator_adapter import (
     ReviewCreatorAdapter,
-)
-from codelens.trigger.application.trigger_manager import TriggerPluginManager
-from codelens.trigger.application.trigger_orchestrator import TriggerOrchestrator
-from codelens.trigger.infrastructure.trigger_store import (
-    FilesystemTriggerStore,
 )
 from codelens.workspace.application.browse_directories import BrowseDirectoriesService
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
@@ -120,7 +113,6 @@ class HttpComponents:
     finding_source_preview: FindingSourcePreviewService
     plugin_manager: PluginManager
     export_orchestrator: ExportOrchestrator
-    trigger_plugin_manager: TriggerPluginManager
     trigger_orchestrator: TriggerOrchestrator
     hook_installer: HookInstaller
 
@@ -173,9 +165,12 @@ def build_components(settings: Settings) -> HttpComponents:
     plugin_store = FilesystemPluginStore(settings.data_dir)
     plugin_installer = GitPluginInstaller(git, plugins_dir)
     plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir)
-    plugin_loader = ImportlibPluginLoader()
+    plugin_loader = CompositePluginLoader()
     export_orchestrator = ExportOrchestrator(
-        review_store, git, plugin_store, plugin_loader
+        review_store,  # type: ignore[arg-type]
+        git,  # type: ignore[arg-type]
+        plugin_store,
+        plugin_loader,  # type: ignore[arg-type]
     )
 
     async def _terminal_export_hook(task_id: str, _status: str) -> None:
@@ -184,11 +179,9 @@ def build_components(settings: Settings) -> HttpComponents:
 
     review_store.set_terminal_hook(_terminal_export_hook)
 
-    # Trigger plugin components
+    # Unified plugin components
     from pathlib import Path
 
-    trigger_store = FilesystemTriggerStore(settings.data_dir)
-    trigger_plugin_manager = TriggerPluginManager(trigger_store)
     hook_installer = HookInstaller(
         Path(__file__).parent.parent.parent / "plugin" / "trigger" / "local_hook"
     )
@@ -196,9 +189,8 @@ def build_components(settings: Settings) -> HttpComponents:
         CreateReviewHandler(planner, capture, review_store, input_artifacts),
         repository_inspector,
     )
-    trigger_plugin_loader = BuiltinTriggerPluginLoader()
     trigger_orchestrator = TriggerOrchestrator(
-        trigger_store, review_creator_adapter, trigger_plugin_loader
+        plugin_store, review_creator_adapter, plugin_loader  # type: ignore[arg-type]
     )
 
     return HttpComponents(
@@ -244,22 +236,15 @@ def build_components(settings: Settings) -> HttpComponents:
         finding_source_preview=FindingSourcePreviewService(review_store, git),
         plugin_manager=plugin_manager,
         export_orchestrator=export_orchestrator,
-        trigger_plugin_manager=trigger_plugin_manager,
         trigger_orchestrator=trigger_orchestrator,
         hook_installer=hook_installer,
     )
 
 
-async def initialize_reporting_components(components: HttpComponents) -> None:
-    """Initialize built-in plugins and auto-export hooks after startup."""
+async def initialize_plugins(components: HttpComponents) -> None:
+    """Initialize built-in plugins after startup."""
 
     await components.plugin_manager.initialize_builtin()
-
-
-async def initialize_trigger_components(components: HttpComponents) -> None:
-    """Initialize built-in trigger plugins after startup."""
-
-    await components.trigger_plugin_manager.initialize_builtin_plugins()
 
 
 def get_components(request: Request) -> HttpComponents:

@@ -4,8 +4,8 @@ import logging
 from pathlib import Path
 from typing import Protocol
 
+from codelens.plugin.domain.ports import ReviewCreatorPort
 from codelens.review.application.commands import CreateReviewCommand, CreateReviewHandler
-from codelens.trigger.domain.ports import ReviewCreatorPort
 from codelens.workspace.domain.models import (
     BranchScope,
     CommitScope,
@@ -70,6 +70,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
         scope_params: dict[str, str | None],
         selected_agents: tuple[str, ...],
         prompt_locale: str,
+        external_context: dict | None = None,
     ) -> str:
         """Create a review from a trigger event.
 
@@ -85,6 +86,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
                 - For 'uncommitted': (no parameters needed)
             selected_agents: Tuple of agent IDs to use for the review.
             prompt_locale: Locale for review prompts ('en' or 'zh-CN').
+            external_context: Platform-specific context for export routing.
 
         Returns:
             Task ID of the created review.
@@ -106,6 +108,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             scope=scope,
             selected_agent_versions=selected_agents,
             prompt_locale=prompt_locale,
+            external_context=external_context,
         )
 
         _LOGGER.info(

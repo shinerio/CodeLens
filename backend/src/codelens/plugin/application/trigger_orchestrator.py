@@ -2,13 +2,14 @@
 
 import logging
 from pathlib import Path
+from typing import Any
 
-from codelens.trigger.domain.models import HookEvent, TriggerRecord
-from codelens.trigger.domain.ports import (
+from codelens.plugin.domain.models import HookEvent, PluginRecord
+from codelens.plugin.domain.ports import (
+    PluginStorePort,
     ReviewCreatorPort,
     TriggerPluginLoaderPort,
     TriggerSinkPort,
-    TriggerStorePort,
 )
 
 _LOGGER = logging.getLogger("codelens.plugin.trigger.orchestrator")
@@ -18,7 +19,7 @@ class TriggerOrchestrator:
     """Orchestrate event dispatch to trigger plugins.
 
     Responsibilities:
-    - Receive git hook events from HTTP endpoints
+    - Receive git hook and webhook events from HTTP endpoints
     - Match events to enabled trigger plugins
     - Load and invoke plugin handlers
     - Aggregate results and handle failures gracefully
@@ -26,14 +27,14 @@ class TriggerOrchestrator:
 
     def __init__(
         self,
-        store: TriggerStorePort,
+        store: PluginStorePort,
         review_creator: ReviewCreatorPort,
         plugin_loader: TriggerPluginLoaderPort,
     ) -> None:
         """Initialize the trigger orchestrator.
 
         Args:
-            store: Port for querying trigger plugin state.
+            store: Port for querying plugin state.
             review_creator: Port for creating reviews (injected into plugins).
             plugin_loader: Port for loading plugin implementations.
         """
@@ -45,7 +46,7 @@ class TriggerOrchestrator:
         self,
         event: HookEvent,
         repository_path: Path,
-        event_payload: dict[str, str],
+        event_payload: dict[str, Any],
     ) -> tuple[str | None, ...]:
         """Handle a git hook event by dispatching to matching trigger plugins.
 
@@ -62,9 +63,9 @@ class TriggerOrchestrator:
             Tuple of task IDs created by each plugin (None for plugins that
             didn't create a review or failed).
         """
-        # Query all enabled trigger plugins
-        all_plugins = await self._store.list_triggers()
-        enabled_plugins = [p for p in all_plugins if p.is_enabled]
+        # Query all plugins with enabled trigger capability
+        all_plugins = await self._store.list_plugins()
+        enabled_plugins = [p for p in all_plugins if p.trigger_enabled]
 
         if not enabled_plugins:
             _LOGGER.debug("No enabled trigger plugins found")
@@ -73,7 +74,7 @@ class TriggerOrchestrator:
         # Filter plugins configured for this repository
         matching_plugins = [
             p for p in enabled_plugins
-            if str(repository_path) in p.config.repository_paths
+            if str(repository_path) in p.trigger_config.get("repository_paths", [])
         ]
 
         if not matching_plugins:
@@ -108,12 +109,70 @@ class TriggerOrchestrator:
 
         return tuple(results)
 
+    async def handle_webhook(
+        self,
+        platform: str,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ) -> tuple[str | None, ...]:
+        """Handle a webhook event by dispatching to matching trigger plugins.
+
+        Finds all enabled trigger plugins that match the given platform,
+        then invokes each plugin's handle_event method with WEBHOOK event type.
+        Failures in one plugin do not prevent other plugins from executing.
+
+        Args:
+            platform: The platform identifier (e.g., "github", "gitlab").
+            payload: The webhook payload parsed from JSON.
+            headers: HTTP headers from the webhook request.
+
+        Returns:
+            Tuple of task IDs created by each plugin (None for plugins that
+            didn't create a review or failed).
+        """
+        # Query all plugins with enabled trigger capability matching the platform
+        all_plugins = await self._store.list_plugins()
+        matching_plugins = [
+            p for p in all_plugins
+            if p.trigger_enabled and p.manifest.platform == platform
+        ]
+
+        if not matching_plugins:
+            _LOGGER.debug(
+                "No trigger plugins configured for platform: %s",
+                platform,
+            )
+            return ()
+
+        _LOGGER.info(
+            "Dispatching webhook event to %d plugin(s) for platform %s",
+            len(matching_plugins),
+            platform,
+        )
+
+        # Invoke each matching plugin
+        results: list[str | None] = []
+        for plugin_record in matching_plugins:
+            try:
+                result = await self._invoke_webhook_plugin(
+                    plugin_record, payload, headers
+                )
+                results.append(result)
+            except Exception:
+                _LOGGER.exception(
+                    "Plugin %s failed to handle webhook event",
+                    plugin_record.plugin_id,
+                )
+                results.append(None)
+
+        return tuple(results)
+
     async def _invoke_plugin(
         self,
-        plugin_record: TriggerRecord,
+        plugin_record: PluginRecord,
         event: HookEvent,
         repository_path: Path,
-        event_payload: dict[str, str],
+        event_payload: dict[str, Any],
     ) -> str | None:
         """Invoke a single trigger plugin's event handler.
 
@@ -133,7 +192,7 @@ class TriggerOrchestrator:
         task_id = await plugin.handle_event(
             event=event,
             repository_path=repository_path,
-            config=plugin_record.config,
+            config=plugin_record.trigger_config,
             event_payload=event_payload,
         )
 
@@ -153,7 +212,50 @@ class TriggerOrchestrator:
 
         return task_id
 
-    def _load_plugin(self, plugin_record: TriggerRecord) -> TriggerSinkPort:
+    async def _invoke_webhook_plugin(
+        self,
+        plugin_record: PluginRecord,
+        payload: dict[str, Any],
+        headers: dict[str, str],
+    ) -> str | None:
+        """Invoke a single trigger plugin's webhook handler.
+
+        Args:
+            plugin_record: The plugin record containing configuration.
+            payload: The webhook payload.
+            headers: HTTP headers from the webhook request.
+
+        Returns:
+            Task ID if a review was created, None otherwise.
+        """
+        # Load the plugin implementation
+        plugin = self._load_plugin(plugin_record)
+
+        # Invoke the plugin's event handler with WEBHOOK event type
+        # The plugin is responsible for parsing the payload and extracting
+        # repository_path, scope, and external_context
+        task_id = await plugin.handle_event(
+            event=HookEvent.WEBHOOK,
+            repository_path=Path("."),  # Placeholder, plugin will override
+            config=plugin_record.trigger_config,
+            event_payload={"payload": payload, "headers": headers},
+        )
+
+        if task_id:
+            _LOGGER.info(
+                "Plugin %s created review %s for webhook event",
+                plugin_record.plugin_id,
+                task_id,
+            )
+        else:
+            _LOGGER.debug(
+                "Plugin %s did not create a review for webhook event (filtered or invalid)",
+                plugin_record.plugin_id,
+            )
+
+        return task_id
+
+    def _load_plugin(self, plugin_record: PluginRecord) -> TriggerSinkPort:
         """Load and instantiate a trigger plugin implementation.
 
         Delegates to the injected plugin_loader port to maintain DDD layering.
@@ -167,7 +269,10 @@ class TriggerOrchestrator:
         Raises:
             ValueError: If the plugin type is not supported.
         """
+        install_path = Path(plugin_record.install_path) if plugin_record.install_path else None
         return self._plugin_loader.load_plugin(
             plugin_record.plugin_id,
             self._review_creator,
+            manifest=plugin_record.manifest,
+            install_path=install_path,
         )

@@ -3,12 +3,10 @@
 import logging
 from datetime import datetime
 from pathlib import Path
+from typing import Any
 
-from codelens.trigger.domain.models import (
-    HookEvent,
-    TriggerConfig,
-)
-from codelens.trigger.domain.ports import (
+from codelens.plugin.domain.models import HookEvent
+from codelens.plugin.domain.ports import (
     ReviewCreatorPort,
     TriggerSinkPort,
 )
@@ -47,37 +45,42 @@ class LocalHookTriggerAdapter(TriggerSinkPort):
         self,
         event: HookEvent,
         repository_path: Path,
-        config: TriggerConfig,
-        event_payload: dict[str, str],
+        config: dict[str, Any],
+        event_payload: dict[str, Any],
+        external_context: dict[str, Any] | None = None,
     ) -> str | None:
         """Handle a git hook event and create a review if appropriate.
 
         Args:
             event: The git hook event type (post-commit or pre-push).
             repository_path: Absolute path to the repository.
-            config: Plugin configuration with scope and agent settings.
+            config: Trigger configuration dict from plugin record.
             event_payload: Event-specific data (commit_sha or push_ref).
+            external_context: Platform routing context (None for local triggers).
 
         Returns:
             Task ID if a review was created, None if debounced or filtered.
         """
+
         # Check if this event type is enabled in config
-        if event not in config.events:
+        events = [HookEvent(e) for e in config.get("events", [])]
+        if event not in events:
             _LOGGER.debug(
                 "Event %s not in configured events %s, skipping",
                 event.value,
-                [e.value for e in config.events],
+                [e.value for e in events],
             )
             return None
 
         # Apply debouncing
-        if config.debounce_seconds > 0:
-            if self._is_debounced(repository_path, event, config.debounce_seconds):
+        debounce_seconds = config.get("debounce_seconds", 0)
+        if debounce_seconds > 0:
+            if self._is_debounced(repository_path, event, debounce_seconds):
                 _LOGGER.info(
                     "Event %s for %s debounced (within %d seconds)",
                     event.value,
                     repository_path,
-                    config.debounce_seconds,
+                    debounce_seconds,
                 )
                 return None
 
@@ -88,10 +91,11 @@ class LocalHookTriggerAdapter(TriggerSinkPort):
         try:
             task_id = await self._review_creator.create_review_from_trigger(
                 repository_path=repository_path,
-                scope_type=config.scope_type,
+                scope_type=config.get("scope_type", "uncommitted"),
                 scope_params=scope_params,
-                selected_agents=config.selected_agents,
-                prompt_locale=config.prompt_locale,
+                selected_agents=tuple(config.get("selected_agents", [])),
+                prompt_locale=config.get("prompt_locale", "en"),
+                external_context=None,
             )
             _LOGGER.info(
                 "Created review %s for %s event on %s",
@@ -140,7 +144,7 @@ class LocalHookTriggerAdapter(TriggerSinkPort):
         self,
         event: HookEvent,
         event_payload: dict[str, str],
-        config: TriggerConfig,
+        config: dict[str, Any],
     ) -> dict[str, str | None]:
         """Build scope parameters for review creation based on scope_type.
 
@@ -150,25 +154,26 @@ class LocalHookTriggerAdapter(TriggerSinkPort):
         Args:
             event: The git hook event type.
             event_payload: Event-specific data from the hook script.
-            config: Plugin configuration.
+            config: Plugin trigger configuration dict.
 
         Returns:
             Dictionary of scope parameters for the review creator.
         """
+        scope_type = config.get("scope_type", "uncommitted")
         # Generate keys based on scope_type, not event type
-        if config.scope_type == "commit":
+        if scope_type == "commit":
             # Commit scope expects base_commit and target_ref
             commit_sha = event_payload.get("commit_sha")
             return {
                 "base_commit": f"{commit_sha}~1" if commit_sha else None,
                 "target_ref": commit_sha,
             }
-        elif config.scope_type == "branch":
+        elif scope_type == "branch":
             # Branch scope expects base_ref and target_ref
             push_ref = event_payload.get("push_ref")
             return {
-                "base_ref": config.base_ref,
-                "target_ref": config.target_ref or push_ref,
+                "base_ref": config.get("base_ref"),
+                "target_ref": config.get("target_ref") or push_ref,
             }
         else:
             # Uncommitted scope needs no parameters

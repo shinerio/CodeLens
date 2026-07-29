@@ -1,0 +1,661 @@
+import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
+import { Check, Download, ExternalLink, FolderGit2, Package, Plus, Power, Trash2, Webhook, X } from "lucide-react";
+import { useEffect, useState } from "react";
+
+import { useI18n } from "../../shared/i18n/i18n";
+import { RepositoryBrowser } from "../repositories/RepositoryBrowser";
+import {
+  disableReport,
+  disableTrigger,
+  enableReport,
+  enableTrigger,
+  getHookStatus,
+  installPlugin,
+  listPlugins,
+  PLUGIN_QUERY_KEY,
+  setAutoExport,
+  uninstallPlugin,
+  updateReportConfig,
+  updateTriggerConfig,
+} from "./api";
+import type { HookStatusResponse, PluginRecord } from "./types";
+import "./PluginsPage.css";
+
+const AVAILABLE_AGENTS = [
+  { reference: "correctness:v1", labelKey: "review.correctness", enabled: true },
+  { reference: "security:v1", labelKey: "review.security", enabled: false },
+  { reference: "performance:v1", labelKey: "review.performance", enabled: false },
+  { reference: "maintainability:v1", labelKey: "review.maintainability", enabled: false },
+] as const;
+
+export function PluginsPage() {
+  const { t } = useI18n();
+  const queryClient = useQueryClient();
+  const [gitUrl, setGitUrl] = useState("");
+  const [gitRef, setGitRef] = useState("");
+  const [installError, setInstallError] = useState<string | null>(null);
+
+  const pluginsQuery = useQuery({
+    queryKey: PLUGIN_QUERY_KEY,
+    queryFn: listPlugins,
+  });
+
+  const invalidatePlugins = () => {
+    void queryClient.invalidateQueries({ queryKey: PLUGIN_QUERY_KEY });
+  };
+
+  const enableTriggerMutation = useMutation({
+    mutationFn: (pluginId: string) => enableTrigger(pluginId),
+    onSuccess: invalidatePlugins,
+  });
+
+  const disableTriggerMutation = useMutation({
+    mutationFn: (pluginId: string) => disableTrigger(pluginId),
+    onSuccess: invalidatePlugins,
+  });
+
+  const enableReportMutation = useMutation({
+    mutationFn: (pluginId: string) => enableReport(pluginId),
+    onSuccess: invalidatePlugins,
+  });
+
+  const disableReportMutation = useMutation({
+    mutationFn: (pluginId: string) => disableReport(pluginId),
+    onSuccess: invalidatePlugins,
+  });
+
+  const autoExportMutation = useMutation({
+    mutationFn: ({ pluginId, enabled }: { pluginId: string; enabled: boolean }) =>
+      setAutoExport(pluginId, enabled),
+    onSuccess: invalidatePlugins,
+  });
+
+  const uninstallMutation = useMutation({
+    mutationFn: (pluginId: string) => uninstallPlugin(pluginId),
+    onSuccess: invalidatePlugins,
+  });
+
+  const installMutation = useMutation({
+    mutationFn: () => installPlugin({ git_url: gitUrl, ref: gitRef || null }),
+    onSuccess: () => {
+      setGitUrl("");
+      setGitRef("");
+      setInstallError(null);
+      invalidatePlugins();
+    },
+    onError: (error: Error) => {
+      setInstallError(error.message);
+    },
+  });
+
+  const plugins = pluginsQuery.data ?? [];
+
+  return (
+    <section className="plugins-page">
+      <header className="plugins-header">
+        <div>
+          <h1>{t("plugins.title")}</h1>
+          <p className="plugins-subtitle">{t("plugins.subtitle")}</p>
+        </div>
+      </header>
+
+      <div className="plugins-install">
+        <h2 className="plugins-section-title">{t("plugins.installNew")}</h2>
+        <div className="install-form">
+          <input
+            className="install-input install-input--url"
+            placeholder={t("plugins.gitUrlPlaceholder")}
+            value={gitUrl}
+            onChange={(e) => setGitUrl(e.target.value)}
+            disabled={installMutation.isPending}
+          />
+          <input
+            className="install-input install-input--ref"
+            placeholder={t("plugins.refPlaceholder")}
+            value={gitRef}
+            onChange={(e) => setGitRef(e.target.value)}
+            disabled={installMutation.isPending}
+          />
+          <button
+            className="install-button"
+            disabled={!gitUrl.trim() || installMutation.isPending}
+            onClick={() => installMutation.mutate()}
+          >
+            <Download aria-hidden="true" />
+            {t("plugins.install")}
+          </button>
+        </div>
+        {installError && <p className="install-error">{installError}</p>}
+      </div>
+
+      {pluginsQuery.isLoading && <p className="plugins-loading">{t("common.loading")}</p>}
+      {pluginsQuery.error && (
+        <p className="plugins-error">
+          {t("plugins.loadFailed")}: {(pluginsQuery.error as Error).message}
+        </p>
+      )}
+
+      <div className="plugin-cards">
+        {plugins.map((plugin) => (
+          <PluginCard
+            key={plugin.plugin_id}
+            plugin={plugin}
+            onEnableTrigger={(id) => enableTriggerMutation.mutate(id)}
+            onDisableTrigger={(id) => disableTriggerMutation.mutate(id)}
+            onEnableReport={(id) => enableReportMutation.mutate(id)}
+            onDisableReport={(id) => disableReportMutation.mutate(id)}
+            onToggleAutoExport={(id, enabled) => autoExportMutation.mutate({ pluginId: id, enabled })}
+            onUninstall={(id) => uninstallMutation.mutate(id)}
+            onConfigUpdate={invalidatePlugins}
+          />
+        ))}
+      </div>
+    </section>
+  );
+}
+
+type PluginCardProps = {
+  plugin: PluginRecord;
+  onEnableTrigger: (pluginId: string) => void;
+  onDisableTrigger: (pluginId: string) => void;
+  onEnableReport: (pluginId: string) => void;
+  onDisableReport: (pluginId: string) => void;
+  onToggleAutoExport: (pluginId: string, enabled: boolean) => void;
+  onUninstall: (pluginId: string) => void;
+  onConfigUpdate: () => void;
+};
+
+function PluginCard({
+  plugin,
+  onEnableTrigger,
+  onDisableTrigger,
+  onEnableReport,
+  onDisableReport,
+  onToggleAutoExport,
+  onUninstall,
+  onConfigUpdate,
+}: PluginCardProps) {
+  const { t } = useI18n();
+  const hasTrigger = !!plugin.manifest.capabilities.trigger;
+  const hasReport = !!plugin.manifest.capabilities.report;
+
+  return (
+    <article className="plugin-card">
+      <div className="plugin-card__header">
+        <div className="plugin-card__title-row">
+          <Package aria-hidden="true" className="plugin-card__icon" />
+          <div>
+            <h3 className="plugin-card__name">{plugin.manifest.name}</h3>
+            <span className="plugin-card__version">v{plugin.manifest.version}</span>
+            <span className="plugin-card__badge plugin-card__badge--platform">{plugin.manifest.platform}</span>
+            {plugin.is_builtin && <span className="plugin-card__badge plugin-card__badge--builtin">{t("plugins.builtin")}</span>}
+          </div>
+        </div>
+        {!plugin.is_builtin && (
+          <button
+            className="plugin-uninstall"
+            onClick={() => onUninstall(plugin.plugin_id)}
+          >
+            <Trash2 aria-hidden="true" />
+            {t("plugins.uninstall")}
+          </button>
+        )}
+      </div>
+
+      <p className="plugin-card__description">{plugin.manifest.description}</p>
+
+      {hasTrigger && (
+        <TriggerCapabilitySection
+          plugin={plugin}
+          onEnable={(id) => onEnableTrigger(id)}
+          onDisable={(id) => onDisableTrigger(id)}
+          onConfigUpdate={onConfigUpdate}
+        />
+      )}
+
+      {hasReport && (
+        <ReportCapabilitySection
+          plugin={plugin}
+          onEnable={(id) => onEnableReport(id)}
+          onDisable={(id) => onDisableReport(id)}
+          onToggleAutoExport={(id, enabled) => onToggleAutoExport(id, enabled)}
+          onConfigUpdate={onConfigUpdate}
+        />
+      )}
+
+      {plugin.install_path && (
+        <div className="plugin-card__install-path">
+          <ExternalLink aria-hidden="true" className="plugin-card__path-icon" />
+          <code>{plugin.install_path}</code>
+        </div>
+      )}
+    </article>
+  );
+}
+
+type TriggerCapabilitySectionProps = {
+  plugin: PluginRecord;
+  onEnable: (pluginId: string) => void;
+  onDisable: (pluginId: string) => void;
+  onConfigUpdate: () => void;
+};
+
+function TriggerCapabilitySection({
+  plugin,
+  onEnable,
+  onDisable,
+  onConfigUpdate,
+}: TriggerCapabilitySectionProps) {
+  const { t } = useI18n();
+  const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(plugin.trigger_config);
+  const [browserOpen, setBrowserOpen] = useState(false);
+  const [hookStatus, setHookStatus] = useState<HookStatusResponse | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const configMutation = useMutation({
+    mutationFn: (config: Record<string, unknown>) =>
+      updateTriggerConfig(plugin.plugin_id, { config }),
+    onSuccess: () => {
+      setError(null);
+      onConfigUpdate();
+      refreshHookStatus();
+    },
+    onError: (err: Error) => {
+      setError(err.message);
+    },
+  });
+
+  const configChanged = JSON.stringify(configDraft) !== JSON.stringify(plugin.trigger_config);
+
+  function refreshHookStatus() {
+    getHookStatus(plugin.plugin_id).then(setHookStatus).catch(() => setHookStatus(null));
+  }
+
+  useEffect(() => {
+    if (plugin.trigger_enabled) {
+      refreshHookStatus();
+    }
+  }, [plugin.plugin_id, plugin.trigger_enabled]);
+
+  const repositoryPaths = (configDraft.repository_paths as string[]) ?? [];
+  const events = (configDraft.events as string[]) ?? [];
+  const selectedAgents = (configDraft.selected_agents as string[]) ?? [];
+  const scopeType = (configDraft.scope_type as string) ?? "uncommitted";
+  const baseRef = (configDraft.base_ref as string | null) ?? "";
+  const targetRef = (configDraft.target_ref as string | null) ?? "";
+  const promptLocale = (configDraft.prompt_locale as string) ?? "en";
+  const debounceSeconds = (configDraft.debounce_seconds as number) ?? 0;
+
+  function handleRepositorySelect(path: string) {
+    if (!repositoryPaths.includes(path)) {
+      setConfigDraft({ ...configDraft, repository_paths: [...repositoryPaths, path] });
+    }
+    setBrowserOpen(false);
+  }
+
+  function handleRemoveRepository(path: string) {
+    setConfigDraft({
+      ...configDraft,
+      repository_paths: repositoryPaths.filter((p) => p !== path),
+    });
+  }
+
+  function handleEventToggle(event: string, checked: boolean) {
+    const newEvents = checked ? [...events, event] : events.filter((e) => e !== event);
+    setConfigDraft({ ...configDraft, events: newEvents });
+  }
+
+  function handleScopeChange(newScopeType: string) {
+    setConfigDraft({ ...configDraft, scope_type: newScopeType });
+  }
+
+  function handleAgentToggle(reference: string, checked: boolean) {
+    const newAgents = checked
+      ? [...selectedAgents, reference]
+      : selectedAgents.filter((a) => a !== reference);
+    setConfigDraft({ ...configDraft, selected_agents: newAgents });
+  }
+
+  const supportedEvents = plugin.manifest.capabilities.trigger?.supported_events ?? [];
+
+  return (
+    <div className="capability-section capability-section--trigger">
+      <div className="capability-section__header">
+        <Webhook aria-hidden="true" className="capability-section__icon" />
+        <h4 className="capability-section__title">{t("plugins.triggerCapability")}</h4>
+        <button
+          className={`capability-toggle ${plugin.trigger_enabled ? "capability-toggle--on" : ""}`}
+          onClick={() => (plugin.trigger_enabled ? onDisable(plugin.plugin_id) : onEnable(plugin.plugin_id))}
+        >
+          <Power aria-hidden="true" />
+          {plugin.trigger_enabled ? t("plugins.enabled") : t("plugins.disabled")}
+        </button>
+      </div>
+
+      <div className="capability-config">
+        <div className="config-section">
+          <label className="config-section__label">{t("plugins.repositoryPaths")}</label>
+          <div className="config-repositories">
+            {repositoryPaths.map((path) => (
+              <div key={path} className="config-repository">
+                <FolderGit2 aria-hidden="true" />
+                <code>{path}</code>
+                <button
+                  className="config-repository__remove"
+                  onClick={() => handleRemoveRepository(path)}
+                  type="button"
+                >
+                  <X aria-hidden="true" />
+                </button>
+              </div>
+            ))}
+          </div>
+          <button
+            className="config-add-repo"
+            onClick={() => setBrowserOpen(true)}
+            type="button"
+          >
+            <Plus aria-hidden="true" />
+            {t("plugins.addRepository")}
+          </button>
+        </div>
+
+        <div className="config-section">
+          <label className="config-section__label">{t("plugins.events")}</label>
+          <div className="config-checkboxes">
+            {supportedEvents.map((event) => (
+              <label key={event} className="config-checkbox">
+                <input
+                  type="checkbox"
+                  checked={events.includes(event)}
+                  onChange={(e) => handleEventToggle(event, e.target.checked)}
+                />
+                <span>{event}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        <div className="config-section">
+          <label className="config-section__label">{t("plugins.selectedAgents")}</label>
+          <div className="config-checkboxes">
+            {AVAILABLE_AGENTS.map((agent) => (
+              <label
+                key={agent.reference}
+                className={`config-checkbox ${!agent.enabled ? "config-checkbox--disabled" : ""}`}
+              >
+                <input
+                  type="checkbox"
+                  checked={selectedAgents.includes(agent.reference)}
+                  disabled={!agent.enabled}
+                  onChange={(e) => handleAgentToggle(agent.reference, e.target.checked)}
+                />
+                <span>{t(agent.labelKey)}</span>
+                {!agent.enabled && (
+                  <span className="config-agent-badge">{t("plugins.comingSoon")}</span>
+                )}
+              </label>
+            ))}
+          </div>
+          {selectedAgents.length === 0 && (
+            <p className="config-error">{t("plugins.noAgentSelected")}</p>
+          )}
+        </div>
+
+        <div className="config-section">
+          <label className="config-section__label">{t("plugins.scopeType")}</label>
+          <div className="config-radios">
+            {(["commit", "branch", "uncommitted"] as const).map((scope) => (
+              <label key={scope} className="config-radio">
+                <input
+                  type="radio"
+                  name={`scope-${plugin.plugin_id}`}
+                  checked={scopeType === scope}
+                  onChange={() => handleScopeChange(scope)}
+                />
+                <span>{t(`plugins.scope.${scope}`)}</span>
+              </label>
+            ))}
+          </div>
+        </div>
+
+        {scopeType === "branch" && (
+          <>
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.baseRef")}</label>
+              <input
+                className="config-input"
+                type="text"
+                value={baseRef}
+                onChange={(e) => setConfigDraft({ ...configDraft, base_ref: e.target.value || null })}
+                placeholder="main"
+              />
+            </div>
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.targetRef")}</label>
+              <input
+                className="config-input"
+                type="text"
+                value={targetRef}
+                onChange={(e) => setConfigDraft({ ...configDraft, target_ref: e.target.value || null })}
+                placeholder="feature-branch"
+              />
+            </div>
+          </>
+        )}
+
+        <div className="config-section">
+          <label className="config-section__label">{t("plugins.locale")}</label>
+          <select
+            className="config-select"
+            value={promptLocale}
+            onChange={(e) => setConfigDraft({ ...configDraft, prompt_locale: e.target.value })}
+          >
+            <option value="en">English</option>
+            <option value="zh-CN">中文</option>
+          </select>
+        </div>
+
+        <div className="config-section">
+          <label className="config-section__label">{t("plugins.debounce")}</label>
+          <input
+            className="config-input"
+            type="number"
+            min="0"
+            value={debounceSeconds}
+            onChange={(e) =>
+              setConfigDraft({ ...configDraft, debounce_seconds: parseInt(e.target.value) || 0 })
+            }
+          />
+        </div>
+
+        <button
+          className="config-save"
+          disabled={!configChanged || configMutation.isPending}
+          onClick={() => configMutation.mutate(configDraft)}
+          type="button"
+        >
+          <Check aria-hidden="true" />
+          {t("plugins.saveConfig")}
+        </button>
+      </div>
+
+      {plugin.trigger_enabled && hookStatus && (
+        <div className="capability-hooks">
+          <h5 className="capability-hooks__title">{t("plugins.hooks")}</h5>
+          <div className="hook-status">
+            <span className="hook-status__repo">{hookStatus.repository_path}</span>
+            <span
+              className={`hook-status__state ${
+                hookStatus.is_installed
+                  ? "hook-status__state--installed"
+                  : "hook-status__state--not-installed"
+              }`}
+            >
+              {hookStatus.is_installed ? t("plugins.hookInstalled") : t("plugins.hookNotInstalled")}
+            </span>
+          </div>
+        </div>
+      )}
+
+      {error && <p className="config-error">{error}</p>}
+
+      <RepositoryBrowser
+        isOpen={browserOpen}
+        onClose={() => setBrowserOpen(false)}
+        onSelect={handleRepositorySelect}
+      />
+    </div>
+  );
+}
+
+type ReportCapabilitySectionProps = {
+  plugin: PluginRecord;
+  onEnable: (pluginId: string) => void;
+  onDisable: (pluginId: string) => void;
+  onToggleAutoExport: (pluginId: string, enabled: boolean) => void;
+  onConfigUpdate: () => void;
+};
+
+function ReportCapabilitySection({
+  plugin,
+  onEnable,
+  onDisable,
+  onToggleAutoExport,
+  onConfigUpdate,
+}: ReportCapabilitySectionProps) {
+  const { t } = useI18n();
+  const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(plugin.report_config);
+
+  const configMutation = useMutation({
+    mutationFn: (config: Record<string, unknown>) =>
+      updateReportConfig(plugin.plugin_id, { config }),
+    onSuccess: () => {
+      onConfigUpdate();
+    },
+  });
+
+  const configChanged = JSON.stringify(configDraft) !== JSON.stringify(plugin.report_config);
+  const configSchema = plugin.manifest.capabilities.report?.config_schema ?? {};
+  const configProperties = extractConfigProperties(configSchema);
+
+  return (
+    <div className="capability-section capability-section--report">
+      <div className="capability-section__header">
+        <Package aria-hidden="true" className="capability-section__icon" />
+        <h4 className="capability-section__title">{t("plugins.reportCapability")}</h4>
+        <button
+          className={`capability-toggle ${plugin.report_enabled ? "capability-toggle--on" : ""}`}
+          onClick={() => (plugin.report_enabled ? onDisable(plugin.plugin_id) : onEnable(plugin.plugin_id))}
+        >
+          <Power aria-hidden="true" />
+          {plugin.report_enabled ? t("plugins.enabled") : t("plugins.disabled")}
+        </button>
+      </div>
+
+      {configProperties.length > 0 && (
+        <div className="capability-config">
+          {configProperties.map((prop) => (
+            <ConfigField
+              key={prop.key}
+              label={prop.label}
+              value={configDraft[prop.key]}
+              defaultValue={prop.default}
+              type={prop.type}
+              onChange={(value) => setConfigDraft({ ...configDraft, [prop.key]: value })}
+            />
+          ))}
+          <button
+            className="config-save"
+            disabled={!configChanged || configMutation.isPending}
+            onClick={() => configMutation.mutate(configDraft)}
+          >
+            <Check aria-hidden="true" />
+            {t("plugins.saveConfig")}
+          </button>
+        </div>
+      )}
+
+      <div className="capability-auto-export">
+        <label className="auto-export-toggle">
+          <input
+            type="checkbox"
+            checked={plugin.report_auto_export}
+            onChange={(e) => onToggleAutoExport(plugin.plugin_id, e.target.checked)}
+            disabled={!plugin.report_enabled}
+          />
+          <span>{t("plugins.autoExport")}</span>
+        </label>
+        <span className="auto-export-hint">{t("plugins.autoExportHint")}</span>
+      </div>
+    </div>
+  );
+}
+
+type ConfigProperty = {
+  key: string;
+  label: string;
+  type: string;
+  default: unknown;
+};
+
+function extractConfigProperties(schema: Record<string, unknown>): ConfigProperty[] {
+  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
+  return Object.entries(properties).map(([key, prop]) => ({
+    key,
+    label: typeof prop.description === "string" ? prop.description : key,
+    type: typeof prop.type === "string" ? prop.type : "string",
+    default: prop.default,
+  }));
+}
+
+type ConfigFieldProps = {
+  label: string;
+  value: unknown;
+  defaultValue: unknown;
+  type: string;
+  onChange: (value: unknown) => void;
+};
+
+function ConfigField({ label, value, defaultValue, type, onChange }: ConfigFieldProps) {
+  if (type === "array" && Array.isArray(defaultValue)) {
+    const options = defaultValue as string[];
+    const current = Array.isArray(value) ? value : options;
+    return (
+      <div className="config-field config-field--array">
+        <label className="config-field__label">{label}</label>
+        <div className="config-field__checkboxes">
+          {options.map((option) => (
+            <label key={option} className="config-field__checkbox">
+              <input
+                type="checkbox"
+                checked={current.includes(option)}
+                onChange={(e) => {
+                  if (e.target.checked) {
+                    onChange([...current, option]);
+                  } else {
+                    onChange(current.filter((item) => item !== option));
+                  }
+                }}
+              />
+              <span>{option}</span>
+            </label>
+          ))}
+        </div>
+      </div>
+    );
+  }
+
+  const stringValue = typeof value === "string" ? value : String(defaultValue ?? "");
+  return (
+    <div className="config-field">
+      <label className="config-field__label">{label}</label>
+      <input
+        className="config-field__input"
+        type={type === "number" ? "number" : "text"}
+        value={stringValue}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </div>
+  );
+}

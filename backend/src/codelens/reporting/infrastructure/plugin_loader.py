@@ -4,8 +4,8 @@ import importlib.util
 import sys
 from pathlib import Path
 
-from codelens.reporting.domain.models import PluginManifest
-from codelens.reporting.domain.ports import ReportSinkPort
+from codelens.plugin.domain.models import PluginManifest, ReportCapability
+from codelens.plugin.domain.ports import ReportSinkPort
 
 
 class PluginLoadError(Exception):
@@ -23,7 +23,12 @@ class ImportlibPluginLoader:
     _MODULE_PREFIX = "codelens_ext_plugin_"
 
     def load_sink(self, manifest: PluginManifest, install_path: Path) -> ReportSinkPort:
-        entry = manifest.entry_point
+        report_cap = manifest.capabilities.get("report")
+        if not isinstance(report_cap, ReportCapability):
+            raise PluginLoadError(
+                f"plugin {manifest.plugin_id} does not declare report capability"
+            )
+        entry = report_cap.entry_point
         if ":" not in entry:
             raise PluginLoadError(
                 f"plugin {manifest.plugin_id} entry_point must be 'module:Class', got: {entry}"

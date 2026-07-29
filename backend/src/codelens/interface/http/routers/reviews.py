@@ -57,6 +57,7 @@ async def create_review(
                 scope=request.scope.to_domain(),
                 selected_agent_versions=tuple(request.selected_agents),
                 prompt_locale=request.prompt_locale,
+                external_context=request.external_context,
             )
         )
     except ValueError as error:
@@ -247,7 +248,7 @@ async def export_findings(
 ) -> ExportResponse:
     """Trigger one report plugin export for a completed review."""
 
-    result = await components.export_orchestrator.export_manual(task_id, request.plugin_id)
+    result = await components.export_orchestrator.export_findings(task_id, request.plugin_id)
     return ExportResponse(
         plugin_id=result.plugin_id,
         task_id=result.task_id,

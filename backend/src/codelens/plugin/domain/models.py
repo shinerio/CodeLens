@@ -1,0 +1,178 @@
+"""Unified plugin domain models.
+
+A CodeLens plugin is a single install unit that declares a ``platform`` and
+optionally provides Trigger and/or Report capabilities. The models in this
+module are the single source of truth for plugin identity, capability
+declaration, and installation state.
+"""
+
+from __future__ import annotations
+
+from dataclasses import dataclass, field
+from enum import StrEnum
+from typing import Any
+
+
+class HookEvent(StrEnum):
+    """Events that can trigger a review.
+
+    ``POST_COMMIT`` and ``PRE_PUSH`` are emitted by local git hook scripts.
+    ``WEBHOOK`` is emitted by remote platforms via HTTP webhook endpoints.
+    """
+
+    POST_COMMIT = "post-commit"
+    PRE_PUSH = "pre-push"
+    WEBHOOK = "webhook"
+
+
+@dataclass(frozen=True)
+class TriggerCapability:
+    """Declare a plugin's trigger capability.
+
+    Attributes:
+        trigger_type: Mechanism used to receive events (``"local-hook"`` or
+            ``"webhook"``).
+        supported_events: Events the trigger can handle.
+        entry_point: ``"module:ClassName"`` pointer resolved by the loader.
+        config_schema: JSON Schema describing the trigger configuration.
+    """
+
+    trigger_type: str
+    supported_events: tuple[str, ...]
+    entry_point: str
+    config_schema: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class ReportCapability:
+    """Declare a plugin's report capability.
+
+    Attributes:
+        entry_point: ``"module:ClassName"`` pointer resolved by the loader.
+        config_schema: JSON Schema describing the report configuration.
+    """
+
+    entry_point: str
+    config_schema: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
+class PluginManifest:
+    """Declare a plugin's identity, platform, and capabilities.
+
+    The manifest is the stable contract between CodeLens and a plugin. It is
+    read from ``plugin.json`` at install time and persisted alongside the
+    installation record.
+
+    ``capabilities`` maps capability names (``"trigger"``, ``"report"``) to
+    their declaration dataclasses. A plugin may declare either or both.
+    """
+
+    plugin_id: str
+    name: str
+    version: str
+    description: str
+    author: str
+    platform: str
+    capabilities: dict[str, Any] = field(default_factory=dict)
+    min_codelens_version: str | None = None
+
+    @property
+    def trigger(self) -> TriggerCapability | None:
+        value = self.capabilities.get("trigger")
+        return value if isinstance(value, TriggerCapability) else None
+
+    @property
+    def report(self) -> ReportCapability | None:
+        value = self.capabilities.get("report")
+        return value if isinstance(value, ReportCapability) else None
+
+
+@dataclass(frozen=True)
+class PluginRecord:
+    """Persisted installation state for one plugin.
+
+    Built-in plugins have ``install_path=None`` and ``is_builtin=True``.
+    External plugins store their on-disk install path.
+
+    Trigger and report capabilities have independent enable flags and
+    independent configuration dicts so that a single plugin can evolve each
+    capability without disturbing the other.
+    """
+
+    plugin_id: str
+    manifest: PluginManifest
+    is_builtin: bool
+    install_path: str | None
+    trigger_enabled: bool
+    report_enabled: bool
+    report_auto_export: bool
+    trigger_config: dict[str, Any] = field(default_factory=dict)
+    report_config: dict[str, Any] = field(default_factory=dict)
+
+
+class PluginCapabilityError(ValueError):
+    """Raised when a capability toggle violates plugin rules."""
+
+
+def validate_capability_toggle(
+    record: PluginRecord,
+    *,
+    enable_trigger: bool | None = None,
+    enable_report: bool | None = None,
+) -> None:
+    """Validate that a capability toggle is legal for the given plugin.
+
+    Built-in plugins have no dependency constraints between trigger and
+    report capabilities. External plugins require trigger to be enabled
+    whenever report is enabled — without the trigger the report capability
+    cannot receive the ``external_context`` needed to route findings back
+    to the originating platform.
+
+    Raises:
+        PluginCapabilityError: If the resulting state would be invalid.
+    """
+
+    if record.is_builtin:
+        return
+
+    final_trigger = (
+        enable_trigger if enable_trigger is not None else record.trigger_enabled
+    )
+    final_report = (
+        enable_report if enable_report is not None else record.report_enabled
+    )
+
+    if final_report and not final_trigger:
+        raise PluginCapabilityError(
+            f"External plugin '{record.plugin_id}': "
+            "report capability requires trigger to be enabled"
+        )
+
+
+@dataclass(frozen=True)
+class ExportResult:
+    """Outcome of one plugin export attempt for one review task.
+
+    A failed export carries ``error`` and ``output_path=None``; callers should
+    never assume the path exists without checking ``success``.
+    """
+
+    plugin_id: str
+    task_id: str
+    success: bool
+    output_path: str | None
+    error: str | None
+    exported_at: Any  # datetime; kept untyped to avoid import cycles in tests
+
+
+@dataclass(frozen=True)
+class ExportHistoryEntry:
+    """One persisted export attempt, used for listing prior results."""
+
+    plugin_id: str
+    task_id: str
+    success: bool
+    output_path: str | None
+    error: str | None
+    exported_at: Any

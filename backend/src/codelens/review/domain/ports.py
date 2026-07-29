@@ -122,6 +122,7 @@ class ReviewRecord:
     created_at: datetime
     is_deleted: bool
     finding_count: int = 0
+    external_context: dict | None = None
 
 
 @dataclass(frozen=True)

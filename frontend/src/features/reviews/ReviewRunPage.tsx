@@ -18,7 +18,7 @@ import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
-import { listPlugins, PLUGIN_QUERY_KEY } from "../report-plugins/api";
+import { listPlugins, PLUGIN_QUERY_KEY } from "../plugins/api";
 import { cancelReview, exportFindings, getFindingSource, getProcessReport, getReview, getTranscript, listFindings, type ExportResultResponse, type TranscriptEntry } from "./api";
 import { failureDetails } from "./failure-details";
 import { ReviewConsole } from "./ReviewConsole";
@@ -135,7 +135,7 @@ export function ReviewRunPage() {
     },
   });
 
-  const enabledPlugins = (pluginsQuery.data ?? []).filter((p) => p.is_enabled);
+  const enabledPlugins = (pluginsQuery.data ?? []).filter((p) => p.report_enabled);
 
   function handleUnsupported() { window.alert(t("common.notSupported")); }
 
@@ -324,8 +324,8 @@ export function ReviewRunPage() {
           {exportResult && (
             <span className={`run-export-result ${exportResult.success ? "run-export-result--ok" : "run-export-result--err"}`}>
               {exportResult.success
-                ? t("reportPlugins.exportSuccess")
-                : t("reportPlugins.exportFailed")}
+                ? t("plugins.exportSuccess")
+                : t("plugins.exportFailed")}
             </span>
           )}
         </div>

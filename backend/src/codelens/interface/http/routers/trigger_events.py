@@ -8,7 +8,7 @@ from fastapi import APIRouter, Depends, status
 from pydantic import BaseModel, ConfigDict
 
 from codelens.interface.http.dependencies import HttpComponents, HttpProblem, get_components
-from codelens.trigger.domain.models import HookEvent
+from codelens.plugin.domain.models import HookEvent
 
 router = APIRouter(prefix="/api/trigger-events", tags=["trigger-events"])
 _LOGGER = logging.getLogger("codelens.trigger_events")

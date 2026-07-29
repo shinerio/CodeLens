@@ -1,7 +1,7 @@
 from dataclasses import asdict
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import (
     AnyHttpUrl,
@@ -300,6 +300,7 @@ class CreateReviewRequest(StrictDto):
     scope: ScopeRequest
     selected_agents: Annotated[list[AgentReference], Field(min_length=1, max_length=32)]
     prompt_locale: Literal["en", "zh-CN"] = "en"
+    external_context: dict[str, Any] | None = None
 
 
 class UpdateReviewerPromptRequest(StrictDto):

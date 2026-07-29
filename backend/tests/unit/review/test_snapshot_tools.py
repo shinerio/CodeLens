@@ -8,7 +8,6 @@ from agents import RunConfig, Usage
 from agents.tool_context import ToolContext
 
 from codelens.review.domain.tool_limits import ToolLimits
-from codelens.review.infrastructure import snapshot_tools as snapshot_tools_module
 from codelens.review.infrastructure.comment_collector import (
     ReviewCommentCollector,
     ReviewCommentSubmission,

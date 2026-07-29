@@ -5,8 +5,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 
 import { App } from "./app/App";
 import { CatalogPreviewPage } from "./features/catalog/CatalogPreviewPage";
-import { ReportPluginsPage } from "./features/report-plugins/ReportPluginsPage";
-import { TriggerPluginsPage } from "./features/trigger-plugins/TriggerPluginsPage";
+import { PluginsPage } from "./features/plugins/PluginsPage";
 import { NewReviewPage } from "./features/reviews/NewReviewPage";
 import { RunListPage } from "./features/reviews/RunListPage";
 import { ReviewRunPage } from "./features/reviews/ReviewRunPage";
@@ -36,8 +35,7 @@ const router = createBrowserRouter([
       { path: "runs/:taskId", element: <ReviewRunPage /> },
       { path: "agents", element: <CatalogPreviewPage kind="agents" /> },
       { path: "capabilities", element: <CatalogPreviewPage kind="capabilities" /> },
-      { path: "report-plugins", element: <ReportPluginsPage /> },
-      { path: "trigger-plugins", element: <TriggerPluginsPage /> },
+      { path: "plugins", element: <PluginsPage /> },
       { path: "settings", element: <SettingsPage /> },
     ],
   },

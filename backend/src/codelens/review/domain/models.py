@@ -72,6 +72,7 @@ class ReviewTask:
     prompt_locale: str
     created_at: datetime
     overlay_artifact_ref: str | None = None
+    external_context: dict | None = None
     worktree_id: str | None = None
     snapshot_id: str | None = None
     started_at: datetime | None = None
@@ -95,6 +96,7 @@ class ReviewTask:
         created_at: datetime,
         overlay_artifact_ref: str | None = None,
         prompt_locale: str = "en",
+        external_context: dict | None = None,
     ) -> "ReviewTask":
         """Create a task only when at least one immutable Agent version is selected."""
 
@@ -117,6 +119,7 @@ class ReviewTask:
             prompt_locale=prompt_locale,
             created_at=created_at,
             overlay_artifact_ref=overlay_artifact_ref,
+            external_context=external_context,
         )
 
     @property
