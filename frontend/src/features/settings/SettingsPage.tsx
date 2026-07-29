@@ -1130,12 +1130,8 @@ export function SettingsPage() {
                     onChange={(event) => setVendor(event.currentTarget.value as ModelProviderVendor)}
                   >
                     <option value="openai">OpenAI</option>
-                    <option value="anthropic">Anthropic</option>
-                    <option value="azure">Azure OpenAI</option>
-                    <option value="gemini">Google Gemini</option>
-                    <option value="ollama">Ollama</option>
-                    <option value="openrouter">OpenRouter</option>
-                    <option value="custom">Custom</option>
+                    <option value="deepseek">DeepSeek</option>
+                    <option value="zhipu">智谱 AI</option>
                   </select>
                 </label>
                 <label className="settings-field">
