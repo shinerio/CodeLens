@@ -99,11 +99,14 @@ it("creates the first persistent model gateway without retaining its API key", a
   render(<SettingsPage />, { wrapper: TestProviders });
 
   expect(await screen.findByText("No gateways configured")).toBeInTheDocument();
-  await user.type(screen.getByLabelText("Gateway name"), "Primary gateway");
+  await user.click(screen.getByRole("button", { name: /add gateway/i }));
+  const gatewayNameInput = await screen.findByLabelText("Gateway name");
+  await user.type(gatewayNameInput, "Primary gateway");
   await user.type(screen.getByLabelText("API Key"), "sk-ui-test-secret");
   await user.type(screen.getByLabelText("Model"), "gpt-test");
   await user.type(screen.getByLabelText("Base URL"), "http://model-gateway.example:8080");
-  await user.click(screen.getByRole("button", { name: "Add gateway" }));
+  const modal = document.querySelector(".gateway-modal") as HTMLElement;
+  await user.click(within(modal).getByRole("button", { name: /^add gateway$/i }));
 
   const createCall = fetchMock.mock.calls.find(
     ([url, init]) => url === "/api/settings/model-gateways" && init?.method === "POST",
@@ -250,11 +253,10 @@ it("updates the selected model execution limits from the runtime rail", async ()
 
   render(<SettingsPage />, { wrapper: TestProviders });
 
-  await waitFor(() =>
-    expect(screen.getByLabelText("Execution model")).toHaveValue("gateway_primary"),
-  );
-  await user.clear(screen.getByLabelText("Maximum agent turns"));
-  await user.type(screen.getByLabelText("Maximum agent turns"), "80");
+  const maxTurnsInput = await screen.findByLabelText("Maximum agent turns");
+  await waitFor(() => expect(maxTurnsInput).toBeEnabled());
+  await user.clear(maxTurnsInput);
+  await user.type(maxTurnsInput, "80");
   await user.clear(screen.getByLabelText("Maximum tool calls"));
   await user.type(screen.getByLabelText("Maximum tool calls"), "240");
   expect(screen.getByLabelText("Agent Timeout (s)")).toHaveValue(1800);

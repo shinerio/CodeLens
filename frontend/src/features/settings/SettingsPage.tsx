@@ -3,7 +3,6 @@ import {
   Check,
   CheckCircle2,
   KeyRound,
-  Network,
   Pencil,
   Plus,
   Plug,
@@ -11,6 +10,7 @@ import {
   ServerCog,
   SlidersHorizontal,
   Trash2,
+  X,
   XCircle,
   Zap,
 } from "lucide-react";
@@ -60,13 +60,10 @@ const DEFAULT_MAX_TOOL_CALLS = 300;
 const DEFAULT_MAX_IDENTICAL_TOOL_RESULTS = 3;
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 30;
 
-function errorMessage(error: unknown) {
-  return error instanceof Error ? error.message : "Unable to save the gateway.";
-}
-
 export function SettingsPage() {
   const { t } = useI18n();
   const queryClient = useQueryClient();
+  const [showGatewayModal, setShowGatewayModal] = useState(false);
   const [editingGatewayId, setEditingGatewayId] = useState<string | null>(null);
   const [name, setName] = useState("");
   const [apiKey, setApiKey] = useState("");
@@ -420,6 +417,33 @@ export function SettingsPage() {
     setApiType(gateway.api_type);
     setMaxTokens(gateway.max_tokens);
     setThinkingLevel(gateway.thinking_level);
+    setShowGatewayModal(true);
+  }
+
+  function handleAddGateway() {
+    setEditingGatewayId(null);
+    setName("");
+    setApiKey("");
+    setModel("");
+    setBaseUrl("");
+    setVendor("openai");
+    setApiType("chat_completions");
+    setMaxTokens(65536);
+    setThinkingLevel("disabled");
+    setShowGatewayModal(true);
+  }
+
+  function closeModal() {
+    setShowGatewayModal(false);
+    setEditingGatewayId(null);
+    setName("");
+    setApiKey("");
+    setModel("");
+    setBaseUrl("");
+    setVendor("openai");
+    setApiType("chat_completions");
+    setMaxTokens(65536);
+    setThinkingLevel("disabled");
   }
 
   function handleDelete(gateway: ModelGateway) {
@@ -434,26 +458,6 @@ export function SettingsPage() {
       saveMutation.mutate();
     }
   }
-
-  const mutationError =
-    saveMutation.error ??
-    executionLimitsMutation.error ??
-    activateMutation.error ??
-    deleteMutation.error ??
-    connectivityMutation.error ??
-    availabilityMutation.error ??
-    gatewayQuery.error ??
-    logLevelQuery.error ??
-    logLevelMutation.error ??
-    recentRepositorySettingsQuery.error ??
-    recentRepositorySettingsMutation.error ??
-    instructionFileSettingsQuery.error ??
-    instructionFileSettingsMutation.error ??
-    reviewCompletionSettingsQuery.error ??
-    reviewCompletionSettingsMutation.error ??
-    toolLimitsQuery.error ??
-    toolLimitsMutation.error ??
-    resetAllMutation.error;
 
   return (
     <section className="settings-page">
@@ -481,7 +485,6 @@ export function SettingsPage() {
 
       <div className="settings-page__layout">
         <main className="settings-main">
-          <div className="gateway-workbench">
           <section className="gateway-inventory">
             <header className="gateway-section-heading">
               <div>
@@ -645,131 +648,16 @@ export function SettingsPage() {
                   </footer>
                 </article>
               ))}
+              <button
+                className="gateway-card gateway-card--add"
+                type="button"
+                onClick={handleAddGateway}
+              >
+                <Plus aria-hidden="true" />
+                <span>{t("settings.addGateway")}</span>
+              </button>
             </div>
           </section>
-
-          <form className="gateway-form" onSubmit={handleSubmit}>
-            <div className="gateway-section-heading gateway-section-heading--form">
-              <div>
-                <p>{t("settings.configurationStep")}</p>
-                <h2>{isEditing ? t("settings.updateGateway") : t("settings.addGateway")}</h2>
-              </div>
-              <Plus aria-hidden="true" />
-            </div>
-            <div className="gateway-form__fields">
-              <label className="settings-field">
-                <span className="settings-field__label">
-                  <ServerCog aria-hidden="true" /> Provider
-                </span>
-                <select value={vendor} onChange={(event) => {
-                  const next = event.currentTarget.value as ModelProviderVendor;
-                  setVendor(next);
-                  if (next === "deepseek" || next === "zhipu") setApiType("chat_completions");
-                }}>
-                  <option value="openai">OpenAI-compatible</option>
-                  <option value="deepseek">DeepSeek</option>
-                  <option value="zhipu">Zhipu (GLM)</option>
-                </select>
-                <small>{vendor === "deepseek" ? "Uses DeepSeek thinking and Chat Completions semantics." : vendor === "zhipu" ? "Uses GLM thinking and Chat Completions semantics." : "Uses OpenAI SDK request semantics."}</small>
-              </label>
-              <label className="settings-field">
-                <span className="settings-field__label">
-                  <ServerCog aria-hidden="true" /> {t("settings.gatewayName")}
-                </span>
-                <input value={name} onChange={(event) => setName(event.currentTarget.value)} />
-              </label>
-              <label className="settings-field settings-field--secret">
-                <span className="settings-field__label">
-                  <KeyRound aria-hidden="true" /> {t("settings.apiKey")}
-                </span>
-                <input
-                  aria-label={t("settings.apiKey")}
-                  autoComplete="new-password"
-                  type="password"
-                  value={apiKey}
-                  onChange={(event) => setApiKey(event.currentTarget.value)}
-                />
-                <small>{isEditing ? t("settings.rotateKey") : t("settings.firstKey")}</small>
-              </label>
-              <label className="settings-field">
-                <span className="settings-field__label">
-                  <Network aria-hidden="true" /> {t("settings.baseUrl")}
-                </span>
-                <input
-                  inputMode="url"
-                  placeholder="https://api.openai.com/v1"
-                  type="url"
-                  value={baseUrl}
-                  onChange={(event) => setBaseUrl(event.currentTarget.value)}
-                />
-              </label>
-              <label className="settings-field">
-                <span className="settings-field__label">
-                  <ServerCog aria-hidden="true" /> {t("settings.model")}
-                </span>
-                <input value={model} onChange={(event) => setModel(event.currentTarget.value)} />
-              </label>
-              <label className="settings-field">
-                <span className="settings-field__label">
-                  <ServerCog aria-hidden="true" /> {t("settings.apiType")}
-                </span>
-                <select
-                  value={apiType}
-                  disabled={vendor === "deepseek" || vendor === "zhipu"}
-                  onChange={(event) => setApiType(event.currentTarget.value as GatewayApiType)}
-                >
-                  <option value="chat_completions">Chat Completions</option>
-                  <option value="responses">Responses</option>
-                </select>
-              </label>
-              <label className="settings-field">
-                <span className="settings-field__label">
-                  <ServerCog aria-hidden="true" /> {t("settings.maxTokens")}
-                </span>
-                <input
-                  type="number"
-                  min={256}
-                  value={maxTokens}
-                  onChange={(event) => setMaxTokens(Number(event.currentTarget.value) || 4096)}
-                />
-                <small>{t("settings.maxTokensHint")}</small>
-              </label>
-              <label className="settings-field">
-                <span className="settings-field__label">
-                  <ServerCog aria-hidden="true" /> {t("settings.thinkingLevel")}
-                </span>
-                <select
-                  value={thinkingLevel}
-                  onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
-                >
-                  <option value="disabled">{t("settings.thinkingDisabled")}</option>
-                  <option value="low">{t("settings.thinkingLow")}</option>
-                  <option value="medium">{t("settings.thinkingMedium")}</option>
-                  <option value="high">{t("settings.thinkingHigh")}</option>
-                </select>
-              </label>
-            </div>
-
-            {mutationError !== null ? (
-              <div className="settings-alert" role="alert">
-                {errorMessage(mutationError)}
-              </div>
-            ) : null}
-
-            <footer className="gateway-form__footer">
-              {isEditing ? (
-                <button className="gateway-form__cancel" type="button" onClick={clearForm}>
-                  {t("common.cancel")}
-                </button>
-              ) : (
-                <span>{saveMutation.isSuccess ? t("settings.saved") : t("settings.secretWriteOnly")}</span>
-              )}
-              <button disabled={isSaveDisabled} type="submit">
-                {isEditing ? t("common.save") : t("settings.addGateway")}
-              </button>
-            </footer>
-          </form>
-          </div>
 
           {/* Agent Execution Panel */}
           <section className="settings-panel">
@@ -778,21 +666,6 @@ export function SettingsPage() {
               <h2 className="settings-panel__title">{t("settings.executionLimits")}</h2>
             </header>
             <div className="settings-panel__grid">
-              <label className="settings-field">
-                <span className="settings-field__label">{t("settings.executionModel")}</span>
-                <select
-                  aria-label={t("settings.executionModel")}
-                  disabled={gateways.length === 0}
-                  value={runtimeGateway?.gateway_id ?? ""}
-                  onChange={(event) => setRuntimeGatewayId(event.currentTarget.value)}
-                >
-                  {gateways.map((gateway) => (
-                    <option key={gateway.gateway_id} value={gateway.gateway_id}>
-                      {gateway.name} · {gateway.model}
-                    </option>
-                  ))}
-                </select>
-              </label>
               <label className="settings-field">
                 <span className="settings-field__label">{t("settings.agentTimeout")}</span>
                 <input
@@ -1240,6 +1113,144 @@ export function SettingsPage() {
           </section>
         </main>
       </div>
+
+      {showGatewayModal && (
+        <div className="gateway-modal-overlay" onClick={closeModal}>
+          <div className="gateway-modal" onClick={(e) => e.stopPropagation()}>
+            <header className="gateway-modal__header">
+              <h2>{isEditing ? t("settings.updateGateway") : t("settings.addGateway")}</h2>
+              <button onClick={closeModal} type="button"><X aria-hidden="true" /></button>
+            </header>
+            <form onSubmit={handleSubmit}>
+              <div className="gateway-modal__fields">
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.provider")}</span>
+                  <select
+                    value={vendor}
+                    onChange={(event) => setVendor(event.currentTarget.value as ModelProviderVendor)}
+                  >
+                    <option value="openai">OpenAI</option>
+                    <option value="anthropic">Anthropic</option>
+                    <option value="azure">Azure OpenAI</option>
+                    <option value="gemini">Google Gemini</option>
+                    <option value="ollama">Ollama</option>
+                    <option value="openrouter">OpenRouter</option>
+                    <option value="custom">Custom</option>
+                  </select>
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.gatewayName")}</span>
+                  <input
+                    aria-label={t("settings.gatewayName")}
+                    onChange={(event) => setName(event.currentTarget.value)}
+                    placeholder={t("settings.gatewayNamePlaceholder")}
+                    required
+                    type="text"
+                    value={name}
+                  />
+                </label>
+                <label className="settings-field settings-field--secret">
+                  <span className="settings-field__label">
+                    <KeyRound aria-hidden="true" />
+                    {t("settings.apiKey")}
+                  </span>
+                  <input
+                    aria-label={t("settings.apiKey")}
+                    autoComplete="off"
+                    onChange={(event) => setApiKey(event.currentTarget.value)}
+                    placeholder={isEditing ? t("settings.apiKeyPreserved") : "sk-..."}
+                    required={!isEditing}
+                    spellCheck={false}
+                    type="password"
+                    value={apiKey}
+                  />
+                  <small>{isEditing ? t("settings.apiKeyEditHint") : t("settings.apiKeyNote")}</small>
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.baseUrl")}</span>
+                  <input
+                    aria-label={t("settings.baseUrl")}
+                    onChange={(event) => setBaseUrl(event.currentTarget.value)}
+                    placeholder="https://api.openai.com/v1"
+                    required
+                    type="url"
+                    value={baseUrl}
+                  />
+                  <small>{t("settings.baseUrlNote")}</small>
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.model")}</span>
+                  <input
+                    aria-label={t("settings.model")}
+                    onChange={(event) => setModel(event.currentTarget.value)}
+                    placeholder="gpt-4o"
+                    required
+                    type="text"
+                    value={model}
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.apiType")}</span>
+                  <select
+                    value={apiType}
+                    onChange={(event) => setApiType(event.currentTarget.value as GatewayApiType)}
+                  >
+                    <option value="chat_completions">Chat Completions</option>
+                    <option value="responses">Responses</option>
+                  </select>
+                  <small>{t("settings.apiTypeNote")}</small>
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxTokens")}</span>
+                  <input
+                    aria-label={t("settings.maxTokens")}
+                    min={1024}
+                    onChange={(event) => setMaxTokens(Number(event.currentTarget.value))}
+                    required
+                    step={1024}
+                    type="number"
+                    value={maxTokens}
+                  />
+                  <small>{t("settings.maxTokensNote")}</small>
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.thinkingLevel")}</span>
+                  <select
+                    value={thinkingLevel}
+                    onChange={(event) => setThinkingLevel(event.currentTarget.value as ThinkingLevel)}
+                  >
+                    <option value="disabled">{t("settings.thinkingDisabled")}</option>
+                    <option value="low">{t("settings.thinkingLow")}</option>
+                    <option value="medium">{t("settings.thinkingMedium")}</option>
+                    <option value="high">{t("settings.thinkingHigh")}</option>
+                  </select>
+                  <small>{t("settings.thinkingLevelNote")}</small>
+                </label>
+              </div>
+              <footer className="gateway-modal__footer">
+                <span>
+                  {saveMutation.isPending
+                    ? t("common.saving")
+                    : isEditing
+                      ? t("settings.editingGateway")
+                      : t("settings.newGateway")}
+                </span>
+                <button
+                  className="gateway-modal__cancel"
+                  disabled={saveMutation.isPending}
+                  onClick={closeModal}
+                  type="button"
+                >
+                  {t("common.cancel")}
+                </button>
+                <button disabled={isSaveDisabled} type="submit">
+                  {isEditing ? t("common.save") : t("settings.addGateway")}
+                </button>
+              </footer>
+            </form>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
