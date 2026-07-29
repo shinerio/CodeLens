@@ -205,7 +205,10 @@ class ReviewOrchestrator:
                 )
                 await self._record(task_id, "lifecycle", message)
         except asyncio.CancelledError:
-            await self._workflow.interrupt(task_id)
+            if await self._workflow.cancellation_requested(task_id):
+                await self._workflow.cancel(task_id)
+            else:
+                await self._workflow.interrupt(task_id)
             raise
 
     async def _advance(

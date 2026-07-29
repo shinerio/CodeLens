@@ -67,6 +67,15 @@
   height: 15px;
 }
 
+.run-list-page__spin {
+  animation: run-list-page-spin 700ms linear infinite;
+}
+
+@keyframes run-list-page-spin {
+  from { transform: rotate(0deg); }
+  to { transform: rotate(360deg); }
+}
+
 .run-list-page__toolbar {
   display: flex;
   max-width: 1200px;

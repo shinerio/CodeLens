@@ -3,14 +3,12 @@ import {
   Activity,
   ChevronDown,
   CircleAlert,
-  CircleCheckBig,
   CircleStop,
   Copy,
   Download,
   FileDigit,
   ListChecks,
   PanelTop,
-  PlayCircle,
   RefreshCw,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -70,6 +68,18 @@ function statusLabel(status: string, t: (key: TranslationKey) => string) {
   return key === undefined ? status.replaceAll("_", " ") : t(key);
 }
 
+const SCOPE_KEYS: Readonly<Record<string, TranslationKey>> = {
+  branch: "run.scopeBranch",
+  commit: "run.scopeCommit",
+  uncommitted: "run.scopeUncommitted",
+  full: "run.scopeFull",
+};
+
+function scopeLabel(scopeType: string, t: (key: TranslationKey) => string) {
+  const key = SCOPE_KEYS[scopeType];
+  return key === undefined ? scopeType.replaceAll("_", " ") : t(key);
+}
+
 function bannerClass(status: string) {
   if (status === "partial") {
     return "run-banner run-banner--partial";
@@ -94,6 +104,7 @@ export function ReviewRunPage() {
   const { status: eventStatus, events, connectionState } = useReviewEvents(taskId);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exportResult, setExportResult] = useState<ExportResultResponse | null>(null);
+  const [linkCopied, setLinkCopied] = useState(false);
 
   const pluginsQuery = useQuery({
     queryKey: PLUGIN_QUERY_KEY,
@@ -127,6 +138,16 @@ export function ReviewRunPage() {
   const enabledPlugins = (pluginsQuery.data ?? []).filter((p) => p.is_enabled);
 
   function handleUnsupported() { window.alert(t("common.notSupported")); }
+
+  async function handleCopyLink() {
+    try {
+      await navigator.clipboard.writeText(window.location.href);
+      setLinkCopied(true);
+      setTimeout(() => setLinkCopied(false), 2000);
+    } catch {
+      window.alert(t("run.copyLinkFailed"));
+    }
+  }
 
   const reviewQuery = useQuery({
     queryKey: ["review", taskId],
@@ -172,8 +193,17 @@ export function ReviewRunPage() {
     },
   });
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   async function refreshProgress() {
+    setIsRefreshing(true);
+    const start = Date.now();
     await Promise.all([reviewQuery.refetch(), findingsQuery.refetch(), transcriptQuery.refetch()]);
+    const elapsed = Date.now() - start;
+    if (elapsed < 500) {
+      await new Promise((resolve) => setTimeout(resolve, 500 - elapsed));
+    }
+    setIsRefreshing(false);
   }
 
   const currentStatus =
@@ -263,9 +293,9 @@ export function ReviewRunPage() {
           </p>
         </div>
         <div className="review-run-page__chips">
-          <button className="run-action" type="button" onClick={() => void refreshProgress()} disabled={reviewQuery.isFetching || transcriptQuery.isFetching}><RefreshCw aria-hidden="true" /> {t("runs.refresh")}</button>
-          <button className="run-action run-action--cancel" type="button" disabled={TERMINAL_STATUSES.has(currentStatus) || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}><CircleStop aria-hidden="true" /> {t("run.cancel")}</button>
-          <button className="run-action" type="button" onClick={handleUnsupported}><Copy aria-hidden="true" /> {t("run.copyLink")}</button>
+          <button className="run-action" type="button" onClick={() => void refreshProgress()} disabled={isRefreshing}><RefreshCw aria-hidden="true" className={isRefreshing ? "run-action__spin" : undefined} /> {t("runs.refresh")}</button>
+          <button className="run-action run-action--cancel" type="button" disabled={TERMINAL_STATUSES.has(currentStatus) || cancelMutation.isPending} onClick={() => cancelMutation.mutate()}><CircleStop aria-hidden="true" className={cancelMutation.isPending ? "run-action__spin" : undefined} /> {cancelMutation.isPending ? t("run.canceling") : t("run.cancel")}</button>
+          <button className="run-action" type="button" onClick={handleCopyLink}><Copy aria-hidden="true" /> {linkCopied ? t("run.linkCopied") : t("run.copyLink")}</button>
           <div className="run-export-menu">
             <button
               className="run-action"
@@ -298,14 +328,6 @@ export function ReviewRunPage() {
                 : t("reportPlugins.exportFailed")}
             </span>
           )}
-          <span className="run-chip">
-            <PlayCircle aria-hidden="true" />
-            {reviewQuery.data?.base_oid ?? t("run.waiting")}
-          </span>
-          <span className="run-chip">
-            <CircleCheckBig aria-hidden="true" />
-            {reviewQuery.data?.head_oid ?? t("run.waiting")}
-          </span>
         </div>
       </header>
 
@@ -382,7 +404,11 @@ export function ReviewRunPage() {
               <Icon aria-hidden="true" />
               <span className="run-tab__copy">
                 <span className="run-tab__label">{t(tab.labelKey)}</span>
-                <span className="run-tab__note">{t(tab.noteKey)}</span>
+                <span className="run-tab__note">
+                  {tab.id === "findings" && !TERMINAL_STATUSES.has(currentStatus)
+                    ? t("run.findingsNotePending")
+                    : t(tab.noteKey)}
+                </span>
               </span>
             </button>
           );
@@ -410,6 +436,32 @@ export function ReviewRunPage() {
                 <dt>{t("run.findings")}</dt>
                 <dd>{findingsQuery.data.length}</dd>
               </div>
+            </dl>
+          </article>
+
+          <article className="run-panel">
+            <h2>{t("run.scope")}</h2>
+            <dl className="run-summary">
+              <div>
+                <dt>{t("run.repository")}</dt>
+                <dd>{reviewQuery.data?.repository_name ?? "-"}</dd>
+              </div>
+              <div>
+                <dt>{t("run.scope")}</dt>
+                <dd>{scopeLabel(reviewQuery.data?.scope_type ?? "", t)}</dd>
+              </div>
+              {reviewQuery.data?.base_oid ? (
+                <div>
+                  <dt>{t("run.baseCommit")}</dt>
+                  <dd><code>{reviewQuery.data.base_oid.slice(0, 7)}</code></dd>
+                </div>
+              ) : null}
+              {reviewQuery.data?.head_oid ? (
+                <div>
+                  <dt>{t("run.headCommit")}</dt>
+                  <dd><code>{reviewQuery.data.head_oid.slice(0, 7)}</code></dd>
+                </div>
+              ) : null}
             </dl>
           </article>
 

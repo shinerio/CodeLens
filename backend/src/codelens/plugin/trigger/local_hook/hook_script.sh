@@ -4,7 +4,8 @@ set -euo pipefail
 
 CODELENS_API="${CODELENS_API:-http://127.0.0.1:__PORT__}"
 REPO_PATH="$(git rev-parse --show-toplevel)"
-HOOK_NAME="$(basename "$0")"
+HOOK_NAME="${1:-$(basename "$0")}"
+shift 2>/dev/null || true
 
 # JSON-escape a string: escape backslashes, double quotes, and control characters
 json_escape() {

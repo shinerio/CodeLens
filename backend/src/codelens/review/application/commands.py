@@ -233,13 +233,20 @@ class DeleteReviewHandler:
 
 
 class CancelReviewHandler:
-    """Persist cancellation intent without directly terminating Worker execution."""
+    """Persist cancellation intent and actively terminate Worker execution."""
 
-    def __init__(self, store: ReviewStorePort) -> None:
+    def __init__(
+        self,
+        store: ReviewStorePort,
+        cancel_task: Callable[[str], None] | None = None,
+    ) -> None:
         self._store = store
+        self._cancel_task = cancel_task
 
     async def handle(self, task_id: str) -> ReviewRecord:
         record = await self._store.request_cancellation(task_id)
         if record is None:
             raise ReviewNotFoundError("review does not exist")
+        if self._cancel_task is not None:
+            self._cancel_task(task_id)
         return record

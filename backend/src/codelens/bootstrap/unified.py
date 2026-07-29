@@ -371,7 +371,7 @@ def build_unified_backend(
             worktree_registry,
             worktree_manager,
         ),
-        cancel_review=CancelReviewHandler(review_store),
+        cancel_review=CancelReviewHandler(review_store, cancel_task=scheduler.cancel_task),
         retry_review=RetryReviewHandler(review_store),
         events=SqlEventOutbox(database, event_bus=event_bus),
         event_bus=event_bus,

@@ -72,6 +72,7 @@ class ReviewScheduler:
         self._record_failure = record_failure
         self._record_claim = record_claim
         self._stop = asyncio.Event()
+        self._active_tasks: dict[str, asyncio.Task[None]] = {}
         if max_active_reviews < 1:
             raise ValueError("active review limit must be positive")
         if not 0 < poll_min_seconds <= poll_max_seconds:
@@ -87,6 +88,23 @@ class ReviewScheduler:
         """Stop claiming new jobs and begin bounded active-task cancellation."""
 
         self._stop.set()
+
+    def cancel_task(self, task_id: str) -> None:
+        """Cancel a running review task by its ID."""
+
+        task = self._active_tasks.get(task_id)
+        if task is not None:
+            task.cancel()
+
+    def _make_unregister_callback(
+        self, task_id: str
+    ) -> Callable[[asyncio.Task[None]], None]:
+        """Return a callback that removes a task from the active registry."""
+
+        def unregister(task: asyncio.Task[None]) -> None:
+            self._active_tasks.pop(task_id, None)
+
+        return unregister
 
     async def run(self, stop: asyncio.Event | None = None) -> None:
         """Acquire singleton ownership, recover once, and supervise isolated tasks."""
@@ -122,7 +140,9 @@ class ReviewScheduler:
                     task = tasks.create_task(self._execute_isolated(job.task_id))
                     _LOGGER.info("Review job claimed", extra={"task_id": job.task_id})
                     active.add(task)
+                    self._active_tasks[job.task_id] = task
                     task.add_done_callback(active.discard)
+                    task.add_done_callback(self._make_unregister_callback(job.task_id))
                     claimed = True
                 if claimed:
                     backoff = self._poll_min_seconds

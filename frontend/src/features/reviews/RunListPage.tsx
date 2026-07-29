@@ -72,8 +72,17 @@ export function RunListPage() {
     });
   }
 
+  const [isRefreshing, setIsRefreshing] = useState(false);
+
   async function refreshReviews() {
+    setIsRefreshing(true);
+    const start = Date.now();
     await reviewsQuery.refetch();
+    const elapsed = Date.now() - start;
+    if (elapsed < 500) {
+      await new Promise((resolve) => setTimeout(resolve, 500 - elapsed));
+    }
+    setIsRefreshing(false);
   }
 
   function handleDelete(taskId: string, repositoryName: string) {
@@ -98,7 +107,7 @@ export function RunListPage() {
   const runCountKey = reviews.length === 1 ? "runs.count" : "runs.countPlural";
 
   return <section className="run-list-page">
-    <header><div><p>{t("runs.eyebrow")}</p><h1>{t("runs.title")}</h1><span>{t("runs.subtitle")}</span></div><div><button type="button" onClick={() => void refreshReviews()} disabled={reviewsQuery.isFetching}><RefreshCw aria-hidden="true" /> {t("runs.refresh")}</button><Link to="/reviews/new"><Plus aria-hidden="true" /> {t("nav.newReview")}</Link></div></header>
+    <header><div><p>{t("runs.eyebrow")}</p><h1>{t("runs.title")}</h1><span>{t("runs.subtitle")}</span></div><div><button type="button" onClick={() => void refreshReviews()} disabled={isRefreshing}><RefreshCw aria-hidden="true" className={isRefreshing ? "run-list-page__spin" : undefined} /> {t("runs.refresh")}</button><Link to="/reviews/new"><Plus aria-hidden="true" /> {t("nav.newReview")}</Link></div></header>
     <div className="run-list-page__toolbar"><label><Search aria-hidden="true" /><input aria-label={t("runs.search")} placeholder={t("runs.searchPlaceholder")} value={query} onChange={(event) => setQuery(event.currentTarget.value)} /></label>{selectedTaskIds.size > 0 ? <button className="run-list-page__batch-delete" type="button" disabled={deleteMutation.isPending} onClick={handleBatchDelete}><Trash2 aria-hidden="true" /> {locale === "zh-CN" ? `删除已选 (${selectedTaskIds.size})` : `Delete selected (${selectedTaskIds.size})`}</button> : null}<span>{t(runCountKey, { count: reviews.length })}</span></div>
     {deleteMutation.isError || retryMutation.isError ? <p className="run-list-page__error" role="alert">{deleteMutation.error instanceof Error ? deleteMutation.error.message : retryMutation.error instanceof Error ? retryMutation.error.message : deleteMutation.isError ? t("runs.unableDelete") : t("runs.unableRetry")}</p> : null}
     <div className="run-list-page__table">

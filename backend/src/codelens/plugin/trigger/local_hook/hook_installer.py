@@ -22,7 +22,7 @@ class HookInstaller:
     HOOK_SCRIPT_TEMPLATE = "hook_script.sh"
     STANDALONE_SCRIPT_NAME = "code-lens-review-hook.sh"
     MARKER_COMMENT = "# CodeLens Trigger Hook"
-    INJECTION_LINE_TEMPLATE = '"$GIT_DIR/hooks/{script_name}" "$@" || true'
+    INJECTION_LINE_TEMPLATE = '"$(cd "$(dirname "$0")" && pwd)/{script_name}" "$(basename "$0")" "$@" || true'
     SHEBANG = "#!/usr/bin/env bash"
 
     def __init__(self, plugin_dir: Path) -> None:
