@@ -11,7 +11,11 @@ from codelens.interface.http.dependencies import (
     HttpProblem,
     get_components,
 )
-from codelens.plugin.domain.models import PluginRecord
+from codelens.plugin.domain.models import (
+    PluginRecord,
+    ReportCapability,
+    TriggerCapability,
+)
 
 router = APIRouter(prefix="/api/plugins", tags=["plugins"])
 _LOGGER = logging.getLogger("codelens.plugins")
@@ -50,6 +54,20 @@ class PluginRecordResponse(BaseModel):
     @classmethod
     def from_domain(cls, record: PluginRecord) -> "PluginRecordResponse":
         """Convert domain record to API response."""
+        capabilities: dict[str, Any] = {}
+        for key, cap in record.manifest.capabilities.items():
+            if isinstance(cap, TriggerCapability):
+                capabilities[key] = {
+                    "trigger_type": cap.trigger_type,
+                    "supported_events": list(cap.supported_events),
+                    "entry_point": cap.entry_point,
+                    "config_schema": cap.config_schema,
+                }
+            elif isinstance(cap, ReportCapability):
+                capabilities[key] = {
+                    "entry_point": cap.entry_point,
+                    "config_schema": cap.config_schema,
+                }
         return cls(
             plugin_id=record.plugin_id,
             manifest=PluginManifestResponse(
@@ -59,7 +77,7 @@ class PluginRecordResponse(BaseModel):
                 description=record.manifest.description,
                 author=record.manifest.author,
                 platform=record.manifest.platform,
-                capabilities=record.manifest.capabilities,
+                capabilities=capabilities,
                 min_codelens_version=record.manifest.min_codelens_version,
             ),
             is_builtin=record.is_builtin,
