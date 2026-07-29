@@ -94,6 +94,31 @@ stop_services() {
     fi
     stop_process "$pid_file"
   done
+
+  # Kill any remaining processes listening on backend/frontend ports
+  # This handles orphaned processes that weren't tracked in PID files
+  local port
+  for port in 8800 5173; do
+    local pids
+    pids=$(ss -tlnp 2>/dev/null | grep ":$port " | grep -oP 'pid=\K[0-9]+' | sort -u || true)
+    for pid in $pids; do
+      if is_running "$pid"; then
+        was_running=true
+        stop_pid_tree "$pid"
+      fi
+    done
+  done
+
+  # Also kill any codelens-review processes by name (catch orphans)
+  local codelens_pids
+  codelens_pids=$(pgrep -f "codelens-review start" 2>/dev/null || true)
+  for pid in $codelens_pids; do
+    if is_running "$pid"; then
+      was_running=true
+      stop_pid_tree "$pid"
+    fi
+  done
+
   remove_runtime_state
   if [ "$was_running" = true ]; then
     printf 'CodeLens stopped.\n'
