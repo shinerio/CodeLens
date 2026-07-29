@@ -189,7 +189,7 @@ def _finding_from_payload(payload: str) -> Finding:
     )
 
 
-def _review_record(row: Any) -> ReviewRecord:
+def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
     scope: dict[str, object] = json.loads(str(row["scope_json"]))
     selected_agents: list[str] = json.loads(str(row["selected_agent_versions_json"]))
     return ReviewRecord(
@@ -210,6 +210,7 @@ def _review_record(row: Any) -> ReviewRecord:
         ),
         created_at=_as_utc(cast(datetime, row["created_at"])),
         is_deleted=row["deleted_at"] is not None,
+        finding_count=finding_count,
     )
 
 
@@ -483,7 +484,18 @@ class SqlReviewStore:
                 .mappings()
                 .all()
             )
-        return tuple(_review_record(row) for row in rows)
+            if not rows:
+                return ()
+            task_ids = [str(row["task_id"]) for row in rows]
+            count_rows = (
+                await session.execute(
+                    select(findings.c.task_id, func.count().label("cnt"))
+                    .where(findings.c.task_id.in_(task_ids))
+                    .group_by(findings.c.task_id)
+                )
+            ).mappings()
+            finding_counts = {str(row["task_id"]): int(row["cnt"]) for row in count_rows}
+        return tuple(_review_record(row, finding_counts.get(str(row["task_id"]), 0)) for row in rows)
 
     async def retry_failed_review(
         self,

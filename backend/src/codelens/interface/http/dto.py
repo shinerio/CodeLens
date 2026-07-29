@@ -329,6 +329,7 @@ class ReviewResponse(StrictDto):
     cancellation_requested: bool
     repository_name: str
     created_at: datetime
+    finding_count: Annotated[int, Field(ge=0)] = 0
 
     @classmethod
     def from_domain(cls, review: ReviewRecord) -> "ReviewResponse":
@@ -345,6 +346,7 @@ class ReviewResponse(StrictDto):
             cancellation_requested=review.cancellation_requested,
             repository_name=review.repository_name,
             created_at=review.created_at,
+            finding_count=review.finding_count,
         )
 
 

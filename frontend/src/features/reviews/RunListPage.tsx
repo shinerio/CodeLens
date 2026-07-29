@@ -106,6 +106,7 @@ export function RunListPage() {
         <button className="run-list-page__select" aria-label={locale === "zh-CN" ? "选择全部记录" : "Select all reviews"} aria-pressed={allVisibleSelected} data-selected={allVisibleSelected} type="button" onClick={toggleVisibleTasks} />
         <span>{t("runs.repository")}</span>
         <span>{t("runs.status")}</span>
+        <span className="run-list-page__findings">{t("runs.findings")}</span>
         <span className="run-list-page__scope">{t("runs.scope")}</span>
         <span className="run-list-page__created">{t("runs.created")}</span>
         <span />
@@ -119,6 +120,7 @@ export function RunListPage() {
           <Link className="run-list-page__details" aria-label={t("runs.open", { name: review.repository_name })} to={`/runs/${review.task_id}`}>
             <strong>{review.repository_name}<small>{review.task_id}</small></strong>
             <span className="run-list-page__status" data-status={review.status}>{REVIEW_STATUS_KEYS[review.status] === undefined ? review.status.replaceAll("_", " ") : t(REVIEW_STATUS_KEYS[review.status])}</span>
+            <span className="run-list-page__findings">{review.status === "completed" ? review.finding_count : "-"}</span>
             <span className="run-list-page__scope">{SCOPE_KEYS[review.scope_type] === undefined ? review.scope_type : t(SCOPE_KEYS[review.scope_type])}</span>
             <time className="run-list-page__created" dateTime={review.created_at}>{formatUserDateTime(review.created_at, locale)}</time>
           </Link>

@@ -112,7 +112,7 @@
 .run-list-page__row {
   display: grid;
   min-height: 58px;
-  grid-template-columns: 2fr 1fr 1fr 1.3fr 38px;
+  grid-template-columns: 38px 2fr 1fr 0.6fr 1fr 1.3fr 80px;
   align-items: center;
   gap: 12px;
   padding: 9px 14px;
@@ -159,8 +159,8 @@
   display: grid !important;
   min-width: 0;
   min-height: 58px !important;
-  grid-column: 2 / 6;
-  grid-template-columns: minmax(0, 2fr) minmax(0, 1fr) minmax(0, 1fr) minmax(0, 1.3fr);
+  grid-column: 2 / 7;
+  grid-template-columns: 2fr 1fr 0.6fr 1fr 1.3fr;
   align-items: center;
   gap: 12px;
   padding: 0 !important;
@@ -192,9 +192,10 @@
   }
 
   .run-list-page__row--header {
-    grid-template-columns: 34px minmax(0, 1.7fr) minmax(0, 1fr) 72px;
+    grid-template-columns: 38px minmax(0, 2fr) minmax(0, 1fr) 80px;
   }
 
+  .run-list-page__findings,
   .run-list-page__scope,
   .run-list-page__created {
     display: none;
@@ -202,7 +203,7 @@
 
   .run-list-page__details {
     grid-column: 2 / 3;
-    grid-template-columns: minmax(0, 1fr) 70px;
+    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
   }
 
   .run-list-page__toolbar {

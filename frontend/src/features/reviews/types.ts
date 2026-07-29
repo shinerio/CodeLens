@@ -49,4 +49,5 @@ export type ReviewResponse = {
   cancellation_requested: boolean;
   repository_name: string;
   created_at: string;
+  finding_count: number;
 };

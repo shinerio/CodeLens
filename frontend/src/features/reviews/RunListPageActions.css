@@ -1,5 +1,5 @@
 .run-list-page__row {
-  grid-template-columns: 34px 2fr 1fr 1fr 1.3fr 76px;
+  grid-template-columns: 38px 2fr 1fr 0.6fr 1fr 1.3fr 80px;
 }
 
 .run-list-page__select {
@@ -98,6 +98,6 @@
 
 @media (max-width: 700px) {
   .run-list-page__row:not(.run-list-page__row--header) {
-    grid-template-columns: 34px minmax(0, 1fr) 72px;
+    grid-template-columns: 38px minmax(0, 3fr) 80px;
   }
 }

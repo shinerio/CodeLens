@@ -121,6 +121,7 @@ class ReviewRecord:
     repository_name: str
     created_at: datetime
     is_deleted: bool
+    finding_count: int = 0
 
 
 @dataclass(frozen=True)
