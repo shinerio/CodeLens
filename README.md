@@ -2,6 +2,15 @@
 
 CodeLens 是一个本地优先的多 Agent 代码 Review 工作台。它通过 Web 界面固定 Git 审查范围，在任务专属的隔离 worktree 中运行 Reviewer，并将模型输出转换为可定位、可验证的结构化 Findings。
 
+## 优势
+
+- 🎯 确定性图流控 (Deterministic Graph Orchestration)。基于 Graph Engineering 构建审查工作流，让 LLM 在受控的节点图谱中按需推理，兼顾灵活性与确定性。
+- 🔒 零伪完成机制 (Zero "Fake-Completion" Assurance)。
+   - 视角真实性：记录每次工具调用轨迹，无 read 操作禁止触发 review_file_done。 
+   - 覆盖全面性：未通过所有改动文件的单文件审核，严禁触发 task_done，彻底杜绝 AI 的“敷衍应付”。
+- ⚡ 多 Agent 专项并发审查 (Multi-Agent Specialist Swarm)。解耦单一 Agent 的庞杂任务，按正确性、安全性、性能、可维护性维度拆分为专属 Agent 并发执行。上下文更聚焦，召回率与准确率双高。
+- 🛠️ 全链路 CR 深度定制 (CR-Native Architecture)。Prompt、Tools 和 Skills 全面聚焦代码审查场景。无冗余指令干扰，极大地收敛模型注意力，显著提升审查深度与结果质量。
+
 > [!IMPORTANT]
 > 项目目前处于早期可用阶段（Phase 0–2）。当前可用的是 `correctness:v1` Reviewer；多 Reviewer、完整报告和 Artifact 浏览仍在开发中。
 
