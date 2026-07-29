@@ -195,7 +195,7 @@ frontend/src/
 
 - CodeLens 对源仓库严格只读。每个任务在应用数据目录创建自己拥有的 detached worktree，并在其中冻结 `ReviewSnapshot`；任务 worktree 只用于构建和读取不可变审查输入。
 - Agent、模型和沙箱不得访问用户原始工作区，不得写入任务 worktree，也不得修改源分支、index、tag 或任何其他 Git 引用。
-- 例外：`plugin` 上下文的导出能力在用户明确触发（手动或自动导出）时，可向被 Review 源仓库根目录下的 `CodeLensReview/` 目录写入导出产物（如 `findings.json`、`findings.md`）。该写入是用户主动发起的后置操作，不属于 Review 只读流程；写入路径必须是源仓库内、与代码目录隔离的固定子目录，不得修改任何代码文件、Git 引用或任务 worktree。外部插件实现 `ReportSinkPort` 时必须遵守此边界，不得越过配置的导出目录写入其他位置。内置 `local` 插件使用原子写入（`tempfile` + `os.replace`）。
+- 例外：`plugin` 上下文的导出能力在用户明确触发（手动或自动导出）时，可向被 Review 源仓库根目录下的 `CodeLensReview/` 目录写入带 UTC 时间戳且不覆盖历史结果的导出产物。该写入是用户主动发起的后置操作，不属于 Review 只读流程；写入路径必须是源仓库内、与代码目录隔离的固定子目录，不得修改任何代码文件、Git 引用或任务 worktree。外部插件实现 `ReportSinkPort` 时必须遵守此边界，不得越过配置的导出目录写入其他位置。内置 `local` 插件使用原子写入（`tempfile` + `os.replace`），并确保仓库根 `.gitignore` 覆盖配置的导出目录；这是该插件唯一可在导出目录外执行的仓库文件写入，且不得跟随 `.gitignore` 符号链接。
 - Finding 只包含问题位置、证据、影响、解释、复现信息和建议；模型输出、HTTP 契约与前端均不得承载可应用的代码变更。
 - Agent 的内置代码工具只能读取 Snapshot Manifest 中的 target/context 文件，并在每次读取前重新验证内容哈希；Git 旧版本读取只能使用 Snapshot 固定的 base/head OID，不能接受模型提供的任意 ref。
 - 默认本地部署不设置仓库根目录白名单，目录浏览从 POSIX `/` 或 Windows 现有盘符开始；因此操作系统用户可读的全部目录构成本地信任边界。该模式只能绑定回环地址。显式传入允许根目录时，后端仍必须在每次仓库访问时执行真实路径边界校验。
