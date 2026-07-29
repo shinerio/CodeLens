@@ -2,6 +2,7 @@
 
 import logging
 from collections.abc import Sequence
+from datetime import UTC, datetime
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -18,6 +19,9 @@ from codelens.plugin.application.hook_management import (
     RepositoryHookStatus,
 )
 from codelens.plugin.domain.models import (
+    PluginCapabilityError,
+    PluginConfigurationError,
+    PluginInstallError,
     PluginRecord,
     ReportCapability,
     TriggerCapability,
@@ -102,7 +106,7 @@ class InstallPluginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     git_url: Annotated[str, Field(min_length=1, max_length=512)]
-    ref: Annotated[str, Field(min_length=1, max_length=128)] = "main"
+    ref: Annotated[str | None, Field(min_length=1, max_length=128)] = None
 
 
 class InstallPluginResponse(BaseModel):
@@ -176,6 +180,15 @@ def _raise_hook_installation_problem(error: HookInstallationError) -> None:
     raise HttpProblem(500, "hook_install_failed", str(error)) from error
 
 
+def _raise_plugin_problem(error: PluginCapabilityError | PluginConfigurationError) -> None:
+    code = (
+        "invalid_plugin_capability"
+        if isinstance(error, PluginCapabilityError)
+        else "invalid_plugin_configuration"
+    )
+    raise HttpProblem(400, code, str(error)) from error
+
+
 @router.get("", response_model=list[PluginRecordResponse])
 async def list_plugins(
     components: Annotated[HttpComponents, Depends(get_components)],
@@ -193,16 +206,19 @@ async def install_plugin(
 ) -> InstallPluginResponse:
     """Install a plugin from a Git repository."""
 
-    _LOGGER.info("Installing plugin from %s@%s", request.git_url, request.ref)
-    record = await components.plugin_manager.install_from_git(
-        git_url=request.git_url,
-        ref=request.ref,
-    )
+    _LOGGER.info("Installing external plugin")
+    try:
+        record = await components.plugin_manager.install_from_git(
+            git_url=request.git_url,
+            ref=request.ref,
+        )
+    except PluginInstallError as error:
+        raise HttpProblem(400, "plugin_install_failed", str(error)) from error
     _LOGGER.info("Plugin installed: %s", record.plugin_id)
     return InstallPluginResponse(
         plugin_id=record.plugin_id,
         install_path=record.install_path or "",
-        installed_at="2026-07-29T00:00:00Z",  # TODO: use actual timestamp
+        installed_at=datetime.now(UTC).isoformat(),
     )
 
 
@@ -214,7 +230,10 @@ async def uninstall_plugin(
     """Uninstall a plugin."""
 
     _LOGGER.info("Uninstalling plugin: %s", plugin_id)
-    success = await components.plugin_manager.uninstall_plugin(plugin_id)
+    try:
+        success = await components.plugin_manager.uninstall_plugin(plugin_id)
+    except PluginInstallError as error:
+        raise HttpProblem(400, "plugin_uninstall_rejected", str(error)) from error
     if not success:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     _LOGGER.info("Plugin uninstalled: %s", plugin_id)
@@ -234,6 +253,8 @@ async def enable_trigger(
         _raise_hook_problem(error)
     except HookInstallationError as error:
         _raise_hook_installation_problem(error)
+    except (PluginCapabilityError, PluginConfigurationError) as error:
+        _raise_plugin_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)
@@ -247,7 +268,14 @@ async def disable_trigger(
     """Disable trigger capability for a plugin."""
 
     _LOGGER.info("Disabling trigger for plugin: %s", plugin_id)
-    record = await components.plugin_manager.disable_trigger(plugin_id)
+    try:
+        record = await components.trigger_hooks.disable_trigger(plugin_id)
+    except HookConfigurationError as error:
+        _raise_hook_problem(error)
+    except HookInstallationError as error:
+        _raise_hook_installation_problem(error)
+    except PluginCapabilityError as error:
+        _raise_plugin_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)
@@ -261,7 +289,10 @@ async def enable_report(
     """Enable report capability for a plugin."""
 
     _LOGGER.info("Enabling report for plugin: %s", plugin_id)
-    record = await components.plugin_manager.enable_report(plugin_id)
+    try:
+        record = await components.plugin_manager.enable_report(plugin_id)
+    except (PluginCapabilityError, PluginConfigurationError) as error:
+        _raise_plugin_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)
@@ -275,7 +306,10 @@ async def disable_report(
     """Disable report capability for a plugin."""
 
     _LOGGER.info("Disabling report for plugin: %s", plugin_id)
-    record = await components.plugin_manager.disable_report(plugin_id)
+    try:
+        record = await components.plugin_manager.disable_report(plugin_id)
+    except PluginCapabilityError as error:
+        _raise_plugin_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)
@@ -296,6 +330,8 @@ async def update_trigger_config(
         _raise_hook_problem(error)
     except HookInstallationError as error:
         _raise_hook_installation_problem(error)
+    except (PluginCapabilityError, PluginConfigurationError) as error:
+        _raise_plugin_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)
@@ -310,9 +346,12 @@ async def update_report_config(
     """Update report configuration for a plugin."""
 
     _LOGGER.info("Updating report config for plugin: %s", plugin_id)
-    record = await components.plugin_manager.update_report_config(
-        plugin_id, request.config
-    )
+    try:
+        record = await components.plugin_manager.update_report_config(
+            plugin_id, request.config
+        )
+    except (PluginCapabilityError, PluginConfigurationError) as error:
+        _raise_plugin_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)
@@ -327,7 +366,10 @@ async def set_auto_export(
     """Enable or disable automatic export for a plugin."""
 
     _LOGGER.info("Setting auto-export for plugin %s: %s", plugin_id, enabled)
-    record = await components.plugin_manager.set_auto_export(plugin_id, enabled)
+    try:
+        record = await components.plugin_manager.set_auto_export(plugin_id, enabled)
+    except PluginCapabilityError as error:
+        _raise_plugin_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)

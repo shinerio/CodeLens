@@ -70,11 +70,25 @@ test("persists the recent repository limit without layout overflow", async ({ pa
     await expect(input).toHaveAttribute("max", limit.max);
   }
 
-  const boxes = await Promise.all([limitInput.boundingBox(), saveButton.boundingBox()]);
-  expect(boxes[0]).not.toBeNull();
-  expect(boxes[1]).not.toBeNull();
-  if (boxes[0] !== null && boxes[1] !== null) {
-    expect(boxes[0].x + boxes[0].width).toBeLessThanOrEqual(boxes[1].x);
+  const reviewSettingsField = limitInput.locator("xpath=..");
+  await expect(reviewSettingsField).toContainText("Recent repository limit");
+  await expect(reviewSettingsField.getByRole("button", {
+    name: "Save recent repository limit",
+  })).toHaveCount(1);
+
+  const boxes = await Promise.all([
+    reviewSettingsField.boundingBox(),
+    limitInput.boundingBox(),
+    saveButton.boundingBox(),
+  ]);
+  expect(boxes.every((box) => box !== null)).toBe(true);
+  const [fieldBox, inputBox, buttonBox] = boxes;
+  if (fieldBox !== null && inputBox !== null && buttonBox !== null) {
+    expect(inputBox.x).toBeGreaterThanOrEqual(fieldBox.x);
+    expect(inputBox.x + inputBox.width).toBeLessThanOrEqual(fieldBox.x + fieldBox.width + 1);
+    expect(buttonBox.y).toBeGreaterThanOrEqual(inputBox.y + inputBox.height);
+    expect(buttonBox.x).toBeGreaterThanOrEqual(fieldBox.x);
+    expect(buttonBox.x + buttonBox.width).toBeLessThanOrEqual(fieldBox.x + fieldBox.width + 1);
   }
   expect(
     await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth),

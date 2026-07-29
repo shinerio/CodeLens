@@ -40,6 +40,7 @@ class CompositePluginLoader:
         """Initialize with empty instance caches."""
         self._trigger_instances: dict[str, TriggerSinkPort] = {}
         self._report_instances: dict[str, ReportSinkPort] = {}
+        self._generations: dict[str, int] = {}
 
     def load_plugin(
         self,
@@ -95,16 +96,14 @@ class CompositePluginLoader:
         self._trigger_instances[plugin_id] = external_instance
         return external_instance
 
-    def load_report(
+    def load_sink(
         self,
-        plugin_id: str,
         manifest: PluginManifest,
         install_path: Path,
     ) -> ReportSinkPort:
         """Load a report plugin instance.
 
         Args:
-            plugin_id: Unique plugin identifier.
             manifest: Plugin manifest with report capability.
             install_path: Plugin install directory.
 
@@ -114,6 +113,7 @@ class CompositePluginLoader:
         Raises:
             PluginLoadError: If plugin cannot be loaded.
         """
+        plugin_id = manifest.plugin_id
         if plugin_id in self._report_instances:
             return self._report_instances[plugin_id]
 
@@ -126,6 +126,17 @@ class CompositePluginLoader:
         instance = self._load_external_report(report_cap.entry_point, install_path, plugin_id)
         self._report_instances[plugin_id] = instance
         return instance
+
+    def invalidate(self, plugin_id: str) -> None:
+        """Discard cached instances and imported modules for one plugin."""
+
+        self._trigger_instances.pop(plugin_id, None)
+        self._report_instances.pop(plugin_id, None)
+        module_prefix = self._module_cache_prefix(plugin_id)
+        for module_name in tuple(sys.modules):
+            if module_name == module_prefix or module_name.startswith(f"{module_prefix}_"):
+                sys.modules.pop(module_name, None)
+        self._generations[plugin_id] = self._generations.get(plugin_id, 0) + 1
 
     def _load_external_trigger(
         self,
@@ -154,7 +165,7 @@ class CompositePluginLoader:
         if not module_file.suffix:
             module_file = module_file.with_suffix(".py")
 
-        cache_key = self._MODULE_PREFIX + plugin_id.replace("-", "_")
+        cache_key = self._module_cache_key(plugin_id)
         spec = importlib.util.spec_from_file_location(cache_key, module_file)
         if spec is None or spec.loader is None:
             raise PluginLoadError(
@@ -163,7 +174,8 @@ class CompositePluginLoader:
         module = importlib.util.module_from_spec(spec)
         sys.modules[cache_key] = module
         try:
-            spec.loader.exec_module(module)
+            source = module_file.read_text(encoding="utf-8")
+            exec(compile(source, str(module_file), "exec"), module.__dict__)
         except Exception as error:
             sys.modules.pop(cache_key, None)
             raise PluginLoadError(
@@ -217,7 +229,7 @@ class CompositePluginLoader:
         if not module_file.suffix:
             module_file = module_file.with_suffix(".py")
 
-        cache_key = self._MODULE_PREFIX + plugin_id.replace("-", "_")
+        cache_key = self._module_cache_key(plugin_id)
         spec = importlib.util.spec_from_file_location(cache_key, module_file)
         if spec is None or spec.loader is None:
             raise PluginLoadError(
@@ -226,7 +238,8 @@ class CompositePluginLoader:
         module = importlib.util.module_from_spec(spec)
         sys.modules[cache_key] = module
         try:
-            spec.loader.exec_module(module)
+            source = module_file.read_text(encoding="utf-8")
+            exec(compile(source, str(module_file), "exec"), module.__dict__)
         except Exception as error:
             sys.modules.pop(cache_key, None)
             raise PluginLoadError(
@@ -253,3 +266,11 @@ class CompositePluginLoader:
                 f"plugin {plugin_id} sink does not implement ReportSinkPort"
             )
         return sink
+
+    def _module_cache_key(self, plugin_id: str) -> str:
+        generation = self._generations.get(plugin_id, 0)
+        return f"{self._module_cache_prefix(plugin_id)}_{generation}"
+
+    @classmethod
+    def _module_cache_prefix(cls, plugin_id: str) -> str:
+        return cls._MODULE_PREFIX + plugin_id.replace("-", "_")

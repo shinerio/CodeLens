@@ -15,7 +15,7 @@ uv run --project backend pytest integration-tests/test_review_pipeline.py -v
 pnpm --dir integration-tests test
 ```
 
-Playwright 测试会创建一个 Review，在桌面和移动端视口下检查三个 Finding，并确保没有额外创建 Review。启动器会在全新的临时数据目录中启动仅绑定回环地址的后端和前端服务，无论测试成功或失败，结束后都会删除该目录。
+Playwright 测试会创建一个 Review，在 `1280x800` 桌面视口下检查三个 Finding，并确保没有额外创建 Review。启动器会在全新的临时数据目录中启动仅绑定回环地址的后端和前端服务，无论测试成功或失败，结束后都会删除该目录。
 
 可以通过以下环境变量覆盖端口和临时目录的父目录：
 

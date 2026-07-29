@@ -47,7 +47,13 @@ export type ExportResult = {
 
 export type InstallPluginRequest = {
   git_url: string;
-  ref?: string | null;
+  ref?: string;
+};
+
+export type InstallPluginResponse = {
+  plugin_id: string;
+  install_path: string;
+  installed_at: string;
 };
 
 export type UpdateConfigRequest = {

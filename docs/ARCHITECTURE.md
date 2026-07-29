@@ -30,6 +30,7 @@
 - Vitest 负责单元与组件测试，Playwright 负责端到端测试。
 - 依赖和命令统一通过 `pnpm` 管理。
 - Monaco Diff Editor 或同等成熟组件负责差异展示，不自行实现通用 diff 算法和编辑器内核。
+- Web 界面仅面向 PC 桌面浏览器，最小支持视口宽度为 1280px；移动端、窄屏和触摸端不属于产品支持范围，前端不得为其引入响应式断点、专用布局、导航或交互分支。
 
 ### 2.3 通信与运行
 
@@ -67,7 +68,7 @@
 - `GET /api/reviews` 返回未删除的持久化 Review 工作空间；`DELETE /api/reviews/{task_id}` 使用软删除语义，活动任务必须同时持久化取消意图。
 - `POST /api/reviews/{task_id}/retry` 仅接受失败且未删除的 Review，并从原任务已经冻结的请求输入创建具有新任务 ID、独立队列、检查点和事件流的 Review；原失败任务及其诊断保持不变，重试不得重新读取可变工作区来构造输入。
 - `POST /api/reviews/{task_id}/export` 仅接受终态 Review，body 为 `{plugin_id}`，触发该插件的导出。返回 `ExportResult`（包含 `plugin_id`、`task_id`、`success`、`output_path`、`error`、`exported_at`）；非终态 Review 必须拒绝；插件未启用或不存在必须返回明确错误。导出是用户主动发起的后置操作，不修改 Review 工作空间、Finding 或事件。
-- `/api/report-plugins` 是报告插件集合契约：`GET` 列出所有已安装插件（含内置与外部），`POST /install` 接收 `{git_url, ref}` 从外部 Git 仓库安装插件并克隆到 `data/plugins/{plugin_id}/`；`PUT /{plugin_id}/enable|disable` 启用或禁用插件；`PUT /{plugin_id}/config` 更新插件配置（必须匹配 manifest `config_schema`）；`PUT /{plugin_id}/auto-export` 设置自动导出开关；`DELETE /{plugin_id}` 卸载外部插件（内置插件不可卸载，必须拒绝）。插件记录持久化到 `data/report-plugins.json`；外部插件代码通过 `importlib` 加载，必须实现 `ReportSinkPort`。
+- `/api/plugins` 是统一插件集合契约：`GET` 列出所有已安装插件，`POST /install` 接收 `{git_url, ref?}` 并把外部 Git 插件安装到 `data/plugins/{plugin_id}/`，`DELETE /{plugin_id}` 卸载外部插件；`PUT /{plugin_id}/trigger/enable|disable|config` 和 `PUT /{plugin_id}/report/enable|disable|config|auto-export` 分别管理 Trigger 与 Report 能力，配置写入前必须匹配 manifest 的 `config_schema`，未声明的能力必须拒绝；本地 Git Hook 通过 `/trigger/install-hooks`、`/trigger/uninstall-hooks` 和 `/trigger/hook-status` 显式同步与查询。统一记录持久化到 `data/plugins.json`，写入必须原子化并串行保护读改写；内置插件 ID `local` 为保留 ID 且不可卸载。外部入口代码通过受控 loader 加载，实现 `TriggerSinkPort` 或 `ReportSinkPort`，卸载和重新安装必须使旧实例缓存失效。安装请求和普通运行日志不得记录可能携带凭证的完整 Git URL。
 - SSE 事件必须来自持久化 outbox；部分成功、超时和失败必须显式表达，不能伪装为完整成功。
 - 前端类型应从经过验证的契约生成或集中维护，不得通过 `any`、非空断言或未校验的类型转换绕过边界。
 
@@ -142,8 +143,7 @@ Interface 层当前包含 FastAPI 路由、请求/响应 DTO、SSE 端点和 Wor
 - `instruction_policy`：规则文件的发现、解析、优先级和冻结。
 - `findings`：Finding、Evidence、校验、去重、抑制和报告。
 - `capabilities`：Skill、MCP、静态工具、沙箱和仓库信任策略。
-- `reporting`：Review 意见的导出插件系统、本地文件导出和外部投递。包含 `PluginManifest`、`ReportSinkPort`、`PluginStorePort`、`PluginLoaderPort` 和 `ExportOrchestrator`。内置插件 `local-file-export` 不可卸载；外部插件从 Git 仓库克隆安装到 `data/plugins/{plugin_id}/`，通过 `importlib` 加载并实现 `ReportSinkPort`。插件 manifest 必须声明 `plugin_id`、`entry_point`、`config_schema` 和 `min_codelens_version`。多个插件可同时启用并设置自动导出；Review 到达终态后依次执行每个启用的自动导出插件，单个插件失败必须隔离，不得影响其他插件或 Review 终态。导出契约使用 `FindingExportEnvelope` 作为统一数据结构，由 `FindingExportFormatterPort` 渲染为 JSON 或 Markdown，再由 `ReportSinkPort` 投递。
-- `plugin`：内置插件的物理组织顶层包，包含 `report/`（导出类插件实现）和 `trigger/`（触发类插件系统）两个子包。`report/` 存放从 `reporting/infrastructure` 迁移的内置导出插件实现代码，`reporting/` 的 domain/application/infrastructure 基础设施保持不变。`trigger/` 是完整的限界上下文，负责外部事件（git hook、webhook）自动触发 Review 的插件生命周期管理和事件分发。包含 `TriggerManifest`、`TriggerRecord`、`TriggerConfig`、`TriggerSinkPort`、`TriggerStorePort`、`ReviewCreatorPort`、`TriggerPluginManager` 和 `TriggerOrchestrator`。内置触发插件 `local-git-hook` 通过安装 shell 脚本到 `.git/hooks/` 监听 git 事件，事件发生时回调 CodeLens HTTP API 触发 Review 创建。`ReviewCreatorPort` 作为防腐层桥接 trigger 和 review 上下文，trigger 不直接依赖 review 的应用层实现。触发插件状态持久化到 `data/trigger-plugins.json`，使用原子写入。Hook 脚本采用 fire-and-forget 模式（`--max-time 5` + `|| true`），确保 git 操作不因 CodeLens 不可达而阻塞。单个插件失败必须隔离，不得影响其他插件执行。`TriggerType.WEBHOOK` 枚举值已预留，未来 webhook 插件只需实现 `TriggerSinkPort` 并增加签名校验，复用相同的 `TriggerOrchestrator.dispatch_event()` 流程。
+- `plugin`：统一插件限界上下文，拥有 `PluginManifest`、`PluginRecord`、`PluginStorePort`、安装与加载 Port、Trigger/Report 能力状态、配置校验、事件分发和导出编排。一个安装单元可声明 Trigger、Report 或两种能力；内置保留插件 `local` 同时提供本地 Git Hook 触发和本地文件导出。外部插件安装到 `data/plugins/{plugin_id}/`，状态统一持久化到 `data/plugins.json`。`ReviewCreatorPort` 作为防腐层桥接 plugin 与 review 上下文，插件应用层不得直接依赖 review 应用实现。Hook 安装必须保留用户已有钩子，向 CodeLens 与用户钩子分别回放 `pre-push` 输入，并在跨仓库同步或状态持久化失败时恢复同步前状态；HTTP 回调保持 fire-and-forget，不得阻塞 Git 操作。导出使用 `FindingExportEnvelope`，多个自动导出插件按 review 来源平台路由，单个插件失败必须返回结构化 `ExportResult` 并与其他插件及 Review 终态隔离。
 - `governance`：审计、反馈、评测和规则建议，不直接改变正在运行的规则。
 
 跨上下文协作必须使用明确的应用服务、领域事件或 Port。一个上下文不得导入另一个上下文的 `infrastructure` 实现、ORM 模型或内部可变状态。共享模块只允许放置稳定、无领域归属且被多个上下文实际复用的最小基础类型。
@@ -195,7 +195,7 @@ frontend/src/
 
 - CodeLens 对源仓库严格只读。每个任务在应用数据目录创建自己拥有的 detached worktree，并在其中冻结 `ReviewSnapshot`；任务 worktree 只用于构建和读取不可变审查输入。
 - Agent、模型和沙箱不得访问用户原始工作区，不得写入任务 worktree，也不得修改源分支、index、tag 或任何其他 Git 引用。
-- 例外：`reporting` 上下文的导出插件在用户明确触发（手动或自动导出）时，可向被 Review 源仓库根目录下的 `CodeLensReview/` 目录写入导出产物（如 `findings.json`、`findings.md`）。该写入是用户主动发起的后置操作，不属于 Review 只读流程；写入路径必须是源仓库内、与代码目录隔离的固定子目录，不得修改任何代码文件、Git 引用或任务 worktree。外部插件实现 `ReportSinkPort` 时必须遵守此边界，不得越过配置的导出目录写入其他位置。内置 `local-file-export` 插件使用原子写入（`tempfile` + `os.replace`）。
+- 例外：`plugin` 上下文的导出能力在用户明确触发（手动或自动导出）时，可向被 Review 源仓库根目录下的 `CodeLensReview/` 目录写入导出产物（如 `findings.json`、`findings.md`）。该写入是用户主动发起的后置操作，不属于 Review 只读流程；写入路径必须是源仓库内、与代码目录隔离的固定子目录，不得修改任何代码文件、Git 引用或任务 worktree。外部插件实现 `ReportSinkPort` 时必须遵守此边界，不得越过配置的导出目录写入其他位置。内置 `local` 插件使用原子写入（`tempfile` + `os.replace`）。
 - Finding 只包含问题位置、证据、影响、解释、复现信息和建议；模型输出、HTTP 契约与前端均不得承载可应用的代码变更。
 - Agent 的内置代码工具只能读取 Snapshot Manifest 中的 target/context 文件，并在每次读取前重新验证内容哈希；Git 旧版本读取只能使用 Snapshot 固定的 base/head OID，不能接受模型提供的任意 ref。
 - 默认本地部署不设置仓库根目录白名单，目录浏览从 POSIX `/` 或 Windows 现有盘符开始；因此操作系统用户可读的全部目录构成本地信任边界。该模式只能绑定回环地址。显式传入允许根目录时，后端仍必须在每次仓库访问时执行真实路径边界校验。

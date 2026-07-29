@@ -87,16 +87,6 @@ async function assertThreeFindings(page: Page) {
     expect(commentZoneBox?.height).toBeGreaterThanOrEqual(
       opinionBox?.height ?? Number.POSITIVE_INFINITY,
     );
-    if ((page.viewportSize()?.width ?? 0) <= 760) {
-      const readScrollLeft = () => detail.locator(".finding-detail__source").evaluate(
-        (element) => element.scrollLeft,
-      );
-      if (expected.side === "new") {
-        await expect.poll(readScrollLeft).toBeGreaterThan(0);
-      } else {
-        await expect.poll(readScrollLeft).toBe(0);
-      }
-    }
     if (expected.pathState !== null) {
       await expect(detail).toContainText(expected.pathState);
     }
@@ -106,15 +96,19 @@ async function assertThreeFindings(page: Page) {
     .toBeTruthy();
 }
 
-test("creates one review with three findings across desktop and mobile", async ({ page }) => {
+test("creates one review with three findings on desktop", async ({ page }) => {
   const pageErrors: string[] = [];
   page.on("pageerror", (error) => pageErrors.push(error.message));
   await page.goto("/settings");
-  await page.getByLabel("Gateway name").fill("Integration fixture");
-  await page.getByLabel("API Key").fill("sk-integration-fixture-secret");
-  await page.getByLabel("Base URL").fill("http://127.0.0.1:9999");
-  await page.getByRole("textbox", { name: "Model", exact: true }).fill("fixture-model");
   await page.getByRole("button", { name: "Add gateway", exact: true }).click();
+  const gatewayModal = page.locator(".gateway-modal");
+  await gatewayModal.getByLabel("Gateway name").fill("Integration fixture");
+  await gatewayModal.getByLabel("API Key").fill("sk-integration-fixture-secret");
+  await gatewayModal.getByLabel("Base URL").fill("http://127.0.0.1:9999");
+  await gatewayModal
+    .getByRole("textbox", { name: "Model", exact: true })
+    .fill("fixture-model");
+  await gatewayModal.getByRole("button", { name: "Add gateway", exact: true }).click();
 
   await page.goto("/reviews/new");
   await chooseRepository(page, fixtureRepositoryPath());
@@ -137,13 +131,6 @@ test("creates one review with three findings across desktop and mobile", async (
   await expect(page.getByRole("status", { name: "Some model findings were skipped" }))
     .toContainText("1 duplicate");
 
-  await page.getByRole("button", { name: /Findings/ }).click();
-  await assertThreeFindings(page);
-  const reviewUrl = page.url();
-
-  await page.setViewportSize({ width: 390, height: 844 });
-  await page.reload();
-  expect(page.url()).toBe(reviewUrl);
   await page.getByRole("button", { name: /Findings/ }).click();
   await assertThreeFindings(page);
 

@@ -1,9 +1,12 @@
 """Orchestrate finding export to report plugins."""
 
 import logging
+from collections.abc import Sequence
+from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Protocol
 
+from codelens.findings.domain.models import Finding
 from codelens.plugin.domain.models import ExportResult, PluginRecord
 from codelens.plugin.domain.ports import (
     PluginLoaderPort,
@@ -20,7 +23,7 @@ from codelens.review.domain.ports import ReviewExecutionRecord, ReviewRecord
 _LOGGER = logging.getLogger("codelens.plugin.report.orchestrator")
 
 
-class ReviewExportStorePort:
+class ReviewExportStorePort(Protocol):
     """Port for accessing review data needed for export.
 
     This is a composite port that combines review record access with
@@ -35,19 +38,19 @@ class ReviewExportStorePort:
         """Get a review execution record by task ID."""
         ...
 
-    async def list_findings(self, task_id: str) -> list[Any]:
+    async def list_findings(self, task_id: str) -> Sequence[Finding]:
         """List all findings for a review task."""
         raise NotImplementedError
 
 
-class RevisionReaderPort:
+class RevisionReaderPort(Protocol):
     """Port for reading file revisions from git repositories."""
 
     async def read_revision_optional(
         self,
-        repository_path: Path,
+        repository: Path,
         revision: str,
-        file_path: str,
+        path: str,
     ) -> bytes | None:
         """Read a file at a specific revision, returning None if not found."""
         ...
@@ -109,7 +112,7 @@ class ExportOrchestrator:
                 success=False,
                 output_path=None,
                 error=f"Plugin '{plugin_id}' not found",
-                exported_at=None,
+                exported_at=datetime.now(UTC),
             )
 
         if not plugin_record.report_enabled:
@@ -119,7 +122,7 @@ class ExportOrchestrator:
                 success=False,
                 output_path=None,
                 error=f"Plugin '{plugin_id}' report capability is not enabled",
-                exported_at=None,
+                exported_at=datetime.now(UTC),
             )
 
         # Build the export envelope
@@ -133,7 +136,7 @@ class ExportOrchestrator:
                 success=False,
                 output_path=None,
                 error=f"Failed to build export envelope: {error}",
-                exported_at=None,
+                exported_at=datetime.now(UTC),
             )
 
         # Export to the plugin
@@ -177,7 +180,7 @@ class ExportOrchestrator:
                     success=False,
                     output_path=None,
                     error=f"Failed to build export envelope: {error}",
-                    exported_at=None,
+                    exported_at=datetime.now(UTC),
                 ),
             )
 
@@ -220,7 +223,7 @@ class ExportOrchestrator:
                         success=False,
                         output_path=None,
                         error="Plugin export failed with exception",
-                        exported_at=None,
+                        exported_at=datetime.now(UTC),
                     )
                 )
 
@@ -240,11 +243,20 @@ class ExportOrchestrator:
         Returns:
             Export result.
         """
-        # Load the plugin implementation
-        sink = self._load_sink(plugin_record)
+        try:
+            sink = self._load_sink(plugin_record)
+            execution = await self._review_store.get_execution(envelope.review.task_id)
+        except Exception:
+            _LOGGER.exception("Plugin %s could not be loaded", plugin_record.plugin_id)
+            return ExportResult(
+                plugin_id=plugin_record.plugin_id,
+                task_id=envelope.review.task_id,
+                success=False,
+                output_path=None,
+                error="Plugin could not be loaded",
+                exported_at=datetime.now(UTC),
+            )
 
-        # Get the repository path from the execution record
-        execution = await self._review_store.get_execution(envelope.review.task_id)
         if execution is None:
             return ExportResult(
                 plugin_id=plugin_record.plugin_id,
@@ -252,15 +264,25 @@ class ExportOrchestrator:
                 success=False,
                 output_path=None,
                 error="Review execution record not found",
-                exported_at=None,
+                exported_at=datetime.now(UTC),
             )
 
-        # Invoke the plugin's export method
-        return await sink.export(
-            envelope=envelope,
-            config=plugin_record.report_config,
-            repository_path=execution.repository_path,
-        )
+        try:
+            return await sink.export(
+                envelope=envelope,
+                config=plugin_record.report_config,
+                repository_path=execution.repository_path,
+            )
+        except Exception:
+            _LOGGER.exception("Plugin %s failed to export findings", plugin_record.plugin_id)
+            return ExportResult(
+                plugin_id=plugin_record.plugin_id,
+                task_id=envelope.review.task_id,
+                success=False,
+                output_path=None,
+                error="Plugin export failed with exception",
+                exported_at=datetime.now(UTC),
+            )
 
     def _load_sink(self, plugin_record: PluginRecord) -> ReportSinkPort:
         """Load and instantiate a report plugin implementation.

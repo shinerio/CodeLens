@@ -550,47 +550,6 @@
   opacity: 0.5;
 }
 
-@media (max-width: 1180px) {
-  .settings-page__layout {
-    grid-template-columns: minmax(0, 1fr);
-  }
-}
-
-@media (max-width: 860px) {
-  .settings-panel__grid {
-    grid-template-columns: 1fr;
-  }
-}
-
-@media (max-width: 680px) {
-  .settings-page {
-    padding: 20px 14px 32px;
-  }
-
-  .settings-page__header {
-    grid-template-columns: minmax(0, 1fr);
-    align-items: start;
-  }
-
-  .provider-state {
-    min-width: 0;
-  }
-
-  .gateway-card-grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .gateway-form__footer {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .gateway-form__footer button {
-    width: 100%;
-  }
-
-}
-
 @media (prefers-reduced-motion: reduce) {
   .settings-field input,
   .gateway-card {

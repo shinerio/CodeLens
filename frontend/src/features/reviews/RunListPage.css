@@ -193,34 +193,3 @@
   color: var(--muted);
   text-align: center;
 }
-
-@media (max-width: 700px) {
-  .run-list-page > header {
-    align-items: start;
-    flex-direction: column;
-  }
-
-  .run-list-page__row--header {
-    grid-template-columns: 38px minmax(0, 2fr) minmax(0, 1fr) 80px;
-  }
-
-  .run-list-page__findings,
-  .run-list-page__scope,
-  .run-list-page__created {
-    display: none;
-  }
-
-  .run-list-page__details {
-    grid-column: 2 / 3;
-    grid-template-columns: minmax(0, 2fr) minmax(0, 1fr);
-  }
-
-  .run-list-page__toolbar {
-    align-items: stretch;
-    flex-direction: column;
-  }
-
-  .run-list-page__toolbar span {
-    margin-left: 0;
-  }
-}

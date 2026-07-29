@@ -95,9 +95,3 @@
   color: var(--red);
   font-size: 0.82rem;
 }
-
-@media (max-width: 700px) {
-  .run-list-page__row:not(.run-list-page__row--header) {
-    grid-template-columns: 38px minmax(0, 3fr) 80px;
-  }
-}

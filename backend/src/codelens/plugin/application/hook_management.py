@@ -65,11 +65,39 @@ class TriggerHookService:
     async def enable_trigger(self, plugin_id: str) -> PluginRecord | None:
         """Enable a trigger and synchronize hooks already present in its config."""
 
-        record = await self._plugin_manager.enable_trigger(plugin_id)
-        if record is not None and self._is_local_hook(record):
-            repositories = await self._validated_repositories(record.trigger_config)
-            await self._synchronize(repositories, self._events(record))
-        return record
+        current = await self._plugin_manager.get_plugin(plugin_id)
+        if current is None:
+            return None
+        if not self._is_local_hook(current):
+            return await self._plugin_manager.enable_trigger(plugin_id)
+        self._plugin_manager.validate_trigger_config(current, current.trigger_config)
+        repositories = await self._validated_repositories(current.trigger_config)
+        previous = await self._capture_state(repositories)
+        try:
+            await self._apply_state(
+                {repository: self._events(current) for repository in repositories}
+            )
+            return await self._plugin_manager.enable_trigger(plugin_id)
+        except BaseException:
+            await self._restore_state(previous)
+            raise
+
+    async def disable_trigger(self, plugin_id: str) -> PluginRecord | None:
+        """Remove configured local hooks before persisting the disabled state."""
+
+        current = await self._plugin_manager.get_plugin(plugin_id)
+        if current is None:
+            return None
+        if not self._is_local_hook(current):
+            return await self._plugin_manager.disable_trigger(plugin_id)
+        repositories = await self._validated_repositories(current.trigger_config)
+        previous = await self._capture_state(repositories)
+        try:
+            await self._apply_state({repository: () for repository in repositories})
+            return await self._plugin_manager.disable_trigger(plugin_id)
+        except BaseException:
+            await self._restore_state(previous)
+            raise
 
     async def update_config(
         self,
@@ -85,6 +113,7 @@ class TriggerHookService:
             return await self._plugin_manager.update_trigger_config(plugin_id, config)
 
         merged = {**current.trigger_config, **config}
+        self._plugin_manager.validate_trigger_config(current, merged)
         repositories = await self._validated_repositories(merged)
         old_repositories = await self._validated_repositories(current.trigger_config)
         canonical_config = {
@@ -92,18 +121,27 @@ class TriggerHookService:
             "repository_paths": [str(repository) for repository in repositories],
         }
         events = self._events(current, merged)
-        record = await self._plugin_manager.update_trigger_config(
-            plugin_id,
-            canonical_config,
+        affected_repositories = tuple(
+            dict.fromkeys((*old_repositories, *repositories))
         )
-        if record is None:
-            return None
-
-        if record.trigger_enabled:
-            await self._synchronize(repositories, events)
-        for removed_repository in set(old_repositories) - set(repositories):
-            await self._uninstall_if_accessible(removed_repository)
-        return record
+        previous = await self._capture_state(affected_repositories)
+        desired = {
+            repository: (
+                events
+                if current.trigger_enabled and repository in repositories
+                else ()
+            )
+            for repository in affected_repositories
+        }
+        try:
+            await self._apply_state(desired)
+            return await self._plugin_manager.update_trigger_config(
+                plugin_id,
+                canonical_config,
+            )
+        except BaseException:
+            await self._restore_state(previous)
+            raise
 
     async def install_configured(self, plugin_id: str) -> PluginRecord | None:
         """Install selected hooks in every configured repository."""
@@ -115,7 +153,14 @@ class TriggerHookService:
             raise HookConfigurationError("trigger plugin must be enabled before installing hooks")
         self._require_local_hook(record)
         repositories = await self._validated_repositories(record.trigger_config)
-        await self._synchronize(repositories, self._events(record))
+        previous = await self._capture_state(repositories)
+        try:
+            await self._apply_state(
+                {repository: self._events(record) for repository in repositories}
+            )
+        except BaseException:
+            await self._restore_state(previous)
+            raise
         return record
 
     async def uninstall_configured(self, plugin_id: str) -> PluginRecord | None:
@@ -126,8 +171,12 @@ class TriggerHookService:
             return None
         self._require_local_hook(record)
         repositories = await self._validated_repositories(record.trigger_config)
-        for repository in repositories:
-            await self._uninstall(repository)
+        previous = await self._capture_state(repositories)
+        try:
+            await self._apply_state({repository: () for repository in repositories})
+        except BaseException:
+            await self._restore_state(previous)
+            raise
         return record
 
     async def get_status(self, plugin_id: str) -> tuple[RepositoryHookStatus, ...] | None:
@@ -202,25 +251,49 @@ class TriggerHookService:
             raise HookConfigurationError("webhook events cannot be installed as local Git hooks")
         return events
 
-    async def _synchronize(
+    async def _capture_state(
         self,
         repositories: tuple[Path, ...],
-        events: tuple[HookEvent, ...],
-    ) -> None:
+    ) -> dict[Path, tuple[HookEvent, ...]]:
+        state: dict[Path, tuple[HookEvent, ...]] = {}
         for repository in repositories:
             try:
+                installed = await self._hook_installer.is_installed(repository)
+            except (OSError, UnicodeError, ValueError) as error:
+                raise HookInstallationError("Git hook state could not be read") from error
+            state[repository] = tuple(
+                event
+                for event in (HookEvent.POST_COMMIT, HookEvent.PRE_PUSH)
+                if installed.get(event, False)
+            )
+        return state
+
+    async def _apply_state(
+        self,
+        desired: dict[Path, tuple[HookEvent, ...]],
+    ) -> None:
+        try:
+            for repository, events in desired.items():
                 await self._hook_installer.uninstall_hooks(repository)
                 if events:
-                    await self._hook_installer.install_hooks(repository, events, self._port)
-            except (OSError, UnicodeError, ValueError) as error:
-                raise HookInstallationError("Git hooks could not be installed") from error
-
-    async def _uninstall_if_accessible(self, repository: Path) -> None:
-        canonical_path = await self._repository_validator.validate_repository(repository)
-        await self._uninstall(canonical_path)
-
-    async def _uninstall(self, repository: Path) -> None:
-        try:
-            await self._hook_installer.uninstall_hooks(repository)
+                    await self._hook_installer.install_hooks(
+                        repository, events, self._port
+                    )
         except (OSError, UnicodeError, ValueError) as error:
-            raise HookInstallationError("Git hooks could not be removed") from error
+            raise HookInstallationError("Git hooks could not be synchronized") from error
+
+    async def _restore_state(
+        self,
+        previous: dict[Path, tuple[HookEvent, ...]],
+    ) -> None:
+        try:
+            for repository, events in previous.items():
+                await self._hook_installer.uninstall_hooks(repository)
+                if events:
+                    await self._hook_installer.install_hooks(
+                        repository, events, self._port
+                    )
+        except (OSError, UnicodeError, ValueError) as error:
+            raise HookInstallationError(
+                "Git hook synchronization failed and the previous state could not be restored"
+            ) from error

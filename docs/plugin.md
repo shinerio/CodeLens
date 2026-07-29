@@ -1,10 +1,10 @@
 # CodeLens 插件生态设计文档
 
-> 版本：0.2.0 | 日期：2026-07-29 | 状态：设计中
+> 版本：0.3.0 | 日期：2026-07-29 | 状态：已实现
 
 ## 1. 文档目的
 
-本文档是 CodeLens 插件生态的**单一事实来源**，完整描述插件系统的统一模型、触发机制、报告机制、与 CodeLens 主体的关系、配合关系和交互接口。
+本文档补充描述插件系统的统一模型、触发机制、报告机制和交互接口；跨边界架构事实与稳定契约以 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 为准。
 
 ---
 
@@ -307,7 +307,7 @@ CodeLens 核心**不校验** `external_context` 的内部结构，只做 dict �
 
 | 文件路径 | 改动说明 |
 |---|---|
-| `reporting/application/export_orchestrator.py` | `auto_export_if_enabled()` 增加平台路由过滤逻辑 |
+| `plugin/application/export_orchestrator.py` | `auto_export_if_enabled()` 按来源平台路由 |
 
 ---
 
@@ -793,26 +793,17 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 
 ### 9.1 统一插件存储
 
-**现状**：Report Plugin 和 Trigger Plugin 使用独立的存储：
-- `data/report-plugins.json`（`FilesystemPluginStore`）
-- `data/trigger-plugins.json`（`FilesystemTriggerStore`）
-
-**目标**：合并为统一存储 `data/plugins.json`（`FilesystemPluginStore`），使用统一的 `PluginRecord`。
+插件状态统一存储到 `data/plugins.json`，由 `FilesystemPluginStore` 持久化统一的 `PluginRecord`。
 
 | 文件路径 | 改动说明 |
 |---|---|
-| `reporting/domain/models.py` | `PluginManifest` 重构为统一模型（增加 `platform`、`capabilities`） |
-| `reporting/domain/models.py` | `PluginRecord` 重构（`trigger_enabled`、`report_enabled`、分离 config） |
-| `reporting/infrastructure/plugin_store.py` | 重构为统一 `FilesystemPluginStore`，存储到 `data/plugins.json` |
-| `trigger/infrastructure/trigger_store.py` | 废弃，合并到统一 store |
+| `plugin/domain/models.py` | 统一 `PluginManifest`、`PluginRecord` 与能力错误 |
+| `plugin/domain/ports.py` | 定义存储、安装、加载、触发和报告 Port |
+| `plugin/infrastructure/plugin_store.py` | 原子、串行地持久化 `data/plugins.json` |
 
 ### 9.2 统一插件管理 API
 
-**现状**：
-- `/api/report-plugins` — Report Plugin 管理
-- `/api/trigger-plugins` — Trigger Plugin 管理
-
-**目标**：合并为 `/api/plugins`：
+插件管理统一使用 `/api/plugins`：
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
@@ -826,7 +817,9 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 | `/api/plugins/{plugin_id}/trigger/config` | PUT | 更新 trigger 配置 |
 | `/api/plugins/{plugin_id}/report/config` | PUT | 更新 report 配置 |
 | `/api/plugins/{plugin_id}/report/auto-export` | PUT | 开关 report 自动导出 |
-| `/api/plugins/{plugin_id}/repos` | DELETE | 清理插件的仓库克隆 |
+| `/api/plugins/{plugin_id}/trigger/install-hooks` | POST | 安装或重装已配置 Git Hook |
+| `/api/plugins/{plugin_id}/trigger/uninstall-hooks` | POST | 移除 CodeLens Git Hook 片段 |
+| `/api/plugins/{plugin_id}/trigger/hook-status` | GET | 查询实际 Git Hook 状态 |
 
 ### 9.3 Webhook 端点
 
@@ -841,7 +834,7 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 
 | 文件路径 | 改动说明 |
 |---|---|
-| `plugin/trigger/local_hook/plugin_loader.py` | 重构为 `CompositeTriggerPluginLoader`：内置 + importlib 外部加载 |
+| `plugin/infrastructure/plugin_loader.py` | `CompositePluginLoader` 统一加载内置与外部 Trigger/Report 实现 |
 
 ---
 
@@ -849,17 +842,16 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 
 ### 10.1 HTTP API 总览
 
-| 端点 | 方法 | 说明 | 状态 |
-|---|---|---|---|
-| `/api/reviews` | POST | 创建 review（支持 `external_context`） | 需扩展 |
-| `/api/reviews/{task_id}/export` | POST | 手动触发插件 report 导出 | 已有（需适配） |
-| `/api/trigger-events` | POST | 接收本地 git hook 事件 | 已有 |
-| `/api/webhooks/{platform}` | POST | 接收远端平台 webhook | **新增** |
-| `/api/plugins` | GET | 列出所有插件 | **替换** report-plugins + trigger-plugins |
-| `/api/plugins/install` | POST | 安装插件 | **替换** |
-| `/api/plugins/{id}/trigger/*` | PUT | Trigger 能力管理 | **替换** |
-| `/api/plugins/{id}/report/*` | PUT | Report 能力管理 | **替换** |
-| `/api/plugins/{id}/repos` | DELETE | 清理仓库克隆 | **新增** |
+| 端点 | 方法 | 说明 |
+|---|---|---|
+| `/api/reviews` | POST | 创建 review（支持 `external_context`） |
+| `/api/reviews/{task_id}/export` | POST | 手动触发插件 report 导出 |
+| `/api/trigger-events` | POST | 接收本地 Git Hook 事件 |
+| `/api/webhooks/{platform}` | POST | 接收远端平台 webhook |
+| `/api/plugins` | GET | 列出所有插件 |
+| `/api/plugins/install` | POST | 安装插件 |
+| `/api/plugins/{id}/trigger/*` | PUT/POST/GET | Trigger 能力、Hook 与状态管理 |
+| `/api/plugins/{id}/report/*` | PUT | Report 能力与自动导出管理 |
 
 ### 10.2 ReviewCreatorPort 扩展
 

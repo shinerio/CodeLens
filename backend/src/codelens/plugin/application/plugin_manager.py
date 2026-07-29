@@ -12,17 +12,24 @@ from dataclasses import replace
 from pathlib import Path
 from typing import Any
 
+from jsonschema.exceptions import SchemaError
+from jsonschema.protocols import Validator
+from jsonschema.validators import validator_for
+
 from codelens.plugin.domain.models import (
+    PluginCapabilityError,
+    PluginConfigurationError,
+    PluginInstallError,
     PluginManifest,
     PluginRecord,
     ReportCapability,
     TriggerCapability,
     validate_capability_toggle,
 )
-from codelens.plugin.domain.ports import PluginStorePort
-from codelens.reporting.infrastructure.git_installer import (
-    GitPluginInstaller,
-    PluginInstallError,
+from codelens.plugin.domain.ports import (
+    PluginCachePort,
+    PluginInstallerPort,
+    PluginStorePort,
 )
 
 
@@ -43,8 +50,9 @@ class PluginManager:
     def __init__(
         self,
         store: PluginStorePort,
-        installer: GitPluginInstaller,
+        installer: PluginInstallerPort,
         plugins_dir: Path,
+        plugin_cache: PluginCachePort | None = None,
     ) -> None:
         """Initialize the plugin manager.
 
@@ -56,6 +64,7 @@ class PluginManager:
         self._store = store
         self._installer = installer
         self._plugins_dir = plugins_dir
+        self._plugin_cache = plugin_cache
 
     async def initialize_builtin(self) -> None:
         """Initialize built-in plugins if not already present.
@@ -102,16 +111,17 @@ class PluginManager:
                                 "description": "Review scope type",
                             },
                             "base_ref": {
-                                "type": "string",
+                                "type": ["string", "null"],
                                 "description": "Base reference for branch scope (e.g., 'main')",
                             },
                             "target_ref": {
-                                "type": "string",
+                                "type": ["string", "null"],
                                 "description": "Target reference for branch scope (e.g., 'HEAD')",
                             },
                             "selected_agents": {
                                 "type": "array",
                                 "items": {"type": "string"},
+                                "minItems": 1,
                                 "description": "Agent IDs to use for reviews",
                             },
                             "prompt_locale": {
@@ -165,7 +175,7 @@ class PluginManager:
                 "scope_type": "commit",
                 "base_ref": None,
                 "target_ref": None,
-                "selected_agents": [],
+                "selected_agents": ["correctness:v1"],
                 "prompt_locale": "en",
                 "debounce_seconds": 10,
             },
@@ -236,6 +246,7 @@ class PluginManager:
         )
 
         await self._store.save_plugin(record)
+        self._invalidate_plugin(manifest.plugin_id)
         return record
 
     async def enable_trigger(self, plugin_id: str) -> PluginRecord | None:
@@ -250,6 +261,9 @@ class PluginManager:
         record = await self._store.get_plugin(plugin_id)
         if record is None:
             return None
+
+        self._require_capability(record, "trigger")
+        self.validate_trigger_config(record, record.trigger_config)
 
         updated = replace(record, trigger_enabled=True)
         await self._store.save_plugin(updated)
@@ -269,6 +283,8 @@ class PluginManager:
         record = await self._store.get_plugin(plugin_id)
         if record is None:
             return None
+
+        self._require_capability(record, "trigger")
 
         # For external plugins, report depends on trigger
         report_enabled = record.report_enabled
@@ -301,6 +317,9 @@ class PluginManager:
         if record is None:
             return None
 
+        self._require_capability(record, "report")
+        self.validate_report_config(record, record.report_config)
+
         # Validate capability dependency for external plugins
         validate_capability_toggle(record, enable_report=True)
 
@@ -320,6 +339,8 @@ class PluginManager:
         record = await self._store.get_plugin(plugin_id)
         if record is None:
             return None
+
+        self._require_capability(record, "report")
 
         updated = replace(record, report_enabled=False)
         await self._store.save_plugin(updated)
@@ -342,6 +363,7 @@ class PluginManager:
             return None
 
         merged = {**record.trigger_config, **config}
+        self.validate_trigger_config(record, merged)
         updated = replace(record, trigger_config=merged)
         await self._store.save_plugin(updated)
         return updated
@@ -363,6 +385,7 @@ class PluginManager:
             return None
 
         merged = {**record.report_config, **config}
+        self.validate_report_config(record, merged)
         updated = replace(record, report_config=merged)
         await self._store.save_plugin(updated)
         return updated
@@ -380,6 +403,8 @@ class PluginManager:
         record = await self._store.get_plugin(plugin_id)
         if record is None:
             return None
+
+        self._require_capability(record, "report")
 
         updated = replace(record, report_auto_export=enabled)
         await self._store.save_plugin(updated)
@@ -415,7 +440,77 @@ class PluginManager:
             if await asyncio.to_thread(path.exists):
                 await asyncio.to_thread(shutil.rmtree, path, ignore_errors=True)
 
-        return await self._store.delete_plugin(plugin_id)
+        deleted = await self._store.delete_plugin(plugin_id)
+        if deleted:
+            self._invalidate_plugin(plugin_id)
+        return deleted
+
+    def validate_trigger_config(
+        self,
+        record: PluginRecord,
+        config: dict[str, Any],
+    ) -> None:
+        """Validate complete trigger configuration before side effects or persistence."""
+
+        capability = record.manifest.trigger
+        if capability is None:
+            self._require_capability(record, "trigger")
+        assert capability is not None
+        self._validate_config(record.plugin_id, "trigger", config, capability.config_schema)
+
+    def validate_report_config(
+        self,
+        record: PluginRecord,
+        config: dict[str, Any],
+    ) -> None:
+        """Validate complete report configuration before persistence."""
+
+        capability = record.manifest.report
+        if capability is None:
+            self._require_capability(record, "report")
+        assert capability is not None
+        self._validate_config(record.plugin_id, "report", config, capability.config_schema)
+
+    @staticmethod
+    def _require_capability(record: PluginRecord, capability_name: str) -> None:
+        if capability_name not in record.manifest.capabilities:
+            raise PluginCapabilityError(
+                f"Plugin '{record.plugin_id}' does not declare {capability_name} capability"
+            )
+
+    @staticmethod
+    def _validate_config(
+        plugin_id: str,
+        capability_name: str,
+        config: dict[str, Any],
+        schema: dict[str, Any],
+    ) -> None:
+        strict_schema = {**schema}
+        strict_schema.setdefault("type", "object")
+        strict_schema.setdefault("additionalProperties", False)
+        validator_type = validator_for(strict_schema)
+        try:
+            validator_type.check_schema(strict_schema)
+        except SchemaError as error:
+            raise PluginConfigurationError(
+                f"Plugin '{plugin_id}' declares an invalid {capability_name} config schema"
+            ) from error
+        validator: Validator = validator_type(strict_schema)
+        validation_error = next(validator.iter_errors(config), None)
+        if validation_error is None:
+            return
+        field = (
+            ".".join(str(part) for part in validation_error.absolute_path)
+            or "configuration"
+        )
+        raise PluginConfigurationError(
+            f"Plugin '{plugin_id}' {capability_name} config field '{field}' "
+            f"violates schema rule '{validation_error.validator}'"
+        )
+
+    def _invalidate_plugin(self, plugin_id: str) -> None:
+        if self._plugin_cache is not None:
+            self._plugin_cache.invalidate(plugin_id)
 
     @staticmethod
     def _extract_defaults(schema: dict[str, Any]) -> dict[str, Any]:

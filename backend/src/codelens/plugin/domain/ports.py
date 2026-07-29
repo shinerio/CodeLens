@@ -119,6 +119,26 @@ class PluginStorePort(Protocol):
         ...
 
 
+class PluginInstallerPort(Protocol):
+    """Install validated external plugin code into the application data directory."""
+
+    async def install(
+        self,
+        git_url: str,
+        ref: str | None = None,
+    ) -> PluginManifest:
+        """Install one Git-backed plugin and return its validated manifest."""
+        ...
+
+
+class PluginCachePort(Protocol):
+    """Invalidate executable plugin instances after lifecycle changes."""
+
+    def invalidate(self, plugin_id: str) -> None:
+        """Discard cached code and instances for one plugin installation."""
+        ...
+
+
 class PluginLoaderPort(Protocol):
     """Load a report sink instance from a plugin manifest and install path."""
 
@@ -128,6 +148,10 @@ class PluginLoaderPort(Protocol):
         install_path: Path,
     ) -> ReportSinkPort:
         """Instantiate and return the sink declared by the manifest."""
+        ...
+
+    def invalidate(self, plugin_id: str) -> None:
+        """Discard cached code and instances for one plugin installation."""
         ...
 
 
@@ -152,6 +176,10 @@ class TriggerPluginLoaderPort(Protocol):
         ``manifest`` and ``install_path`` are required for external plugins
         and ignored for built-in ones.
         """
+        ...
+
+    def invalidate(self, plugin_id: str) -> None:
+        """Discard cached code and instances for one plugin installation."""
         ...
 
 

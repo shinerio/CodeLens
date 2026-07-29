@@ -1,4 +1,4 @@
-import { cleanup, render, screen } from "@testing-library/react";
+import { cleanup, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -8,6 +8,9 @@ import { PluginsPage } from "./PluginsPage";
 const fetchMock = vi.fn();
 let hookIsInstalled = true;
 let hookInstallFailures = 0;
+let installRequest: RequestInit | undefined;
+let configRequest: RequestInit | undefined;
+let pluginsPayload: unknown[];
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -19,48 +22,69 @@ function jsonResponse(payload: unknown): Response {
 beforeEach(() => {
   hookIsInstalled = true;
   hookInstallFailures = 0;
-  fetchMock.mockReset();
-  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
-    const url = String(input);
-    if (url.endsWith("/api/plugins")) {
-      return jsonResponse([
-        {
-          plugin_id: "local",
-          manifest: {
-            plugin_id: "local",
-            name: "Local Development Plugin",
-            version: "1.0.0",
-            description: "Local Git hook trigger",
-            author: "CodeLens Team",
-            platform: "local",
-            capabilities: {
-              trigger: {
-                trigger_type: "local-hook",
-                supported_events: ["post-commit"],
-                entry_point: "local_hook_trigger:LocalHookTriggerAdapter",
-                config_schema: {},
-              },
-            },
-            min_codelens_version: null,
+  installRequest = undefined;
+  configRequest = undefined;
+  pluginsPayload = [
+    {
+      plugin_id: "local",
+      manifest: {
+        plugin_id: "local",
+        name: "Local Development Plugin",
+        version: "1.0.0",
+        description: "Local Git hook trigger",
+        author: "CodeLens Team",
+        platform: "local",
+        capabilities: {
+          trigger: {
+            trigger_type: "local-hook",
+            supported_events: ["post-commit"],
+            entry_point: "local_hook_trigger:LocalHookTriggerAdapter",
+            config_schema: {},
           },
-          is_builtin: true,
-          install_path: null,
-          trigger_enabled: true,
-          report_enabled: false,
-          report_auto_export: false,
-          trigger_config: {
-            repository_paths: ["/workspace/repository"],
-            events: ["post-commit"],
-            scope_type: "commit",
-            base_ref: null,
-            target_ref: null,
-            selected_agents: ["correctness:v1"],
-            prompt_locale: "en",
-            debounce_seconds: 10,
-          },
-          report_config: {},
         },
-      ]);
+        min_codelens_version: null,
+      },
+      is_builtin: true,
+      install_path: null,
+      trigger_enabled: true,
+      report_enabled: false,
+      report_auto_export: false,
+      trigger_config: {
+        repository_paths: ["/workspace/repository"],
+        events: ["post-commit"],
+        scope_type: "commit",
+        base_ref: null,
+        target_ref: null,
+        selected_agents: ["correctness:v1"],
+        prompt_locale: "en",
+        debounce_seconds: 10,
+      },
+      report_config: {},
+    },
+  ];
+  fetchMock.mockReset();
+  fetchMock.mockImplementation(async (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = String(input);
+    if (url.endsWith("/api/plugins/install")) {
+      installRequest = init;
+      return new Response(
+        JSON.stringify({
+          plugin_id: "external",
+          install_path: "/data/plugins/external",
+          installed_at: "2026-07-29T00:00:00Z",
+        }),
+        {
+          status: 201,
+          headers: { "Content-Type": "application/json" },
+        },
+      );
+    }
+    if (url.endsWith("/api/plugins")) {
+      return jsonResponse(pluginsPayload);
+    }
+    if (url.endsWith("/api/plugins/external/report/config")) {
+      configRequest = init;
+      return jsonResponse(pluginsPayload[0]);
     }
     if (url.endsWith("/api/plugins/local/trigger/hook-status")) {
       return jsonResponse({
@@ -139,4 +163,68 @@ it("keeps installation retryable after an install failure", async () => {
 
   expect(await screen.findByRole("button", { name: "Reinstall Git hooks" })).toBeEnabled();
   expect(await screen.findByText("Installed")).toBeVisible();
+});
+
+it("omits an empty Git ref from the installation request", async () => {
+  const user = userEvent.setup();
+  render(<PluginsPage />, { wrapper: TestProviders });
+
+  await user.type(screen.getByPlaceholderText("Git repository URL"), "https://example.invalid/plugin.git");
+  await user.click(screen.getByRole("button", { name: "Install" }));
+
+  await waitFor(() => expect(installRequest).toBeDefined());
+  expect(JSON.parse(String(installRequest?.body))).toEqual({
+    git_url: "https://example.invalid/plugin.git",
+  });
+});
+
+it("submits numeric schema fields as numbers", async () => {
+  pluginsPayload = [
+    {
+      plugin_id: "external",
+      manifest: {
+        plugin_id: "external",
+        name: "External report",
+        version: "1.0.0",
+        description: "Report plugin",
+        author: "Test",
+        platform: "local",
+        capabilities: {
+          report: {
+            entry_point: "sink:Sink",
+            config_schema: {
+              type: "object",
+              properties: {
+                retries: {
+                  type: "integer",
+                  description: "Retries",
+                  default: 1,
+                },
+              },
+            },
+          },
+        },
+        min_codelens_version: null,
+      },
+      is_builtin: false,
+      install_path: "/data/plugins/external",
+      trigger_enabled: false,
+      report_enabled: true,
+      report_auto_export: false,
+      trigger_config: {},
+      report_config: { retries: 1 },
+    },
+  ];
+  const user = userEvent.setup();
+  render(<PluginsPage />, { wrapper: TestProviders });
+
+  const retries = await screen.findByRole("spinbutton");
+  await user.clear(retries);
+  await user.type(retries, "3");
+  await user.click(screen.getByRole("button", { name: "Save configuration" }));
+
+  await waitFor(() => expect(configRequest).toBeDefined());
+  expect(JSON.parse(String(configRequest?.body))).toEqual({
+    config: { retries: 3 },
+  });
 });

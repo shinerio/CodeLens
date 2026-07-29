@@ -28,7 +28,6 @@
 - Artifacts：实现任务 Artifact 浏览、报告导出与下载契约；不得向前端暴露未受控的工作区路径或任意文件访问。
 - Settings：补齐 General、Security、Storage、Network 等 demo 设置页的后端配置契约与前端接入；当前已完成的
   模型网关 CRUD/激活功能不应被这些预览项替代。
-- 移动端：补齐 demo 的可展开侧栏导航和相关键盘/焦点管理。
 
 ## 延期的并发、协作与部署能力
 

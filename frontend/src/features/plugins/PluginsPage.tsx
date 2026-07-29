@@ -89,7 +89,13 @@ export function PluginsPage() {
   });
 
   const installMutation = useMutation({
-    mutationFn: () => installPlugin({ git_url: gitUrl, ref: gitRef || null }),
+    mutationFn: () => {
+      const ref = gitRef.trim();
+      return installPlugin({
+        git_url: gitUrl.trim(),
+        ...(ref ? { ref } : {}),
+      });
+    },
     onSuccess: () => {
       setGitUrl("");
       setGitRef("");
@@ -290,6 +296,10 @@ function TriggerCapabilitySection({
   });
 
   const configChanged = JSON.stringify(configDraft) !== JSON.stringify(plugin.trigger_config);
+
+  useEffect(() => {
+    setConfigDraft(plugin.trigger_config);
+  }, [plugin.plugin_id, plugin.trigger_config]);
 
   function refreshHookStatus() {
     getHookStatus(plugin.plugin_id).then(setHookStatus).catch(() => setHookStatus(null));
@@ -588,6 +598,10 @@ function ReportCapabilitySection({
   const { t } = useI18n();
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(plugin.report_config);
 
+  useEffect(() => {
+    setConfigDraft(plugin.report_config);
+  }, [plugin.plugin_id, plugin.report_config]);
+
   const configMutation = useMutation({
     mutationFn: (config: Record<string, unknown>) =>
       updateReportConfig(plugin.plugin_id, { config }),
@@ -623,6 +637,8 @@ function ReportCapabilitySection({
               value={configDraft[prop.key]}
               defaultValue={prop.default}
               type={prop.type}
+              enumValues={prop.enumValues}
+              itemEnumValues={prop.itemEnumValues}
               onChange={(value) => setConfigDraft({ ...configDraft, [prop.key]: value })}
             />
           ))}
@@ -658,16 +674,39 @@ type ConfigProperty = {
   label: string;
   type: string;
   default: unknown;
+  enumValues: string[];
+  itemEnumValues: string[];
 };
 
 function extractConfigProperties(schema: Record<string, unknown>): ConfigProperty[] {
-  const properties = (schema.properties ?? {}) as Record<string, Record<string, unknown>>;
-  return Object.entries(properties).map(([key, prop]) => ({
-    key,
-    label: typeof prop.description === "string" ? prop.description : key,
-    type: typeof prop.type === "string" ? prop.type : "string",
-    default: prop.default,
-  }));
+  const rawProperties = schema.properties;
+  if (!isRecord(rawProperties)) {
+    return [];
+  }
+  return Object.entries(rawProperties).flatMap(([key, rawProperty]) => {
+    if (!isRecord(rawProperty)) {
+      return [];
+    }
+    const items = isRecord(rawProperty.items) ? rawProperty.items : {};
+    return [{
+      key,
+      label: typeof rawProperty.description === "string" ? rawProperty.description : key,
+      type: typeof rawProperty.type === "string" ? rawProperty.type : "string",
+      default: rawProperty.default,
+      enumValues: stringValues(rawProperty.enum),
+      itemEnumValues: stringValues(items.enum),
+    }];
+  });
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function stringValues(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string")
+    : [];
 }
 
 type ConfigFieldProps = {
@@ -675,18 +714,27 @@ type ConfigFieldProps = {
   value: unknown;
   defaultValue: unknown;
   type: string;
+  enumValues: string[];
+  itemEnumValues: string[];
   onChange: (value: unknown) => void;
 };
 
-function ConfigField({ label, value, defaultValue, type, onChange }: ConfigFieldProps) {
-  if (type === "array" && Array.isArray(defaultValue)) {
-    const options = defaultValue as string[];
-    const current = Array.isArray(value) ? value : options;
+function ConfigField({
+  label,
+  value,
+  defaultValue,
+  type,
+  enumValues,
+  itemEnumValues,
+  onChange,
+}: ConfigFieldProps) {
+  if (type === "array" && itemEnumValues.length > 0) {
+    const current = stringValues(value ?? defaultValue);
     return (
       <div className="config-field config-field--array">
         <label className="config-field__label">{label}</label>
         <div className="config-field__checkboxes">
-          {options.map((option) => (
+          {itemEnumValues.map((option) => (
             <label key={option} className="config-field__checkbox">
               <input
                 type="checkbox"
@@ -707,13 +755,76 @@ function ConfigField({ label, value, defaultValue, type, onChange }: ConfigField
     );
   }
 
+  if (type === "boolean") {
+    const checked = typeof value === "boolean"
+      ? value
+      : typeof defaultValue === "boolean" && defaultValue;
+    return (
+      <label className="config-field config-field--boolean">
+        <input
+          type="checkbox"
+          checked={checked}
+          onChange={(event) => onChange(event.target.checked)}
+        />
+        <span className="config-field__label">{label}</span>
+      </label>
+    );
+  }
+
+  if (enumValues.length > 0) {
+    const selected = typeof value === "string"
+      ? value
+      : typeof defaultValue === "string" ? defaultValue : enumValues[0];
+    return (
+      <div className="config-field">
+        <label className="config-field__label">{label}</label>
+        <select
+          className="config-field__input"
+          value={selected}
+          onChange={(event) => onChange(event.target.value)}
+        >
+          {enumValues.map((option) => <option key={option} value={option}>{option}</option>)}
+        </select>
+      </div>
+    );
+  }
+
+  if (type === "integer" || type === "number") {
+    const numericValue = typeof value === "number"
+      ? value
+      : typeof defaultValue === "number" ? defaultValue : 0;
+    return (
+      <div className="config-field">
+        <label className="config-field__label">{label}</label>
+        <input
+          className="config-field__input"
+          type="number"
+          step={type === "integer" ? 1 : "any"}
+          value={numericValue}
+          onChange={(event) => {
+            if (event.target.value === "") {
+              onChange(0);
+              return;
+            }
+            const parsed = type === "integer"
+              ? Number.parseInt(event.target.value, 10)
+              : Number.parseFloat(event.target.value);
+            if (Number.isFinite(parsed)) {
+              onChange(parsed);
+            }
+          }}
+        />
+      </div>
+    );
+  }
+
   const stringValue = typeof value === "string" ? value : String(defaultValue ?? "");
   return (
     <div className="config-field">
       <label className="config-field__label">{label}</label>
       <input
         className="config-field__input"
-        type={type === "number" ? "number" : "text"}
+        type="text"
         value={stringValue}
         onChange={(e) => onChange(e.target.value)}
       />

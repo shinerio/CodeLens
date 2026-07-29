@@ -2,6 +2,7 @@ import { api } from "../../shared/api/client";
 import type {
   HookStatusResponse,
   InstallPluginRequest,
+  InstallPluginResponse,
   PluginRecord,
   UpdateConfigRequest,
 } from "./types";
@@ -14,8 +15,8 @@ export async function listPlugins(): Promise<PluginRecord[]> {
   return api<PluginRecord[]>("/plugins");
 }
 
-export async function installPlugin(request: InstallPluginRequest): Promise<PluginRecord> {
-  return api<PluginRecord>("/plugins/install", {
+export async function installPlugin(request: InstallPluginRequest): Promise<InstallPluginResponse> {
+  return api<InstallPluginResponse>("/plugins/install", {
     method: "POST",
     body: JSON.stringify(request),
   });

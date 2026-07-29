@@ -37,7 +37,7 @@ class LocalFileExportSink(ReportSinkPort):
 
     @property
     def sink_id(self) -> str:
-        return "local-file-export"
+        return "local"
 
     @property
     def display_name(self) -> str:

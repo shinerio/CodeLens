@@ -26,12 +26,12 @@ from codelens.plugin.application.export_orchestrator import ExportOrchestrator
 from codelens.plugin.application.hook_management import TriggerHookService
 from codelens.plugin.application.plugin_manager import PluginManager
 from codelens.plugin.application.trigger_orchestrator import TriggerOrchestrator
+from codelens.plugin.infrastructure.git_installer import GitPluginInstaller
 from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader
 from codelens.plugin.infrastructure.plugin_store import FilesystemPluginStore
 from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
-from codelens.reporting.infrastructure.git_installer import GitPluginInstaller
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.settings import ReviewCompletionSettingsService
 from codelens.review.application.tool_limits_service import ToolLimitsService
@@ -296,7 +296,7 @@ def build_unified_backend(
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
     tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
 
-    # Reporting context: plugin store, loader, manager, and export orchestrator.
+    # Plugin context: store, loader, lifecycle manager, and export orchestrator.
     # The terminal hook is late-bound on the review store so that the
     # orchestrator (which depends on the store) can wire itself after
     # construction without circular references.
@@ -304,13 +304,15 @@ def build_unified_backend(
     plugins_dir.mkdir(parents=True, exist_ok=True)
     plugin_store = FilesystemPluginStore(settings.data_dir)
     plugin_installer = GitPluginInstaller(git, plugins_dir)
-    plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir)
     plugin_loader = CompositePluginLoader()
+    plugin_manager = PluginManager(
+        plugin_store, plugin_installer, plugins_dir, plugin_loader
+    )
     export_orchestrator = ExportOrchestrator(
-        review_store,  # type: ignore[arg-type]
-        git,  # type: ignore[arg-type]
+        review_store,
+        git,
         plugin_store,
-        plugin_loader,  # type: ignore[arg-type]
+        plugin_loader,
     )
 
     async def _terminal_export_hook(task_id: str, _status: str) -> None:

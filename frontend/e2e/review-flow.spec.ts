@@ -34,12 +34,10 @@ async function assertFindingWorkspaceLayout(page: import("@playwright/test").Pag
   expect(
     await comment.evaluate((element) => element.scrollHeight <= element.clientHeight + 1),
   ).toBeTruthy();
-  if ((page.viewportSize()?.width ?? 0) > 760) {
-    const collapsedSidebar = await page.locator(".sidebar").boundingBox();
-    expect(collapsedSidebar?.width).toBeLessThanOrEqual(55);
-    await page.locator(".sidebar").hover();
-    await expect(page.locator(".sidebar")).toHaveCSS("width", "216px");
-  }
+  const collapsedSidebar = await page.locator(".sidebar").boundingBox();
+  expect(collapsedSidebar?.width).toBeLessThanOrEqual(55);
+  await page.locator(".sidebar").hover();
+  await expect(page.locator(".sidebar")).toHaveCSS("width", "216px");
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 }
 
@@ -69,11 +67,16 @@ test("streams the correctness fixture from inspect to validated findings", async
   const repository = fixtureRepositoryPath();
   await page.goto("/settings");
 
-  await page.getByLabel("Gateway name").fill("E2E fixture");
-  await page.getByLabel("API Key").fill("sk-e2e-fixture-secret");
-  await page.getByLabel("Base URL").fill("http://127.0.0.1:9999");
-  await page.getByRole("textbox", { name: "Model", exact: true }).fill("fixture-model");
   await page.getByRole("button", { name: "Add gateway", exact: true }).click();
+  const gatewayModal = page.locator(".gateway-modal");
+  await expect(gatewayModal.getByRole("heading", { name: "Add gateway" })).toBeVisible();
+  await gatewayModal.getByLabel("Gateway name").fill("E2E fixture");
+  await gatewayModal.getByLabel("API Key").fill("sk-e2e-fixture-secret");
+  await gatewayModal.getByLabel("Base URL").fill("http://127.0.0.1:9999");
+  await gatewayModal
+    .getByRole("textbox", { name: "Model", exact: true })
+    .fill("fixture-model");
+  await gatewayModal.getByRole("button", { name: "Add gateway", exact: true }).click();
   await expect(page.getByText("Active gateway", { exact: true }).first()).toBeVisible();
 
   await page.goto("/reviews/new");

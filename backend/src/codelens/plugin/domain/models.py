@@ -9,6 +9,7 @@ declaration, and installation state.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
@@ -115,6 +116,14 @@ class PluginCapabilityError(ValueError):
     """Raised when a capability toggle violates plugin rules."""
 
 
+class PluginConfigurationError(ValueError):
+    """Raised when capability configuration violates its manifest schema."""
+
+
+class PluginInstallError(ValueError):
+    """Raised when an external plugin cannot be installed or removed."""
+
+
 def validate_capability_toggle(
     record: PluginRecord,
     *,
@@ -163,7 +172,7 @@ class ExportResult:
     success: bool
     output_path: str | None
     error: str | None
-    exported_at: Any  # datetime; kept untyped to avoid import cycles in tests
+    exported_at: datetime
 
 
 @dataclass(frozen=True)
@@ -175,4 +184,4 @@ class ExportHistoryEntry:
     success: bool
     output_path: str | None
     error: str | None
-    exported_at: Any
+    exported_at: datetime

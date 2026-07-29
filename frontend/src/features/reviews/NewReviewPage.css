@@ -734,52 +734,6 @@
   color: var(--page-accent);
 }
 
-@media (max-width: 1080px) {
-  .new-review-page__grid {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .panel--aside {
-    position: static;
-  }
-}
-
-@media (max-width: 760px) {
-  .new-review-page {
-    padding: 18px 14px 28px;
-  }
-
-  .field-row--path,
-  .repository-picker,
-  .scope-toggle-grid,
-  .inspection-summary {
-    grid-template-columns: minmax(0, 1fr);
-  }
-
-  .agent-row {
-    grid-template-columns: auto minmax(0, 1fr);
-  }
-
-  .agent-row__status,
-  .agent-row__input {
-    justify-self: end;
-  }
-
-  .form-actions {
-    flex-direction: column;
-    align-items: stretch;
-  }
-
-  .provider-required {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-
-  .action-button {
-    width: 100%;
-  }
-}
-
 @media (prefers-reduced-motion: reduce) {
   .scope-toggle,
   .agent-row,

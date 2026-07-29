@@ -1,8 +1,10 @@
 """Install and uninstall git hook scripts in repositories."""
 
 import asyncio
+import os
 import shlex
 import stat
+import tempfile
 from pathlib import Path
 
 from codelens.plugin.domain.models import HookEvent
@@ -26,6 +28,16 @@ class HookInstaller:
     USER_HOOK_BACKUP_SUFFIX = ".codelens-user-hook"
     MARKER_COMMENT = "# CodeLens Trigger Hook"
     INJECTION_LINE_TEMPLATE = (
+        'CODELENS_HOOK_INPUT="$(mktemp "${{TMPDIR:-/tmp}}/codelens-hook.XXXXXX" '
+        '2>/dev/null || true)"; if [ -n "$CODELENS_HOOK_INPUT" ]; then '
+        'cat > "$CODELENS_HOOK_INPUT"; '
+        '"$(cd "$(dirname "$0")" && pwd)/{script_name}" '
+        '"$(basename "$0")" "$@" < "$CODELENS_HOOK_INPUT" || true; '
+        'exec < "$CODELENS_HOOK_INPUT"; rm -f "$CODELENS_HOOK_INPUT"; '
+        'else "$(cd "$(dirname "$0")" && pwd)/{script_name}" '
+        '"$(basename "$0")" "$@" < /dev/null || true; fi'
+    )
+    NULL_STDIN_INJECTION_LINE_TEMPLATE = (
         '"$(cd "$(dirname "$0")" && pwd)/{script_name}" '
         '"$(basename "$0")" "$@" < /dev/null || true'
     )
@@ -225,10 +237,12 @@ class HookInstaller:
             if not self._path_entry_exists(hook_path):
                 backup_path.rename(hook_path)
                 return
-            if not hook_path.is_symlink() and self._has_marker(hook_path):
-                hook_path.unlink()
-                backup_path.rename(hook_path)
-            return
+            if self._has_codelens_injection(hook_path):
+                backup_path.replace(hook_path)
+                return
+            raise FileExistsError(
+                f"Git hook changed while CodeLens backup exists: {hook_path}"
+            )
 
         if hook_path.is_symlink() or not hook_path.exists():
             return
@@ -283,20 +297,36 @@ class HookInstaller:
         backup_path = self._user_hook_backup_path(hook_path)
         if self._path_entry_exists(backup_path):
             raise FileExistsError(f"Git hook backup already exists: {backup_path}")
-        hook_path.rename(backup_path)
         original_hook_line = (
             f'"$(cd "$(dirname "$0")" && pwd)/{backup_path.name}" "$@"'
         )
+        descriptor, temporary_name = tempfile.mkstemp(
+            dir=hook_path.parent,
+            prefix=f".{hook_path.name}-",
+            suffix=".tmp",
+        )
+        os.close(descriptor)
+        temporary_path = Path(temporary_name)
+        has_moved_original = False
         try:
             self._write_executable_hook(
-                hook_path,
+                temporary_path,
                 f"{self.SHEBANG}\n{full_injection}\n{original_hook_line}\n",
             )
+            hook_path.rename(backup_path)
+            has_moved_original = True
+            temporary_path.replace(hook_path)
         except BaseException:
-            if self._path_entry_exists(hook_path):
-                hook_path.unlink()
-            backup_path.rename(hook_path)
+            # Cancellation must not strand the user's hook under the backup name.
+            if (
+                has_moved_original
+                and not self._path_entry_exists(hook_path)
+                and self._path_entry_exists(backup_path)
+            ):
+                backup_path.rename(hook_path)
             raise
+        finally:
+            temporary_path.unlink(missing_ok=True)
 
     def _without_codelens_injection(self, lines: list[str]) -> list[str]:
         """Remove exact CodeLens injection pairs and orphaned marker lines."""
@@ -314,11 +344,17 @@ class HookInstaller:
                 index += 1
         return cleaned
 
-    def _has_marker(self, hook_path: Path) -> bool:
+    def _has_codelens_injection(self, hook_path: Path) -> bool:
+        if hook_path.is_symlink():
+            return False
         try:
+            lines = hook_path.read_text(encoding="utf-8").split("\n")
+            injection_lines = self._known_injection_lines()
             return any(
-                line.strip() == self.MARKER_COMMENT
-                for line in hook_path.read_text(encoding="utf-8").split("\n")
+                lines[index].strip() == self.MARKER_COMMENT
+                and index + 1 < len(lines)
+                and lines[index + 1].strip() in injection_lines
+                for index in range(len(lines))
             )
         except (OSError, UnicodeDecodeError):
             return False
@@ -341,6 +377,9 @@ class HookInstaller:
     def _known_injection_lines(self) -> set[str]:
         return {
             self._injection_line(),
+            self.NULL_STDIN_INJECTION_LINE_TEMPLATE.format(
+                script_name=self.STANDALONE_SCRIPT_NAME
+            ),
             self.LEGACY_INJECTION_LINE_TEMPLATE.format(
                 script_name=self.STANDALONE_SCRIPT_NAME
             ),

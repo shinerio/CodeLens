@@ -40,4 +40,3 @@
 .catalog-preview-tabs { display: flex; max-width: 1200px; gap: 7px; margin: 0 auto 14px; padding: 8px; overflow-x: auto; border: 1px solid var(--line); background: var(--surface); }
 .catalog-preview-tabs button { white-space: nowrap; }
 .catalog-preview-tabs button.active { border-color: var(--accent); background: var(--accent-soft); color: var(--accent); }
-@media (max-width: 680px) { .catalog-preview-page { padding: 18px; } .catalog-preview-page__header { align-items: start; flex-direction: column; } .catalog-preview-toolbar { align-items: stretch; flex-wrap: wrap; } .catalog-preview-toolbar > span { margin-left: 0; } }

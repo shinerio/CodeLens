@@ -30,6 +30,7 @@ class FilesystemPluginStore:
     def __init__(self, data_dir: Path) -> None:
         self._path = data_dir.expanduser().resolve() / "plugins.json"
         self._data_dir = data_dir
+        self._write_lock = asyncio.Lock()
 
     async def list_plugins(self) -> tuple[PluginRecord, ...]:
         return await asyncio.to_thread(self._list_plugins_sync)
@@ -39,10 +40,12 @@ class FilesystemPluginStore:
         return next((r for r in records if r.plugin_id == plugin_id), None)
 
     async def save_plugin(self, record: PluginRecord) -> None:
-        await asyncio.to_thread(self._save_plugin_sync, record)
+        async with self._write_lock:
+            await asyncio.to_thread(self._save_plugin_sync, record)
 
     async def delete_plugin(self, plugin_id: str) -> bool:
-        return await asyncio.to_thread(self._delete_plugin_sync, plugin_id)
+        async with self._write_lock:
+            return await asyncio.to_thread(self._delete_plugin_sync, plugin_id)
 
     def _list_plugins_sync(self) -> tuple[PluginRecord, ...]:
         payload = self._read()

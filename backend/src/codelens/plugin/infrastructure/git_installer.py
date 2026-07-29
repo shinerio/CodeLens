@@ -6,12 +6,17 @@ import shutil
 import tempfile
 from pathlib import Path
 
-from codelens.plugin.domain.models import PluginManifest, ReportCapability, TriggerCapability
+from jsonschema.exceptions import SchemaError
+from jsonschema.validators import validator_for
+
+from codelens.plugin.domain.models import (
+    PluginInstallError,
+    PluginManifest,
+    ReportCapability,
+    TriggerCapability,
+)
+from codelens.shared.domain.errors import InvalidRepositoryError
 from codelens.workspace.infrastructure.git_cli import GitCli
-
-
-class PluginInstallError(Exception):
-    """Raised when a plugin cannot be installed from a Git repository."""
 
 
 class GitPluginInstaller:
@@ -24,6 +29,7 @@ class GitPluginInstaller:
     """
 
     _MANIFEST_FILENAME = "plugin.json"
+    _RESERVED_PLUGIN_IDS = frozenset({"local"})
 
     def __init__(self, git: GitCli, plugins_dir: Path) -> None:
         self._git = git
@@ -32,7 +38,12 @@ class GitPluginInstaller:
     async def install(self, git_url: str, ref: str | None = None) -> PluginManifest:
         temp_dir = Path(tempfile.mkdtemp(prefix="codelens-plugin-install-"))
         try:
-            await self._git.clone(git_url, temp_dir, ref=ref)
+            try:
+                await self._git.clone(git_url, temp_dir, ref=ref)
+            except InvalidRepositoryError:
+                raise PluginInstallError(
+                    "Git repository could not be cloned"
+                ) from None
             manifest = await asyncio.to_thread(self._read_manifest, temp_dir)
             self._validate_manifest(manifest)
             install_path = self._plugins_dir / manifest.plugin_id
@@ -99,6 +110,10 @@ class GitPluginInstaller:
             raise PluginInstallError(
                 f"plugin_id must be a valid identifier, got: {manifest.plugin_id}"
             )
+        if manifest.plugin_id in self._RESERVED_PLUGIN_IDS:
+            raise PluginInstallError(
+                f"plugin_id '{manifest.plugin_id}' is reserved for a built-in plugin"
+            )
         if not manifest.capabilities:
             raise PluginInstallError(
                 "plugin must declare at least one capability (trigger or report)"
@@ -110,3 +125,9 @@ class GitPluginInstaller:
                 raise PluginInstallError(
                     f"{cap_name}.entry_point must be 'module:Class', got: {cap.entry_point}"
                 )
+            try:
+                validator_for(cap.config_schema).check_schema(cap.config_schema)
+            except SchemaError as error:
+                raise PluginInstallError(
+                    f"{cap_name}.config_schema must be valid JSON Schema"
+                ) from error

@@ -245,28 +245,3 @@
   color: #7e5a2c;
   font-size: 0.74rem;
 }
-
-@media (max-width: 620px) {
-  .repository-browser-backdrop {
-    padding: 0;
-    place-items: stretch;
-  }
-
-  .repository-browser {
-    width: 100%;
-    max-height: 100vh;
-    box-shadow: none;
-  }
-
-  .repository-browser__location {
-    grid-template-columns: auto minmax(0, 1fr) auto;
-  }
-
-  .repository-browser__location > span {
-    display: none;
-  }
-
-  .directory-row small {
-    display: none;
-  }
-}

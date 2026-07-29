@@ -13,6 +13,7 @@ dependencies = [
   "aiosqlite",
   "alembic",
   "fastapi",
+  "jsonschema>=4.26,<5",
   "markdown-it-py",
   "openai-agents",
   "pathspec",
@@ -35,6 +36,7 @@ dev = [
   "pytest-asyncio",
   "pytest-cov",
   "ruff",
+  "types-jsonschema>=4.26,<5",
 ]
 
 [tool.hatch.build.targets.wheel]
