@@ -1,6 +1,7 @@
 """Unified plugin management API routes."""
 
 import logging
+from collections.abc import Sequence
 from typing import Annotated, Any
 
 from fastapi import APIRouter, Depends
@@ -10,6 +11,11 @@ from codelens.interface.http.dependencies import (
     HttpComponents,
     HttpProblem,
     get_components,
+)
+from codelens.plugin.application.hook_management import (
+    HookConfigurationError,
+    HookInstallationError,
+    RepositoryHookStatus,
 )
 from codelens.plugin.domain.models import (
     PluginRecord,
@@ -125,6 +131,49 @@ class HookStatusResponse(BaseModel):
     is_installed: bool
     hook_path: str | None
     repository_path: str
+    repositories: list["RepositoryHookStatusResponse"]
+
+
+class RepositoryHookStatusResponse(BaseModel):
+    """Selected Git hook state for one configured repository."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    repository_path: str
+    hooks: dict[str, bool]
+    is_installed: bool
+
+
+def _hook_status_response(
+    statuses: Sequence[RepositoryHookStatus],
+) -> HookStatusResponse:
+    repositories = [
+        RepositoryHookStatusResponse(
+            repository_path=str(status.repository_path),
+            hooks={event.value: installed for event, installed in status.hooks.items()},
+            is_installed=status.is_installed,
+        )
+        for status in statuses
+    ]
+    single_status = statuses[0] if len(statuses) == 1 else None
+    return HookStatusResponse(
+        is_installed=bool(statuses) and all(status.is_installed for status in statuses),
+        hook_path=(
+            str(single_status.hook_path)
+            if single_status is not None and single_status.hook_path is not None
+            else None
+        ),
+        repository_path=(str(single_status.repository_path) if single_status is not None else ""),
+        repositories=repositories,
+    )
+
+
+def _raise_hook_problem(error: HookConfigurationError) -> None:
+    raise HttpProblem(400, "invalid_hook_configuration", str(error)) from error
+
+
+def _raise_hook_installation_problem(error: HookInstallationError) -> None:
+    raise HttpProblem(500, "hook_install_failed", str(error)) from error
 
 
 @router.get("", response_model=list[PluginRecordResponse])
@@ -179,7 +228,12 @@ async def enable_trigger(
     """Enable trigger capability for a plugin."""
 
     _LOGGER.info("Enabling trigger for plugin: %s", plugin_id)
-    record = await components.plugin_manager.enable_trigger(plugin_id)
+    try:
+        record = await components.trigger_hooks.enable_trigger(plugin_id)
+    except HookConfigurationError as error:
+        _raise_hook_problem(error)
+    except HookInstallationError as error:
+        _raise_hook_installation_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)
@@ -236,9 +290,12 @@ async def update_trigger_config(
     """Update trigger configuration for a plugin."""
 
     _LOGGER.info("Updating trigger config for plugin: %s", plugin_id)
-    record = await components.plugin_manager.update_trigger_config(
-        plugin_id, request.config
-    )
+    try:
+        record = await components.trigger_hooks.update_config(plugin_id, request.config)
+    except HookConfigurationError as error:
+        _raise_hook_problem(error)
+    except HookInstallationError as error:
+        _raise_hook_installation_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return PluginRecordResponse.from_domain(record)
@@ -284,16 +341,16 @@ async def install_hooks(
     """Install Git hooks for a trigger plugin."""
 
     _LOGGER.info("Installing hooks for plugin: %s", plugin_id)
-    record = await components.plugin_manager.get_plugin(plugin_id)
+    try:
+        record = await components.trigger_hooks.install_configured(plugin_id)
+    except HookConfigurationError as error:
+        _raise_hook_problem(error)
+    except HookInstallationError as error:
+        _raise_hook_installation_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
-
-    # TODO: Implement hook installation
-    return HookStatusResponse(
-        is_installed=False,
-        hook_path=None,
-        repository_path="",
-    )
+    statuses = await components.trigger_hooks.get_status(plugin_id)
+    return _hook_status_response(statuses or ())
 
 
 @router.post("/{plugin_id}/trigger/uninstall-hooks", response_model=HookStatusResponse)
@@ -304,16 +361,16 @@ async def uninstall_hooks(
     """Uninstall Git hooks for a trigger plugin."""
 
     _LOGGER.info("Uninstalling hooks for plugin: %s", plugin_id)
-    record = await components.plugin_manager.get_plugin(plugin_id)
+    try:
+        record = await components.trigger_hooks.uninstall_configured(plugin_id)
+    except HookConfigurationError as error:
+        _raise_hook_problem(error)
+    except HookInstallationError as error:
+        _raise_hook_installation_problem(error)
     if record is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
-
-    # TODO: Implement hook uninstalling
-    return HookStatusResponse(
-        is_installed=False,
-        hook_path=None,
-        repository_path="",
-    )
+    statuses = await components.trigger_hooks.get_status(plugin_id)
+    return _hook_status_response(statuses or ())
 
 
 @router.get("/{plugin_id}/trigger/hook-status", response_model=HookStatusResponse)
@@ -324,13 +381,10 @@ async def get_hook_status(
     """Get Git hook installation status for a trigger plugin."""
 
     _LOGGER.info("Getting hook status for plugin: %s", plugin_id)
-    record = await components.plugin_manager.get_plugin(plugin_id)
-    if record is None:
+    try:
+        statuses = await components.trigger_hooks.get_status(plugin_id)
+    except HookConfigurationError as error:
+        _raise_hook_problem(error)
+    if statuses is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
-
-    # TODO: Implement hook status check
-    return HookStatusResponse(
-        is_installed=False,
-        hook_path=None,
-        repository_path="",
-    )
+    return _hook_status_response(statuses)

@@ -1,0 +1,1 @@
+"""Local trigger plugin tests."""

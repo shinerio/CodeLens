@@ -1,5 +1,17 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { Check, Download, ExternalLink, FolderGit2, Package, Plus, Power, Trash2, Webhook, X } from "lucide-react";
+import {
+  Check,
+  Download,
+  ExternalLink,
+  FolderGit2,
+  Package,
+  Plus,
+  Power,
+  RefreshCw,
+  Trash2,
+  Webhook,
+  X,
+} from "lucide-react";
 import { useEffect, useState } from "react";
 
 import { useI18n } from "../../shared/i18n/i18n";
@@ -10,6 +22,7 @@ import {
   enableReport,
   enableTrigger,
   getHookStatus,
+  installHooks,
   installPlugin,
   listPlugins,
   PLUGIN_QUERY_KEY,
@@ -265,6 +278,17 @@ function TriggerCapabilitySection({
     },
   });
 
+  const hookInstallMutation = useMutation({
+    mutationFn: () => installHooks(plugin.plugin_id),
+    onSuccess: (status) => {
+      setHookStatus(status);
+      setError(null);
+    },
+    onError: (err: Error) => {
+      setError(err.message);
+    },
+  });
+
   const configChanged = JSON.stringify(configDraft) !== JSON.stringify(plugin.trigger_config);
 
   function refreshHookStatus() {
@@ -480,21 +504,58 @@ function TriggerCapabilitySection({
         </button>
       </div>
 
-      {plugin.trigger_enabled && hookStatus && (
+      {plugin.trigger_enabled && (
         <div className="capability-hooks">
-          <h5 className="capability-hooks__title">{t("plugins.hooks")}</h5>
-          <div className="hook-status">
-            <span className="hook-status__repo">{hookStatus.repository_path}</span>
-            <span
-              className={`hook-status__state ${
-                hookStatus.is_installed
-                  ? "hook-status__state--installed"
-                  : "hook-status__state--not-installed"
-              }`}
+          <div className="capability-hooks__header">
+            <h5 className="capability-hooks__title">{t("plugins.hooks")}</h5>
+            <button
+              aria-label={
+                hookStatus?.is_installed
+                  ? t("plugins.reinstallHooks")
+                  : t("plugins.installHooks")
+              }
+              className="hook-install-button"
+              disabled={
+                hookInstallMutation.isPending ||
+                configChanged ||
+                repositoryPaths.length === 0 ||
+                events.length === 0
+              }
+              onClick={() => hookInstallMutation.mutate()}
+              title={
+                hookStatus?.is_installed
+                  ? t("plugins.reinstallHooks")
+                  : t("plugins.installHooks")
+              }
+              type="button"
             >
-              {hookStatus.is_installed ? t("plugins.hookInstalled") : t("plugins.hookNotInstalled")}
-            </span>
+              <RefreshCw
+                aria-hidden="true"
+                className={hookInstallMutation.isPending ? "hook-install-button__spin" : undefined}
+              />
+              {hookInstallMutation.isPending
+                ? t("plugins.installingHooks")
+                : hookStatus?.is_installed
+                  ? t("plugins.reinstallHooks")
+                  : t("plugins.installHooks")}
+            </button>
           </div>
+          {(hookStatus?.repositories ?? []).map((repositoryStatus) => (
+            <div className="hook-status" key={repositoryStatus.repository_path}>
+              <span className="hook-status__repo">{repositoryStatus.repository_path}</span>
+              <span
+                className={`hook-status__state ${
+                  repositoryStatus.is_installed
+                    ? "hook-status__state--installed"
+                    : "hook-status__state--not-installed"
+                }`}
+              >
+                {repositoryStatus.is_installed
+                  ? t("plugins.hookInstalled")
+                  : t("plugins.hookNotInstalled")}
+              </span>
+            </div>
+          ))}
         </div>
       )}
 

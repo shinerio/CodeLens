@@ -41,10 +41,11 @@ class CompositePluginLoader:
         self._trigger_instances: dict[str, TriggerSinkPort] = {}
         self._report_instances: dict[str, ReportSinkPort] = {}
 
-    def load_trigger(
+    def load_plugin(
         self,
         plugin_id: str,
         review_creator: ReviewCreatorPort,
+        *,
         manifest: PluginManifest | None = None,
         install_path: Path | None = None,
     ) -> TriggerSinkPort:

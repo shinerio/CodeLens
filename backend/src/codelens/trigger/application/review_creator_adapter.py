@@ -4,7 +4,7 @@ import logging
 from pathlib import Path
 from typing import Protocol
 
-from codelens.plugin.domain.ports import ReviewCreatorPort
+from codelens.plugin.domain.ports import ReviewCreatorPort, TriggerRepositoryValidatorPort
 from codelens.review.application.commands import CreateReviewCommand, CreateReviewHandler
 from codelens.workspace.domain.models import (
     BranchScope,
@@ -37,6 +37,19 @@ class RepositoryMetadataInspectorPort(Protocol):
             InvalidRepositoryError: If the path is not a valid git repository root.
         """
         ...
+
+
+class TriggerRepositoryValidatorAdapter(TriggerRepositoryValidatorPort):
+    """Bridge workspace repository inspection into the trigger plugin boundary."""
+
+    def __init__(self, repository_inspector: RepositoryMetadataInspectorPort) -> None:
+        self._repository_inspector = repository_inspector
+
+    async def validate_repository(self, repository_path: Path) -> Path:
+        """Return the canonical root after workspace access and Git validation."""
+
+        repository = await self._repository_inspector.inspect(repository_path)
+        return repository.path
 
 
 class ReviewCreatorAdapter(ReviewCreatorPort):

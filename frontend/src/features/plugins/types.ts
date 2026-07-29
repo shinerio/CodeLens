@@ -58,4 +58,11 @@ export type HookStatusResponse = {
   is_installed: boolean;
   hook_path: string | null;
   repository_path: string;
+  repositories: RepositoryHookStatus[];
+};
+
+export type RepositoryHookStatus = {
+  repository_path: string;
+  hooks: Record<string, boolean>;
+  is_installed: boolean;
 };

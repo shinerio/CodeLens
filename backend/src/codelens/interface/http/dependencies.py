@@ -9,6 +9,7 @@ from codelens.instruction_policy.infrastructure.file_settings import (
     FilesystemInstructionLineLimitsStore,
 )
 from codelens.plugin.application.export_orchestrator import ExportOrchestrator
+from codelens.plugin.application.hook_management import TriggerHookService
 from codelens.plugin.application.plugin_manager import PluginManager
 from codelens.plugin.application.trigger_orchestrator import TriggerOrchestrator
 from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader
@@ -61,6 +62,7 @@ from codelens.reviewer_catalog.infrastructure.model_gateway_probe import (
 )
 from codelens.trigger.application.review_creator_adapter import (
     ReviewCreatorAdapter,
+    TriggerRepositoryValidatorAdapter,
 )
 from codelens.workspace.application.browse_directories import BrowseDirectoriesService
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
@@ -115,6 +117,7 @@ class HttpComponents:
     export_orchestrator: ExportOrchestrator
     trigger_orchestrator: TriggerOrchestrator
     hook_installer: HookInstaller
+    trigger_hooks: TriggerHookService
 
     async def start(self) -> None:
         """Create contained runtime directories and apply migrations before serving."""
@@ -190,7 +193,13 @@ def build_components(settings: Settings) -> HttpComponents:
         repository_inspector,
     )
     trigger_orchestrator = TriggerOrchestrator(
-        plugin_store, review_creator_adapter, plugin_loader  # type: ignore[arg-type]
+        plugin_store, review_creator_adapter, plugin_loader
+    )
+    trigger_hooks = TriggerHookService(
+        plugin_manager,
+        hook_installer,
+        TriggerRepositoryValidatorAdapter(repository_inspector),
+        settings.port,
     )
 
     return HttpComponents(
@@ -238,6 +247,7 @@ def build_components(settings: Settings) -> HttpComponents:
         export_orchestrator=export_orchestrator,
         trigger_orchestrator=trigger_orchestrator,
         hook_installer=hook_installer,
+        trigger_hooks=trigger_hooks,
     )
 
 

@@ -21,7 +21,7 @@ class LocalHookTriggerAdapter(TriggerSinkPort):
     events occur in rapid succession (e.g., amend commits, rebases).
     """
 
-    TRIGGER_ID = "local-git-hook"
+    TRIGGER_ID = "local"
     DISPLAY_NAME = "Local Git Hook Trigger"
 
     def __init__(self, review_creator: ReviewCreatorPort) -> None:

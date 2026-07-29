@@ -153,3 +153,32 @@ class TriggerPluginLoaderPort(Protocol):
         and ignored for built-in ones.
         """
         ...
+
+
+class HookInstallerPort(Protocol):
+    """Manage CodeLens-owned Git hook fragments for a validated repository."""
+
+    async def install_hooks(
+        self,
+        repository_path: Path,
+        events: tuple[HookEvent, ...],
+        port: int,
+    ) -> None:
+        """Install the selected local Git event hooks."""
+        ...
+
+    async def uninstall_hooks(self, repository_path: Path) -> None:
+        """Remove only CodeLens-owned hook content from the repository."""
+        ...
+
+    async def is_installed(self, repository_path: Path) -> dict[HookEvent, bool]:
+        """Return the installation state of each supported hook event."""
+        ...
+
+
+class TriggerRepositoryValidatorPort(Protocol):
+    """Validate trigger repository access and return its canonical root path."""
+
+    async def validate_repository(self, repository_path: Path) -> Path:
+        """Validate one exact Git root against the configured access boundary."""
+        ...
