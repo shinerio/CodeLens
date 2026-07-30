@@ -20,6 +20,12 @@ class RepositoryInspector:
         self._metadata = metadata
         self._roots = tuple(root.expanduser().resolve() for root in repository_roots)
 
+    def add_root(self, root: Path | str) -> None:
+        """Dynamically add a trusted repository root (e.g., plugin install path)."""
+        resolved = Path(root).expanduser().resolve()
+        if resolved not in self._roots:
+            self._roots = (*self._roots, resolved)
+
     async def inspect(self, path: Path) -> RepositoryInfo:
         """Inspect one exact repository root inside configured access boundaries."""
 

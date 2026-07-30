@@ -254,9 +254,16 @@ def build_components(settings: Settings) -> HttpComponents:
 
 
 async def initialize_plugins(components: HttpComponents) -> None:
-    """Initialize built-in plugins after startup."""
+    """Initialize built-in plugins and add their paths to trusted roots."""
 
     await components.plugin_manager.initialize_builtin()
+    # Add plugin install paths to trusted repository roots
+    from codelens.plugin.infrastructure.plugin_store import FilesystemPluginStore
+    plugin_store = FilesystemPluginStore(components.settings.data_dir)
+    plugins = await plugin_store.list_plugins()
+    for plugin in plugins:
+        if plugin.install_path and (plugin.trigger_enabled or plugin.report_enabled):
+            components.repository_inspector.add_root(plugin.install_path)
 
 
 def get_components(request: Request) -> HttpComponents:
