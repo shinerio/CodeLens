@@ -299,6 +299,7 @@ class Supervisor:
         proc = subprocess.Popen(
             cmd,
             cwd=self._project_root,
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=env,
@@ -327,6 +328,7 @@ class Supervisor:
         proc = subprocess.Popen(
             cmd,
             cwd=self._project_root,
+            stdin=subprocess.DEVNULL,
             stdout=log_file,
             stderr=subprocess.STDOUT,
             env=env,
