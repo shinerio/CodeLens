@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pytest
 
-from codelens.bootstrap.cli import parse_command, prepare_runtime
+from codelens.bootstrap.cli import _parse_start_args, prepare_runtime
 from codelens.bootstrap.settings import Settings
 from codelens.workspace.infrastructure.git_cli import GitCli
 
@@ -21,7 +21,7 @@ def test_start_command_uses_validated_loopback_and_data_directory_options(tmp_pa
     repository = tmp_path / "repository"
     repository.mkdir()
 
-    parsed = parse_command(["start", str(repository), "--data-dir", str(tmp_path / "data")])
+    parsed = _parse_start_args(["start", str(repository), "--data-dir", str(tmp_path / "data")])
 
     assert parsed.settings.host == "127.0.0.1"
     assert parsed.settings.repository_roots == (repository.resolve(),)

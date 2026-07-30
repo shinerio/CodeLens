@@ -48,7 +48,9 @@ class Settings(BaseSettings):
 
         if self.host not in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
             raise ValueError("auth=none requires a loopback host")
-        # repository_roots is optional for 0.0.0.0 — when empty, all repos are allowed
+        # 0.0.0.0 binding requires explicit repository roots for security
+        if self.host == "0.0.0.0" and not self.repository_roots:
+            raise ValueError("binding to 0.0.0.0 requires explicit repository roots")
         # plugin install paths are added dynamically at runtime
         if self.max_workers != 1:
             raise ValueError("the first release supports exactly one Worker")

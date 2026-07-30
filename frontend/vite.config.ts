@@ -2,7 +2,9 @@ import react from "@vitejs/plugin-react";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitest/config";
 
+const apiHost = process.env.CODELENS_API_HOST ?? "127.0.0.1";
 const apiPort = process.env.CODELENS_API_PORT ?? "8800";
+const frontendPort = parseInt(process.env.CODELENS_FRONTEND_PORT ?? "5173", 10);
 
 export default defineConfig({
   plugins: [react()],
@@ -17,12 +19,12 @@ export default defineConfig({
     ],
   },
   server: {
-    port: 5173,
+    port: frontendPort,
     proxy: {
       "/api": {
-        target: `http://127.0.0.1:${apiPort}`,
+        target: `http://${apiHost}:${apiPort}`,
         changeOrigin: true,
-        headers: { origin: `http://127.0.0.1:${apiPort}` },
+        headers: { origin: `http://${apiHost}:${apiPort}` },
       },
     },
   },

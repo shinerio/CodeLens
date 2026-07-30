@@ -13,23 +13,46 @@ cleanup() {
 }
 trap cleanup EXIT
 
-cat >"$TEST_DIR/bin/uv" <<'EOF'
+# Mock uv: handles sync (exit 0), and run (invoke Python CLI or start mock server)
+cat >"$TEST_DIR/bin/uv" <<EOF
 #!/usr/bin/env bash
-if [ "$1" = sync ]; then exit 0; fi
-exec sleep 300
+if [ "\$1" = sync ]; then exit 0; fi
+if [ -n "\${CODELENS_MOCK_BACKEND:-}" ]; then
+  exec python3 -c "
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1', 8800), H).serve_forever()
+"
+fi
+export CODELENS_MOCK_BACKEND=1
+export PYTHONPATH="$PROJECT_DIR/backend/src"
+shift 3
+shift
+exec python3 -m codelens.bootstrap.cli "\$@"
 EOF
+
+# Mock pnpm: handles install (exit 0), and dev (start mock server)
 cat >"$TEST_DIR/bin/pnpm" <<'EOF'
 #!/usr/bin/env bash
 for argument in "$@"; do
   if [ "$argument" = install ]; then exit 0; fi
 done
-exec sleep 300
+exec python3 -c "
+import http.server
+class H(http.server.BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.end_headers()
+    def log_message(self, *a): pass
+http.server.HTTPServer(('127.0.0.1', 5173), H).serve_forever()
+"
 EOF
-cat >"$TEST_DIR/bin/curl" <<'EOF'
-#!/usr/bin/env bash
-exit 0
-EOF
-chmod +x "$TEST_DIR/bin/uv" "$TEST_DIR/bin/pnpm" "$TEST_DIR/bin/curl"
+
+chmod +x "$TEST_DIR/bin/uv" "$TEST_DIR/bin/pnpm"
 export PATH="$TEST_DIR/bin:$PATH"
 mkdir -p "$PROJECT_DIR/logs"
 : >"$PROJECT_DIR/logs/unified.log"
