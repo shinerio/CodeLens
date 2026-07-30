@@ -105,12 +105,11 @@ def main(arguments: Sequence[str] | None = None) -> None:
 
     if command == "run-backend":
         # Direct backend execution (used by supervisor)
-        values = parser.parse_args(argv)
         settings = Settings(
-            data_dir=Path(values.data_dir),
-            host=str(values.host),
-            port=int(values.port),
-            repository_roots=tuple(Path(value) for value in values.repository_root),
+            data_dir=Path(parsed.data_dir),
+            host=str(parsed.host),
+            port=int(parsed.port),
+            repository_roots=tuple(Path(value) for value in parsed.repository_root),
         )
         asyncio.run(prepare_runtime(settings))
         from codelens.bootstrap.logging import configure_process_logging
@@ -128,13 +127,22 @@ def main(arguments: Sequence[str] | None = None) -> None:
 
     if command == "restart":
         start_cmd = _parse_start_args(argv)
-        supervisor.restart(start_cmd.settings, start_cmd.supervisor_config)
+        asyncio.run(prepare_runtime(start_cmd.settings))
+        supervisor.restart(
+            start_cmd.settings,
+            start_cmd.supervisor_config,
+            default_root=Path.cwd().resolve(),
+        )
         return
 
     # start
     start_cmd = _parse_start_args(argv)
     asyncio.run(prepare_runtime(start_cmd.settings))
-    supervisor.start(start_cmd.settings, start_cmd.supervisor_config)
+    supervisor.start(
+        start_cmd.settings,
+        start_cmd.supervisor_config,
+        default_root=Path.cwd().resolve(),
+    )
 
 
 if __name__ == "__main__":

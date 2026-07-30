@@ -1,6 +1,7 @@
 """Cross-platform process supervisor for backend and frontend services."""
 
 import getpass
+import json
 import os
 import shutil
 import signal
@@ -142,9 +143,16 @@ class Supervisor:
         self._runtime_dir = Path(tempfile.gettempdir()) / f"codelens-review-{_get_user_id()}"
         self._backend_pid_file = self._runtime_dir / "backend.pid"
         self._frontend_pid_file = self._runtime_dir / "frontend.pid"
+        self._config_file = self._runtime_dir / "config.json"
         self._log_dir = self._project_root / "logs"
 
-    def start(self, settings: Settings, config: SupervisorConfig) -> None:
+    def start(
+        self,
+        settings: Settings,
+        config: SupervisorConfig,
+        *,
+        default_root: Path | None = None,
+    ) -> None:
         """Install dependencies, start backend and frontend, and wait for readiness."""
         self._check_dependencies()
         self._ensure_not_running()
@@ -163,12 +171,15 @@ class Supervisor:
 
         try:
             # Start backend
-            backend_pid = self._start_backend(settings)
+            backend_pid = self._start_backend(settings, default_root)
             self._write_pid(self._backend_pid_file, backend_pid)
 
             # Start frontend
             frontend_pid = self._start_frontend(config, settings.host, settings.port)
             self._write_pid(self._frontend_pid_file, frontend_pid)
+
+            # Save running config for stop()
+            self._save_running_config(settings.port, config.frontend_port)
 
             # Wait for readiness
             backend_health_host = _resolve_health_host(settings.host)
@@ -209,7 +220,8 @@ class Supervisor:
                 pid_file.unlink()
 
         # Fallback: kill processes on our ports
-        for port in (8800, 5173):
+        fallback_ports = self._load_running_ports()
+        for port in fallback_ports:
             for pid in self._find_pids_on_port(port):
                 if _is_running(pid):
                     was_running = True
@@ -233,10 +245,16 @@ class Supervisor:
         else:
             print("CodeLens is not running.")
 
-    def restart(self, settings: Settings, config: SupervisorConfig) -> None:
+    def restart(
+        self,
+        settings: Settings,
+        config: SupervisorConfig,
+        *,
+        default_root: Path | None = None,
+    ) -> None:
         """Stop all services and start them again."""
         self.stop()
-        self.start(settings, config)
+        self.start(settings, config, default_root=default_root)
 
     # ── Private helpers ────────────────────────────────────────────────────
 
@@ -276,7 +294,7 @@ class Supervisor:
                     "use 'codelens-review restart' or 'codelens-review stop'"
                 )
 
-    def _start_backend(self, settings: Settings) -> int:
+    def _start_backend(self, settings: Settings, default_root: Path | None = None) -> int:
         """Spawn the backend process and return its PID."""
         env = os.environ.copy()
         env["CODELENS_HOST"] = settings.host
@@ -291,8 +309,13 @@ class Supervisor:
             "--host", settings.host,
             "--port", str(settings.port),
         ]
-        if settings.data_dir != Settings().data_dir:
+        if settings.data_dir != self._project_root / "data":
             cmd.extend(["--data-dir", str(settings.data_dir)])
+        # When the user has not configured explicit repository roots, trust the
+        # directory from which the start command was invoked so that repositories
+        # under the user's working directory are reviewable by default.
+        if not settings.repository_roots and default_root is not None:
+            cmd.append(str(default_root))
         for root in settings.repository_roots:
             cmd.append(str(root))
 
@@ -304,6 +327,7 @@ class Supervisor:
             stderr=subprocess.STDOUT,
             env=env,
         )
+        log_file.close()
         return proc.pid
 
     def _start_frontend(
@@ -333,6 +357,7 @@ class Supervisor:
             stderr=subprocess.STDOUT,
             env=env,
         )
+        log_file.close()
         return proc.pid
 
     def _wait_for_http(self, url: str, pid: int, name: str, timeout_seconds: int = 30) -> None:
@@ -365,6 +390,23 @@ class Supervisor:
         """Write a PID to a file."""
         pid_file.parent.mkdir(parents=True, exist_ok=True)
         pid_file.write_text(str(pid))
+
+    def _save_running_config(self, backend_port: int, frontend_port: int) -> None:
+        """Save running ports so stop() can use them instead of hardcoded defaults."""
+        self._config_file.parent.mkdir(parents=True, exist_ok=True)
+        self._config_file.write_text(
+            json.dumps({"backend_port": backend_port, "frontend_port": frontend_port})
+        )
+
+    def _load_running_ports(self) -> list[int]:
+        """Read running ports from config file, falling back to defaults."""
+        if self._config_file.exists():
+            try:
+                data = json.loads(self._config_file.read_text())
+                return [data["backend_port"], data["frontend_port"]]
+            except (OSError, json.JSONDecodeError, KeyError):
+                pass
+        return [8800, 5173]
 
     def _cleanup_pid_files(self) -> None:
         """Remove PID files and runtime directory."""
