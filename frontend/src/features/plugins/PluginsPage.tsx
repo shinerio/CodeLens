@@ -311,6 +311,12 @@ function TriggerCapabilitySection({
     }
   }, [plugin.plugin_id, plugin.trigger_enabled]);
 
+  const triggerType = plugin.manifest.capabilities.trigger?.trigger_type ?? "local-hook";
+  const isLocalHook = triggerType === "local-hook";
+  const isWebhook = triggerType === "webhook";
+
+  // For local-hook: use hardcoded fields
+  // For webhook: use config_schema to dynamically render fields
   const repositoryPaths = (configDraft.repository_paths as string[]) ?? [];
   const events = (configDraft.events as string[]) ?? [];
   const selectedAgents = (configDraft.selected_agents as string[]) ?? [];
@@ -352,6 +358,10 @@ function TriggerCapabilitySection({
 
   const supportedEvents = plugin.manifest.capabilities.trigger?.supported_events ?? [];
 
+  // For webhook: extract config_schema properties for dynamic rendering
+  const webhookConfigSchema = plugin.manifest.capabilities.trigger?.config_schema ?? {};
+  const webhookConfigProperties = isWebhook ? extractConfigProperties(webhookConfigSchema) : [];
+
   return (
     <div className="capability-section capability-section--trigger">
       <div className="capability-section__header">
@@ -366,142 +376,171 @@ function TriggerCapabilitySection({
         </button>
       </div>
 
+      {isWebhook && (
+        <div className="capability-webhook-info">
+          <p className="webhook-url-label">{t("plugins.webhookUrl")}</p>
+          <code className="webhook-url">{`POST /api/webhooks/${plugin.manifest.platform}`}</code>
+          <p className="webhook-hint">{t("plugins.webhookHint")}</p>
+        </div>
+      )}
+
       <div className="capability-config">
-        <div className="config-section">
-          <label className="config-section__label">{t("plugins.repositoryPaths")}</label>
-          <div className="config-repositories">
-            {repositoryPaths.map((path) => (
-              <div key={path} className="config-repository">
-                <FolderGit2 aria-hidden="true" />
-                <code>{path}</code>
-                <button
-                  className="config-repository__remove"
-                  onClick={() => handleRemoveRepository(path)}
-                  type="button"
-                >
-                  <X aria-hidden="true" />
-                </button>
-              </div>
-            ))}
-          </div>
-          <button
-            className="config-add-repo"
-            onClick={() => setBrowserOpen(true)}
-            type="button"
-          >
-            <Plus aria-hidden="true" />
-            {t("plugins.addRepository")}
-          </button>
-        </div>
-
-        <div className="config-section">
-          <label className="config-section__label">{t("plugins.events")}</label>
-          <div className="config-checkboxes">
-            {supportedEvents.map((event) => (
-              <label key={event} className="config-checkbox">
-                <input
-                  type="checkbox"
-                  checked={events.includes(event)}
-                  onChange={(e) => handleEventToggle(event, e.target.checked)}
-                />
-                <span>{event}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        <div className="config-section">
-          <label className="config-section__label">{t("plugins.selectedAgents")}</label>
-          <div className="config-checkboxes">
-            {AVAILABLE_AGENTS.map((agent) => (
-              <label
-                key={agent.reference}
-                className={`config-checkbox ${!agent.enabled ? "config-checkbox--disabled" : ""}`}
-              >
-                <input
-                  type="checkbox"
-                  checked={selectedAgents.includes(agent.reference)}
-                  disabled={!agent.enabled}
-                  onChange={(e) => handleAgentToggle(agent.reference, e.target.checked)}
-                />
-                <span>{t(agent.labelKey)}</span>
-                {!agent.enabled && (
-                  <span className="config-agent-badge">{t("plugins.comingSoon")}</span>
-                )}
-              </label>
-            ))}
-          </div>
-          {selectedAgents.length === 0 && (
-            <p className="config-error">{t("plugins.noAgentSelected")}</p>
-          )}
-        </div>
-
-        <div className="config-section">
-          <label className="config-section__label">{t("plugins.scopeType")}</label>
-          <div className="config-radios">
-            {(["commit", "branch", "uncommitted"] as const).map((scope) => (
-              <label key={scope} className="config-radio">
-                <input
-                  type="radio"
-                  name={`scope-${plugin.plugin_id}`}
-                  checked={scopeType === scope}
-                  onChange={() => handleScopeChange(scope)}
-                />
-                <span>{t(`plugins.scope.${scope}`)}</span>
-              </label>
-            ))}
-          </div>
-        </div>
-
-        {scopeType === "branch" && (
+        {isLocalHook && (
           <>
             <div className="config-section">
-              <label className="config-section__label">{t("plugins.baseRef")}</label>
-              <input
-                className="config-input"
-                type="text"
-                value={baseRef}
-                onChange={(e) => setConfigDraft({ ...configDraft, base_ref: e.target.value || null })}
-                placeholder="main"
-              />
+              <label className="config-section__label">{t("plugins.repositoryPaths")}</label>
+              <div className="config-repositories">
+                {repositoryPaths.map((path) => (
+                  <div key={path} className="config-repository">
+                    <FolderGit2 aria-hidden="true" />
+                    <code>{path}</code>
+                    <button
+                      className="config-repository__remove"
+                      onClick={() => handleRemoveRepository(path)}
+                      type="button"
+                    >
+                      <X aria-hidden="true" />
+                    </button>
+                  </div>
+                ))}
+              </div>
+              <button
+                className="config-add-repo"
+                onClick={() => setBrowserOpen(true)}
+                type="button"
+              >
+                <Plus aria-hidden="true" />
+                {t("plugins.addRepository")}
+              </button>
             </div>
+
             <div className="config-section">
-              <label className="config-section__label">{t("plugins.targetRef")}</label>
+              <label className="config-section__label">{t("plugins.events")}</label>
+              <div className="config-checkboxes">
+                {supportedEvents.map((event) => (
+                  <label key={event} className="config-checkbox">
+                    <input
+                      type="checkbox"
+                      checked={events.includes(event)}
+                      onChange={(e) => handleEventToggle(event, e.target.checked)}
+                    />
+                    <span>{event}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.selectedAgents")}</label>
+              <div className="config-checkboxes">
+                {AVAILABLE_AGENTS.map((agent) => (
+                  <label
+                    key={agent.reference}
+                    className={`config-checkbox ${!agent.enabled ? "config-checkbox--disabled" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedAgents.includes(agent.reference)}
+                      disabled={!agent.enabled}
+                      onChange={(e) => handleAgentToggle(agent.reference, e.target.checked)}
+                    />
+                    <span>{t(agent.labelKey)}</span>
+                    {!agent.enabled && (
+                      <span className="config-agent-badge">{t("plugins.comingSoon")}</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+              {selectedAgents.length === 0 && (
+                <p className="config-error">{t("plugins.noAgentSelected")}</p>
+              )}
+            </div>
+
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.scopeType")}</label>
+              <div className="config-radios">
+                {(["commit", "branch", "uncommitted"] as const).map((scope) => (
+                  <label key={scope} className="config-radio">
+                    <input
+                      type="radio"
+                      name={`scope-${plugin.plugin_id}`}
+                      checked={scopeType === scope}
+                      onChange={() => handleScopeChange(scope)}
+                    />
+                    <span>{t(`plugins.scope.${scope}`)}</span>
+                  </label>
+                ))}
+              </div>
+            </div>
+
+            {scopeType === "branch" && (
+              <>
+                <div className="config-section">
+                  <label className="config-section__label">{t("plugins.baseRef")}</label>
+                  <input
+                    className="config-input"
+                    type="text"
+                    value={baseRef}
+                    onChange={(e) => setConfigDraft({ ...configDraft, base_ref: e.target.value || null })}
+                    placeholder="main"
+                  />
+                </div>
+                <div className="config-section">
+                  <label className="config-section__label">{t("plugins.targetRef")}</label>
+                  <input
+                    className="config-input"
+                    type="text"
+                    value={targetRef}
+                    onChange={(e) => setConfigDraft({ ...configDraft, target_ref: e.target.value || null })}
+                    placeholder="feature-branch"
+                  />
+                </div>
+              </>
+            )}
+
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.locale")}</label>
+              <select
+                className="config-select"
+                value={promptLocale}
+                onChange={(e) => setConfigDraft({ ...configDraft, prompt_locale: e.target.value })}
+              >
+                <option value="en">English</option>
+                <option value="zh-CN">中文</option>
+              </select>
+            </div>
+
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.debounce")}</label>
               <input
                 className="config-input"
-                type="text"
-                value={targetRef}
-                onChange={(e) => setConfigDraft({ ...configDraft, target_ref: e.target.value || null })}
-                placeholder="feature-branch"
+                type="number"
+                min="0"
+                value={debounceSeconds}
+                onChange={(e) =>
+                  setConfigDraft({ ...configDraft, debounce_seconds: parseInt(e.target.value) || 0 })
+                }
               />
             </div>
           </>
         )}
 
-        <div className="config-section">
-          <label className="config-section__label">{t("plugins.locale")}</label>
-          <select
-            className="config-select"
-            value={promptLocale}
-            onChange={(e) => setConfigDraft({ ...configDraft, prompt_locale: e.target.value })}
-          >
-            <option value="en">English</option>
-            <option value="zh-CN">中文</option>
-          </select>
-        </div>
-
-        <div className="config-section">
-          <label className="config-section__label">{t("plugins.debounce")}</label>
-          <input
-            className="config-input"
-            type="number"
-            min="0"
-            value={debounceSeconds}
-            onChange={(e) =>
-              setConfigDraft({ ...configDraft, debounce_seconds: parseInt(e.target.value) || 0 })
-            }
-          />
-        </div>
+        {isWebhook && webhookConfigProperties.length > 0 && (
+          <div className="config-section">
+            {webhookConfigProperties.map((prop) => (
+              <ConfigField
+                key={prop.key}
+                label={prop.label}
+                value={configDraft[prop.key]}
+                defaultValue={prop.default}
+                type={prop.type}
+                enumValues={prop.enumValues}
+                itemEnumValues={prop.itemEnumValues}
+                onChange={(value) => setConfigDraft({ ...configDraft, [prop.key]: value })}
+              />
+            ))}
+          </div>
+        )}
 
         <button
           className="config-save"
@@ -514,7 +553,7 @@ function TriggerCapabilitySection({
         </button>
       </div>
 
-      {plugin.trigger_enabled && (
+      {isLocalHook && plugin.trigger_enabled && (
         <div className="capability-hooks">
           <div className="capability-hooks__header">
             <h5 className="capability-hooks__title">{t("plugins.hooks")}</h5>
@@ -571,11 +610,13 @@ function TriggerCapabilitySection({
 
       {error && <p className="config-error">{error}</p>}
 
-      <RepositoryBrowser
-        isOpen={browserOpen}
-        onClose={() => setBrowserOpen(false)}
-        onSelect={handleRepositorySelect}
-      />
+      {isLocalHook && (
+        <RepositoryBrowser
+          isOpen={browserOpen}
+          onClose={() => setBrowserOpen(false)}
+          onSelect={handleRepositorySelect}
+        />
+      )}
     </div>
   );
 }
