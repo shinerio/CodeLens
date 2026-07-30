@@ -358,9 +358,16 @@ function TriggerCapabilitySection({
 
   const supportedEvents = plugin.manifest.capabilities.trigger?.supported_events ?? [];
 
+  // Common trigger fields rendered with specialized UI for all trigger types
+  const COMMON_TRIGGER_FIELDS = new Set(["selected_agents", "prompt_locale", "debounce_seconds"]);
+
   // For webhook: extract config_schema properties for dynamic rendering
   const webhookConfigSchema = plugin.manifest.capabilities.trigger?.config_schema ?? {};
   const webhookConfigProperties = isWebhook ? extractConfigProperties(webhookConfigSchema) : [];
+  // Plugin-specific custom fields (excluding common ones already rendered)
+  const webhookCustomProperties = webhookConfigProperties.filter(
+    (prop) => !COMMON_TRIGGER_FIELDS.has(prop.key),
+  );
 
   return (
     <div className="capability-section capability-section--trigger">
@@ -525,9 +532,64 @@ function TriggerCapabilitySection({
           </>
         )}
 
-        {isWebhook && webhookConfigProperties.length > 0 && (
+        {isWebhook && (
+          <>
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.selectedAgents")}</label>
+              <div className="config-checkboxes">
+                {AVAILABLE_AGENTS.map((agent) => (
+                  <label
+                    key={agent.reference}
+                    className={`config-checkbox ${!agent.enabled ? "config-checkbox--disabled" : ""}`}
+                  >
+                    <input
+                      type="checkbox"
+                      checked={selectedAgents.includes(agent.reference)}
+                      disabled={!agent.enabled}
+                      onChange={(e) => handleAgentToggle(agent.reference, e.target.checked)}
+                    />
+                    <span>{t(agent.labelKey)}</span>
+                    {!agent.enabled && (
+                      <span className="config-agent-badge">{t("plugins.comingSoon")}</span>
+                    )}
+                  </label>
+                ))}
+              </div>
+              {selectedAgents.length === 0 && (
+                <p className="config-error">{t("plugins.noAgentSelected")}</p>
+              )}
+            </div>
+
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.locale")}</label>
+              <select
+                className="config-select"
+                value={promptLocale}
+                onChange={(e) => setConfigDraft({ ...configDraft, prompt_locale: e.target.value })}
+              >
+                <option value="en">English</option>
+                <option value="zh-CN">中文</option>
+              </select>
+            </div>
+
+            <div className="config-section">
+              <label className="config-section__label">{t("plugins.debounce")}</label>
+              <input
+                className="config-input"
+                type="number"
+                min="0"
+                value={debounceSeconds}
+                onChange={(e) =>
+                  setConfigDraft({ ...configDraft, debounce_seconds: parseInt(e.target.value) || 0 })
+                }
+              />
+            </div>
+          </>
+        )}
+
+        {isWebhook && webhookCustomProperties.length > 0 && (
           <div className="config-section">
-            {webhookConfigProperties.map((prop) => (
+            {webhookCustomProperties.map((prop) => (
               <ConfigField
                 key={prop.key}
                 label={prop.label}

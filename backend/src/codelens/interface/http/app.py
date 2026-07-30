@@ -79,6 +79,7 @@ class LocalHttpSafetyMiddleware:
 
     def __init__(self, app: ASGIApp, *, configured_host: str) -> None:
         self._app = app
+        self._allow_all_hosts = configured_host == "0.0.0.0"
         self._allowed_hosts = {*_LOOPBACK_HOSTS, configured_host}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
@@ -86,21 +87,22 @@ class LocalHttpSafetyMiddleware:
             await self._app(scope, receive, send)
             return
         headers = Headers(scope=scope)
-        host = _validated_host(headers.get("host", ""))
-        if host not in self._allowed_hosts:
-            await JSONResponse(
-                {"code": "invalid_host", "message": "The Host header is not allowed."},
-                status_code=400,
-            )(scope, receive, send)
-            return
-        origin = headers.get("origin")
-        if origin is not None:
-            if _validated_origin_host(origin) not in self._allowed_hosts:
+        if not self._allow_all_hosts:
+            host = _validated_host(headers.get("host", ""))
+            if host not in self._allowed_hosts:
                 await JSONResponse(
-                    {"code": "invalid_origin", "message": "The Origin header is not allowed."},
-                    status_code=403,
+                    {"code": "invalid_host", "message": "The Host header is not allowed."},
+                    status_code=400,
                 )(scope, receive, send)
                 return
+            origin = headers.get("origin")
+            if origin is not None:
+                if _validated_origin_host(origin) not in self._allowed_hosts:
+                    await JSONResponse(
+                        {"code": "invalid_origin", "message": "The Origin header is not allowed."},
+                        status_code=403,
+                    )(scope, receive, send)
+                    return
         method = str(scope.get("method", "GET")).upper()
         if method in _STATE_CHANGING_METHODS:
             content_type = headers.get("content-type", "").partition(";")[0].strip().lower()
