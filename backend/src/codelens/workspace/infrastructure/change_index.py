@@ -287,23 +287,27 @@ class GitChangeIndexBuilder:
                     old_line = int(old_start)
                     old_lines = old_lines_by_path.get(old_path)
                     if old_lines is None:
-                        old_result = await self._git.run(
+                        old_blob = await self._git.read_revision_optional(
                             worktree.root,
-                            "show",
-                            f"{base_oid}:{old_path}",
+                            base_oid,
+                            old_path,
                         )
-                        old_lines = tuple(old_result.stdout.splitlines(keepends=True))
+                        if old_blob is None:
+                            old_lines = ()
+                        else:
+                            old_lines = tuple(old_blob.splitlines(keepends=True))
                         old_lines_by_path[old_path] = old_lines
-                    old_excerpt = b"".join(old_lines[old_line - 1 : old_line + old_count - 1])
-                    hunks.append(
-                        self._hunk(
-                            path,
-                            old_line,
-                            old_line + old_count - 1,
-                            "old",
-                            old_excerpt,
+                    if old_lines and old_line <= len(old_lines):
+                        old_excerpt = b"".join(old_lines[old_line - 1 : old_line + old_count - 1])
+                        hunks.append(
+                            self._hunk(
+                                path,
+                                old_line,
+                                old_line + old_count - 1,
+                                "old",
+                                old_excerpt,
+                            )
                         )
-                    )
                 if new_count > 0:
                     start_line = int(new_start)
                     end_line = start_line + new_count - 1

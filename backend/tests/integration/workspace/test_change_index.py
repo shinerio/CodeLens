@@ -107,6 +107,66 @@ async def test_builds_hunks_for_git_c_quoted_utf8_paths(tmp_path: Path) -> None:
     ]
 
 
+async def test_skips_old_hunk_when_base_object_is_unreachable(tmp_path: Path) -> None:
+    """When the old-side blob is unreachable (e.g. submodule), skip the old hunk gracefully."""
+    git_cli = GitCli()
+
+    submodule = tmp_path / "submodule"
+    submodule.mkdir()
+    await _git(submodule, "init")
+    await _git(submodule, "config", "user.email", "review@example.test")
+    await _git(submodule, "config", "user.name", "Review Test")
+    await _git(submodule, "config", "commit.gpgSign", "false")
+    (submodule / "lib.py").write_text("lib = 1\n", encoding="utf-8")
+    await _git(submodule, "add", ".")
+    await _git(submodule, "commit", "-m", "lib base")
+    await _git(submodule, "commit", "-m", "lib head", "--allow-empty")
+
+    origin = tmp_path / "origin"
+    origin.mkdir()
+    await _git(origin, "init")
+    await _git(origin, "config", "user.email", "review@example.test")
+    await _git(origin, "config", "user.name", "Review Test")
+    await _git(origin, "config", "commit.gpgSign", "false")
+    (origin / "main.py").write_text("main = 1\n", encoding="utf-8")
+    await _git(origin, "add", ".")
+    await _git(origin, "commit", "-m", "base")
+    base_oid = await _git(origin, "rev-parse", "HEAD")
+
+    await _git(
+        origin,
+        "-c", "protocol.file.allow=always",
+        "submodule", "add", str(submodule), ".codehub/sub",
+    )
+    await _git(origin, "commit", "-m", "add submodule")
+    (origin / "main.py").write_text("main = 2\n", encoding="utf-8")
+    await _git(origin, "add", ".")
+    await _git(origin, "commit", "-m", "head")
+    head_oid = await _git(origin, "rev-parse", "HEAD")
+
+    worktree = TaskWorktree(
+        "worktree-submodule",
+        "review-submodule",
+        "a" * 64,
+        origin,
+        head_oid,
+        "b" * 64,
+    )
+
+    index = await GitChangeIndexBuilder(git_cli).build(
+        worktree,
+        base_oid,
+        ("main.py", ".codehub/sub"),
+        "branch",
+    )
+
+    assert index.files == (
+        ReviewFileChange(".codehub/sub", "added"),
+        ReviewFileChange("main.py", "modified"),
+    )
+    assert all(hunk.path == "main.py" or hunk.side == "new" for hunk in index.hunks)
+
+
 async def test_full_scope_indexes_complete_text_files_from_an_empty_baseline(
     tmp_path: Path,
 ) -> None:
