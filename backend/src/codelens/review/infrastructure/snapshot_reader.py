@@ -22,7 +22,7 @@ def _normalized_relative(path: str) -> bool:
     )
 
 
-def _read_entry(root: Path, entry: SnapshotEntry) -> bytes:
+def _read_entry(root: Path, entry: SnapshotEntry, max_bytes: int) -> bytes:
     absolute = root / entry.path
     if entry.kind == "deleted":
         return b""
@@ -31,7 +31,11 @@ def _read_entry(root: Path, entry: SnapshotEntry) -> bytes:
     resolved = absolute.resolve()
     if not resolved.is_relative_to(root):
         raise ValueError("Snapshot context path escapes its worktree")
-    return absolute.read_bytes()
+    with absolute.open("rb") as stream:
+        payload = stream.read(max_bytes + 1)
+    if len(payload) > max_bytes:
+        raise ValueError("Snapshot context file exceeds size limit")
+    return payload
 
 
 class FilesystemSnapshotReader:
@@ -74,7 +78,7 @@ class FilesystemSnapshotReader:
                 path,
             )
         else:
-            payload = await asyncio.to_thread(_read_entry, snapshot.worktree.root, entry)
+            payload = await asyncio.to_thread(_read_entry, snapshot.worktree.root, entry, max_bytes)
             if hashlib.sha256(payload).hexdigest() != entry.content_hash:
                 raise ValueError("Snapshot context content changed")
         selected = b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])

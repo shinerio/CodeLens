@@ -1,6 +1,5 @@
 """Cross-platform process supervisor for backend and frontend services."""
 
-import getpass
 import json
 import os
 import shutil
@@ -129,7 +128,7 @@ def _get_user_id() -> str:
     """Return a user identifier for the runtime directory name."""
     if _IS_WINDOWS:
         return os.environ.get("USERNAME", "unknown")
-    return os.environ.get("USER", getpass.getuser())
+    return str(os.getuid())
 
 
 class Supervisor:
@@ -319,15 +318,17 @@ class Supervisor:
         for root in settings.repository_roots:
             cmd.append(str(root))
 
-        proc = subprocess.Popen(
-            cmd,
-            cwd=self._project_root,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
-        log_file.close()
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=self._project_root,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+        finally:
+            log_file.close()
         return proc.pid
 
     def _start_frontend(
@@ -349,15 +350,17 @@ class Supervisor:
             "--strictPort",
         ]
 
-        proc = subprocess.Popen(
-            cmd,
-            cwd=self._project_root,
-            stdin=subprocess.DEVNULL,
-            stdout=log_file,
-            stderr=subprocess.STDOUT,
-            env=env,
-        )
-        log_file.close()
+        try:
+            proc = subprocess.Popen(
+                cmd,
+                cwd=self._project_root,
+                stdin=subprocess.DEVNULL,
+                stdout=log_file,
+                stderr=subprocess.STDOUT,
+                env=env,
+            )
+        finally:
+            log_file.close()
         return proc.pid
 
     def _wait_for_http(self, url: str, pid: int, name: str, timeout_seconds: int = 30) -> None:
@@ -434,7 +437,7 @@ class Supervisor:
                 )
                 pids: list[int] = []
                 for line in result.stdout.splitlines():
-                    if f":{port}" in line and "LISTENING" in line:
+                    if f":{port} " in line and "LISTENING" in line:
                         parts = line.split()
                         if parts and parts[-1].isdigit():
                             pids.append(int(parts[-1]))

@@ -715,18 +715,49 @@ class SqlReviewStore:
         """Return every non-terminal execution for startup worktree reconciliation."""
 
         async with self._database.sessions() as session:
-            task_ids = (
+            rows = (
                 await session.execute(
-                    select(review_tasks.c.task_id).where(
+                    select(review_tasks).where(
                         review_tasks.c.status.not_in(("completed", "partial", "failed", "canceled"))
                     )
                 )
-            ).scalars()
+            ).mappings().all()
+
         executions: list[ReviewExecutionRecord] = []
-        for task_id in task_ids:
-            record = await self.get_execution(str(task_id))
-            if record is not None:
-                executions.append(record)
+        for row in rows:
+            raw_path = row["repository_path"]
+            raw_targets = row["target_paths_json"]
+            if raw_path is None or raw_targets is None:
+                continue
+            selected: list[str] = json.loads(str(row["selected_agent_versions_json"]))
+            target_paths: list[str] = json.loads(str(raw_targets))
+            repository_path = await asyncio.to_thread(_resolve_path, str(raw_path))
+            executions.append(
+                ReviewExecutionRecord(
+                    task_id=str(row["task_id"]),
+                    repository_path=repository_path,
+                    repository_realpath_hash=str(row["repository_realpath_hash"]),
+                    git_common_dir_hash=str(row["git_common_dir_hash"]),
+                    base_oid=str(row["base_oid"]),
+                    head_oid=str(row["head_oid"]),
+                    scope_type=_review_scope_type(json.loads(str(row["scope_json"]))),
+                    overlay_hash=(
+                        str(row["overlay_hash"])
+                        if row["overlay_hash"] is not None
+                        else None
+                    ),
+                    overlay_artifact_ref=(
+                        str(row["overlay_artifact_ref"])
+                        if row["overlay_artifact_ref"] is not None
+                        else None
+                    ),
+                    target_paths=tuple(target_paths),
+                    selected_agent_versions=tuple(selected),
+                    prompt_locale=str(row["prompt_locale"]),
+                    status=str(row["status"]),
+                    cancellation_requested=bool(row["cancellation_requested"]),
+                )
+            )
         return tuple(executions)
 
     async def get_status(self, task_id: str) -> str:

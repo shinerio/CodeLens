@@ -39,7 +39,7 @@ class InMemoryEventBus:
     async def subscribe(self, task_id: str) -> asyncio.Queue[ReviewEvent]:
         """Register a new subscriber queue for one task."""
 
-        queue: asyncio.Queue[ReviewEvent] = asyncio.Queue()
+        queue: asyncio.Queue[ReviewEvent] = asyncio.Queue(maxsize=1000)
         async with self._lock:
             self._subscribers[task_id].append(queue)
         return queue

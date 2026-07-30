@@ -181,15 +181,25 @@ class ReviewOrchestrator:
                 if status == "canceled":
                     return
 
-            await asyncio.gather(
-                *(self._checkpoint_output(task_id, prepared, agent) for agent in prepared.agents)
+            results = await asyncio.gather(
+                *(self._checkpoint_output(task_id, prepared, agent) for agent in prepared.agents),
+                return_exceptions=True,
             )
+            exceptions = [r for r in results if isinstance(r, BaseException)]
+            if exceptions:
+                non_cancelled = [e for e in exceptions if not isinstance(e, asyncio.CancelledError)]
+                raise non_cancelled[0] if non_cancelled else exceptions[0]
             status = await self._advance(task_id, status, "reviewing", "validating")
             if status == "canceled":
                 return
-            await asyncio.gather(
-                *(self._validate_output(task_id, prepared, agent) for agent in prepared.agents)
+            results = await asyncio.gather(
+                *(self._validate_output(task_id, prepared, agent) for agent in prepared.agents),
+                return_exceptions=True,
             )
+            exceptions = [r for r in results if isinstance(r, BaseException)]
+            if exceptions:
+                non_cancelled = [e for e in exceptions if not isinstance(e, asyncio.CancelledError)]
+                raise non_cancelled[0] if non_cancelled else exceptions[0]
             status = await self._advance(task_id, status, "validating", "synthesizing")
             if status == "canceled":
                 return

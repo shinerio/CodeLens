@@ -134,13 +134,13 @@ def build_process_report(
             tool_result_count += 1
             call_id = entry.metadata.get("tool_call_id")
             tool_name = calls_by_id.get((agent_name, call_id)) if call_id else None
-            if tool_name is None and pending_calls[agent_name]:
-                tool_name = pending_calls[agent_name].popleft()
-            elif tool_name is not None:
+            if tool_name is not None:
                 try:
                     pending_calls[agent_name].remove(tool_name)
                 except ValueError:
                     pass
+            elif pending_calls[agent_name]:
+                tool_name = pending_calls[agent_name].popleft()
             if tool_name is None:
                 unmatched_tool_result_count += 1
             else:
