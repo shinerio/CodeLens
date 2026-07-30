@@ -173,6 +173,13 @@ class CompositePluginLoader:
             )
         module = importlib.util.module_from_spec(spec)
         sys.modules[cache_key] = module
+
+        # Add install_path to sys.path so plugin can import sibling modules.
+        # Use append (lowest priority) to avoid shadowing stdlib or third-party packages.
+        install_path_str = str(install_path.resolve())
+        if install_path_str not in sys.path:
+            sys.path.append(install_path_str)
+
         try:
             source = module_file.read_text(encoding="utf-8")
             exec(compile(source, str(module_file), "exec"), module.__dict__)
@@ -237,6 +244,13 @@ class CompositePluginLoader:
             )
         module = importlib.util.module_from_spec(spec)
         sys.modules[cache_key] = module
+
+        # Add install_path to sys.path so plugin can import sibling modules.
+        # Use append (lowest priority) to avoid shadowing stdlib or third-party packages.
+        install_path_str = str(install_path.resolve())
+        if install_path_str not in sys.path:
+            sys.path.append(install_path_str)
+
         try:
             source = module_file.read_text(encoding="utf-8")
             exec(compile(source, str(module_file), "exec"), module.__dict__)
