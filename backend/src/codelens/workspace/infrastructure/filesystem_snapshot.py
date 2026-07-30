@@ -202,21 +202,20 @@ class FilesystemSnapshotBuilder:
         origins: dict[str, _SnapshotOrigin] = {path: "context" for path in context_paths}
         origins.update({path: "target" for path in normalized_targets})
         origins.update({path: "instruction" for path in instruction_paths})
-        entries = tuple(
-            entry
-            for entry in await asyncio.gather(
-                *(
-                    asyncio.to_thread(_snapshot_entry, worktree.root, path, origin)
-                    for path, origin in sorted(origins.items())
-                )
+        raw_entries = await asyncio.gather(
+            *(
+                asyncio.to_thread(_snapshot_entry, worktree.root, path, origin)
+                for path, origin in sorted(origins.items())
             )
-            if entry is not None
         )
+        entries = tuple(entry for entry in raw_entries if entry is not None)
+        # Filter paths whose entries were skipped (e.g., submodule directories)
+        entry_paths = {entry.path for entry in entries}
         manifest = SnapshotManifest(
-            target_paths=normalized_targets,
-            context_paths=context_paths,
+            target_paths=tuple(p for p in normalized_targets if p in entry_paths),
+            context_paths=tuple(p for p in context_paths if p in entry_paths),
             excluded_paths=tuple((*ignore_resolution.excluded, *policy_excluded)),
-            instruction_paths=instruction_paths,
+            instruction_paths=tuple(p for p in instruction_paths if p in entry_paths),
             entries=entries,
         )
         manifest_hash = hashlib.sha256(_canonical_manifest(manifest)).hexdigest()

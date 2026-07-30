@@ -268,9 +268,10 @@ async def initialize_plugins(components: HttpComponents) -> None:
         if plugin.install_path and (plugin.trigger_enabled or plugin.report_enabled):
             install_path = Path(plugin.install_path)
             components.repository_inspector.add_root(install_path)
-            repos_path = install_path / "repos"
-            if repos_path.exists():
-                components.repository_inspector.add_root(repos_path)
+            # Always add repos/ as trusted root — webhook plugins clone
+            # repositories here on first event, so the directory may not
+            # exist yet at initialization time.
+            components.repository_inspector.add_root(install_path / "repos")
 
 
 def get_components(request: Request) -> HttpComponents:
