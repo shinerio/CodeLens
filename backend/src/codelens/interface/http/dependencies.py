@@ -1,5 +1,7 @@
 import asyncio
+import logging
 from dataclasses import dataclass
+from pathlib import Path
 
 from fastapi import Request
 
@@ -80,6 +82,8 @@ from codelens.workspace.infrastructure.git_worktrees import (
 from codelens.workspace.infrastructure.input_artifacts import FilesystemInputArtifactStore
 from codelens.workspace.infrastructure.repository_catalog import GitRepositoryCatalogAdapter
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
+
+_LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True)
@@ -257,13 +261,16 @@ async def initialize_plugins(components: HttpComponents) -> None:
     """Initialize built-in plugins and add their paths to trusted roots."""
 
     await components.plugin_manager.initialize_builtin()
-    # Add plugin install paths to trusted repository roots
-    from codelens.plugin.infrastructure.plugin_store import FilesystemPluginStore
     plugin_store = FilesystemPluginStore(components.settings.data_dir)
     plugins = await plugin_store.list_plugins()
+    _LOGGER.debug("Found %d plugin(s)", len(plugins))
     for plugin in plugins:
         if plugin.install_path and (plugin.trigger_enabled or plugin.report_enabled):
-            components.repository_inspector.add_root(plugin.install_path)
+            install_path = Path(plugin.install_path)
+            components.repository_inspector.add_root(install_path)
+            repos_path = install_path / "repos"
+            if repos_path.exists():
+                components.repository_inspector.add_root(repos_path)
 
 
 def get_components(request: Request) -> HttpComponents:

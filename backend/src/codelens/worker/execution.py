@@ -166,6 +166,7 @@ class WorkerReviewExecutor:
         semaphores: WorkerSemaphores,
         transcripts: WorkerTranscriptStore,
         reviewer_prompts: ReviewerPromptSettingsService | None = None,
+        repository_inspector: RepositoryInspector | None = None,
     ) -> None:
         self._settings = settings
         self._review_store = review_store
@@ -184,7 +185,7 @@ class WorkerReviewExecutor:
         self._reviewer_prompts = reviewer_prompts or ReviewerPromptSettingsService(
             FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
         )
-        self._repository_inspector = RepositoryInspector(
+        self._repository_inspector = repository_inspector or RepositoryInspector(
             GitRepositoryMetadataAdapter(GitCli()),
             settings.repository_roots,
         )

@@ -171,6 +171,14 @@ def build_unified_backend(
     )
     tool_limits_service = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
 
+    # Create repository inspector early so it can be shared with Worker
+    from codelens.workspace.application.inspect_repository import RepositoryInspector
+    from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
+    repository_inspector = RepositoryInspector(
+        GitRepositoryMetadataAdapter(git),
+        settings.repository_roots,
+    )
+
     # Worker components
     worktree_manager = GitReviewWorktreeManager(
         data_dir=settings.data_dir,
@@ -239,6 +247,7 @@ def build_unified_backend(
         reviewer_prompts=ReviewerPromptSettingsService(
             FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
         ),
+        repository_inspector=repository_inspector,
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),
@@ -285,12 +294,7 @@ def build_unified_backend(
     from codelens.workspace.infrastructure.git_overlay import GitReviewInputCaptureAdapter
     from codelens.workspace.infrastructure.git_workspace import GitWorkspaceAdapter
     from codelens.workspace.infrastructure.repository_catalog import GitRepositoryCatalogAdapter
-    from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
 
-    repository_inspector = RepositoryInspector(
-        GitRepositoryMetadataAdapter(git),
-        settings.repository_roots,
-    )
     planner = ScopePlanner(GitWorkspaceAdapter(git))
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
