@@ -268,7 +268,7 @@ class ExportOrchestrator:
             )
 
         try:
-            return await sink.export(
+            raw_result = await sink.export(
                 envelope=envelope,
                 config=plugin_record.report_config,
                 repository_path=execution.repository_path,
@@ -283,6 +283,30 @@ class ExportOrchestrator:
                 error="Plugin export failed with exception",
                 exported_at=datetime.now(UTC),
             )
+
+        # External plugins may return a plain dict instead of ExportResult.
+        if isinstance(raw_result, ExportResult):
+            return raw_result
+        if isinstance(raw_result, dict):
+            return ExportResult(
+                plugin_id=raw_result.get("plugin_id", plugin_record.plugin_id),
+                task_id=raw_result.get("task_id", envelope.review.task_id),
+                success=bool(raw_result.get("success", False)),
+                output_path=raw_result.get("output_path"),
+                error=raw_result.get("error"),
+                exported_at=datetime.fromisoformat(raw_result["exported_at"])
+                if "exported_at" in raw_result
+                else datetime.now(UTC),
+            )
+        _LOGGER.error("Plugin %s returned unexpected type: %s", plugin_record.plugin_id, type(raw_result))
+        return ExportResult(
+            plugin_id=plugin_record.plugin_id,
+            task_id=envelope.review.task_id,
+            success=False,
+            output_path=None,
+            error=f"Plugin returned unexpected result type: {type(raw_result).__name__}",
+            exported_at=datetime.now(UTC),
+        )
 
     def _load_sink(self, plugin_record: PluginRecord) -> ReportSinkPort:
         """Load and instantiate a report plugin implementation.
