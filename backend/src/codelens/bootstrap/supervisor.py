@@ -84,6 +84,52 @@ def _get_child_pids(pid: int) -> list[int]:
         return []
 
 
+def _get_ancestor_pids(pid: int) -> set[int]:
+    """Return the set of all ancestor PIDs from the given PID to the process tree root."""
+    ancestors: set[int] = set()
+    current = pid
+    if _IS_WINDOWS:
+        # On Windows, walk up using wmic to get parent PID
+        while current > 0:
+            ancestors.add(current)
+            try:
+                result = subprocess.run(
+                    ["wmic", "process", "where", f"ProcessId={current}", "get", "ParentProcessId"],
+                    capture_output=True,
+                    text=True,
+                    timeout=5,
+                )
+                parent = None
+                for line in result.stdout.splitlines():
+                    line = line.strip()
+                    if line.isdigit() and int(line) != current:
+                        parent = int(line)
+                        break
+                if parent is None or parent == 0 or parent in ancestors:
+                    break
+                current = parent
+            except (subprocess.SubprocessError, OSError):
+                break
+    else:
+        # On Unix, read /proc/[pid]/status or use ps
+        while current > 0:
+            ancestors.add(current)
+            try:
+                with open(f"/proc/{current}/status", "r") as f:
+                    for line in f:
+                        if line.startswith("PPid:"):
+                            parent = int(line.split(":")[1].strip())
+                            break
+                    else:
+                        break
+                if parent == 0 or parent in ancestors:
+                    break
+                current = parent
+            except (FileNotFoundError, PermissionError, ValueError):
+                break
+    return ancestors
+
+
 def _kill_process_tree(pid: int) -> None:
     """Kill a process and all its descendants."""
     if not _is_running(pid):
@@ -154,7 +200,7 @@ class Supervisor:
     ) -> None:
         """Install dependencies, start backend and frontend, and wait for readiness."""
         self._check_dependencies()
-        self._ensure_not_running()
+        self._ensure_not_running(settings, config)
 
         # Prepare directories
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -209,6 +255,10 @@ class Supervisor:
         """Stop all running services and clean up PID files."""
         was_running = False
 
+        # Load running ports from config.json BEFORE cleaning the runtime
+        # directory, so the port fallback works even when PID files are stale.
+        fallback_ports = self._load_running_ports()
+
         # Stop tracked processes
         for pid_file in (self._backend_pid_file, self._frontend_pid_file):
             pid = self._read_pid(pid_file)
@@ -219,18 +269,19 @@ class Supervisor:
                 pid_file.unlink()
 
         # Fallback: kill processes on our ports
-        fallback_ports = self._load_running_ports()
         for port in fallback_ports:
             for pid in self._find_pids_on_port(port):
                 if _is_running(pid):
                     was_running = True
                     _kill_process_tree(pid)
 
-        # Fallback: kill codelens-review processes by name
-        for pid in self._find_pids_by_name("codelens-review start"):
-            if _is_running(pid):
-                was_running = True
-                _kill_process_tree(pid)
+        # Fallback: kill codelens-review supervisor/backend processes by name.
+        # Use specific patterns to avoid matching the current stop/restart command.
+        for pattern in ("codelens-review start", "codelens-review run-backend"):
+            for pid in self._find_pids_by_name(pattern):
+                if pid != os.getpid() and _is_running(pid):
+                    was_running = True
+                    _kill_process_tree(pid)
 
         # Clean runtime directory
         if self._runtime_dir.exists():
@@ -253,6 +304,11 @@ class Supervisor:
     ) -> None:
         """Stop all services and start them again."""
         self.stop()
+        # Brief pause to allow kernel resources (flock, TCP sockets) to be
+        # fully released after process termination. Without this, the new
+        # backend may fail to acquire the worker singleton lock or bind to
+        # the same port.
+        time.sleep(1)
         self.start(settings, config, default_root=default_root)
 
     # ── Private helpers ────────────────────────────────────────────────────
@@ -283,7 +339,7 @@ class Supervisor:
         if result.returncode != 0:
             raise RuntimeError("Frontend dependency installation failed")
 
-    def _ensure_not_running(self) -> None:
+    def _ensure_not_running(self, settings: Settings, config: SupervisorConfig) -> None:
         """Raise if any service is already running."""
         for pid_file in (self._backend_pid_file, self._frontend_pid_file):
             pid = self._read_pid(pid_file)
@@ -292,6 +348,28 @@ class Supervisor:
                     "CodeLens is already running; "
                     "use 'codelens-review restart' or 'codelens-review stop'"
                 )
+
+        # PID files may be absent when the runtime directory was cleaned up
+        # but the OS processes survived (e.g. manual kill of the supervisor).
+        # Detect that case by checking whether the target ports are already
+        # bound or a codelens-review command is still alive.
+        for port in (settings.port, config.frontend_port):
+            for pid in self._find_pids_on_port(port):
+                if _is_running(pid):
+                    raise RuntimeError(
+                        f"another process is already listening on port {port}; "
+                        "use 'codelens-review restart' or 'codelens-review stop'"
+                    )
+
+        current_pid = os.getpid()
+        ancestors = _get_ancestor_pids(current_pid)
+        for name in ("codelens-review start", "codelens-review run-backend"):
+            for pid in self._find_pids_by_name(name):
+                if pid not in ancestors and _is_running(pid):
+                    raise RuntimeError(
+                        "CodeLens is already running; "
+                        "use 'codelens-review restart' or 'codelens-review stop'"
+                    )
 
     def _start_backend(self, settings: Settings, default_root: Path | None = None) -> int:
         """Spawn the backend process and return its PID."""
