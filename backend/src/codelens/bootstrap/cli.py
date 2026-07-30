@@ -48,6 +48,13 @@ def _parser() -> argparse.ArgumentParser:
     restart = subparsers.add_parser("restart", help="Restart all services")
     _add_start_flags(restart, defaults)
 
+    # Internal command used by supervisor to run backend directly
+    run_backend = subparsers.add_parser("run-backend", help=argparse.SUPPRESS)
+    run_backend.add_argument("repository_root", nargs="*")
+    run_backend.add_argument("--host", default=defaults.host)
+    run_backend.add_argument("--port", type=int, default=defaults.port)
+    run_backend.add_argument("--data-dir", type=Path, default=defaults.data_dir)
+
     return parser
 
 
@@ -95,6 +102,23 @@ def main(arguments: Sequence[str] | None = None) -> None:
     parser = _parser()
     parsed = parser.parse_args(argv)
     command = parsed.command
+
+    if command == "run-backend":
+        # Direct backend execution (used by supervisor)
+        values = parser.parse_args(argv)
+        settings = Settings(
+            data_dir=Path(values.data_dir),
+            host=str(values.host),
+            port=int(values.port),
+            repository_roots=tuple(Path(value) for value in values.repository_root),
+        )
+        asyncio.run(prepare_runtime(settings))
+        from codelens.bootstrap.logging import configure_process_logging
+        from codelens.bootstrap.unified import run_unified
+
+        configure_process_logging("unified", data_directory=settings.data_dir)
+        asyncio.run(run_unified(settings))
+        return
 
     supervisor = Supervisor()
 

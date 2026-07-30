@@ -287,7 +287,7 @@ class Supervisor:
 
         cmd = [
             "uv", "run", "--project", "backend",
-            "codelens-review", "start",
+            "codelens-review", "run-backend",
             "--host", settings.host,
             "--port", str(settings.port),
         ]
