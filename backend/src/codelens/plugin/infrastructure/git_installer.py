@@ -78,6 +78,8 @@ class GitPluginInstaller:
                 platform=raw.get("platform", "local"),
                 capabilities=capabilities,
                 min_codelens_version=raw.get("min_codelens_version"),
+                name_i18n=raw.get("name_i18n", {}),
+                description_i18n=raw.get("description_i18n", {}),
             )
         except KeyError as error:
             raise PluginInstallError(

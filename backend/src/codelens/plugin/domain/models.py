@@ -67,6 +67,10 @@ class PluginManifest:
 
     ``capabilities`` maps capability names (``"trigger"``, ``"report"``) to
     their declaration dataclasses. A plugin may declare either or both.
+
+    ``name_i18n`` and ``description_i18n`` are optional locale-keyed dicts
+    (e.g. ``{"zh-CN": "..."}``) that override ``name``/``description`` when
+    the frontend locale matches.
     """
 
     plugin_id: str
@@ -77,6 +81,8 @@ class PluginManifest:
     platform: str
     capabilities: dict[str, Any] = field(default_factory=dict)
     min_codelens_version: str | None = None
+    name_i18n: dict[str, str] = field(default_factory=dict)
+    description_i18n: dict[str, str] = field(default_factory=dict)
 
     @property
     def trigger(self) -> TriggerCapability | None:

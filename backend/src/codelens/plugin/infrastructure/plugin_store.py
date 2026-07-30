@@ -123,6 +123,8 @@ def _serialize_record(record: PluginRecord) -> dict:
         "platform": record.manifest.platform,
         "capabilities": {},
         "min_codelens_version": record.manifest.min_codelens_version,
+        "name_i18n": record.manifest.name_i18n,
+        "description_i18n": record.manifest.description_i18n,
     }
 
     # Serialize capabilities
@@ -188,6 +190,8 @@ def _deserialize_record(data: dict) -> PluginRecord | None:
             platform=manifest_data["platform"],
             capabilities=capabilities,
             min_codelens_version=manifest_data.get("min_codelens_version"),
+            name_i18n=manifest_data.get("name_i18n", {}),
+            description_i18n=manifest_data.get("description_i18n", {}),
         )
 
         return PluginRecord(

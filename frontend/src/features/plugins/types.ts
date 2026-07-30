@@ -22,6 +22,8 @@ export type PluginManifest = {
     report?: ReportCapability;
   };
   min_codelens_version: string | null;
+  name_i18n?: Record<string, string>;
+  description_i18n?: Record<string, string>;
 };
 
 export type PluginRecord = {

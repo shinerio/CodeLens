@@ -44,6 +44,8 @@ class PluginManifestResponse(BaseModel):
     platform: str
     capabilities: dict[str, Any]
     min_codelens_version: str | None
+    name_i18n: dict[str, str] = Field(default_factory=dict)
+    description_i18n: dict[str, str] = Field(default_factory=dict)
 
 
 class PluginRecordResponse(BaseModel):
@@ -89,6 +91,8 @@ class PluginRecordResponse(BaseModel):
                 platform=record.manifest.platform,
                 capabilities=capabilities,
                 min_codelens_version=record.manifest.min_codelens_version,
+                name_i18n=record.manifest.name_i18n,
+                description_i18n=record.manifest.description_i18n,
             ),
             is_builtin=record.is_builtin,
             install_path=record.install_path,

@@ -194,9 +194,13 @@ function PluginCard({
   onUninstall,
   onConfigUpdate,
 }: PluginCardProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const hasTrigger = !!plugin.manifest.capabilities.trigger;
   const hasReport = !!plugin.manifest.capabilities.report;
+
+  // Get localized name and description
+  const displayName = plugin.manifest.name_i18n?.[locale] ?? plugin.manifest.name;
+  const displayDescription = plugin.manifest.description_i18n?.[locale] ?? plugin.manifest.description;
 
   return (
     <article className="plugin-card">
@@ -204,7 +208,7 @@ function PluginCard({
         <div className="plugin-card__title-row">
           <Package aria-hidden="true" className="plugin-card__icon" />
           <div>
-            <h3 className="plugin-card__name">{plugin.manifest.name}</h3>
+            <h3 className="plugin-card__name">{displayName}</h3>
             <span className="plugin-card__version">v{plugin.manifest.version}</span>
             <span className="plugin-card__badge plugin-card__badge--platform">{plugin.manifest.platform}</span>
             {plugin.is_builtin && <span className="plugin-card__badge plugin-card__badge--builtin">{t("plugins.builtin")}</span>}
@@ -221,7 +225,7 @@ function PluginCard({
         )}
       </div>
 
-      <p className="plugin-card__description">{plugin.manifest.description}</p>
+      <p className="plugin-card__description">{displayDescription}</p>
 
       {hasTrigger && (
         <TriggerCapabilitySection
@@ -265,7 +269,7 @@ function TriggerCapabilitySection({
   onDisable,
   onConfigUpdate,
 }: TriggerCapabilitySectionProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(plugin.trigger_config);
   const [browserOpen, setBrowserOpen] = useState(false);
   const [hookStatus, setHookStatus] = useState<HookStatusResponse | null>(null);
@@ -363,7 +367,7 @@ function TriggerCapabilitySection({
 
   // For webhook: extract config_schema properties for dynamic rendering
   const webhookConfigSchema = plugin.manifest.capabilities.trigger?.config_schema ?? {};
-  const webhookConfigProperties = isWebhook ? extractConfigProperties(webhookConfigSchema) : [];
+  const webhookConfigProperties = isWebhook ? extractConfigProperties(webhookConfigSchema, locale) : [];
   // Plugin-specific custom fields (excluding common ones already rendered)
   const webhookCustomProperties = webhookConfigProperties.filter(
     (prop) => !COMMON_TRIGGER_FIELDS.has(prop.key),
@@ -698,7 +702,7 @@ function ReportCapabilitySection({
   onToggleAutoExport,
   onConfigUpdate,
 }: ReportCapabilitySectionProps) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(plugin.report_config);
 
   useEffect(() => {
@@ -715,7 +719,7 @@ function ReportCapabilitySection({
 
   const configChanged = JSON.stringify(configDraft) !== JSON.stringify(plugin.report_config);
   const configSchema = plugin.manifest.capabilities.report?.config_schema ?? {};
-  const configProperties = extractConfigProperties(configSchema);
+  const configProperties = extractConfigProperties(configSchema, locale);
 
   return (
     <div className="capability-section capability-section--report">
@@ -781,7 +785,7 @@ type ConfigProperty = {
   itemEnumValues: string[];
 };
 
-function extractConfigProperties(schema: Record<string, unknown>): ConfigProperty[] {
+function extractConfigProperties(schema: Record<string, unknown>, locale: string): ConfigProperty[] {
   const rawProperties = schema.properties;
   if (!isRecord(rawProperties)) {
     return [];
@@ -791,9 +795,15 @@ function extractConfigProperties(schema: Record<string, unknown>): ConfigPropert
       return [];
     }
     const items = isRecord(rawProperty.items) ? rawProperty.items : {};
+    const descI18n = isRecord(rawProperty.description_i18n) ? rawProperty.description_i18n : {};
+    const label = typeof descI18n[locale] === "string"
+      ? descI18n[locale]
+      : typeof rawProperty.description === "string"
+        ? rawProperty.description
+        : key;
     return [{
       key,
-      label: typeof rawProperty.description === "string" ? rawProperty.description : key,
+      label,
       type: typeof rawProperty.type === "string" ? rawProperty.type : "string",
       default: rawProperty.default,
       enumValues: stringValues(rawProperty.enum),
