@@ -129,6 +129,7 @@ def test_filesystem_browser_starts_at_system_roots_and_marks_git_directories(
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX permission bits are not portable to Windows")
+@pytest.mark.skipif(os.geteuid() == 0, reason="root bypass file permission checks")
 def test_filesystem_browser_skips_directories_the_current_user_cannot_access(
     tmp_path: Path,
 ) -> None:
