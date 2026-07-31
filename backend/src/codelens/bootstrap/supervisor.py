@@ -18,6 +18,23 @@ from codelens.bootstrap.settings import Settings
 _IS_WINDOWS = sys.platform == "win32"
 
 
+def _resolve_executable(command: str) -> str:
+    """Resolve a bare command name to a subprocess-launchable path.
+
+    On Windows, package managers such as ``pnpm`` ship as ``pnpm.cmd`` batch
+    shims. ``CreateProcess`` cannot execute a bare ``pnpm`` argument because
+    it does not consult PATHEXT, so ``subprocess`` raises ``FileNotFoundError``
+    (WinError 2). Resolving the full path — including the ``.cmd`` extension
+    — lets Python's subprocess layer wrap the batch file with ``cmd.exe``
+    automatically, without ``shell=True``. On POSIX this simply returns the
+    absolute executable path, so behaviour is unchanged. Falls back to the
+    bare command when resolution fails so the caller's existence check still
+    produces a clear error.
+    """
+    resolved = shutil.which(command)
+    return resolved if resolved is not None else command
+
+
 @dataclass(frozen=True)
 class SupervisorConfig:
     """Frontend-specific configuration for the supervisor."""
@@ -325,7 +342,7 @@ class Supervisor:
 
         print("\n[1/3] Installing backend dependencies...")
         result = subprocess.run(
-            ["uv", "sync", "--project", "backend"],
+            [_resolve_executable("uv"), "sync", "--project", "backend"],
             cwd=self._project_root,
         )
         if result.returncode != 0:
@@ -333,7 +350,7 @@ class Supervisor:
 
         print("\n[2/3] Installing frontend dependencies...")
         result = subprocess.run(
-            ["pnpm", "--dir", "frontend", "install"],
+            [_resolve_executable("pnpm"), "--dir", "frontend", "install"],
             cwd=self._project_root,
         )
         if result.returncode != 0:
@@ -381,7 +398,7 @@ class Supervisor:
         log_file = open(supervisor_log, "a")
 
         cmd = [
-            "uv", "run", "--project", "backend",
+            _resolve_executable("uv"), "run", "--project", "backend",
             "codelens-review", "run-backend",
             "--host", settings.host,
             "--port", str(settings.port),
@@ -422,7 +439,7 @@ class Supervisor:
         log_file = open(frontend_log, "a")
 
         cmd = [
-            "pnpm", "--dir", "frontend", "dev",
+            _resolve_executable("pnpm"), "--dir", "frontend", "dev",
             "--host", config.frontend_host,
             "--port", str(config.frontend_port),
             "--strictPort",
