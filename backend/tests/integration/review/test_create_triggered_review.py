@@ -35,7 +35,9 @@ class ChangingCapture:
 
 
 class CompleteFreezer:
-    async def freeze(self, _profile: ReviewProfileSnapshot) -> dict[str, object]:
+    async def freeze(
+        self, _profile: ReviewProfileSnapshot, prompt_locale: str
+    ) -> dict[str, object]:
         return {
             "schema_version": 1,
             "budget_policy": {"version": 1, "profile": "standard"},
@@ -43,13 +45,15 @@ class CompleteFreezer:
             "capability_readiness": {"policy_fingerprint": "capability:v1"},
             "planner_execution_spec": {"artifact_id": "prompt:planner:v1"},
             "eligible_reviewer_execution_specs": [],
-            "artifact_ids": ["prompt:planner:v1"],
+            "artifact_ids": [f"prompt:planner:v1:{prompt_locale}"],
         }
 
 
 class LeakingFreezer(CompleteFreezer):
-    async def freeze(self, profile: ReviewProfileSnapshot) -> dict[str, object]:
-        context = await super().freeze(profile)
+    async def freeze(
+        self, profile: ReviewProfileSnapshot, prompt_locale: str
+    ) -> dict[str, object]:
+        context = await super().freeze(profile, prompt_locale)
         context["planner_execution_spec"] = {
             "artifact_id": "prompt:planner:v1",
             "prompt": "trusted prompt bytes must live in the Artifact Store",
@@ -135,3 +139,35 @@ async def test_trigger_rejects_trusted_prompt_bodies_before_creating_task(
         )
 
     assert store.tasks == []
+
+
+async def test_prompt_locale_is_part_of_the_frozen_trigger_policy(tmp_path: Path) -> None:
+    store = RecordingTriggeredStore()
+    handler = CreateTriggeredReviewHandler(  # type: ignore[arg-type]
+        StaticPlanner(), ChangingCapture(), CompleteFreezer(), store, NoopArtifacts()
+    )
+    repository = RepositoryInfo(
+        path=tmp_path,
+        repository_id="repository-1",
+        repository_realpath_hash="b" * 64,
+        git_common_dir_hash="c" * 64,
+        head_sha="d" * 40,
+        current_branch="main",
+        is_dirty=False,
+    )
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+
+    for locale in ("en", "zh-CN"):
+        await handler.handle(
+            CreateTriggeredReview(
+                repository=repository,
+                scope=BranchScope("main", "HEAD"),
+                review_profile=profile,
+                prompt_locale=locale,
+                supersede_policy="latest_snapshot",
+                external_context=None,
+            )
+        )
+
+    assert store.tasks[0].trigger_slot_key != store.tasks[1].trigger_slot_key
+    assert store.tasks[0].idempotency_key != store.tasks[1].idempotency_key

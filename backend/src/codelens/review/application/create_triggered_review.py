@@ -18,7 +18,9 @@ from codelens.workspace.domain.ports import InputArtifactPort, RepositoryInfo
 class PlanningContextFreezerPort(Protocol):
     """Freeze resolved Catalog and capability data without persisting trusted bodies."""
 
-    async def freeze(self, profile: ReviewProfileSnapshot) -> Mapping[str, object]: ...
+    async def freeze(
+        self, profile: ReviewProfileSnapshot, prompt_locale: str
+    ) -> Mapping[str, object]: ...
 
 
 @dataclass(frozen=True, slots=True)
@@ -96,7 +98,9 @@ class CreateTriggeredReviewHandler:
         captured = await self._capture.capture(command.repository.path, plan)
         artifact = captured.overlay_artifact
         try:
-            context = dict(await self._freezer.freeze(command.review_profile))
+            context = dict(
+                await self._freezer.freeze(command.review_profile, command.prompt_locale)
+            )
             missing = _REQUIRED_CONTEXT_KEYS.difference(context)
             if missing:
                 raise ValueError(f"planning context is incomplete: {sorted(missing)}")
@@ -112,6 +116,7 @@ class CreateTriggeredReviewHandler:
                     "selection": selection_policy,
                     "budget": command.review_profile.budget_profile.value,
                 },
+                "prompt_locale": command.prompt_locale,
                 "planning_context_hash": hashlib.sha256(context_json.encode()).hexdigest(),
             }
             slot_key = hashlib.sha256(_canonical(policy).encode()).hexdigest()
