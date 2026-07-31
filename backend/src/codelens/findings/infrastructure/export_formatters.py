@@ -61,6 +61,10 @@ class MarkdownFindingExportFormatter:
         lines.append(f"- **Task ID:** {envelope.review.task_id}")
         lines.append(f"- **Repository:** {envelope.review.repository_name}")
         lines.append(f"- **Scope:** {envelope.review.scope_type}")
+        if envelope.review.base_ref:
+            lines.append(f"- **Base Branch:** `{envelope.review.base_ref}`")
+        if envelope.review.target_ref:
+            lines.append(f"- **Target Branch:** `{envelope.review.target_ref}`")
         lines.append(f"- **Base OID:** `{envelope.review.base_oid[:12]}`")
         lines.append(f"- **Head OID:** `{envelope.review.head_oid[:12]}`")
         lines.append(f"- **Status:** {envelope.review.status}")

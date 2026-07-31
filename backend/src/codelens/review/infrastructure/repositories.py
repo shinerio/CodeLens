@@ -741,6 +741,8 @@ class SqlReviewStore:
             base_oid=str(row["base_oid"]),
             head_oid=str(row["head_oid"]),
             scope_type=_review_scope_type(json.loads(str(row["scope_json"]))),
+            base_ref=_review_scope_refs(json.loads(str(row["scope_json"])))[0],
+            target_ref=_review_scope_refs(json.loads(str(row["scope_json"])))[1],
             overlay_hash=str(row["overlay_hash"]) if row["overlay_hash"] is not None else None,
             overlay_artifact_ref=(
                 str(row["overlay_artifact_ref"])
@@ -784,6 +786,8 @@ class SqlReviewStore:
                     base_oid=str(row["base_oid"]),
                     head_oid=str(row["head_oid"]),
                     scope_type=_review_scope_type(json.loads(str(row["scope_json"]))),
+                    base_ref=_review_scope_refs(json.loads(str(row["scope_json"])))[0],
+                    target_ref=_review_scope_refs(json.loads(str(row["scope_json"])))[1],
                     overlay_hash=(
                         str(row["overlay_hash"])
                         if row["overlay_hash"] is not None

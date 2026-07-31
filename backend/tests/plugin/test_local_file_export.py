@@ -21,6 +21,8 @@ def _export_envelope() -> FindingExportEnvelope:
             scope_type="commit",
             base_oid="a" * 40,
             head_oid="b" * 40,
+            base_ref=None,
+            target_ref=None,
             selected_agent_versions=("correctness:v1",),
             status="completed",
             created_at=created_at,

@@ -80,6 +80,8 @@ class ReviewExportMeta:
     scope_type: str
     base_oid: str
     head_oid: str
+    base_ref: str | None
+    target_ref: str | None
     selected_agent_versions: tuple[str, ...]
     status: str
     created_at: datetime
@@ -217,6 +219,8 @@ class ExportFindingsHandler:
                 scope_type=review.scope_type,
                 base_oid=review.base_oid,
                 head_oid=review.head_oid,
+                base_ref=review.base_ref,
+                target_ref=review.target_ref,
                 selected_agent_versions=review.selected_agent_versions,
                 status=review.status,
                 created_at=review.created_at,

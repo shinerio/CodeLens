@@ -23,6 +23,8 @@ class Store:
             base_oid="c" * 40,
             head_oid="d" * 40,
             scope_type="branch",
+            base_ref="main",
+            target_ref="feature",
             overlay_hash=None,
             overlay_artifact_ref=None,
             target_paths=("src/example.py",),

@@ -147,6 +147,8 @@ class ReviewExecutionRecord:
     base_oid: str
     head_oid: str
     scope_type: ReviewScopeType
+    base_ref: str | None
+    target_ref: str | None
     overlay_hash: str | None
     overlay_artifact_ref: str | None
     target_paths: tuple[str, ...]
