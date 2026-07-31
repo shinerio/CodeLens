@@ -14,6 +14,7 @@ from codelens.plugin.application.export_orchestrator import ExportOrchestrator
 from codelens.plugin.application.hook_management import TriggerHookService
 from codelens.plugin.application.plugin_manager import PluginManager
 from codelens.plugin.application.trigger_orchestrator import TriggerOrchestrator
+from codelens.plugin.infrastructure.export_history_store import SqliteExportHistoryStore
 from codelens.plugin.infrastructure.git_installer import GitPluginInstaller
 from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader
 from codelens.plugin.infrastructure.plugin_store import FilesystemPluginStore
@@ -126,6 +127,7 @@ class HttpComponents:
     finding_source_preview: FindingSourcePreviewService
     plugin_manager: PluginManager
     export_orchestrator: ExportOrchestrator
+    export_history: SqliteExportHistoryStore
     trigger_orchestrator: TriggerOrchestrator
     hook_installer: HookInstaller
     trigger_hooks: TriggerHookService
@@ -185,11 +187,13 @@ def build_components(settings: Settings) -> HttpComponents:
     plugin_manager = PluginManager(
         plugin_store, plugin_installer, plugins_dir, plugin_loader
     )
+    export_history = SqliteExportHistoryStore(settings.data_dir / "codelens.sqlite3")
     export_orchestrator = ExportOrchestrator(
         review_store,
         git,
         plugin_store,
         plugin_loader,
+        export_history,
     )
 
     async def _terminal_export_hook(task_id: str, _status: str) -> None:
@@ -265,6 +269,7 @@ def build_components(settings: Settings) -> HttpComponents:
         finding_source_preview=FindingSourcePreviewService(review_store, git),
         plugin_manager=plugin_manager,
         export_orchestrator=export_orchestrator,
+        export_history=export_history,
         trigger_orchestrator=trigger_orchestrator,
         hook_installer=hook_installer,
         trigger_hooks=trigger_hooks,

@@ -259,6 +259,27 @@ async def export_findings(
     )
 
 
+@router.get("/{task_id}/exports", response_model=list[ExportResponse])
+async def list_exports(
+    task_id: TaskId,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> list[ExportResponse]:
+    """Return all export history entries for a review task."""
+
+    entries = await components.export_history.list_by_task(task_id)
+    return [
+        ExportResponse(
+            plugin_id=entry.plugin_id,
+            task_id=entry.task_id,
+            success=entry.success,
+            output_path=entry.output_path,
+            error=entry.error,
+            exported_at=entry.exported_at.isoformat(),
+        )
+        for entry in entries
+    ]
+
+
 def _parse_last_event_id(raw_event_id: str | None) -> int:
     if raw_event_id is None:
         return 0

@@ -7,8 +7,9 @@ from pathlib import Path
 from typing import Protocol
 
 from codelens.findings.domain.models import Finding
-from codelens.plugin.domain.models import ExportResult, PluginRecord
+from codelens.plugin.domain.models import ExportHistoryEntry, ExportResult, PluginRecord
 from codelens.plugin.domain.ports import (
+    ExportHistoryPort,
     PluginLoaderPort,
     PluginStorePort,
     ReportSinkPort,
@@ -73,6 +74,7 @@ class ExportOrchestrator:
         revision_reader: RevisionReaderPort,
         plugin_store: PluginStorePort,
         plugin_loader: PluginLoaderPort,
+        export_history: ExportHistoryPort | None = None,
     ) -> None:
         """Initialize the export orchestrator.
 
@@ -81,11 +83,13 @@ class ExportOrchestrator:
             revision_reader: Port for reading file revisions.
             plugin_store: Port for querying plugin state.
             plugin_loader: Port for loading plugin implementations.
+            export_history: Optional port for persisting export results.
         """
         self._review_store = review_store
         self._revision_reader = revision_reader
         self._plugin_store = plugin_store
         self._plugin_loader = plugin_loader
+        self._export_history = export_history
         self._envelope_builder = ExportFindingsHandler(review_store, revision_reader)
         self._builtin_sink = LocalFileExportSink()
 
@@ -106,7 +110,7 @@ class ExportOrchestrator:
         # Find the plugin
         plugin_record = await self._plugin_store.get_plugin(plugin_id)
         if plugin_record is None:
-            return ExportResult(
+            result = ExportResult(
                 plugin_id=plugin_id,
                 task_id=task_id,
                 success=False,
@@ -114,9 +118,11 @@ class ExportOrchestrator:
                 error=f"Plugin '{plugin_id}' not found",
                 exported_at=datetime.now(UTC),
             )
+            await self._save_history(result)
+            return result
 
         if not plugin_record.report_enabled:
-            return ExportResult(
+            result = ExportResult(
                 plugin_id=plugin_id,
                 task_id=task_id,
                 success=False,
@@ -124,13 +130,15 @@ class ExportOrchestrator:
                 error=f"Plugin '{plugin_id}' report capability is not enabled",
                 exported_at=datetime.now(UTC),
             )
+            await self._save_history(result)
+            return result
 
         # Build the export envelope
         try:
             envelope = await self._envelope_builder.build_envelope(task_id)
         except Exception as error:
             _LOGGER.exception("Failed to build export envelope for task %s", task_id)
-            return ExportResult(
+            result = ExportResult(
                 plugin_id=plugin_id,
                 task_id=task_id,
                 success=False,
@@ -138,9 +146,13 @@ class ExportOrchestrator:
                 error=f"Failed to build export envelope: {error}",
                 exported_at=datetime.now(UTC),
             )
+            await self._save_history(result)
+            return result
 
         # Export to the plugin
-        return await self._export_to_plugin(plugin_record, envelope)
+        result = await self._export_to_plugin(plugin_record, envelope)
+        await self._save_history(result)
+        return result
 
     async def auto_export_if_enabled(
         self,
@@ -173,16 +185,16 @@ class ExportOrchestrator:
             envelope = await self._envelope_builder.build_envelope(task_id)
         except Exception as error:
             _LOGGER.exception("Failed to build export envelope for task %s", task_id)
-            return (
-                ExportResult(
-                    plugin_id="all",
-                    task_id=task_id,
-                    success=False,
-                    output_path=None,
-                    error=f"Failed to build export envelope: {error}",
-                    exported_at=datetime.now(UTC),
-                ),
+            result = ExportResult(
+                plugin_id="all",
+                task_id=task_id,
+                success=False,
+                output_path=None,
+                error=f"Failed to build export envelope: {error}",
+                exported_at=datetime.now(UTC),
             )
+            await self._save_history(result)
+            return (result,)
 
         # Determine the review's platform from external_context
         review_platform = "local"
@@ -210,22 +222,23 @@ class ExportOrchestrator:
 
             try:
                 result = await self._export_to_plugin(plugin_record, envelope)
+                await self._save_history(result)
                 results.append(result)
             except Exception:
                 _LOGGER.exception(
                     "Plugin %s failed to export findings",
                     plugin_record.plugin_id,
                 )
-                results.append(
-                    ExportResult(
-                        plugin_id=plugin_record.plugin_id,
-                        task_id=task_id,
-                        success=False,
-                        output_path=None,
-                        error="Plugin export failed with exception",
-                        exported_at=datetime.now(UTC),
-                    )
+                result = ExportResult(
+                    plugin_id=plugin_record.plugin_id,
+                    task_id=task_id,
+                    success=False,
+                    output_path=None,
+                    error="Plugin export failed with exception",
+                    exported_at=datetime.now(UTC),
                 )
+                await self._save_history(result)
+                results.append(result)
 
         return tuple(results)
 
@@ -298,7 +311,11 @@ class ExportOrchestrator:
                 if "exported_at" in raw_result
                 else datetime.now(UTC),
             )
-        _LOGGER.error("Plugin %s returned unexpected type: %s", plugin_record.plugin_id, type(raw_result))
+        _LOGGER.error(
+            "Plugin %s returned unexpected type: %s",
+            plugin_record.plugin_id,
+            type(raw_result),
+        )
         return ExportResult(
             plugin_id=plugin_record.plugin_id,
             task_id=envelope.review.task_id,
@@ -307,6 +324,24 @@ class ExportOrchestrator:
             error=f"Plugin returned unexpected result type: {type(raw_result).__name__}",
             exported_at=datetime.now(UTC),
         )
+
+    async def _save_history(self, result: ExportResult) -> None:
+        """Persist an export result to history if the port is available."""
+        if self._export_history is None:
+            return
+        try:
+            await self._export_history.save(
+                ExportHistoryEntry(
+                    plugin_id=result.plugin_id,
+                    task_id=result.task_id,
+                    success=result.success,
+                    output_path=result.output_path,
+                    error=result.error,
+                    exported_at=result.exported_at,
+                )
+            )
+        except Exception:
+            _LOGGER.exception("Failed to save export history")
 
     def _load_sink(self, plugin_record: PluginRecord) -> ReportSinkPort:
         """Load and instantiate a report plugin implementation.

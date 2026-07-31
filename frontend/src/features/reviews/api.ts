@@ -116,3 +116,7 @@ export async function exportFindings(taskId: string, pluginId: string): Promise<
     body: JSON.stringify({ plugin_id: pluginId }),
   });
 }
+
+export async function listExportHistory(taskId: string): Promise<ExportResultResponse[]> {
+  return api<ExportResultResponse[]>(`/reviews/${taskId}/exports`);
+}

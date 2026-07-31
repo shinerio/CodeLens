@@ -52,4 +52,5 @@ export type ReviewResponse = {
   repository_name: string;
   created_at: string;
   finding_count: number;
+  external_context: Record<string, unknown> | null;
 };

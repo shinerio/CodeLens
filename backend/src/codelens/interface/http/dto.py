@@ -341,6 +341,7 @@ class ReviewResponse(StrictDto):
     repository_name: str
     created_at: datetime
     finding_count: Annotated[int, Field(ge=0)] = 0
+    external_context: dict[str, Any] | None = None
 
     @classmethod
     def from_domain(cls, review: ReviewRecord) -> "ReviewResponse":
@@ -360,6 +361,7 @@ class ReviewResponse(StrictDto):
             repository_name=review.repository_name,
             created_at=review.created_at,
             finding_count=review.finding_count,
+            external_context=review.external_context,
         )
 
 

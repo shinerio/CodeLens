@@ -30,27 +30,12 @@ beforeEach(() => {
 });
 
 it("shows the live run and refreshes findings after completion", async () => {
-  fetchMock
-    .mockResolvedValueOnce(jsonResponse([]))
-    .mockResolvedValueOnce(
-      jsonResponse({
-        task_id: "review_1",
-        status: "reviewing",
-        scope_type: "branch",
-        base_oid: "a".repeat(40),
-        head_oid: "b".repeat(40),
-        selected_agents: ["correctness:v1"],
-        worktree_status: "pending",
-        repository_id: "repository-1",
-        repository_realpath_hash: "c".repeat(64),
-        git_common_dir_hash: "d".repeat(64),
-        cancellation_requested: false,
-      }),
-    )
-    .mockResolvedValueOnce(jsonResponse([]))
-    .mockResolvedValueOnce(jsonResponse([]))
-    .mockResolvedValueOnce(
-      jsonResponse([
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/plugins")) return jsonResponse([]);
+    if (url.endsWith("/exports")) return jsonResponse([]);
+    if (url.endsWith("/findings"))
+      return jsonResponse([
         {
           finding_id: "finding_1",
           fingerprint: "e".repeat(64),
@@ -90,8 +75,25 @@ it("shows the live run and refreshes findings after completion", async () => {
             },
           ],
         },
-      ]),
-    );
+      ]);
+    if (url.endsWith("/transcript")) return jsonResponse([]);
+    if (url.endsWith("/process-report")) {
+      return jsonResponse({ code: "process_report_not_ready", message: "not ready" }, 409);
+    }
+    return jsonResponse({
+      task_id: "review_1",
+      status: "reviewing",
+      scope_type: "branch",
+      base_oid: "a".repeat(40),
+      head_oid: "b".repeat(40),
+      selected_agents: ["correctness:v1"],
+      worktree_status: "pending",
+      repository_id: "repository-1",
+      repository_realpath_hash: "c".repeat(64),
+      git_common_dir_hash: "d".repeat(64),
+      cancellation_requested: false,
+    });
+  });
 
   render(<ReviewRunPage />, {
     wrapper: ({ children }) => (

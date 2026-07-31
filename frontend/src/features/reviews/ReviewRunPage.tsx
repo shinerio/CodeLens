@@ -19,7 +19,8 @@ import { FindingDetail } from "../findings/FindingDetail";
 import { FindingList } from "../findings/FindingList";
 import type { FindingRecord } from "../findings/types";
 import { listPlugins, PLUGIN_QUERY_KEY } from "../plugins/api";
-import { cancelReview, exportFindings, getFindingSource, getProcessReport, getReview, getTranscript, listFindings, type ExportResultResponse, type TranscriptEntry } from "./api";
+import { cancelReview, exportFindings, getFindingSource, getProcessReport, getReview, getTranscript, listExportHistory, listFindings, type ExportResultResponse, type TranscriptEntry } from "./api";
+import { PluginPanels } from "./PluginPanels";
 import { failureDetails } from "./failure-details";
 import { ReviewConsole } from "./ReviewConsole";
 import { ReviewProcessReport } from "./ReviewProcessReport";
@@ -121,6 +122,7 @@ export function ReviewRunPage() {
     onSuccess: (result) => {
       setExportResult(result);
       setExportMenuOpen(false);
+      void queryClient.invalidateQueries({ queryKey: ["review-exports", taskId] });
     },
     onError: (error: Error) => {
       setExportResult({
@@ -170,6 +172,12 @@ export function ReviewRunPage() {
     },
     enabled: taskId !== undefined,
     initialData: [] as FindingRecord[],
+  });
+  const exportHistoryQuery = useQuery({
+    queryKey: ["review-exports", taskId],
+    queryFn: () => listExportHistory(taskId ?? ""),
+    enabled: taskId !== undefined,
+    initialData: [] as ExportResultResponse[],
   });
   const transcriptQuery = useQuery({
     queryKey: ["review-transcript", taskId],
@@ -245,8 +253,8 @@ export function ReviewRunPage() {
       return;
     }
     terminalRef.current = currentStatus;
-    void Promise.all([findingsQuery.refetch(), transcriptQuery.refetch()]);
-  }, [currentStatus, findingsQuery, transcriptQuery]);
+    void Promise.all([findingsQuery.refetch(), transcriptQuery.refetch(), exportHistoryQuery.refetch()]);
+  }, [currentStatus, findingsQuery, transcriptQuery, exportHistoryQuery]);
 
   useEffect(() => {
     if (findingsQuery.data.length > 0 && selectedFindingId === null) {
@@ -488,6 +496,12 @@ export function ReviewRunPage() {
               ))}
             </div>
           </article>
+
+          <PluginPanels
+            externalContext={reviewQuery.data?.external_context ?? null}
+            plugins={pluginsQuery.data ?? []}
+            exportHistory={exportHistoryQuery.data}
+          />
         </section>
       ) : null}
 

@@ -954,6 +954,97 @@
   line-height: 1.6;
 }
 
+.plugin-panel__link {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  color: var(--run-accent);
+  text-decoration: none;
+  font-weight: 600;
+}
+
+.plugin-panel__link:hover {
+  text-decoration: underline;
+}
+
+.plugin-panel__link svg {
+  width: 14px;
+  height: 14px;
+}
+
+.plugin-panel__exports {
+  display: grid;
+  gap: 10px;
+  padding: 18px;
+}
+
+.plugin-panel__export-entry {
+  display: grid;
+  gap: 6px;
+  padding: 12px 14px;
+  border: 1px solid var(--run-line);
+  background: var(--run-paper-strong);
+}
+
+.plugin-panel__export-entry--ok {
+  border-left: 3px solid rgba(97, 124, 35, 0.6);
+}
+
+.plugin-panel__export-entry--err {
+  border-left: 3px solid rgba(179, 58, 58, 0.5);
+}
+
+.plugin-panel__export-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.plugin-panel__export-head strong {
+  font-size: 0.9rem;
+}
+
+.plugin-panel__export-head time {
+  color: var(--run-muted);
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  font-size: 0.72rem;
+}
+
+.plugin-panel__export-status {
+  font-size: 0.82rem;
+  font-weight: 600;
+}
+
+.plugin-panel__export-entry--ok .plugin-panel__export-status {
+  color: #5a6e1f;
+}
+
+.plugin-panel__export-entry--err .plugin-panel__export-status {
+  color: var(--run-failed);
+}
+
+.plugin-panel__export-error {
+  margin: 0;
+  padding: 8px 10px;
+  border: 1px solid rgba(179, 58, 58, 0.2);
+  background: #fff2f2;
+  color: var(--run-failed);
+  font-size: 0.78rem;
+  line-height: 1.45;
+}
+
+.plugin-panel__export-path {
+  margin: 0;
+  color: var(--run-muted);
+  font-size: 0.78rem;
+}
+
+.plugin-panel__export-path code {
+  overflow-wrap: anywhere;
+  word-break: break-all;
+}
+
 .run-empty {
   padding: 32px;
   color: var(--run-muted);

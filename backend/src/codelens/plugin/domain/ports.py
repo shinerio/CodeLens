@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from codelens.plugin.domain.models import (
+    ExportHistoryEntry,
     ExportResult,
     HookEvent,
     PluginManifest,
@@ -218,4 +219,16 @@ class TriggerRepositoryValidatorPort(Protocol):
 
     async def validate_repository(self, repository_path: Path) -> Path:
         """Validate one exact Git root against the configured access boundary."""
+        ...
+
+
+class ExportHistoryPort(Protocol):
+    """Persist and query export operation history."""
+
+    async def save(self, entry: ExportHistoryEntry) -> None:
+        """Persist one export history entry."""
+        ...
+
+    async def list_by_task(self, task_id: str) -> list[ExportHistoryEntry]:
+        """Return all export history entries for a task, newest first."""
         ...
