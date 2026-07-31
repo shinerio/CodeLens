@@ -11,6 +11,7 @@ from typing import Any, cast
 from sqlalchemy import case, delete, func, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
 from sqlalchemy.engine import CursorResult, RowMapping
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from codelens.findings.domain.models import (
@@ -45,6 +46,7 @@ from codelens.review.domain.review_strategy import (
     BudgetProfile,
     FixedReviewerSelection,
     ReviewerSelection,
+    ReviewProfileSnapshot,
 )
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
@@ -111,9 +113,7 @@ def _json(value: object) -> str:
 def _selection_json(selection: ReviewerSelection) -> str:
     if isinstance(selection, AdaptiveReviewerSelection):
         return _json({"mode": "adaptive"})
-    return _json(
-        {"mode": "fixed", "reviewer_versions": list(selection.reviewer_versions)}
-    )
+    return _json({"mode": "fixed", "reviewer_versions": list(selection.reviewer_versions)})
 
 
 def _selection_from_json(payload: str) -> ReviewerSelection:
@@ -262,6 +262,22 @@ def _review_scope_refs(scope: dict[str, object]) -> tuple[str | None, str | None
 def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
     scope: dict[str, object] = json.loads(str(row["scope_json"]))
     selected_agents: list[str] = json.loads(str(row["selected_agent_versions_json"]))
+    selection_value = (
+        json.loads(str(row["selection_request_json"]))
+        if row["selection_request_json"] is not None
+        else {"mode": "fixed", "reviewer_versions": selected_agents}
+    )
+    selection: ReviewerSelection = (
+        AdaptiveReviewerSelection()
+        if selection_value["mode"] == "adaptive"
+        else FixedReviewerSelection(tuple(selection_value["reviewer_versions"]))
+    )
+    profile = ReviewProfileSnapshot(
+        selection,
+        BudgetProfile(str(row["budget_profile"] or "standard")),
+        str(row["profile_source_id"]) if row["profile_source_id"] is not None else None,
+        int(row["profile_source_revision"]) if row["profile_source_revision"] is not None else None,
+    )
     external_context = None
     if row["external_context_json"] is not None:
         external_context = json.loads(str(row["external_context_json"]))
@@ -277,6 +293,17 @@ def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
         base_ref=base_ref,
         target_ref=target_ref,
         selected_agent_versions=tuple(selected_agents),
+        review_profile=profile,
+        planning_context_json=str(row["planning_context_json"])
+        if row["planning_context_json"] is not None
+        else None,
+        planning_context_hash=str(row["planning_context_hash"])
+        if row["planning_context_hash"] is not None
+        else None,
+        trigger_source=str(row["trigger_source"]) if row["trigger_source"] is not None else None,
+        supersede_policy=str(row["supersede_policy"])
+        if row["supersede_policy"] is not None
+        else None,
         status=str(row["status"]),
         cancellation_requested=bool(row["cancellation_requested"]),
         repository_name=(
@@ -316,9 +343,9 @@ class SqlReviewProfileRepository:
 
         async def operation(session: AsyncSession) -> ReviewProfile:
             default_count = await session.scalar(
-                select(func.count()).select_from(review_profiles).where(
-                    review_profiles.c.is_default.is_(True)
-                )
+                select(func.count())
+                .select_from(review_profiles)
+                .where(review_profiles.c.is_default.is_(True))
             )
             if profile.is_default:
                 await session.execute(
@@ -339,14 +366,16 @@ class SqlReviewProfileRepository:
 
         return await self._database.run_transaction(operation)
 
-    async def _load_for_update(
-        self, session: AsyncSession, profile_id: str
-    ) -> ReviewProfile:
+    async def _load_for_update(self, session: AsyncSession, profile_id: str) -> ReviewProfile:
         row = (
-            await session.execute(
-                select(review_profiles).where(review_profiles.c.profile_id == profile_id)
+            (
+                await session.execute(
+                    select(review_profiles).where(review_profiles.c.profile_id == profile_id)
+                )
             )
-        ).mappings().one_or_none()
+            .mappings()
+            .one_or_none()
+        )
         if row is None:
             raise ReviewProfileNotFoundError("review profile does not exist")
         return _review_profile_from_row(row)
@@ -637,6 +666,10 @@ class SqlReviewStore:
         captured: list[ReviewEvent] = []
 
         async def operation(session: AsyncSession) -> None:
+            selection = task.review_profile.reviewer_selection
+            selection_payload: dict[str, object] = {"mode": selection.mode}
+            if isinstance(selection, FixedReviewerSelection):
+                selection_payload["reviewer_versions"] = list(selection.reviewer_versions)
             await session.execute(
                 insert(review_tasks).values(
                     task_id=task.task_id,
@@ -652,6 +685,16 @@ class SqlReviewStore:
                     target_paths_json=_json(task.target_paths),
                     status=task.status.value,
                     selected_agent_versions_json=_json(task.selected_agent_versions),
+                    selection_request_json=_json(selection_payload),
+                    budget_profile=task.review_profile.budget_profile.value,
+                    profile_source_id=task.review_profile.source_profile_id,
+                    profile_source_revision=task.review_profile.source_profile_revision,
+                    trigger_source=task.trigger_source,
+                    supersede_policy=task.supersede_policy,
+                    idempotency_key=task.idempotency_key,
+                    trigger_slot_key=task.trigger_slot_key,
+                    planning_context_json=task.planning_context_json,
+                    planning_context_hash=task.planning_context_hash,
                     prompt_locale=task.prompt_locale,
                     external_context_json=(
                         _json(task.external_context) if task.external_context else None
@@ -709,6 +752,200 @@ class SqlReviewStore:
 
         await self._database.run_transaction(operation)
         await self._publish_events(captured)
+
+    async def create_triggered_with_job(self, task: ReviewTask) -> tuple[ReviewRecord, bool]:
+        """Commit idempotency, slot superseding/cancel intent, job, and outbox atomically."""
+
+        if task.idempotency_key is None or task.trigger_slot_key is None:
+            raise ValueError("triggered reviews require durable identity keys")
+        captured: list[ReviewEvent] = []
+
+        async def operation(session: AsyncSession) -> tuple[ReviewRecord, bool]:
+            # Database.run_transaction may replay this callback after SQLITE_BUSY.
+            # Keep only events produced by the attempt that eventually commits.
+            captured.clear()
+            duplicate = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(
+                            review_tasks.c.idempotency_key == task.idempotency_key
+                        )
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if duplicate is not None:
+                return _review_record(duplicate), False
+            if task.supersede_policy == "latest_snapshot":
+                active = [
+                    "created",
+                    "provisioning_worktree",
+                    "snapshotting",
+                    "preparing",
+                    "reviewing",
+                    "validating",
+                    "synthesizing",
+                ]
+                older = (
+                    (
+                        await session.execute(
+                            select(
+                                review_tasks.c.task_id,
+                                review_tasks.c.status,
+                                jobs.c.status.label("job_status"),
+                            )
+                            .join(jobs, jobs.c.task_id == review_tasks.c.task_id)
+                            .where(
+                                review_tasks.c.trigger_slot_key == task.trigger_slot_key,
+                                review_tasks.c.deleted_at.is_(None),
+                                review_tasks.c.status.in_(active),
+                            )
+                        )
+                    )
+                    .mappings()
+                    .all()
+                )
+                for row in older:
+                    older_id = str(row["task_id"])
+                    is_queued = (
+                        str(row["status"]) == "created" and str(row["job_status"]) == "queued"
+                    )
+                    if is_queued:
+                        await session.execute(
+                            update(review_tasks)
+                            .where(review_tasks.c.task_id == older_id)
+                            .values(status="superseded", updated_at=task.created_at)
+                        )
+                        await session.execute(
+                            update(jobs)
+                            .where(jobs.c.task_id == older_id)
+                            .values(
+                                status="superseded",
+                                finished_at=task.created_at,
+                                updated_at=task.created_at,
+                            )
+                        )
+                        event_type = "review.superseded"
+                    else:
+                        await session.execute(
+                            update(review_tasks)
+                            .where(review_tasks.c.task_id == older_id)
+                            .values(cancellation_requested=True, updated_at=task.created_at)
+                        )
+                        event_type = "review.cancel_requested"
+                    supersede_payload: dict[str, object] = {"superseded_by_task_id": task.task_id}
+                    supersede_event_id = await session.scalar(
+                        insert(events)
+                        .values(**_event_values(older_id, event_type, supersede_payload))
+                        .returning(events.c.event_id)
+                    )
+                    if supersede_event_id is not None:
+                        captured.append(
+                            ReviewEvent(
+                                int(supersede_event_id),
+                                older_id,
+                                event_type,
+                                supersede_payload,
+                            )
+                        )
+            selection = task.review_profile.reviewer_selection
+            selection_payload: dict[str, object] = {"mode": selection.mode}
+            if isinstance(selection, FixedReviewerSelection):
+                selection_payload["reviewer_versions"] = list(selection.reviewer_versions)
+            values = dict(
+                task_id=task.task_id,
+                repository_id=task.repository_id,
+                repository_path=str(task.repository_path),
+                repository_realpath_hash=task.repository_realpath_hash,
+                git_common_dir_hash=task.git_common_dir_hash,
+                scope_json=_json(asdict(task.scope)),
+                base_oid=task.target.base_oid,
+                head_oid=task.target.head_oid,
+                overlay_hash=task.target.overlay_hash,
+                overlay_artifact_ref=task.overlay_artifact_ref,
+                target_paths_json=_json(task.target_paths),
+                status=task.status.value,
+                selected_agent_versions_json=_json(task.selected_agent_versions),
+                selection_request_json=_json(selection_payload),
+                budget_profile=task.review_profile.budget_profile.value,
+                profile_source_id=task.review_profile.source_profile_id,
+                profile_source_revision=task.review_profile.source_profile_revision,
+                trigger_source=task.trigger_source,
+                supersede_policy=task.supersede_policy,
+                idempotency_key=task.idempotency_key,
+                trigger_slot_key=task.trigger_slot_key,
+                planning_context_json=task.planning_context_json,
+                planning_context_hash=task.planning_context_hash,
+                prompt_locale=task.prompt_locale,
+                external_context_json=_json(task.external_context)
+                if task.external_context
+                else None,
+                worktree_id=None,
+                snapshot_id=None,
+                cancellation_requested=False,
+                created_at=task.created_at,
+                updated_at=task.created_at,
+            )
+            await session.execute(insert(review_tasks).values(**values))
+            await session.execute(
+                insert(jobs).values(
+                    task_id=task.task_id,
+                    status="queued",
+                    created_at=task.created_at,
+                    updated_at=task.created_at,
+                )
+            )
+            payload: dict[str, object] = {
+                "status": "created",
+                "base_oid": task.target.base_oid,
+                "head_oid": task.target.head_oid,
+            }
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task.task_id, "review.created", payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is not None:
+                captured.append(ReviewEvent(int(event_id), task.task_id, "review.created", payload))
+            await _record_recent_repository(
+                session,
+                task.repository_path,
+                task.created_at,
+                await _get_recent_repository_limit(session),
+            )
+            row = (
+                (
+                    await session.execute(
+                        select(review_tasks).where(review_tasks.c.task_id == task.task_id)
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            return _review_record(row), True
+
+        try:
+            result = await self._database.run_transaction(operation)
+        except IntegrityError:
+            captured.clear()
+            async with self._database.sessions() as session:
+                duplicate = (
+                    (
+                        await session.execute(
+                            select(review_tasks).where(
+                                review_tasks.c.idempotency_key == task.idempotency_key
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one_or_none()
+                )
+            if duplicate is None:
+                raise
+            return _review_record(duplicate), False
+        await self._publish_events(captured)
+        return result
 
     async def count_tasks(self) -> int:
         """Return the number of durable ReviewTasks."""
@@ -804,8 +1041,7 @@ class SqlReviewStore:
             ).mappings()
             finding_counts = {str(row["task_id"]): int(row["cnt"]) for row in count_rows}
         return tuple(
-            _review_record(row, finding_counts.get(str(row["task_id"]), 0))
-            for row in rows
+            _review_record(row, finding_counts.get(str(row["task_id"]), 0)) for row in rows
         )
 
     async def retry_failed_review(
@@ -848,7 +1084,18 @@ class SqlReviewStore:
                     target_paths_json=source["target_paths_json"],
                     status="created",
                     selected_agent_versions_json=source["selected_agent_versions_json"],
+                    selection_request_json=source["selection_request_json"],
+                    budget_profile=source["budget_profile"],
+                    profile_source_id=source["profile_source_id"],
+                    profile_source_revision=source["profile_source_revision"],
+                    trigger_source="manual",
+                    supersede_policy=None,
+                    idempotency_key=None,
+                    trigger_slot_key=None,
+                    planning_context_json=source["planning_context_json"],
+                    planning_context_hash=source["planning_context_hash"],
                     prompt_locale=source["prompt_locale"],
+                    external_context_json=source["external_context_json"],
                     worktree_id=None,
                     snapshot_id=None,
                     cancellation_requested=False,
@@ -912,7 +1159,7 @@ class SqlReviewStore:
     async def soft_delete_review(self, task_id: str) -> bool:
         """Hide one workspace and atomically request cancellation if it is active."""
 
-        terminal_statuses = {"completed", "partial", "failed", "canceled"}
+        terminal_statuses = {"completed", "partial", "failed", "canceled", "superseded"}
         captured: list[ReviewEvent] = []
 
         async def operation(session: AsyncSession) -> bool:
@@ -991,6 +1238,11 @@ class SqlReviewStore:
         selected: list[str] = json.loads(str(row["selected_agent_versions_json"]))
         target_paths: list[str] = json.loads(str(raw_targets))
         repository_path = await asyncio.to_thread(_resolve_path, str(raw_path))
+        summary = _review_record(row)
+        if summary.planning_context_json is not None:
+            actual_hash = hashlib.sha256(summary.planning_context_json.encode()).hexdigest()
+            if actual_hash != summary.planning_context_hash:
+                raise ValueError("frozen planning context hash mismatch")
         return ReviewExecutionRecord(
             task_id=str(row["task_id"]),
             repository_path=repository_path,
@@ -1009,6 +1261,9 @@ class SqlReviewStore:
             ),
             target_paths=tuple(target_paths),
             selected_agent_versions=tuple(selected),
+            review_profile=summary.review_profile,
+            planning_context_json=summary.planning_context_json,
+            planning_context_hash=summary.planning_context_hash,
             prompt_locale=str(row["prompt_locale"]),
             status=str(row["status"]),
             cancellation_requested=bool(row["cancellation_requested"]),
@@ -1019,12 +1274,18 @@ class SqlReviewStore:
 
         async with self._database.sessions() as session:
             rows = (
-                await session.execute(
-                    select(review_tasks).where(
-                        review_tasks.c.status.not_in(("completed", "partial", "failed", "canceled"))
+                (
+                    await session.execute(
+                        select(review_tasks).where(
+                            review_tasks.c.status.not_in(
+                                ("completed", "partial", "failed", "canceled", "superseded")
+                            )
+                        )
                     )
                 )
-            ).mappings().all()
+                .mappings()
+                .all()
+            )
 
         executions: list[ReviewExecutionRecord] = []
         for row in rows:
@@ -1035,6 +1296,7 @@ class SqlReviewStore:
             selected: list[str] = json.loads(str(row["selected_agent_versions_json"]))
             target_paths: list[str] = json.loads(str(raw_targets))
             repository_path = await asyncio.to_thread(_resolve_path, str(raw_path))
+            summary = _review_record(row)
             executions.append(
                 ReviewExecutionRecord(
                     task_id=str(row["task_id"]),
@@ -1047,9 +1309,7 @@ class SqlReviewStore:
                     base_ref=_review_scope_refs(json.loads(str(row["scope_json"])))[0],
                     target_ref=_review_scope_refs(json.loads(str(row["scope_json"])))[1],
                     overlay_hash=(
-                        str(row["overlay_hash"])
-                        if row["overlay_hash"] is not None
-                        else None
+                        str(row["overlay_hash"]) if row["overlay_hash"] is not None else None
                     ),
                     overlay_artifact_ref=(
                         str(row["overlay_artifact_ref"])
@@ -1058,6 +1318,9 @@ class SqlReviewStore:
                     ),
                     target_paths=tuple(target_paths),
                     selected_agent_versions=tuple(selected),
+                    review_profile=summary.review_profile,
+                    planning_context_json=summary.planning_context_json,
+                    planning_context_hash=summary.planning_context_hash,
                     prompt_locale=str(row["prompt_locale"]),
                     status=str(row["status"]),
                     cancellation_requested=bool(row["cancellation_requested"]),
@@ -1164,7 +1427,14 @@ class SqlReviewStore:
             )
             if current == status:
                 return
-            if current in {"completed", "partial", "failed", "canceled", None}:
+            if current in {
+                "completed",
+                "partial",
+                "failed",
+                "canceled",
+                "superseded",
+                None,
+            }:
                 raise InvalidAgentRunStateError("terminal review cannot finish again")
             await session.execute(
                 update(review_tasks)

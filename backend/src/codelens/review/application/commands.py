@@ -4,6 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Literal
 
 from codelens.review.application.settings import TriggerIdempotencySettingsService
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
@@ -14,6 +15,7 @@ from codelens.review.domain.ports import (
     ReviewRecord,
     ReviewStorePort,
 )
+from codelens.review.domain.review_strategy import FixedReviewerSelection, ReviewProfileSnapshot
 from codelens.shared.domain.errors import DomainError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.plan_scope import ScopePlanner
@@ -40,7 +42,9 @@ class CreateReviewCommand:
 
     repository: RepositoryInfo
     scope: ReviewScope
-    selected_agent_versions: tuple[str, ...]
+    review_profile: ReviewProfileSnapshot
+    trigger_source: Literal["manual", "plugin"] = "manual"
+    supersede_policy: Literal["latest_snapshot", "preserve_all"] | None = None
     prompt_locale: str = "en"
     external_context: dict | None = None
     skip_if_duplicate: bool = False
@@ -115,7 +119,14 @@ class CreateReviewHandler:
             target=captured.target,
             repository_path=command.repository.path,
             target_paths=scope_plan.target_paths,
-            selected_agent_versions=command.selected_agent_versions,
+            selected_agent_versions=(
+                command.review_profile.reviewer_selection.reviewer_versions
+                if isinstance(command.review_profile.reviewer_selection, FixedReviewerSelection)
+                else ()
+            ),
+            review_profile=command.review_profile,
+            trigger_source=command.trigger_source,
+            supersede_policy=command.supersede_policy,
             prompt_locale=command.prompt_locale,
             created_at=self._clock(),
             overlay_artifact_ref=artifact.reference if artifact is not None else None,

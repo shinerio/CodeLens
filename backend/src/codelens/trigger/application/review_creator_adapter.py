@@ -6,6 +6,11 @@ from typing import Protocol
 
 from codelens.plugin.domain.ports import ReviewCreatorPort, TriggerRepositoryValidatorPort
 from codelens.review.application.commands import CreateReviewCommand, CreateReviewHandler
+from codelens.review.domain.review_strategy import (
+    BudgetProfile,
+    FixedReviewerSelection,
+    ReviewProfileSnapshot,
+)
 from codelens.workspace.domain.models import (
     BranchScope,
     CommitScope,
@@ -119,7 +124,10 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
         command = CreateReviewCommand(
             repository=repository_info,
             scope=scope,
-            selected_agent_versions=selected_agents,
+            review_profile=ReviewProfileSnapshot(
+                FixedReviewerSelection(selected_agents), BudgetProfile.STANDARD
+            ),
+            trigger_source="plugin",
             prompt_locale=prompt_locale,
             external_context=external_context,
             skip_if_duplicate=True,
@@ -161,9 +169,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             target_ref = scope_params.get("target_ref")
 
             if not base_commit or not target_ref:
-                raise ValueError(
-                    "Commit scope requires 'base_commit' and 'target_ref' parameters"
-                )
+                raise ValueError("Commit scope requires 'base_commit' and 'target_ref' parameters")
 
             return CommitScope(
                 base_commit=base_commit,
@@ -176,9 +182,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             target_ref = scope_params.get("target_ref")
 
             if not base_ref or not target_ref:
-                raise ValueError(
-                    "Branch scope requires 'base_ref' and 'target_ref' parameters"
-                )
+                raise ValueError("Branch scope requires 'base_ref' and 'target_ref' parameters")
 
             return BranchScope(
                 base_ref=base_ref,

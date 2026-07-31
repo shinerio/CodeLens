@@ -1,5 +1,5 @@
 from collections.abc import Awaitable, Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import Literal, Protocol
@@ -8,7 +8,12 @@ from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.review_profile import ReviewProfile
-from codelens.review.domain.review_strategy import BudgetProfile, ReviewerSelection
+from codelens.review.domain.review_strategy import (
+    BudgetProfile,
+    FixedReviewerSelection,
+    ReviewerSelection,
+    ReviewProfileSnapshot,
+)
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.workspace.domain.models import ReviewScopeType, ReviewSnapshot
 
@@ -160,6 +165,11 @@ class ReviewRecord:
     base_ref: str | None
     target_ref: str | None
     selected_agent_versions: tuple[str, ...]
+    review_profile: ReviewProfileSnapshot
+    planning_context_json: str | None
+    planning_context_hash: str | None
+    trigger_source: str | None
+    supersede_policy: str | None
     status: str
     cancellation_requested: bool
     repository_name: str
@@ -198,6 +208,13 @@ class ReviewExecutionRecord:
     prompt_locale: str
     status: str
     cancellation_requested: bool
+    review_profile: ReviewProfileSnapshot = field(
+        default_factory=lambda: ReviewProfileSnapshot(
+            FixedReviewerSelection(("correctness:v1",)), BudgetProfile.STANDARD
+        )
+    )
+    planning_context_json: str | None = None
+    planning_context_hash: str | None = None
 
 
 @dataclass(frozen=True)
@@ -257,6 +274,11 @@ class ReviewStorePort(Protocol):
         head_oid: str,
     ) -> ReviewRecord | None:
         """Return the newest non-deleted, non-failed review matching the commit range."""
+
+        raise NotImplementedError
+
+    async def create_triggered_with_job(self, task: ReviewTask) -> tuple[ReviewRecord, bool]:
+        """Atomically deduplicate, supersede/cancel older slot tasks, and enqueue one task."""
 
         raise NotImplementedError
 

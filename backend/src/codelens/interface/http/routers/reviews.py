@@ -24,6 +24,11 @@ from codelens.interface.http.dto import (
 )
 from codelens.review.application.commands import CreateReviewCommand
 from codelens.review.application.process_report import ProcessTranscriptEntry, build_process_report
+from codelens.review.domain.review_strategy import (
+    BudgetProfile,
+    FixedReviewerSelection,
+    ReviewProfileSnapshot,
+)
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 _LOGGER = logging.getLogger("codelens.reviews")
@@ -37,8 +42,9 @@ _TERMINAL_EVENTS = {
     "review.partial",
     "review.failed",
     "review.canceled",
+    "review.superseded",
 }
-_TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled"}
+_TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled", "superseded"}
 
 
 @router.post("", response_model=ReviewResponse, status_code=202)
@@ -55,7 +61,9 @@ async def create_review(
             CreateReviewCommand(
                 repository=repository,
                 scope=request.scope.to_domain(),
-                selected_agent_versions=tuple(request.selected_agents),
+                review_profile=ReviewProfileSnapshot(
+                    FixedReviewerSelection(tuple(request.selected_agents)), BudgetProfile.STANDARD
+                ),
                 prompt_locale=request.prompt_locale,
                 external_context=request.external_context,
             )

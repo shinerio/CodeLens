@@ -1,5 +1,6 @@
 from datetime import UTC, datetime
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +11,11 @@ from codelens.review.application.commands import (
 )
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import ReviewRecord
+from codelens.review.domain.review_strategy import (
+    BudgetProfile,
+    FixedReviewerSelection,
+    ReviewProfileSnapshot,
+)
 from codelens.shared.domain.errors import SnapshotStaleError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.plan_scope import ScopePlanner
@@ -77,8 +83,9 @@ class RecordingArtifacts:
 
 
 class FailingStore:
-    def __init__(self, *, fail_create: bool) -> None:
+    def __init__(self, *, fail_create: bool, duplicate: object | None = None) -> None:
         self.fail_create = fail_create
+        self.duplicate = duplicate
         self.created: list[ReviewTask] = []
 
     async def create_with_job(self, task: ReviewTask) -> None:
@@ -91,6 +98,16 @@ class FailingStore:
 
     async def request_cancellation(self, _task_id: str) -> ReviewRecord | None:
         return None
+
+    async def find_duplicate_review(
+        self, *, repository_id: str, base_oid: str, head_oid: str
+    ) -> object | None:
+        return self.duplicate
+
+
+class EnabledIdempotencySettings:
+    async def get(self) -> object:
+        return SimpleNamespace(enabled=True)
 
 
 class DeletingStore:
@@ -127,7 +144,9 @@ def _command(tmp_path: Path) -> CreateReviewCommand:
     return CreateReviewCommand(
         repository=repository,
         scope=BranchScope("main", "HEAD", True),
-        selected_agent_versions=("correctness:v1",),
+        review_profile=ReviewProfileSnapshot(
+            FixedReviewerSelection(("correctness:v1",)), BudgetProfile.STANDARD
+        ),
     )
 
 
@@ -168,6 +187,35 @@ async def test_stale_capture_never_creates_a_durable_command(tmp_path: Path) -> 
         "input_00000000000000000000000000000001.json",
         "input_00000000000000000000000000000002.json",
     ]
+
+
+async def test_legacy_plugin_duplicate_keeps_existing_review_and_discards_overlay(
+    tmp_path: Path,
+) -> None:
+    artifacts = RecordingArtifacts()
+    existing = SimpleNamespace(task_id="review-existing")
+    store = FailingStore(fail_create=False, duplicate=existing)
+    handler = CreateReviewHandler(
+        ScopePlanner(FixedPlanner()),
+        ReviewInputCaptureService(StableCaptureSource(), artifacts),
+        store,  # type: ignore[arg-type]
+        artifacts,
+        idempotency_settings=EnabledIdempotencySettings(),  # type: ignore[arg-type]
+    )
+    command = _command(tmp_path)
+    command = CreateReviewCommand(
+        repository=command.repository,
+        scope=command.scope,
+        review_profile=command.review_profile,
+        trigger_source="plugin",
+        skip_if_duplicate=True,
+    )
+
+    result = await handler.handle(command)
+
+    assert result is existing
+    assert store.created == []
+    assert artifacts.discarded == ["input_00000000000000000000000000000001.json"]
 
 
 async def test_delete_review_removes_its_registered_owned_worktree(tmp_path: Path) -> None:

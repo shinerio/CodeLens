@@ -2,6 +2,7 @@ import asyncio
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from alembic import command
@@ -25,7 +26,11 @@ from codelens.review.application.review_profiles import (
 )
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
-from codelens.review.domain.review_strategy import AdaptiveReviewerSelection, BudgetProfile
+from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
+    BudgetProfile,
+    ReviewProfileSnapshot,
+)
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import (
     SqlCheckpointStore,
@@ -46,6 +51,10 @@ def _task(
     head: str = "b",
     repository_path: Path = Path("/tmp/repository-1"),
     created_at: datetime = datetime(2026, 7, 17, tzinfo=UTC),
+    review_profile: ReviewProfileSnapshot | None = None,
+    idempotency_key: str | None = None,
+    trigger_slot_key: str | None = None,
+    supersede_policy: Literal["latest_snapshot", "preserve_all"] = "latest_snapshot",
 ) -> ReviewTask:
     return ReviewTask.create(
         task_id=task_id,
@@ -57,6 +66,11 @@ def _task(
         scope=BranchScope(base_ref="main", target_ref=f"feature-{head}"),
         target=ReviewTarget("a" * 40, head * 40, None),
         selected_agent_versions=("correctness:v1",),
+        review_profile=review_profile,
+        trigger_source="plugin" if idempotency_key else "manual",
+        supersede_policy=supersede_policy if idempotency_key else None,
+        idempotency_key=idempotency_key,
+        trigger_slot_key=trigger_slot_key,
         created_at=created_at,
     )
 
@@ -126,6 +140,194 @@ async def test_review_profile_migration_upgrades_previous_head_and_seeds_empty_t
             "standard",
         )
     ]
+
+
+async def test_selection_migration_backfills_legacy_fixed_request(tmp_path: Path) -> None:
+    database_path = tmp_path / "selection-upgrade.sqlite3"
+    await asyncio.to_thread(_migrate_to, database_path, "0005_review_profiles")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """INSERT INTO review_tasks
+            (task_id,repository_id,repository_realpath_hash,git_common_dir_hash,scope_json,
+             base_oid,head_oid,status,selected_agent_versions_json,prompt_locale,
+             cancellation_requested,created_at,updated_at)
+            VALUES ('legacy','repo','a','b','{"type":"branch"}','c','d','created',
+                    '["security:v1","performance:v1"]','en',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"""
+        )
+    await asyncio.to_thread(_migrate_to, database_path, "head")
+    with sqlite3.connect(database_path) as connection:
+        row = connection.execute(
+            "SELECT selection_request_json,budget_profile,planning_context_json "
+            "FROM review_tasks WHERE task_id='legacy'"
+        ).fetchone()
+    assert row == (
+        '{"mode":"fixed","reviewer_versions":["security:v1","performance:v1"]}',
+        "standard",
+        None,
+    )
+
+
+async def test_triggered_create_deduplicates_and_supersedes_atomically(tmp_path: Path) -> None:
+    database = await _database(tmp_path)
+    store = SqlReviewStore(database)
+    try:
+        profile = ReviewProfileSnapshot(
+            AdaptiveReviewerSelection(), BudgetProfile.DEEP, "profile-auto", 2
+        )
+        first = _task(
+            "review-first",
+            review_profile=profile,
+            idempotency_key="1" * 64,
+            trigger_slot_key="a" * 64,
+        )
+        created, was_created = await store.create_triggered_with_job(first)
+        duplicate, duplicate_created = await store.create_triggered_with_job(first)
+        assert was_created and not duplicate_created and duplicate.task_id == created.task_id
+
+        second = _task(
+            "review-second",
+            head="c",
+            review_profile=profile,
+            idempotency_key="2" * 64,
+            trigger_slot_key="a" * 64,
+        )
+        await store.create_triggered_with_job(second)
+        assert (await store.get_review("review-first")).status == "superseded"  # type: ignore[union-attr]
+    finally:
+        await database.dispose()
+
+
+async def test_concurrent_identical_triggers_create_one_sqlite_task(tmp_path: Path) -> None:
+    database = await _database(tmp_path)
+    store = SqlReviewStore(database)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    try:
+        left = _task(
+            "review-left",
+            review_profile=profile,
+            idempotency_key="9" * 64,
+            trigger_slot_key="8" * 64,
+        )
+        right = _task(
+            "review-right",
+            review_profile=profile,
+            idempotency_key="9" * 64,
+            trigger_slot_key="8" * 64,
+        )
+        results = await asyncio.gather(
+            store.create_triggered_with_job(left), store.create_triggered_with_job(right)
+        )
+        assert {record.task_id for record, _ in results} in ({"review-left"}, {"review-right"})
+        assert sorted(was_created for _, was_created in results) == [False, True]
+    finally:
+        await database.dispose()
+
+
+async def test_latest_snapshot_cancels_running_but_preserves_history(tmp_path: Path) -> None:
+    database = await _database(tmp_path)
+    store = SqlReviewStore(database)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    try:
+        running = _task(
+            "review-running",
+            review_profile=profile,
+            idempotency_key="3" * 64,
+            trigger_slot_key="7" * 64,
+        )
+        await store.create_triggered_with_job(running)
+        for status in ("provisioning_worktree", "snapshotting", "preparing", "reviewing"):
+            await store.transition(running.task_id, status)
+
+        historical = _task(
+            "review-history",
+            review_profile=profile,
+            idempotency_key="4" * 64,
+            trigger_slot_key="7" * 64,
+        )
+        await store.create_triggered_with_job(historical)
+        await store.fail(historical.task_id, "expected")
+
+        newest = _task(
+            "review-newest",
+            head="e",
+            review_profile=profile,
+            idempotency_key="5" * 64,
+            trigger_slot_key="7" * 64,
+        )
+        await store.create_triggered_with_job(newest)
+        running_record = await store.get_review(running.task_id)
+        history_record = await store.get_review(historical.task_id)
+        assert running_record is not None and running_record.status == "reviewing"
+        assert running_record.cancellation_requested
+        assert history_record is not None and history_record.status == "failed"
+    finally:
+        await database.dispose()
+
+
+async def test_latest_snapshot_requests_cancellation_after_job_claim_before_task_transition(
+    tmp_path: Path,
+) -> None:
+    database = await _database(tmp_path)
+    store = SqlReviewStore(database)
+    jobs = SqlJobQueue(database)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    try:
+        claimed = _task(
+            "review-claimed",
+            review_profile=profile,
+            idempotency_key="a" * 64,
+            trigger_slot_key="b" * 64,
+        )
+        await store.create_triggered_with_job(claimed)
+        job = await jobs.next_queued()
+        assert job is not None and job.task_id == claimed.task_id
+
+        await store.create_triggered_with_job(
+            _task(
+                "review-after-claim",
+                head="f",
+                review_profile=profile,
+                idempotency_key="c" * 64,
+                trigger_slot_key="b" * 64,
+            )
+        )
+
+        claimed_record = await store.get_review(claimed.task_id)
+        claimed_job = await jobs.get(claimed.task_id)
+        assert claimed_record is not None and claimed_record.status == "created"
+        assert claimed_record.cancellation_requested
+        assert claimed_job is not None and claimed_job.status == "running"
+    finally:
+        await database.dispose()
+
+
+async def test_preserve_all_leaves_older_queued_task_unchanged(tmp_path: Path) -> None:
+    database = await _database(tmp_path)
+    store = SqlReviewStore(database)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    try:
+        older = _task(
+            "review-older",
+            review_profile=profile,
+            idempotency_key="6" * 64,
+            trigger_slot_key="6" * 64,
+            supersede_policy="preserve_all",
+        )
+        newer = _task(
+            "review-newer",
+            head="f",
+            review_profile=profile,
+            idempotency_key="7" * 64,
+            trigger_slot_key="6" * 64,
+            supersede_policy="preserve_all",
+        )
+        await store.create_triggered_with_job(older)
+        await store.create_triggered_with_job(newer)
+        older_record = await store.get_review(older.task_id)
+        assert older_record is not None and older_record.status == "created"
+        assert not older_record.cancellation_requested
+    finally:
+        await database.dispose()
 
 
 async def test_review_profiles_keep_exactly_one_default_across_restart(
@@ -223,7 +425,14 @@ async def test_failed_review_retry_creates_an_independent_queued_task(tmp_path: 
         store = SqlReviewStore(database)
         jobs = SqlJobQueue(database)
         events = SqlEventOutbox(database)
-        original = _task("review-original")
+        original = _task(
+            "review-original",
+            review_profile=ReviewProfileSnapshot(
+                AdaptiveReviewerSelection(), BudgetProfile.STANDARD, "profile-auto", 2
+            ),
+            idempotency_key="d" * 64,
+            trigger_slot_key="e" * 64,
+        )
         await store.create_with_job(original)
         await store.fail(original.task_id, "review_execution_failed")
 
@@ -244,6 +453,10 @@ async def test_failed_review_retry_creates_an_independent_queued_task(tmp_path: 
             original.target.head_oid,
         )
         assert retried.selected_agent_versions == original.selected_agent_versions
+        assert retried.review_profile == original.review_profile
+        assert retried.planning_context_hash == original.planning_context_hash
+        assert retried.trigger_source == "manual"
+        assert retried.supersede_policy is None
         assert retry_execution is not None
         assert retry_execution.repository_path == original.repository_path.resolve()
         assert retry_execution.target_paths == original.target_paths

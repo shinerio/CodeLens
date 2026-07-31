@@ -56,6 +56,16 @@ review_tasks = Table(
     Column("target_paths_json", Text),
     Column("status", String(32), nullable=False),
     Column("selected_agent_versions_json", Text, nullable=False),
+    Column("selection_request_json", Text),
+    Column("budget_profile", String(16)),
+    Column("profile_source_id", String(128)),
+    Column("profile_source_revision", Integer),
+    Column("trigger_source", String(16)),
+    Column("supersede_policy", String(32)),
+    Column("idempotency_key", String(64)),
+    Column("trigger_slot_key", String(64)),
+    Column("planning_context_json", Text),
+    Column("planning_context_hash", String(64)),
     Column("prompt_locale", String(8), nullable=False, default="en"),
     Column("external_context_json", Text),
     Column("worktree_id", String(128)),
@@ -64,6 +74,19 @@ review_tasks = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     Column("deleted_at", DateTime(timezone=True)),
+)
+Index(
+    "uq_review_tasks_idempotency_key",
+    review_tasks.c.idempotency_key,
+    unique=True,
+    sqlite_where=review_tasks.c.idempotency_key.is_not(None),
+)
+Index(
+    "ix_review_tasks_trigger_slot",
+    review_tasks.c.trigger_slot_key,
+    review_tasks.c.status,
+    review_tasks.c.created_at,
+    sqlite_where=review_tasks.c.trigger_slot_key.is_not(None),
 )
 
 recent_repositories = Table(
