@@ -170,3 +170,18 @@ async def test_keeps_valid_candidates_when_another_candidate_is_invalid() -> Non
 async def test_rejects_an_unparseable_output_envelope() -> None:
     with pytest.raises(FindingValidationError):
         await _validator().validate(b"not-json")
+
+
+def test_comment_v1_codec_bytes_and_confidence_remain_unchanged() -> None:
+    codec = AgentOutputCodec("1")
+    decoded = json.loads(_payload())
+
+    encoded = codec.encode(decoded)
+
+    assert encoded == json.dumps(
+        decoded,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    assert codec.decode(encoded).findings[0].confidence == 0.95
