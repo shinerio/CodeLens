@@ -243,11 +243,108 @@ class PluginManager:
             report_auto_export=False,
             trigger_config=trigger_config,
             report_config=report_config,
+            git_url=git_url,
+            git_ref=ref,
         )
 
         await self._store.save_plugin(record)
         self._invalidate_plugin(manifest.plugin_id)
         return record
+
+    async def update_plugin(self, plugin_id: str, ref: str | None = None) -> PluginRecord:
+        """Update an installed external plugin to a new version.
+
+        Preserves user configuration (trigger/report config, enabled states,
+        auto-export settings) while replacing the plugin code. Configuration
+        fields that still exist in the new schema are kept; new fields get
+        their default values; removed fields are dropped.
+
+        Args:
+            plugin_id: Unique identifier of the plugin.
+            ref: Optional Git reference (branch, tag, commit). Defaults to
+                the ref used during installation.
+
+        Returns:
+            Updated plugin record.
+
+        Raises:
+            PluginInstallError: If plugin is built-in, has no git_url, or
+                update fails.
+        """
+        record = await self._store.get_plugin(plugin_id)
+        if record is None:
+            raise PluginInstallError(f"Plugin '{plugin_id}' not found")
+
+        if record.is_builtin:
+            raise PluginInstallError(
+                f"Built-in plugin '{plugin_id}' cannot be updated"
+            )
+
+        if not record.git_url:
+            raise PluginInstallError(
+                f"Plugin '{plugin_id}' has no Git source URL; reinstall to enable updates"
+            )
+
+        if not record.install_path:
+            raise PluginInstallError(
+                f"Plugin '{plugin_id}' has no install path"
+            )
+
+        install_path = Path(record.install_path)
+        update_ref = ref if ref is not None else record.git_ref
+
+        # Clone new version and swap directories
+        new_manifest = await self._installer.update(
+            record.git_url, install_path, update_ref
+        )
+
+        # Merge existing config with new schema defaults
+        new_trigger_config = self._merge_config(
+            record.trigger_config,
+            new_manifest.capabilities.get("trigger"),
+        )
+        new_report_config = self._merge_config(
+            record.report_config,
+            new_manifest.capabilities.get("report"),
+        )
+
+        updated = replace(
+            record,
+            manifest=new_manifest,
+            trigger_config=new_trigger_config,
+            report_config=new_report_config,
+            git_ref=update_ref,
+        )
+
+        await self._store.save_plugin(updated)
+        self._invalidate_plugin(plugin_id)
+        return updated
+
+    @staticmethod
+    def _merge_config(
+        existing_config: dict[str, Any],
+        capability: TriggerCapability | ReportCapability | None,
+    ) -> dict[str, Any]:
+        """Merge existing config with new schema defaults.
+
+        Keeps existing values for fields still present in the schema,
+        adds defaults for new fields, drops removed fields.
+        """
+        if capability is None:
+            return {}
+
+        schema_properties = capability.config_schema.get("properties", {})
+        merged: dict[str, Any] = {}
+
+        for key, prop_schema in schema_properties.items():
+            if key in existing_config:
+                # Keep existing value if field still exists
+                merged[key] = existing_config[key]
+            elif isinstance(prop_schema, dict) and "default" in prop_schema:
+                # Add default for new fields
+                merged[key] = prop_schema["default"]
+
+        return merged
 
     async def enable_trigger(self, plugin_id: str) -> PluginRecord | None:
         """Enable the trigger capability of a plugin.

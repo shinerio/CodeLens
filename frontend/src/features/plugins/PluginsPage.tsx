@@ -28,6 +28,7 @@ import {
   PLUGIN_QUERY_KEY,
   setAutoExport,
   uninstallPlugin,
+  updatePlugin,
   updateReportConfig,
   updateTriggerConfig,
 } from "./api";
@@ -85,6 +86,12 @@ export function PluginsPage() {
 
   const uninstallMutation = useMutation({
     mutationFn: (pluginId: string) => uninstallPlugin(pluginId),
+    onSuccess: invalidatePlugins,
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: ({ pluginId, ref }: { pluginId: string; ref?: string }) =>
+      updatePlugin(pluginId, ref),
     onSuccess: invalidatePlugins,
   });
 
@@ -165,6 +172,8 @@ export function PluginsPage() {
             onDisableReport={(id) => disableReportMutation.mutate(id)}
             onToggleAutoExport={(id, enabled) => autoExportMutation.mutate({ pluginId: id, enabled })}
             onUninstall={(id) => uninstallMutation.mutate(id)}
+            onUpdate={(id, ref) => updateMutation.mutate({ pluginId: id, ref })}
+            isUpdating={updateMutation.isPending}
             onConfigUpdate={invalidatePlugins}
           />
         ))}
@@ -181,6 +190,8 @@ type PluginCardProps = {
   onDisableReport: (pluginId: string) => void;
   onToggleAutoExport: (pluginId: string, enabled: boolean) => void;
   onUninstall: (pluginId: string) => void;
+  onUpdate: (pluginId: string, ref?: string) => void;
+  isUpdating: boolean;
   onConfigUpdate: () => void;
 };
 
@@ -192,6 +203,8 @@ function PluginCard({
   onDisableReport,
   onToggleAutoExport,
   onUninstall,
+  onUpdate,
+  isUpdating,
   onConfigUpdate,
 }: PluginCardProps) {
   const { t, locale } = useI18n();
@@ -215,13 +228,25 @@ function PluginCard({
           </div>
         </div>
         {!plugin.is_builtin && (
-          <button
-            className="plugin-uninstall"
-            onClick={() => onUninstall(plugin.plugin_id)}
-          >
-            <Trash2 aria-hidden="true" />
-            {t("plugins.uninstall")}
-          </button>
+          <div className="plugin-card__actions">
+            {plugin.git_url && (
+              <button
+                className="plugin-update"
+                disabled={isUpdating}
+                onClick={() => onUpdate(plugin.plugin_id)}
+              >
+                <RefreshCw aria-hidden="true" className={isUpdating ? "plugin-update__spin" : undefined} />
+                {isUpdating ? t("plugins.updating") : t("plugins.update")}
+              </button>
+            )}
+            <button
+              className="plugin-uninstall"
+              onClick={() => onUninstall(plugin.plugin_id)}
+            >
+              <Trash2 aria-hidden="true" />
+              {t("plugins.uninstall")}
+            </button>
+          </div>
         )}
       </div>
 

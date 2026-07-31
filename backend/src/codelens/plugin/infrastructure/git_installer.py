@@ -58,6 +58,54 @@ class GitPluginInstaller:
             if await asyncio.to_thread(temp_dir.exists):
                 await asyncio.to_thread(shutil.rmtree, temp_dir, True)
 
+    async def update(
+        self,
+        git_url: str,
+        install_path: Path,
+        ref: str | None = None,
+    ) -> PluginManifest:
+        """Update an installed plugin by cloning a new version and swapping directories.
+
+        Args:
+            git_url: Git repository URL.
+            install_path: Current installation directory.
+            ref: Optional Git reference (branch, tag, commit).
+
+        Returns:
+            Validated manifest of the new version.
+
+        Raises:
+            PluginInstallError: If update fails.
+        """
+        temp_dir = Path(tempfile.mkdtemp(prefix="codelens-plugin-update-"))
+        backup_path = install_path.with_suffix(".bak")
+        try:
+            try:
+                await self._git.clone(git_url, temp_dir, ref=ref)
+            except InvalidRepositoryError:
+                raise PluginInstallError(
+                    "Git repository could not be cloned"
+                ) from None
+            manifest = await asyncio.to_thread(self._read_manifest, temp_dir)
+            self._validate_manifest(manifest)
+
+            # Atomic swap: old → .bak, new → install, remove .bak
+            if backup_path.exists():
+                await asyncio.to_thread(shutil.rmtree, backup_path, True)
+            await asyncio.to_thread(install_path.rename, backup_path)
+            try:
+                shutil.move(str(temp_dir), str(install_path))
+            except Exception:
+                # Restore from backup if move fails
+                if backup_path.exists():
+                    backup_path.rename(install_path)
+                raise
+            await asyncio.to_thread(shutil.rmtree, backup_path, True)
+            return manifest
+        finally:
+            if await asyncio.to_thread(temp_dir.exists):
+                await asyncio.to_thread(shutil.rmtree, temp_dir, True)
+
     def _read_manifest(self, plugin_dir: Path) -> PluginManifest:
         manifest_path = plugin_dir / self._MANIFEST_FILENAME
         if not manifest_path.exists():

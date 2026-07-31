@@ -28,6 +28,16 @@ export async function uninstallPlugin(pluginId: string): Promise<void> {
   });
 }
 
+export async function updatePlugin(
+  pluginId: string,
+  ref?: string,
+): Promise<PluginRecord> {
+  return api<PluginRecord>(`/plugins/${pluginId}/update`, {
+    method: "PUT",
+    body: JSON.stringify({ ref: ref ?? null }),
+  });
+}
+
 export async function enableTrigger(pluginId: string): Promise<PluginRecord> {
   return api<PluginRecord>(`/plugins/${pluginId}/trigger/enable`, {
     method: "PUT",

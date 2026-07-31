@@ -36,6 +36,8 @@ export type PluginRecord = {
   report_auto_export: boolean;
   trigger_config: Record<string, unknown>;
   report_config: Record<string, unknown>;
+  git_url: string | null;
+  git_ref: string | null;
 };
 
 export type ExportResult = {

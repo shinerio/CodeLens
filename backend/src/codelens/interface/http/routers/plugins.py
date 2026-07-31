@@ -62,6 +62,8 @@ class PluginRecordResponse(BaseModel):
     report_auto_export: bool
     trigger_config: dict[str, Any]
     report_config: dict[str, Any]
+    git_url: str | None = None
+    git_ref: str | None = None
 
     @classmethod
     def from_domain(cls, record: PluginRecord) -> "PluginRecordResponse":
@@ -101,6 +103,8 @@ class PluginRecordResponse(BaseModel):
             report_auto_export=record.report_auto_export,
             trigger_config=record.trigger_config,
             report_config=record.report_config,
+            git_url=record.git_url,
+            git_ref=record.git_ref,
         )
 
 
@@ -110,6 +114,14 @@ class InstallPluginRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     git_url: Annotated[str, Field(min_length=1, max_length=512)]
+    ref: Annotated[str | None, Field(min_length=1, max_length=128)] = None
+
+
+class UpdatePluginRequest(BaseModel):
+    """Update an installed plugin to a new version."""
+
+    model_config = ConfigDict(extra="forbid")
+
     ref: Annotated[str | None, Field(min_length=1, max_length=128)] = None
 
 
@@ -241,6 +253,25 @@ async def uninstall_plugin(
     if not success:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     _LOGGER.info("Plugin uninstalled: %s", plugin_id)
+
+
+@router.put("/{plugin_id}/update", response_model=PluginRecordResponse)
+async def update_plugin(
+    plugin_id: str,
+    request: UpdatePluginRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> PluginRecordResponse:
+    """Update an installed plugin to a new version."""
+
+    _LOGGER.info("Updating plugin: %s", plugin_id)
+    try:
+        record = await components.plugin_manager.update_plugin(
+            plugin_id, ref=request.ref
+        )
+    except PluginInstallError as error:
+        raise HttpProblem(400, "plugin_update_failed", str(error)) from error
+    _LOGGER.info("Plugin updated: %s to v%s", record.plugin_id, record.manifest.version)
+    return PluginRecordResponse.from_domain(record)
 
 
 @router.put("/{plugin_id}/trigger/enable", response_model=PluginRecordResponse)

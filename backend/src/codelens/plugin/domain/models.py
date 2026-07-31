@@ -100,7 +100,8 @@ class PluginRecord:
     """Persisted installation state for one plugin.
 
     Built-in plugins have ``install_path=None`` and ``is_builtin=True``.
-    External plugins store their on-disk install path.
+    External plugins store their on-disk install path and the Git source
+    URL/reference used for installation, enabling in-place updates.
 
     Trigger and report capabilities have independent enable flags and
     independent configuration dicts so that a single plugin can evolve each
@@ -116,6 +117,8 @@ class PluginRecord:
     report_auto_export: bool
     trigger_config: dict[str, Any] = field(default_factory=dict)
     report_config: dict[str, Any] = field(default_factory=dict)
+    git_url: str | None = None
+    git_ref: str | None = None
 
 
 class PluginCapabilityError(ValueError):

@@ -7,9 +7,11 @@ from codelens.plugin.application.plugin_manager import PluginManager
 from codelens.plugin.domain.models import (
     PluginCapabilityError,
     PluginConfigurationError,
+    PluginInstallError,
     PluginManifest,
     PluginRecord,
     ReportCapability,
+    TriggerCapability,
 )
 from codelens.plugin.domain.ports import PluginInstallerPort, PluginStorePort
 
@@ -153,3 +155,273 @@ async def test_builtin_trigger_rejects_an_empty_agent_selection() -> None:
 
     assert store.record is not None
     assert store.record.trigger_config["selected_agents"] == ["correctness:v1"]
+
+
+class MockInstaller:
+    """Mock installer that returns a new manifest for update testing."""
+
+    def __init__(self, new_manifest: PluginManifest) -> None:
+        self.new_manifest = new_manifest
+
+    async def install(self, git_url: str, ref: str | None = None) -> PluginManifest:
+        return self.new_manifest
+
+    async def update(
+        self, git_url: str, install_path: Path, ref: str | None = None
+    ) -> PluginManifest:
+        return self.new_manifest
+
+
+def _external_record() -> PluginRecord:
+    """Create an external plugin record with git_url and config."""
+    manifest = PluginManifest(
+        plugin_id="test-plugin",
+        name="Test Plugin",
+        version="1.0.0",
+        description="Test",
+        author="test",
+        platform="github",
+        capabilities={
+            "trigger": TriggerCapability(
+                trigger_type="webhook",
+                supported_events=("webhook",),
+                entry_point="trigger:Trigger",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "api_key": {"type": "string"},
+                        "timeout": {"type": "integer", "default": 30},
+                    },
+                },
+            ),
+            "report": ReportCapability(
+                entry_point="sink:Sink",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "output_format": {"type": "string", "default": "json"},
+                    },
+                },
+            ),
+        },
+    )
+    return PluginRecord(
+        plugin_id=manifest.plugin_id,
+        manifest=manifest,
+        is_builtin=False,
+        install_path="/data/plugins/test-plugin",
+        trigger_enabled=True,
+        report_enabled=True,
+        report_auto_export=True,
+        trigger_config={"api_key": "secret123", "timeout": 60},
+        report_config={"output_format": "markdown"},
+        git_url="https://github.com/test/plugin.git",
+        git_ref="v1.0.0",
+    )
+
+
+async def test_update_plugin_preserves_existing_config() -> None:
+    """Update should keep existing config values for fields still in schema."""
+    record = _external_record()
+    store = MemoryPluginStore(record)
+
+    # New manifest with same fields
+    new_manifest = PluginManifest(
+        plugin_id="test-plugin",
+        name="Test Plugin",
+        version="2.0.0",
+        description="Test v2",
+        author="test",
+        platform="github",
+        capabilities={
+            "trigger": TriggerCapability(
+                trigger_type="webhook",
+                supported_events=("webhook",),
+                entry_point="trigger:Trigger",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "api_key": {"type": "string"},
+                        "timeout": {"type": "integer", "default": 30},
+                    },
+                },
+            ),
+            "report": ReportCapability(
+                entry_point="sink:Sink",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "output_format": {"type": "string", "default": "json"},
+                    },
+                },
+            ),
+        },
+    )
+
+    installer = MockInstaller(new_manifest)
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, installer),
+        Path("/data/plugins"),
+    )
+
+    updated = await manager.update_plugin("test-plugin")
+
+    # Config should be preserved
+    assert updated.trigger_config == {"api_key": "secret123", "timeout": 60}
+    assert updated.report_config == {"output_format": "markdown"}
+    # Enabled states should be preserved
+    assert updated.trigger_enabled is True
+    assert updated.report_enabled is True
+    assert updated.report_auto_export is True
+    # Version should be updated
+    assert updated.manifest.version == "2.0.0"
+
+
+async def test_update_plugin_adds_defaults_for_new_fields() -> None:
+    """Update should add default values for newly introduced config fields."""
+    record = _external_record()
+    store = MemoryPluginStore(record)
+
+    # New manifest with additional field
+    new_manifest = PluginManifest(
+        plugin_id="test-plugin",
+        name="Test Plugin",
+        version="2.0.0",
+        description="Test v2",
+        author="test",
+        platform="github",
+        capabilities={
+            "trigger": TriggerCapability(
+                trigger_type="webhook",
+                supported_events=("webhook",),
+                entry_point="trigger:Trigger",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "api_key": {"type": "string"},
+                        "timeout": {"type": "integer", "default": 30},
+                        "retry_count": {"type": "integer", "default": 3},  # New field
+                    },
+                },
+            ),
+            "report": ReportCapability(
+                entry_point="sink:Sink",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "output_format": {"type": "string", "default": "json"},
+                    },
+                },
+            ),
+        },
+    )
+
+    installer = MockInstaller(new_manifest)
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, installer),
+        Path("/data/plugins"),
+    )
+
+    updated = await manager.update_plugin("test-plugin")
+
+    # Existing config should be preserved, new field should get default
+    assert updated.trigger_config == {
+        "api_key": "secret123",
+        "timeout": 60,
+        "retry_count": 3,
+    }
+
+
+async def test_update_plugin_drops_removed_fields() -> None:
+    """Update should drop config fields that are no longer in the schema."""
+    record = _external_record()
+    store = MemoryPluginStore(record)
+
+    # New manifest without 'timeout' field
+    new_manifest = PluginManifest(
+        plugin_id="test-plugin",
+        name="Test Plugin",
+        version="2.0.0",
+        description="Test v2",
+        author="test",
+        platform="github",
+        capabilities={
+            "trigger": TriggerCapability(
+                trigger_type="webhook",
+                supported_events=("webhook",),
+                entry_point="trigger:Trigger",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "api_key": {"type": "string"},
+                        # 'timeout' removed
+                    },
+                },
+            ),
+            "report": ReportCapability(
+                entry_point="sink:Sink",
+                config_schema={
+                    "type": "object",
+                    "properties": {
+                        "output_format": {"type": "string", "default": "json"},
+                    },
+                },
+            ),
+        },
+    )
+
+    installer = MockInstaller(new_manifest)
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, installer),
+        Path("/data/plugins"),
+    )
+
+    updated = await manager.update_plugin("test-plugin")
+
+    # 'timeout' should be dropped
+    assert updated.trigger_config == {"api_key": "secret123"}
+
+
+async def test_update_plugin_rejects_builtin() -> None:
+    """Update should reject built-in plugins."""
+    record = _record()  # Built-in plugin
+    store = MemoryPluginStore(record)
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, object()),
+        Path("/unused"),
+    )
+
+    with pytest.raises(PluginInstallError, match="Built-in plugin"):
+        await manager.update_plugin("report-only")
+
+
+async def test_update_plugin_rejects_missing_git_url() -> None:
+    """Update should reject plugins without git_url."""
+    record = _external_record()
+    # Remove git_url
+    record = PluginRecord(
+        plugin_id=record.plugin_id,
+        manifest=record.manifest,
+        is_builtin=record.is_builtin,
+        install_path=record.install_path,
+        trigger_enabled=record.trigger_enabled,
+        report_enabled=record.report_enabled,
+        report_auto_export=record.report_auto_export,
+        trigger_config=record.trigger_config,
+        report_config=record.report_config,
+        git_url=None,  # No git_url
+        git_ref=None,
+    )
+    store = MemoryPluginStore(record)
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, object()),
+        Path("/data/plugins"),
+    )
+
+    with pytest.raises(PluginInstallError, match="no Git source URL"):
+        await manager.update_plugin("test-plugin")

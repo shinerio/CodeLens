@@ -130,6 +130,15 @@ class PluginInstallerPort(Protocol):
         """Install one Git-backed plugin and return its validated manifest."""
         ...
 
+    async def update(
+        self,
+        git_url: str,
+        install_path: Path,
+        ref: str | None = None,
+    ) -> PluginManifest:
+        """Update an installed plugin by cloning a new version and swapping directories."""
+        ...
+
 
 class PluginCachePort(Protocol):
     """Invalidate executable plugin instances after lifecycle changes."""

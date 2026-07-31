@@ -156,6 +156,8 @@ def _serialize_record(record: PluginRecord) -> dict:
         "report_auto_export": record.report_auto_export,
         "trigger_config": record.trigger_config,
         "report_config": record.report_config,
+        "git_url": record.git_url,
+        "git_ref": record.git_ref,
     }
 
 
@@ -204,6 +206,8 @@ def _deserialize_record(data: dict) -> PluginRecord | None:
             report_auto_export=data.get("report_auto_export", False),
             trigger_config=data.get("trigger_config", {}),
             report_config=data.get("report_config", {}),
+            git_url=data.get("git_url"),
+            git_ref=data.get("git_ref"),
         )
     except (KeyError, TypeError, ValueError):
         return None

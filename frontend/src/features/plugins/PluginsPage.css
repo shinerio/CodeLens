@@ -160,6 +160,46 @@
   margin: 0 0 16px;
 }
 
+.plugin-card__actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.plugin-update {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: transparent;
+  color: var(--accent);
+  font-size: 0.8125rem;
+  cursor: pointer;
+}
+
+.plugin-update:hover:not(:disabled) {
+  background: var(--accent);
+  color: #fff;
+  border-color: var(--accent);
+}
+
+.plugin-update:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.plugin-update__spin {
+  animation: plugin-update-spin 0.8s linear infinite;
+}
+
+@keyframes plugin-update-spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
 .plugin-uninstall {
   display: inline-flex;
   align-items: center;
