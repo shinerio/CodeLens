@@ -34,6 +34,14 @@ from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
 from codelens.review.application.context_builder import ContextBuilder
+from codelens.review.application.review_profiles import (
+    CopyReviewProfileHandler,
+    CreateReviewProfileHandler,
+    DeleteReviewProfileHandler,
+    ListReviewProfilesHandler,
+    SetDefaultReviewProfileHandler,
+    UpdateReviewProfileHandler,
+)
 from codelens.review.application.settings import (
     ReviewCompletionSettingsService,
     TriggerIdempotencySettingsService,
@@ -55,6 +63,7 @@ from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
     SqlJobQueue,
     SqlRecentRepositoryStore,
+    SqlReviewProfileRepository,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
@@ -165,6 +174,7 @@ def build_unified_backend(
     # Shared infrastructure
     review_store = SqlReviewStore(database, event_bus=event_bus)
     recent_repository_store = SqlRecentRepositoryStore(database)
+    review_profile_repository = SqlReviewProfileRepository(database)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
     input_artifacts = FilesystemInputArtifactStore(settings.data_dir / "artifacts" / "inputs")
     transcripts_store = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
@@ -387,6 +397,12 @@ def build_unified_backend(
         update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
             recent_repository_store
         ),
+        create_review_profile=CreateReviewProfileHandler(review_profile_repository),
+        update_review_profile=UpdateReviewProfileHandler(review_profile_repository),
+        copy_review_profile=CopyReviewProfileHandler(review_profile_repository),
+        delete_review_profile=DeleteReviewProfileHandler(review_profile_repository),
+        set_default_review_profile=SetDefaultReviewProfileHandler(review_profile_repository),
+        list_review_profiles=ListReviewProfilesHandler(review_profile_repository),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
         review_completion_settings=review_completion_settings,
         trigger_idempotency_settings=trigger_idempotency_settings,

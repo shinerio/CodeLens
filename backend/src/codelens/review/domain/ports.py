@@ -7,6 +7,8 @@ from typing import Literal, Protocol
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.models import ReviewTask
+from codelens.review.domain.review_profile import ReviewProfile
+from codelens.review.domain.review_strategy import BudgetProfile, ReviewerSelection
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.workspace.domain.models import ReviewScopeType, ReviewSnapshot
 
@@ -15,6 +17,45 @@ MIN_RECENT_REPOSITORY_LIMIT = 1
 MAX_RECENT_REPOSITORY_LIMIT = 20
 
 type AgentReviewCompletionStatus = Literal["complete", "incomplete"]
+
+
+class ReviewProfileRepository(Protocol):
+    """Persist profiles while keeping exactly one default in each transaction."""
+
+    async def list_review_profiles(self) -> tuple[ReviewProfile, ...]: ...
+
+    async def create_review_profile(self, profile: ReviewProfile) -> ReviewProfile: ...
+
+    async def update_review_profile(
+        self,
+        profile_id: str,
+        *,
+        expected_revision: int,
+        name: str,
+        is_default: bool,
+        reviewer_selection: ReviewerSelection,
+        budget_profile: BudgetProfile,
+        updated_at: datetime,
+    ) -> ReviewProfile: ...
+
+    async def copy_review_profile(
+        self,
+        profile_id: str,
+        *,
+        new_profile_id: str,
+        name: str,
+        created_at: datetime,
+    ) -> ReviewProfile: ...
+
+    async def delete_review_profile(self, profile_id: str) -> None: ...
+
+    async def set_default_review_profile(
+        self,
+        profile_id: str,
+        *,
+        expected_revision: int,
+        updated_at: datetime,
+    ) -> ReviewProfile: ...
 
 
 @dataclass(frozen=True)

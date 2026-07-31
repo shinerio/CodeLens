@@ -5,6 +5,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    Index,
     Integer,
     MetaData,
     String,
@@ -14,6 +15,30 @@ from sqlalchemy import (
 )
 
 metadata = MetaData()
+
+review_profiles = Table(
+    "review_profiles",
+    metadata,
+    Column("profile_id", String(128), primary_key=True),
+    Column("revision", Integer, nullable=False),
+    Column("name", String(120), nullable=False),
+    Column("is_default", Boolean, nullable=False, default=False),
+    Column("reviewer_selection_json", Text, nullable=False),
+    Column("budget_profile", String(32), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    CheckConstraint("revision >= 1", name="ck_review_profiles_positive_revision"),
+    CheckConstraint(
+        "budget_profile IN ('lean', 'standard', 'deep')",
+        name="ck_review_profiles_budget_profile",
+    ),
+)
+Index(
+    "uq_review_profiles_single_default",
+    review_profiles.c.is_default,
+    unique=True,
+    sqlite_where=review_profiles.c.is_default.is_(True),
+)
 
 review_tasks = Table(
     "review_tasks",

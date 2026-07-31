@@ -1,8 +1,11 @@
 import asyncio
+import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pytest
+from alembic import command
+from alembic.config import Config
 from sqlalchemy.exc import IntegrityError
 
 from codelens.findings.domain.models import (
@@ -15,14 +18,21 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
+from codelens.review.application.review_profiles import (
+    CreateReviewProfileHandler,
+    DeleteReviewProfileHandler,
+    SetDefaultReviewProfileHandler,
+)
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
+from codelens.review.domain.review_strategy import AdaptiveReviewerSelection, BudgetProfile
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import (
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlJobQueue,
     SqlRecentRepositoryStore,
+    SqlReviewProfileRepository,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
@@ -79,6 +89,79 @@ async def _database(tmp_path: Path) -> Database:
     database = Database(f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}")
     await database.migrate()
     return database
+
+
+def _migrate_to(database_path: Path, revision: str) -> None:
+    backend_root = Path(__file__).resolve().parents[3]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_root / "migrations"))
+    config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{database_path}")
+    command.upgrade(config, revision)
+
+
+async def test_review_profile_migration_upgrades_previous_head_and_seeds_empty_table(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "upgrade.sqlite3"
+    await asyncio.to_thread(_migrate_to, database_path, "0e0e42b05c24")
+    await asyncio.to_thread(_migrate_to, database_path, "head")
+
+    def read_profiles() -> list[tuple[str, int, str, int, str, str]]:
+        with sqlite3.connect(database_path) as connection:
+            return connection.execute(
+                """
+                SELECT profile_id, revision, name, is_default,
+                       reviewer_selection_json, budget_profile
+                FROM review_profiles
+                """
+            ).fetchall()
+
+    assert await asyncio.to_thread(read_profiles) == [
+        (
+            "profile-balanced",
+            1,
+            "Balanced Review",
+            1,
+            '{"mode":"adaptive"}',
+            "standard",
+        )
+    ]
+
+
+async def test_review_profiles_keep_exactly_one_default_across_restart(
+    tmp_path: Path,
+) -> None:
+    database = await _database(tmp_path)
+    repository = SqlReviewProfileRepository(database)
+    try:
+        create = CreateReviewProfileHandler(repository)
+        custom = await create.handle(
+            name="Deep Review",
+            is_default=False,
+            reviewer_selection=AdaptiveReviewerSelection(),
+            budget_profile=BudgetProfile.DEEP,
+        )
+        switched = await SetDefaultReviewProfileHandler(repository).handle(
+            custom.profile_id, expected_revision=custom.revision
+        )
+        profiles = await repository.list_review_profiles()
+        assert [profile.profile_id for profile in profiles if profile.is_default] == [
+            switched.profile_id
+        ]
+        with pytest.raises(ValueError, match="default profile"):
+            await DeleteReviewProfileHandler(repository).handle(switched.profile_id)
+        await DeleteReviewProfileHandler(repository).handle("profile-balanced")
+    finally:
+        await database.dispose()
+
+    restarted = Database(f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}")
+    try:
+        profiles = await SqlReviewProfileRepository(restarted).list_review_profiles()
+        assert [(profile.profile_id, profile.is_default) for profile in profiles] == [
+            (switched.profile_id, True)
+        ]
+    finally:
+        await restarted.dispose()
 
 
 async def test_migration_and_task_job_event_creation_are_atomic(tmp_path: Path) -> None:

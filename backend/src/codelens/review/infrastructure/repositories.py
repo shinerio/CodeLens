@@ -10,7 +10,7 @@ from typing import Any, cast
 
 from sqlalchemy import case, delete, func, insert, select, update
 from sqlalchemy.dialects.sqlite import insert as sqlite_insert
-from sqlalchemy.engine import CursorResult
+from sqlalchemy.engine import CursorResult, RowMapping
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from codelens.findings.domain.models import (
@@ -34,6 +34,18 @@ from codelens.review.domain.ports import (
     ReviewExecutionRecord,
     ReviewRecord,
 )
+from codelens.review.domain.review_profile import (
+    ReviewProfile,
+    ReviewProfileDefaultRequiredError,
+    ReviewProfileNotFoundError,
+    ReviewProfileRevisionConflictError,
+)
+from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
+    BudgetProfile,
+    FixedReviewerSelection,
+    ReviewerSelection,
+)
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.tables import (
@@ -43,6 +55,7 @@ from codelens.review.infrastructure.tables import (
     jobs,
     recent_repositories,
     recent_repository_settings,
+    review_profiles,
     review_tasks,
     task_worktrees,
 )
@@ -93,6 +106,52 @@ def _resolve_path(value: str) -> Path:
 
 def _json(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"))
+
+
+def _selection_json(selection: ReviewerSelection) -> str:
+    if isinstance(selection, AdaptiveReviewerSelection):
+        return _json({"mode": "adaptive"})
+    return _json(
+        {"mode": "fixed", "reviewer_versions": list(selection.reviewer_versions)}
+    )
+
+
+def _selection_from_json(payload: str) -> ReviewerSelection:
+    value = json.loads(payload)
+    if not isinstance(value, dict) or value.get("mode") not in {"adaptive", "fixed"}:
+        raise RuntimeError("Review profile has invalid reviewer selection")
+    if value["mode"] == "adaptive":
+        return AdaptiveReviewerSelection()
+    versions = value.get("reviewer_versions")
+    if not isinstance(versions, list) or not all(isinstance(item, str) for item in versions):
+        raise RuntimeError("Review profile has invalid fixed reviewer selection")
+    return FixedReviewerSelection(tuple(versions))
+
+
+def _review_profile_from_row(row: RowMapping) -> ReviewProfile:
+    return ReviewProfile(
+        profile_id=str(row["profile_id"]),
+        revision=int(row["revision"]),
+        name=str(row["name"]),
+        is_default=bool(row["is_default"]),
+        reviewer_selection=_selection_from_json(str(row["reviewer_selection_json"])),
+        budget_profile=BudgetProfile(str(row["budget_profile"])),
+        created_at=_as_utc(cast(datetime, row["created_at"])),
+        updated_at=_as_utc(cast(datetime, row["updated_at"])),
+    )
+
+
+def _review_profile_values(profile: ReviewProfile) -> dict[str, object]:
+    return {
+        "profile_id": profile.profile_id,
+        "revision": profile.revision,
+        "name": profile.name,
+        "is_default": profile.is_default,
+        "reviewer_selection_json": _selection_json(profile.reviewer_selection),
+        "budget_profile": profile.budget_profile.value,
+        "created_at": profile.created_at,
+        "updated_at": profile.updated_at,
+    }
 
 
 def _review_scope_type(scope: dict[str, object]) -> ReviewScopeType:
@@ -230,6 +289,205 @@ def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
         finding_count=finding_count,
         external_context=external_context,
     )
+
+
+class SqlReviewProfileRepository:
+    """Persist Review profiles and enforce exactly one default per transaction."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def list_review_profiles(self) -> tuple[ReviewProfile, ...]:
+        """Return the default first, then stable profile identities."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(review_profiles).order_by(
+                        review_profiles.c.is_default.desc(),
+                        review_profiles.c.profile_id.asc(),
+                    )
+                )
+            ).mappings()
+            return tuple(_review_profile_from_row(row) for row in rows)
+
+    async def create_review_profile(self, profile: ReviewProfile) -> ReviewProfile:
+        """Insert a profile, replacing a prior default before the transaction commits."""
+
+        async def operation(session: AsyncSession) -> ReviewProfile:
+            default_count = await session.scalar(
+                select(func.count()).select_from(review_profiles).where(
+                    review_profiles.c.is_default.is_(True)
+                )
+            )
+            if profile.is_default:
+                await session.execute(
+                    update(review_profiles)
+                    .where(review_profiles.c.is_default.is_(True))
+                    .values(
+                        is_default=False,
+                        revision=review_profiles.c.revision + 1,
+                        updated_at=profile.updated_at,
+                    )
+                )
+            elif not default_count:
+                raise ReviewProfileDefaultRequiredError(
+                    "a default profile must exist before creating a non-default profile"
+                )
+            await session.execute(insert(review_profiles).values(**_review_profile_values(profile)))
+            return profile
+
+        return await self._database.run_transaction(operation)
+
+    async def _load_for_update(
+        self, session: AsyncSession, profile_id: str
+    ) -> ReviewProfile:
+        row = (
+            await session.execute(
+                select(review_profiles).where(review_profiles.c.profile_id == profile_id)
+            )
+        ).mappings().one_or_none()
+        if row is None:
+            raise ReviewProfileNotFoundError("review profile does not exist")
+        return _review_profile_from_row(row)
+
+    async def update_review_profile(
+        self,
+        profile_id: str,
+        *,
+        expected_revision: int,
+        name: str,
+        is_default: bool,
+        reviewer_selection: ReviewerSelection,
+        budget_profile: BudgetProfile,
+        updated_at: datetime,
+    ) -> ReviewProfile:
+        """Replace a profile and its default membership in one optimistic transaction."""
+
+        async def operation(session: AsyncSession) -> ReviewProfile:
+            current = await self._load_for_update(session, profile_id)
+            updated = current.update(
+                expected_revision=expected_revision,
+                name=name,
+                is_default=is_default,
+                reviewer_selection=reviewer_selection,
+                budget_profile=budget_profile,
+                updated_at=updated_at,
+            )
+            if current.is_default and not updated.is_default:
+                raise ReviewProfileDefaultRequiredError("the default profile cannot be unset")
+            if updated.is_default and not current.is_default:
+                await session.execute(
+                    update(review_profiles)
+                    .where(review_profiles.c.is_default.is_(True))
+                    .values(
+                        is_default=False,
+                        revision=review_profiles.c.revision + 1,
+                        updated_at=updated_at,
+                    )
+                )
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(review_profiles)
+                    .where(
+                        review_profiles.c.profile_id == profile_id,
+                        review_profiles.c.revision == expected_revision,
+                    )
+                    .values(**_review_profile_values(updated))
+                ),
+            )
+            if result.rowcount != 1:
+                raise ReviewProfileRevisionConflictError("review profile revision conflict")
+            return updated
+
+        return await self._database.run_transaction(operation)
+
+    async def copy_review_profile(
+        self,
+        profile_id: str,
+        *,
+        new_profile_id: str,
+        name: str,
+        created_at: datetime,
+    ) -> ReviewProfile:
+        """Copy only strategy values into an independent non-default aggregate."""
+
+        async def operation(session: AsyncSession) -> ReviewProfile:
+            source = await self._load_for_update(session, profile_id)
+            copied = ReviewProfile.create(
+                profile_id=new_profile_id,
+                name=name,
+                is_default=False,
+                reviewer_selection=source.reviewer_selection,
+                budget_profile=source.budget_profile,
+                created_at=created_at,
+            )
+            await session.execute(insert(review_profiles).values(**_review_profile_values(copied)))
+            return copied
+
+        return await self._database.run_transaction(operation)
+
+    async def delete_review_profile(self, profile_id: str) -> None:
+        """Delete a non-default profile while retaining the current default."""
+
+        async def operation(session: AsyncSession) -> None:
+            profile = await self._load_for_update(session, profile_id)
+            if profile.is_default:
+                raise ReviewProfileDefaultRequiredError("the default profile cannot be deleted")
+            await session.execute(
+                delete(review_profiles).where(review_profiles.c.profile_id == profile_id)
+            )
+
+        await self._database.run_transaction(operation)
+
+    async def set_default_review_profile(
+        self,
+        profile_id: str,
+        *,
+        expected_revision: int,
+        updated_at: datetime,
+    ) -> ReviewProfile:
+        """Promote one profile and demote the old default atomically."""
+
+        async def operation(session: AsyncSession) -> ReviewProfile:
+            current = await self._load_for_update(session, profile_id)
+            updated = current.update(
+                expected_revision=expected_revision,
+                name=current.name,
+                is_default=True,
+                reviewer_selection=current.reviewer_selection,
+                budget_profile=current.budget_profile,
+                updated_at=updated_at,
+            )
+            await session.execute(
+                update(review_profiles)
+                .where(
+                    review_profiles.c.is_default.is_(True),
+                    review_profiles.c.profile_id != profile_id,
+                )
+                .values(
+                    is_default=False,
+                    revision=review_profiles.c.revision + 1,
+                    updated_at=updated_at,
+                )
+            )
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(review_profiles)
+                    .where(
+                        review_profiles.c.profile_id == profile_id,
+                        review_profiles.c.revision == expected_revision,
+                    )
+                    .values(**_review_profile_values(updated))
+                ),
+            )
+            if result.rowcount != 1:
+                raise ReviewProfileRevisionConflictError("review profile revision conflict")
+            return updated
+
+        return await self._database.run_transaction(operation)
 
 
 class SqlRecentRepositoryStore:

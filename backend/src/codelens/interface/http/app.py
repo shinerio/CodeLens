@@ -17,6 +17,7 @@ from codelens.interface.http.dependencies import (
 )
 from codelens.interface.http.routers.plugins import router as plugins_router
 from codelens.interface.http.routers.repositories import router as repositories_router
+from codelens.interface.http.routers.review_profiles import router as review_profiles_router
 from codelens.interface.http.routers.reviewer_prompts import router as reviewer_prompts_router
 from codelens.interface.http.routers.reviews import router as reviews_router
 from codelens.interface.http.routers.settings import router as settings_router
@@ -24,6 +25,11 @@ from codelens.interface.http.routers.trigger_events import router as trigger_eve
 from codelens.interface.http.routers.webhooks import router as webhooks_router
 from codelens.review.application.commands import ReviewNotFoundError
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
+from codelens.review.domain.review_profile import (
+    ReviewProfileDefaultRequiredError,
+    ReviewProfileNotFoundError,
+    ReviewProfileRevisionConflictError,
+)
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayNotFoundError
 from codelens.shared.domain.errors import (
     DomainError,
@@ -131,6 +137,12 @@ def _domain_problem(error: DomainError) -> tuple[int, str]:
         return 404, "The model gateway does not exist."
     if isinstance(error, InvalidAgentRunStateError):
         return 409, "The review state does not allow this operation."
+    if isinstance(error, ReviewProfileNotFoundError):
+        return 404, "The review profile does not exist."
+    if isinstance(error, ReviewProfileRevisionConflictError):
+        return 409, "The review profile changed; reload it before retrying."
+    if isinstance(error, ReviewProfileDefaultRequiredError):
+        return 409, "At least one review profile must remain the default."
     return 400, "The request violates a domain rule."
 
 
@@ -198,6 +210,7 @@ def create_app_with_components(
         return {"status": "ready", "auth": settings.auth}
 
     app.include_router(repositories_router)
+    app.include_router(review_profiles_router)
     app.include_router(reviews_router)
     app.include_router(settings_router)
     app.include_router(reviewer_prompts_router)

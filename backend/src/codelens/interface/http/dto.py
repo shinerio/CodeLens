@@ -16,6 +16,11 @@ from pydantic import (
 
 from codelens.review.application.process_report import ReviewProcessReport
 from codelens.review.domain.ports import RecentRepositoryRecord, ReviewRecord
+from codelens.review.domain.review_profile import ReviewProfile
+from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
+    FixedReviewerSelection,
+)
 from codelens.workspace.domain.models import (
     BranchScope,
     CommitScope,
@@ -30,6 +35,90 @@ class StrictDto(BaseModel):
     """Reject unknown public fields so clients cannot inject internal identifiers."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class AdaptiveReviewerSelectionDto(StrictDto):
+    mode: Literal["adaptive"]
+
+
+class FixedReviewerSelectionDto(StrictDto):
+    mode: Literal["fixed"]
+    reviewer_versions: Annotated[
+        list[
+            Annotated[
+                str,
+                StringConstraints(pattern=r"^[a-z][a-z0-9_.-]*:v[1-9][0-9]*$"),
+            ]
+        ],
+        Field(min_length=1),
+    ]
+
+    @model_validator(mode="after")
+    def validate_reviewer_team(self) -> "FixedReviewerSelectionDto":
+        """Reject duplicate and legacy singleton combinations at the HTTP boundary."""
+
+        if len(self.reviewer_versions) != len(set(self.reviewer_versions)):
+            raise ValueError("reviewer_versions must be unique")
+        for singleton in ("general:v1", "correctness:v1"):
+            if singleton in self.reviewer_versions and self.reviewer_versions != [singleton]:
+                raise ValueError(f"{singleton} must run alone")
+        return self
+
+
+type ReviewerSelectionDto = Annotated[
+    AdaptiveReviewerSelectionDto | FixedReviewerSelectionDto,
+    Field(discriminator="mode"),
+]
+
+
+class CreateReviewProfileRequest(StrictDto):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    is_default: bool = False
+    reviewer_selection: ReviewerSelectionDto
+    budget_profile: Literal["lean", "standard", "deep"]
+
+
+class UpdateReviewProfileRequest(CreateReviewProfileRequest):
+    revision: Annotated[int, Field(ge=1)]
+
+
+class CopyReviewProfileRequest(StrictDto):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+
+
+class ReviewProfileResponse(StrictDto):
+    profile_id: str
+    revision: int
+    name: str
+    is_default: bool
+    reviewer_selection: ReviewerSelectionDto
+    budget_profile: Literal["lean", "standard", "deep"]
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_domain(cls, profile: ReviewProfile) -> "ReviewProfileResponse":
+        """Project a profile without exposing its persistence representation."""
+
+        selection: AdaptiveReviewerSelectionDto | FixedReviewerSelectionDto
+        if isinstance(profile.reviewer_selection, AdaptiveReviewerSelection):
+            selection = AdaptiveReviewerSelectionDto(mode="adaptive")
+        else:
+            assert isinstance(profile.reviewer_selection, FixedReviewerSelection)
+            selection = FixedReviewerSelectionDto(
+                mode="fixed",
+                reviewer_versions=list(profile.reviewer_selection.reviewer_versions),
+            )
+        return cls(
+            profile_id=profile.profile_id,
+            revision=profile.revision,
+            name=profile.name,
+            is_default=profile.is_default,
+            reviewer_selection=selection,
+            budget_profile=profile.budget_profile.value,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+        )
 
 
 class PinnedSourceVersionResponse(StrictDto):

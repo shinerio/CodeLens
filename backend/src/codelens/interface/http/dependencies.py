@@ -33,6 +33,14 @@ from codelens.review.application.commands import (
     RetryReviewHandler,
     UpdateRecentRepositorySettingsHandler,
 )
+from codelens.review.application.review_profiles import (
+    CopyReviewProfileHandler,
+    CreateReviewProfileHandler,
+    DeleteReviewProfileHandler,
+    ListReviewProfilesHandler,
+    SetDefaultReviewProfileHandler,
+    UpdateReviewProfileHandler,
+)
 from codelens.review.application.settings import (
     ReviewCompletionSettingsService,
     TriggerIdempotencySettingsService,
@@ -49,6 +57,7 @@ from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimits
 from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
     SqlRecentRepositoryStore,
+    SqlReviewProfileRepository,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
@@ -109,6 +118,12 @@ class HttpComponents:
     delete_recent_repository: DeleteRecentRepositoryHandler
     get_recent_repository_settings: GetRecentRepositorySettingsHandler
     update_recent_repository_settings: UpdateRecentRepositorySettingsHandler
+    create_review_profile: CreateReviewProfileHandler
+    update_review_profile: UpdateReviewProfileHandler
+    copy_review_profile: CopyReviewProfileHandler
+    delete_review_profile: DeleteReviewProfileHandler
+    set_default_review_profile: SetDefaultReviewProfileHandler
+    list_review_profiles: ListReviewProfilesHandler
     instruction_settings: InstructionSettingsService
     review_completion_settings: ReviewCompletionSettingsService
     trigger_idempotency_settings: TriggerIdempotencySettingsService
@@ -161,6 +176,7 @@ def build_components(settings: Settings) -> HttpComponents:
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     review_store = SqlReviewStore(database, event_bus=event_bus)
     recent_repository_store = SqlRecentRepositoryStore(database)
+    review_profile_repository = SqlReviewProfileRepository(database)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
     worktree_manager = GitReviewWorktreeManager(
         data_dir=settings.data_dir,
@@ -243,6 +259,12 @@ def build_components(settings: Settings) -> HttpComponents:
         update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
             recent_repository_store
         ),
+        create_review_profile=CreateReviewProfileHandler(review_profile_repository),
+        update_review_profile=UpdateReviewProfileHandler(review_profile_repository),
+        copy_review_profile=CopyReviewProfileHandler(review_profile_repository),
+        delete_review_profile=DeleteReviewProfileHandler(review_profile_repository),
+        set_default_review_profile=SetDefaultReviewProfileHandler(review_profile_repository),
+        list_review_profiles=ListReviewProfilesHandler(review_profile_repository),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
         review_completion_settings=review_completion_settings,
         trigger_idempotency_settings=trigger_idempotency_settings,
