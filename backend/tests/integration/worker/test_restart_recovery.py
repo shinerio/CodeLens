@@ -1,9 +1,16 @@
 import asyncio
+import hashlib
 from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from codelens.capabilities.application.resolve import CapabilityResolver
+from codelens.capabilities.domain.models import (
+    AgentExecutionLimits,
+    FrozenAgentExecutionSpec,
+)
+from codelens.capabilities.domain.skills import SkillActivationFacts
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.application.orchestrator import PreparedReview, ReviewOrchestrator
 from codelens.review.domain.models import ReviewTask
@@ -33,7 +40,11 @@ class Runtime:
         self.calls = 0
 
     async def invoke(
-        self, _agent: object, _payload: bytes, _snapshot: object, _prompt_locale: str
+        self,
+        _execution_spec: FrozenAgentExecutionSpec,
+        _payload: bytes,
+        _snapshot: object,
+        _prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
         return UnvalidatedAgentOutput(
@@ -87,7 +98,13 @@ def _prepared(tmp_path: Path) -> PreparedReview:
         ChangeIndex(()),
     )
     agent = correctness_agent()
-    return PreparedReview(snapshot, (agent,), {"correctness:v1": b"{}"}, "en")
+    spec = CapabilityResolver.testing().resolve(
+        agent=agent,
+        prompt_content_hash=hashlib.sha256(agent.prompt_template.encode("utf-8")).hexdigest(),
+        facts=SkillActivationFacts.empty(),
+        execution_limits=AgentExecutionLimits.legacy_default(),
+    )
+    return PreparedReview(snapshot, (spec,), {"correctness:v1": b"{}"}, "en")
 
 
 def _orchestrator(

@@ -7,6 +7,7 @@ from collections.abc import Awaitable, Callable, Mapping, Sequence
 from dataclasses import dataclass
 from typing import Literal, Protocol, TypeVar
 
+from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.ports import (
     AgentReviewCompletionStatus,
@@ -17,7 +18,6 @@ from codelens.review.domain.ports import (
     FindingValidationWarning,
     RunArtifactPort,
 )
-from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.workspace.domain.models import ReviewSnapshot
 
 type TranscriptKind = Literal[
@@ -40,10 +40,10 @@ type TranscriptRecord = tuple[TranscriptKind, str, Mapping[str, str] | None]
 
 @dataclass(frozen=True)
 class PreparedReview:
-    """Hold one frozen Snapshot and bounded input for each immutable Agent version."""
+    """Hold one Snapshot and bounded input for each frozen Agent execution spec."""
 
     snapshot: ReviewSnapshot
-    agents: tuple[AgentVersion, ...]
+    execution_specs: tuple[FrozenAgentExecutionSpec, ...]
     input_payloads: dict[str, bytes]
     prompt_locale: str
 
@@ -122,7 +122,7 @@ class _TranscriptPort(Protocol):
 class _StreamingRuntimePort(Protocol):
     async def invoke_stream(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,
@@ -182,7 +182,10 @@ class ReviewOrchestrator:
                     return
 
             results = await asyncio.gather(
-                *(self._checkpoint_output(task_id, prepared, agent) for agent in prepared.agents),
+                *(
+                    self._checkpoint_output(task_id, prepared, execution_spec)
+                    for execution_spec in prepared.execution_specs
+                ),
                 return_exceptions=True,
             )
             exceptions = [r for r in results if isinstance(r, BaseException)]
@@ -193,7 +196,10 @@ class ReviewOrchestrator:
             if status == "canceled":
                 return
             results = await asyncio.gather(
-                *(self._validate_output(task_id, prepared, agent) for agent in prepared.agents),
+                *(
+                    self._validate_output(task_id, prepared, execution_spec)
+                    for execution_spec in prepared.execution_specs
+                ),
                 return_exceptions=True,
             )
             exceptions = [r for r in results if isinstance(r, BaseException)]
@@ -246,18 +252,18 @@ class ReviewOrchestrator:
         self,
         task_id: str,
         prepared: PreparedReview,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
     ) -> None:
         if await self._cancel_if_requested(task_id):
             return
-        node_key = self._node_key(agent)
+        node_key = self._node_key(execution_spec)
         await self._checkpoints.ensure(task_id, node_key, "primary")
         checkpoint = await self._checkpoints.get(task_id, node_key)
         if checkpoint.status in {"output_saved", "validating", "succeeded"}:
             return
         if checkpoint.status != "pending":
             raise RuntimeError("interrupted checkpoint was not recovered before execution")
-        input_payload = prepared.input_payloads[self._agent_key(agent)]
+        input_payload = prepared.input_payloads[self._agent_key(execution_spec)]
         transcript_records: list[TranscriptRecord] = []
         await self._checkpoints.mark_running(task_id, node_key)
         await self._hit("before_model_invocation")
@@ -265,7 +271,7 @@ class ReviewOrchestrator:
 
         async def record_stream_event(event: AgentRuntimeEvent) -> None:
             nonlocal last_transcript_flush
-            await self._buffer_runtime_event(transcript_records, agent, event)
+            await self._buffer_runtime_event(transcript_records, execution_spec, event)
             if time.monotonic() - last_transcript_flush >= 1.0:
                 await self._record_many(task_id, transcript_records)
                 transcript_records.clear()
@@ -276,14 +282,14 @@ class ReviewOrchestrator:
                 stream = getattr(self._runtime, "invoke_stream", None)
                 if stream is None:
                     output = await self._runtime.invoke(
-                        agent,
+                        execution_spec,
                         input_payload,
                         prepared.snapshot,
                         prepared.prompt_locale,
                     )
                 else:
                     output = await stream(
-                        agent,
+                        execution_spec,
                         input_payload,
                         prepared.snapshot,
                         prepared.prompt_locale,
@@ -294,7 +300,7 @@ class ReviewOrchestrator:
                 "model_output",
                 output.canonical_bytes.decode("utf-8", errors="replace"),
                 {
-                    "agent": self._agent_key(agent),
+                    "agent": self._agent_key(execution_spec),
                     "model_name": output.model_name,
                     "llm_call_count": str(len(output.diagnostics)),
                     "input_tokens": str(output.input_tokens),
@@ -317,7 +323,7 @@ class ReviewOrchestrator:
                         f"{len(output.incomplete_review_files)} files lack verified review coverage"
                     ),
                     {
-                        "agent": self._agent_key(agent),
+                        "agent": self._agent_key(execution_spec),
                         "warning_code": "review_coverage_incomplete",
                         "incomplete_file_count": str(len(output.incomplete_review_files)),
                         "incomplete_files": incomplete_files,
@@ -341,11 +347,11 @@ class ReviewOrchestrator:
         self,
         task_id: str,
         prepared: PreparedReview,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
     ) -> None:
         if await self._cancel_if_requested(task_id):
             return
-        node_key = self._node_key(agent)
+        node_key = self._node_key(execution_spec)
         checkpoint = await self._checkpoints.get(task_id, node_key)
         if checkpoint.status == "succeeded":
             return
@@ -362,7 +368,12 @@ class ReviewOrchestrator:
             checkpoint.artifact_ref,
             checkpoint.artifact_hash,
         )
-        validator = self._validator_factory(task_id, node_key, prepared, agent)
+        validator = self._validator_factory(
+            task_id,
+            node_key,
+            prepared,
+            execution_spec.agent,
+        )
         findings = await validator.validate(payload)
         if validator.warnings:
             duplicate_count = sum(
@@ -377,7 +388,7 @@ class ReviewOrchestrator:
                     f"{len(validator.warnings)} model candidates"
                 ),
                 {
-                    "agent": self._agent_key(agent),
+                    "agent": self._agent_key(execution_spec),
                     "warning_code": "finding_validation_partial",
                     "retained_count": str(len(findings.findings)),
                     "skipped_count": str(len(validator.warnings)),
@@ -397,8 +408,8 @@ class ReviewOrchestrator:
 
         checkpoints = await asyncio.gather(
             *(
-                self._checkpoints.get(task_id, self._node_key(agent))
-                for agent in prepared.agents
+                self._checkpoints.get(task_id, self._node_key(execution_spec))
+                for execution_spec in prepared.execution_specs
             )
         )
         return (
@@ -424,13 +435,17 @@ class ReviewOrchestrator:
     async def _record_runtime_event(
         self,
         records: list[TranscriptRecord],
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         event: AgentRuntimeEvent,
     ) -> None:
         """Keep streamed chunks in memory until the model produces complete output."""
 
         records.append(
-            (event.kind, event.content, {"agent": self._agent_key(agent), **event.metadata})
+            (
+                event.kind,
+                event.content,
+                {"agent": self._agent_key(execution_spec), **event.metadata},
+            )
         )
 
     _buffer_runtime_event = _record_runtime_event
@@ -440,9 +455,9 @@ class ReviewOrchestrator:
             await self._transcript.append_many(task_id, records)
 
     @staticmethod
-    def _agent_key(agent: AgentVersion) -> str:
-        return f"{agent.agent_id}:v{agent.version}"
+    def _agent_key(execution_spec: FrozenAgentExecutionSpec) -> str:
+        return execution_spec.agent.reference
 
     @classmethod
-    def _node_key(cls, agent: AgentVersion) -> str:
-        return f"{cls._agent_key(agent)}:0:root"
+    def _node_key(cls, execution_spec: FrozenAgentExecutionSpec) -> str:
+        return f"{cls._agent_key(execution_spec)}:0:root"

@@ -4,10 +4,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import Literal, Protocol
 
+from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.tool_limits import ToolLimits
-from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.workspace.domain.models import ReviewScopeType, ReviewSnapshot
 
 DEFAULT_RECENT_REPOSITORY_LIMIT = 10
@@ -86,6 +86,7 @@ class AgentRuntimeEvent:
         "model_raw_output",
         "tool_call",
         "tool_result",
+        "skill_loaded",
         "lifecycle",
     ]
     content: str
@@ -258,7 +259,7 @@ class AgentRuntimePort(Protocol):
 
     async def invoke(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,

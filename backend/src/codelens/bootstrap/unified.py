@@ -223,8 +223,9 @@ def build_unified_backend(
     snapshot_reader = FilesystemSnapshotReader(git)
     codec = AgentOutputCodec("1")
     system_prompts = I18nPromptLoader.load(settings.prompt_dir)
+    provider_config_store = FilesystemModelProviderConfigAdapter(settings.data_dir)
     provider_runtime = runtime or OpenAIAgentRuntime(
-        FilesystemModelProviderConfigAdapter(settings.data_dir),
+        provider_config_store,
         codec,
         git,
         system_prompts,
@@ -258,6 +259,8 @@ def build_unified_backend(
             FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
         ),
         repository_inspector=repository_inspector,
+        provider_config=provider_config_store,
+        tool_limits_service=tool_limits_service,
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),

@@ -1,9 +1,20 @@
 """Worker-side reconstruction and execution of durable review commands."""
 
 import asyncio
+import hashlib
 from dataclasses import dataclass, replace
 
 from codelens.bootstrap.settings import Settings
+from codelens.capabilities.application.resolve import CapabilityResolver
+from codelens.capabilities.domain.models import (
+    AgentExecutionLimits,
+    FrozenAgentExecutionSpec,
+)
+from codelens.capabilities.domain.skills import SkillActivationFacts
+from codelens.capabilities.infrastructure.builtin_profiles import (
+    builtin_capability_profiles,
+    builtin_skill_policies,
+)
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.orchestrator import (
@@ -11,6 +22,7 @@ from codelens.review.application.orchestrator import (
     PreparedReview,
     ReviewOrchestrator,
 )
+from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.application.validate_findings import FindingValidator
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.errors import AgentRuntimeError
@@ -22,6 +34,7 @@ from codelens.review.domain.ports import (
     SnapshotFileReaderPort,
     UnvalidatedAgentOutput,
 )
+from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
     SqlCheckpointStore,
     SqlJobQueue,
@@ -32,9 +45,16 @@ from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactSt
 from codelens.review.infrastructure.transcripts import WorkerTranscriptStore
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.domain.models import AgentVersion
+from codelens.reviewer_catalog.domain.provider_config import (
+    ModelProviderConfig,
+    ModelProviderConfigPort,
+)
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
 from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
     FilesystemReviewerPromptStore,
+)
+from codelens.reviewer_catalog.infrastructure.file_provider_config import (
+    FilesystemModelProviderConfigAdapter,
 )
 from codelens.shared.domain.errors import DomainError
 from codelens.worker.scheduler import ClaimedJob, WorkerSemaphores
@@ -75,17 +95,22 @@ class _ModelLimitedRuntime:
 
     async def invoke(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
         async with self._semaphore:
-            return await self._runtime.invoke(agent, input_payload, snapshot, prompt_locale)
+            return await self._runtime.invoke(
+                execution_spec,
+                input_payload,
+                snapshot,
+                prompt_locale,
+            )
 
     async def invoke_stream(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,
@@ -95,9 +120,20 @@ class _ModelLimitedRuntime:
 
         stream = getattr(self._runtime, "invoke_stream", None)
         if stream is None:
-            return await self.invoke(agent, input_payload, snapshot, prompt_locale)
+            return await self.invoke(
+                execution_spec,
+                input_payload,
+                snapshot,
+                prompt_locale,
+            )
         async with self._semaphore:
-            return await stream(agent, input_payload, snapshot, prompt_locale, sink)
+            return await stream(
+                execution_spec,
+                input_payload,
+                snapshot,
+                prompt_locale,
+                sink,
+            )
 
 
 class SqlCheckpointPortAdapter:
@@ -167,6 +203,9 @@ class WorkerReviewExecutor:
         transcripts: WorkerTranscriptStore,
         reviewer_prompts: ReviewerPromptSettingsService | None = None,
         repository_inspector: RepositoryInspector | None = None,
+        provider_config: ModelProviderConfigPort | None = None,
+        tool_limits_service: ToolLimitsService | None = None,
+        capability_resolver: CapabilityResolver | None = None,
     ) -> None:
         self._settings = settings
         self._review_store = review_store
@@ -188,6 +227,16 @@ class WorkerReviewExecutor:
         self._repository_inspector = repository_inspector or RepositoryInspector(
             GitRepositoryMetadataAdapter(GitCli()),
             settings.repository_roots,
+        )
+        self._provider_config = provider_config or FilesystemModelProviderConfigAdapter(
+            settings.data_dir
+        )
+        self._tool_limits_service = tool_limits_service or ToolLimitsService(
+            FilesystemToolLimitsStore(settings.data_dir)
+        )
+        self._capability_resolver = capability_resolver or CapabilityResolver(
+            builtin_capability_profiles(),
+            builtin_skill_policies(),
         )
 
     async def recover(self) -> None:
@@ -262,14 +311,30 @@ class WorkerReviewExecutor:
             scope_plan,
             instructions,
         )
-        agents = await self._agents(record.selected_agent_versions, record.prompt_locale)
+        provider_config = await self._provider_config.load()
+        if provider_config is None:
+            provider_config = ModelProviderConfig(api_key="", model="", base_url="")
+        tool_limits = await self._tool_limits_service.get()
+        execution_specs = await self._execution_specs(
+            record.selected_agent_versions,
+            record.prompt_locale,
+            snapshot,
+            AgentExecutionLimits(
+                max_turns=provider_config.max_agent_turns,
+                max_tool_calls=provider_config.max_tool_calls,
+                max_input_tokens=provider_config.max_tokens,
+                max_output_tokens=provider_config.max_tokens,
+                timeout_seconds=provider_config.agent_timeout,
+                max_tool_result_bytes=tool_limits.max_read_bytes,
+            ),
+        )
         payloads: dict[str, bytes] = {}
-        for agent in agents:
+        for execution_spec in execution_specs:
             agent_input = self._context_builder.build(snapshot, instructions)
-            payloads[f"{agent.agent_id}:v{agent.version}"] = agent_input.canonical_bytes()
+            payloads[execution_spec.agent.reference] = agent_input.canonical_bytes()
         return PreparedReview(
             snapshot=snapshot,
-            agents=agents,
+            execution_specs=execution_specs,
             input_payloads=payloads,
             prompt_locale=record.prompt_locale,
         )
@@ -332,24 +397,62 @@ class WorkerReviewExecutor:
             overlay_artifact=artifact,
         )
 
-    async def _agents(self, references: tuple[str, ...], locale: str) -> tuple[AgentVersion, ...]:
+    async def _execution_specs(
+        self,
+        references: tuple[str, ...],
+        locale: str,
+        snapshot: ReviewSnapshot,
+        execution_limits: AgentExecutionLimits,
+    ) -> tuple[FrozenAgentExecutionSpec, ...]:
         catalog = {"correctness:v1": correctness_agent()}
         try:
-            agents: list[AgentVersion] = []
+            specs: list[FrozenAgentExecutionSpec] = []
             for reference in references:
                 agent = catalog[reference]
                 view = await self._reviewer_prompts.get(
                     agent, "zh-CN" if locale == "zh-CN" else "en"
                 )
-                agents.append(
-                    replace(
-                        agent,
-                        prompt_template=view.prompt,
+                resolved_agent = replace(agent, prompt_template=view.prompt)
+                specs.append(
+                    self._capability_resolver.resolve(
+                        agent=resolved_agent,
+                        prompt_content_hash=hashlib.sha256(
+                            view.prompt.encode("utf-8")
+                        ).hexdigest(),
+                        facts=self._skill_facts(snapshot),
+                        execution_limits=execution_limits,
                     )
                 )
-            return tuple(agents)
+            return tuple(specs)
         except KeyError as error:
             raise ValueError("review references an unavailable Agent version") from error
+
+    @staticmethod
+    def _skill_facts(snapshot: ReviewSnapshot) -> SkillActivationFacts:
+        language_by_suffix = {
+            ".cs": "csharp",
+            ".go": "go",
+            ".java": "java",
+            ".js": "javascript",
+            ".jsx": "javascript",
+            ".py": "python",
+            ".rb": "ruby",
+            ".rs": "rust",
+            ".ts": "typescript",
+            ".tsx": "typescript",
+        }
+        changed_paths = tuple(sorted(snapshot.manifest.target_paths))
+        languages = tuple(
+            sorted(
+                {
+                    language
+                    for path in changed_paths
+                    for suffix, language in language_by_suffix.items()
+                    if path.casefold().endswith(suffix)
+                }
+            )
+        )
+        return SkillActivationFacts(languages, changed_paths)
 
     def _validator(
         self,

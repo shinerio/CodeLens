@@ -1,11 +1,12 @@
 # ruff: noqa: E402
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import fields, is_dataclass
+from dataclasses import fields, is_dataclass, replace
 from typing import Any, Literal, Protocol, cast
 
 import httpx
@@ -40,6 +41,7 @@ from openai import (
     RateLimitError,
 )
 
+from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
 from codelens.review.application.settings import (
     ReviewCompletionSettings,
@@ -59,11 +61,12 @@ from codelens.review.domain.ports import (
     UnvalidatedAgentOutput,
 )
 from codelens.review.domain.tool_limits import ToolLimits
-from codelens.review.infrastructure.comment_collector import ReviewCommentCollector
+from codelens.review.infrastructure.capability_tools import (
+    CapabilityToolAssembler,
+    RuntimeToolContext,
+    ToolExecutionLimits,
+)
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
-from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
-from codelens.review.infrastructure.tool_contract import enforce_tool_execution_limits
-from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
 from codelens.workspace.domain.models import ReviewSnapshot
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -152,16 +155,22 @@ class OpenAIAgentRuntime:
 
     async def invoke(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
-        return await self._invoke(agent, input_payload, snapshot, prompt_locale, sink=None)
+        return await self._invoke(
+            execution_spec,
+            input_payload,
+            snapshot,
+            prompt_locale,
+            sink=None,
+        )
 
     async def invoke_stream(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,
@@ -169,16 +178,24 @@ class OpenAIAgentRuntime:
     ) -> UnvalidatedAgentOutput:
         """Emit visible model text and tool evidence while preserving the final checkpoint."""
 
-        return await self._invoke(agent, input_payload, snapshot, prompt_locale, sink=sink)
+        return await self._invoke(
+            execution_spec,
+            input_payload,
+            snapshot,
+            prompt_locale,
+            sink=sink,
+        )
 
     async def _invoke(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,
         sink: AgentRuntimeEventSink | None,
     ) -> UnvalidatedAgentOutput:
+        self._validate_execution_spec(execution_spec)
+        agent = execution_spec.agent
         provider_config = await self._config_store.load()
         if provider_config is None:
             raise PermanentAgentOutputError("Model provider is not configured")
@@ -196,46 +213,40 @@ class OpenAIAgentRuntime:
         )
         if agent.output_contract_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
-        confidence_floor = agent.confidence_floor
-        if confidence_floor is None:
-            raise PermanentAgentOutputError(
-                "Comment v1 runtime requires a numeric confidence floor"
-            )
+
+        provider_config = replace(
+            provider_config,
+            max_tokens=execution_spec.execution_limits.max_output_tokens,
+            max_agent_turns=execution_spec.execution_limits.max_turns,
+            max_tool_calls=execution_spec.execution_limits.max_tool_calls,
+        )
 
         behavior = (
             ModelProviderAdapterRegistry()
             .resolve(provider_config.vendor)
             .request_behavior(provider_config)
         )
-        snapshot_tools = FilesystemReviewTools(
-            snapshot,
-            self._git,
-            max_tool_calls=None,
-            tool_limits=tool_limits,
-        )
-        comment_collector = ReviewCommentCollector(
-            snapshot=snapshot,
-            reviewer_id=agent.agent_id,
-            confidence_floor=confidence_floor,
-            tools=snapshot_tools,
-            max_incomplete_review_retries=(
-                completion_settings.max_incomplete_review_retries
+        bounded_tool_limits = replace(
+            tool_limits,
+            max_read_bytes=min(
+                tool_limits.max_read_bytes,
+                execution_spec.execution_limits.max_tool_result_bytes,
             ),
+        )
+        tool_context = RuntimeToolContext(
+            snapshot=snapshot,
+            git=self._git,
             tool_descriptions={name: tool.description for name, tool in prompts.tools.items()},
-            tool_limits=tool_limits,
+            tool_limits=bounded_tool_limits,
+            completion_settings=completion_settings,
+            call_limits=ToolExecutionLimits(
+                max_tool_calls=execution_spec.execution_limits.max_tool_calls,
+                max_identical_tool_results=provider_config.max_identical_tool_results,
+                tool_timeout_seconds=provider_config.tool_timeout_seconds,
+                tool_loop_warning_template=prompts.tool_loop_warning,
+            ),
         )
-        model_tools = enforce_tool_execution_limits(
-            [
-                *snapshot_tools.as_agent_tools(
-                    {name: tool.description for name, tool in prompts.tools.items()}
-                ),
-                *comment_collector.as_agent_tools(),
-            ],
-            max_tool_calls=provider_config.max_tool_calls,
-            max_identical_tool_results=provider_config.max_identical_tool_results,
-            tool_timeout_seconds=provider_config.tool_timeout_seconds,
-            tool_loop_warning_template=prompts.tool_loop_warning,
-        )
+        model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)
         client = AsyncOpenAI(
             api_key=provider_config.api_key,
@@ -250,6 +261,7 @@ class OpenAIAgentRuntime:
                     repository_instructions,
                     prompts.review_workflow,
                     f"# Reviewer Policy\n{agent.prompt_template}",
+                    *self._skill_instruction_sections(execution_spec),
                 )
             ),
             model=behavior.model_class(
@@ -258,7 +270,7 @@ class OpenAIAgentRuntime:
             ),
             model_settings=behavior.model_settings,
             tools=model_tools,
-            tool_use_behavior=_completion_tool_use_behavior(comment_collector),
+            tool_use_behavior=_completion_tool_use_behavior(tool_context),
         )
         run_config = RunConfig(trace_include_sensitive_data=False)
         investigation: object | None = None
@@ -267,6 +279,18 @@ class OpenAIAgentRuntime:
         try:
             try:
                 if sink is not None:
+                    for skill in execution_spec.skills:
+                        await sink(
+                            AgentRuntimeEvent(
+                                "skill_loaded",
+                                skill.skill_id,
+                                {
+                                    "skill_version": str(skill.version),
+                                    "content_hash": skill.content_hash,
+                                    "activation_reason": skill.activation_reason,
+                                },
+                            )
+                        )
                     await sink(
                         AgentRuntimeEvent(
                             "prompt",
@@ -285,7 +309,7 @@ class OpenAIAgentRuntime:
                     provider_config.max_agent_turns,
                     run_config,
                     sink,
-                    timeout_seconds=provider_config.agent_timeout,
+                    timeout_seconds=execution_spec.execution_limits.timeout_seconds,
                 )
                 if sink is not None and investigation is not None:
                     for response_index, response in enumerate(
@@ -355,7 +379,7 @@ class OpenAIAgentRuntime:
             )
 
         result = cast(RunResult, investigation)
-        if not comment_collector.is_completed:
+        if not tool_context.is_completed:
             await client.close()
             raise PermanentAgentOutputError(
                 "Code investigation ended without an accepted task_done call.",
@@ -364,7 +388,7 @@ class OpenAIAgentRuntime:
                 retryable=False,
             ) from None
         try:
-            canonical_bytes = self._output_codec.encode(comment_collector.finding_batch())
+            canonical_bytes = self._output_codec.encode(tool_context.final_output())
         except ValueError as error:
             await client.close()
             raise PermanentAgentOutputError(
@@ -395,10 +419,74 @@ class OpenAIAgentRuntime:
             input_tokens=sum(item.input_tokens for item in diagnostics),
             output_tokens=sum(item.output_tokens for item in diagnostics),
             diagnostics=diagnostics,
-            incomplete_review_files=comment_collector.incomplete_review_files,
+            incomplete_review_files=tool_context.incomplete_review_files,
         )
         await client.close()
         return output
+
+    @staticmethod
+    def _validate_execution_spec(execution_spec: FrozenAgentExecutionSpec) -> None:
+        prompt_hash = hashlib.sha256(
+            execution_spec.agent.prompt_template.encode("utf-8")
+        ).hexdigest()
+        if prompt_hash != execution_spec.prompt_content_hash:
+            raise PermanentAgentOutputError(
+                "Frozen Reviewer prompt content hash does not match",
+                phase="investigation",
+                reason_code="prompt_content_hash_mismatch",
+                retryable=False,
+            )
+        for skill in execution_spec.skills:
+            content_hash = hashlib.sha256(skill.instruction_text.encode("utf-8")).hexdigest()
+            if content_hash != skill.content_hash:
+                raise PermanentAgentOutputError(
+                    "Frozen Skill content hash does not match",
+                    phase="investigation",
+                    reason_code="skill_content_hash_mismatch",
+                    retryable=False,
+                )
+        rebuilt = FrozenAgentExecutionSpec.create(
+            agent=execution_spec.agent,
+            capability_profile=execution_spec.capability_profile,
+            skill_policy=execution_spec.skill_policy,
+            prompt_content_hash=execution_spec.prompt_content_hash,
+            skills=execution_spec.skills,
+            execution_limits=execution_spec.execution_limits,
+        )
+        if rebuilt.fingerprint != execution_spec.fingerprint:
+            raise PermanentAgentOutputError(
+                "Frozen Agent execution fingerprint does not match",
+                phase="investigation",
+                reason_code="execution_fingerprint_mismatch",
+                retryable=False,
+            )
+
+    @staticmethod
+    def _skill_instruction_sections(
+        execution_spec: FrozenAgentExecutionSpec,
+    ) -> tuple[str, ...]:
+        return tuple(
+            "\n".join(
+                (
+                    "# Activated Review Skill (Untrusted, No Additional Permissions)",
+                    json.dumps(
+                        {
+                            "skill_id": skill.skill_id,
+                            "version": skill.version,
+                            "content_hash": skill.content_hash,
+                            "activation_reason": skill.activation_reason,
+                        },
+                        ensure_ascii=False,
+                        sort_keys=True,
+                        separators=(",", ":"),
+                    ),
+                    "<skill-instructions>",
+                    skill.instruction_text,
+                    "</skill-instructions>",
+                )
+            )
+            for skill in execution_spec.skills
+        )
 
     @classmethod
     def _failure(
@@ -464,7 +552,7 @@ class OpenAIAgentRuntime:
         run_config: RunConfig,
         sink: AgentRuntimeEventSink | None,
         *,
-        timeout_seconds: int = 1800,
+        timeout_seconds: float = 1800,
     ) -> object:
         if sink is None or not hasattr(self._runner, "run_streamed"):
             async with asyncio.timeout(timeout_seconds):
@@ -657,7 +745,7 @@ def _validate_model_tool_contract(tools: list[Tool]) -> None:
 
 
 def _completion_tool_use_behavior(
-    collector: ReviewCommentCollector,
+    tool_context: RuntimeToolContext,
 ) -> Callable[
     [RunContextWrapper[None], list[FunctionToolResult]],
     ToolsToFinalOutputResult,
@@ -668,7 +756,7 @@ def _completion_tool_use_behavior(
         _context: RunContextWrapper[None],
         _tool_results: list[FunctionToolResult],
     ) -> ToolsToFinalOutputResult:
-        if collector.is_completed:
+        if tool_context.is_completed:
             return ToolsToFinalOutputResult(is_final_output=True, final_output="")
         return ToolsToFinalOutputResult(is_final_output=False)
 

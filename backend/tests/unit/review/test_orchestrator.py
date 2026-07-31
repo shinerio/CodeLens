@@ -5,6 +5,12 @@ from dataclasses import dataclass
 
 import pytest
 
+from codelens.capabilities.application.resolve import CapabilityResolver
+from codelens.capabilities.domain.models import (
+    AgentExecutionLimits,
+    FrozenAgentExecutionSpec,
+)
+from codelens.capabilities.domain.skills import SkillActivationFacts
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.application.orchestrator import (
     PreparedReview,
@@ -109,15 +115,17 @@ class RecordingRuntime:
         self.payload = payload
         self.incomplete_review_files = incomplete_review_files
         self.calls = 0
+        self.specs: list[FrozenAgentExecutionSpec] = []
 
     async def invoke(
         self,
-        _agent: object,
+        execution_spec: FrozenAgentExecutionSpec,
         _input_payload: bytes,
         _snapshot: object,
         _prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
+        self.specs.append(execution_spec)
         return UnvalidatedAgentOutput(
             self.payload,
             ("response-1", "response-2"),
@@ -135,7 +143,7 @@ class RecordingRuntime:
 class StreamingRuntime(RecordingRuntime):
     async def invoke_stream(
         self,
-        agent: object,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: object,
         prompt_locale: str,
@@ -145,7 +153,7 @@ class StreamingRuntime(RecordingRuntime):
         await emit(AgentRuntimeEvent("prompt", "complete model input", {}))
         await emit(AgentRuntimeEvent("model_started", "", {}))
         await emit(AgentRuntimeEvent("model_reasoning_delta", "Inspecting the diff", {}))
-        return await self.invoke(agent, input_payload, snapshot, prompt_locale)
+        return await self.invoke(execution_spec, input_payload, snapshot, prompt_locale)
 
 
 class RecordingTranscript:
@@ -168,12 +176,14 @@ class CancellingRuntime(RecordingRuntime):
 
     async def invoke(
         self,
-        agent: object,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: object,
         prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
-        output = await super().invoke(agent, input_payload, snapshot, prompt_locale)
+        output = await super().invoke(
+            execution_spec, input_payload, snapshot, prompt_locale
+        )
         self._workflow.is_cancellation_requested = True
         return output
 
@@ -254,9 +264,15 @@ def _prepared() -> PreparedReview:
         ChangeIndex(()),
     )
     agent = correctness_agent()
+    execution_spec = CapabilityResolver.testing().resolve(
+        agent=agent,
+        prompt_content_hash=hashlib.sha256(agent.prompt_template.encode("utf-8")).hexdigest(),
+        facts=SkillActivationFacts.empty(),
+        execution_limits=AgentExecutionLimits.legacy_default(),
+    )
     return PreparedReview(
         snapshot=snapshot,
-        agents=(agent,),
+        execution_specs=(execution_spec,),
         input_payloads={"correctness:v1": b"{}"},
         prompt_locale="en",
     )
@@ -309,6 +325,9 @@ async def test_happy_path_persists_the_complete_state_sequence() -> None:
     ]
     assert checkpoints.value.status == "succeeded"
     assert runtime.calls == completion.calls == 1
+    assert runtime.specs[0].agent.reference == "correctness:v1"
+    assert runtime.specs[0].capability_profile.reference == "legacy-reviewer:v1"
+    assert len(runtime.specs[0].fingerprint) == 64
     assert workflow.job_completed
 
 
