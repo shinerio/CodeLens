@@ -195,11 +195,14 @@ class FixtureRuntime:
         self.calls += 1
         if self.delay_seconds > 0:
             await asyncio.sleep(self.delay_seconds)
+        confidence_floor = agent.confidence_floor
+        if confidence_floor is None:
+            raise ValueError("Comment v1 fixture requires a numeric confidence floor")
         tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=None)
         collector = ReviewCommentCollector(
             snapshot=snapshot,
             reviewer_id=agent.agent_id,
-            confidence_floor=agent.confidence_floor,
+            confidence_floor=confidence_floor,
             tools=tools,
         )
         await collector.submit_many(list(self._comments))

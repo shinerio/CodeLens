@@ -96,6 +96,11 @@ class FindingValidator:
         self._node_key = node_key
         self._snapshot = snapshot
         self._agent = agent
+        if agent.confidence_floor is None:
+            raise FindingValidationError(
+                "Comment v1 validation requires a numeric confidence floor"
+            )
+        self._confidence_floor = agent.confidence_floor
         self._codec = codec
         self._excerpt_reader = excerpt_reader
         self._warnings: tuple[FindingValidationWarning, ...] = ()
@@ -143,7 +148,7 @@ class FindingValidator:
     async def _validate_candidate(self, candidate: _FindingCandidate) -> Finding:
         if candidate.reviewer_id != self._agent.agent_id:
             raise FindingValidationError("Finding reviewer does not match the Agent")
-        if candidate.confidence < self._agent.confidence_floor:
+        if candidate.confidence < self._confidence_floor:
             raise FindingValidationError("Finding confidence is below the Agent threshold")
         primary = await self._location(candidate.primary_location)
         related = tuple([await self._location(item) for item in candidate.related_locations])

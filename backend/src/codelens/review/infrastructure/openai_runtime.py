@@ -196,6 +196,11 @@ class OpenAIAgentRuntime:
         )
         if agent.output_contract_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
+        confidence_floor = agent.confidence_floor
+        if confidence_floor is None:
+            raise PermanentAgentOutputError(
+                "Comment v1 runtime requires a numeric confidence floor"
+            )
 
         behavior = (
             ModelProviderAdapterRegistry()
@@ -211,7 +216,7 @@ class OpenAIAgentRuntime:
         comment_collector = ReviewCommentCollector(
             snapshot=snapshot,
             reviewer_id=agent.agent_id,
-            confidence_floor=agent.confidence_floor,
+            confidence_floor=confidence_floor,
             tools=snapshot_tools,
             max_incomplete_review_retries=(
                 completion_settings.max_incomplete_review_retries
