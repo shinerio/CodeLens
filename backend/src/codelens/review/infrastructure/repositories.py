@@ -493,7 +493,7 @@ class SqlReviewStore:
         base_oid: str,
         head_oid: str,
     ) -> ReviewRecord | None:
-        """Return the newest non-deleted, non-failed, non-canceled review matching the commit range."""
+        """Return the newest viable Review matching the repository commit range."""
 
         async with self._database.sessions() as session:
             row = (

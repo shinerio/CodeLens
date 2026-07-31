@@ -132,7 +132,7 @@ def _get_ancestor_pids(pid: int) -> set[int]:
         while current > 0:
             ancestors.add(current)
             try:
-                with open(f"/proc/{current}/status", "r") as f:
+                with open(f"/proc/{current}/status") as f:
                     for line in f:
                         if line.startswith("PPid:"):
                             parent = int(line.split(":")[1].strip())
