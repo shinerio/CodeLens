@@ -339,7 +339,7 @@ class WorkerReviewExecutor:
             for reference in references:
                 agent = catalog[reference]
                 view = await self._reviewer_prompts.get(
-                    agent.agent_id, "zh-CN" if locale == "zh-CN" else "en"
+                    agent, "zh-CN" if locale == "zh-CN" else "en"
                 )
                 agents.append(
                     replace(
