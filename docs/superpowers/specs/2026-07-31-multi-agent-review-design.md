@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 状态：候选定稿（后端编排、插件、Capability 与前端交互均已确认，等待书面规格最终审阅）
+- 状态：已批准（后端编排、插件、Capability 与前端交互均已确认）
 - 日期：2026-07-31
 - 适用仓库：CodeLens
 - 目标：把现有单 Reviewer Review 扩展为可配置、可恢复、可审计的多 Agent 并行 Review，并为后续 MCP 与 Skills 提供稳定能力边界。
@@ -297,7 +297,7 @@ General 和 Fixed Single Specialist 在确定性校验后直接进入发布门�
 
 ```text
 queued -> planning -> reviewing -> resolving -> verifying
-       -> completed | partial | failed | cancelled | superseded
+       -> completed | partial | failed | canceled | superseded
 ```
 
 AgentRun 状态继续表达 Pending、Running、Output Saved、Validating 和各类终态。DAG 调度只根据持久化节点状态推进，不依赖进程内 Future 是否存在。
@@ -704,7 +704,7 @@ Reviewer Catalog 提供独立只读 API，返回版本、职责、类型、成�
 
 Finding 卡片显示严重级别、类别、位置、建议、发布或验证状态，以及 CodeLens 内部可见的规范主 Reviewer 和合并来源。Comment v2 的 `evidence_strength`、`impact_certainty`、`reproducibility` 使用类别标签表达；新任务不显示或按数字置信度排序。Legacy `correctness:v1` 的数字置信度只保留在历史数据与兼容接口中，不提升为新版结果页的主信息。
 
-General 或 Fixed Single Specialist 没有 Resolver/Verifier 时，Review Plan 自动压缩未创建的 Pass，而不是显示伪造的 `skipped` 节点。Planning、Running、Partial、Failed、Cancelled 和 Superseded 都使用同一结果页骨架，避免任务完成时页面结构跳变。
+General 或 Fixed Single Specialist 没有 Resolver/Verifier 时，Review Plan 自动压缩未创建的 Pass，而不是显示伪造的 `skipped` 节点。Planning、Running、Partial、Failed、Canceled 和 Superseded 都使用同一结果页骨架，避免任务完成时页面结构跳变。
 
 #### 17.3.5 共享组件与状态
 
@@ -750,7 +750,7 @@ review.resolution_completed
 review.verification_completed
 review.completed
 review.partial
-review.cancelled
+review.canceled
 review.superseded
 ```
 
@@ -785,14 +785,14 @@ Planner 主动未选择某一视角、General 策略或 Optional Capability 的�
 
 ### 19.3 取消
 
-取消设置任务级意图，停止领取新节点并尝试终止运行中模型调用。无法立即中断的迟到结果不得继续发布。Plan、Transcript、Candidate 和错误 Artifact 保留，最终状态为 `cancelled`。
+取消设置任务级意图，停止领取新节点并尝试终止运行中模型调用。无法立即中断的迟到结果不得继续发布。Plan、Transcript、Candidate 和错误 Artifact 保留，最终状态为 `canceled`。
 
 ### 19.4 完成状态
 
 - `completed`：冻结 Plan 中的节点均按策略得到明确结果，Finding 可以为零。
 - `partial`：部分计划能力因非预期故障缺失，但仍有可信结果可发布。
 - `failed`：无法形成可信最终结果。
-- `cancelled`：用户或系统协作取消。
+- `canceled`：用户或系统协作取消。
 - `superseded`：插件产生更新 Snapshot，旧任务不再作为当前结果展示。
 
 ## 20. 数据与限界上下文

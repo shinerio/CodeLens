@@ -543,7 +543,7 @@ Report 插件只接收最终 Published Finding，不接收 CandidateFinding、Fi
 - 不把 Adaptive 请求误显示成“未选择 Reviewer”；
 - 对 `partial` 显示缺失视角，不能把它格式化为完整成功；
 - 不导出内部被抑制、合并或未确认的 Candidate；
-- `failed`、`cancelled`、`superseded` 默认不自动导出；
+- `failed`、`canceled`、`superseded` 默认不自动导出；
 - `completed` 或 `partial` 且存在 Published Finding 时可以导出；
 - 继续把 `external_context` 视为路由元数据，不记录其中的 Secret。
 
