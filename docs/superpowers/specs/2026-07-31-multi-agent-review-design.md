@@ -2,7 +2,7 @@
 
 ## 1. 文档状态
 
-- 状态：已确认设计
+- 状态：候选定稿（后端编排、插件、Capability 与前端交互均已确认，等待书面规格最终审阅）
 - 日期：2026-07-31
 - 适用仓库：CodeLens
 - 目标：把现有单 Reviewer Review 扩展为可配置、可恢复、可审计的多 Agent 并行 Review，并为后续 MCP 与 Skills 提供稳定能力边界。
@@ -620,40 +620,104 @@ Fixed 选择超过预算时拒绝创建，不能静默移除 Reviewer。Adaptive
 
 ### 17.1 ReviewProfile
 
-用户可以保存一次、重复使用：
+`ReviewProfile` 是可复用的 Review 策略模板，只包含 Reviewer 选择和预算，不包含插件 Debounce、Supersede 等触发策略：
 
 ```json
 {
+  "profile_id": "profile-balanced",
+  "revision": 3,
   "name": "Default adaptive review",
+  "is_default": true,
   "reviewer_selection": {
     "mode": "adaptive"
   },
-  "budget_profile": "standard",
-  "supersede_policy": "latest_snapshot"
+  "budget_profile": "standard"
 }
 ```
 
-任务创建时必须把 Profile 解析为不可变快照，不能只保存可变 Profile ID。插件既可以引用 Profile，也可以保存同构内联配置，进入 Review 上下文后都转换为相同 `ReviewProfileSnapshot`。
+本地 CodeLens 实例必须始终有且仅有一个手工 Review 默认 Profile。Profile 可以编辑、复制和删除；默认 Profile 必须先被另一个 Profile 替代才能删除。Profile 更新使用 `revision` 做乐观并发检查，防止两个页面互相覆盖。
+
+Profile 是可变模板，执行定义不是。手工任务创建时必须把 Profile 解析为不可变 `ReviewProfileSnapshot`，保存 Profile ID 与 Revision 只用于来源追踪，不能在重试或恢复时重新读取 Profile。用户在创建页临时调整策略时生成内联快照，不会修改原 Profile；只有显式选择“另存为新 Profile”才创建新模板。
+
+插件配置页可以选择 Profile 作为填写模板，但保存时必须把 `reviewer_selection` 和 `budget_profile` 复制到插件独立配置快照。Core 可以在插件配置之外保存来源 Profile、Revision 和复制时间用于 UI 提示；该元数据不传给插件、不参与幂等指纹，也不形成实时引用。Profile 后续变化不会影响插件，只有用户显式“从 Profile 重新载入”并保存配置时才更新。
 
 ### 17.2 创建与查询
 
-创建请求使用判别联合。Adaptive 任务创建后 `review_plan` 可以暂时为空，Planner 完成后再填充。查询结果至少包含：
+Profile 应用服务和 API 支持列表、创建、按 Revision 更新、复制、删除和切换默认 Profile。创建 Review 的请求仍使用 Fixed/Adaptive 判别联合，Profile 只负责在界面和应用层产生该请求，不进入领域选择协议。
+
+Adaptive 任务创建后 `review_plan` 可以暂时为空，Planner 完成后再填充。查询结果至少包含：
 
 - `selection_request`；
+- 可空的来源 Profile ID 与 Revision；
 - 可空 `review_plan`；
 - Planned、Completed、Failed、Omitted Coverage；
 - Published Findings；
-- `partial` 或降级说明。
+- `partial` 或降级说明；
+- Resolver 合并数与 Verifier 结果摘要。
 
 Reviewer Catalog 提供独立只读 API，返回版本、职责、类型、成本等级、Capability Ready 状态和是否允许 Planner 选择。
 
 ### 17.3 前端
 
-- Fixed 显示 Reviewer 多选；选择 General 后清除并禁用专业 Reviewer。
-- Adaptive 隐藏 Reviewer 选择，只展示 Budget Profile 和由系统规划的说明。
-- 普通启动默认使用仓库保存的 ReviewProfile，避免每次交互。
-- 结果页以 Published Finding 为主，折叠展示选择模式、实际 Reviewer、Planner 理由、缺失视角、Resolver 合并和 Verifier 状态。
-- Candidate、被抑制记录和原始 Transcript 不进入普通结果页。
+前端采用 **Profile 优先 + 原地展开编辑**。手工和插件配置复用同一个 `ReviewStrategyEditor`，但两者的保存语义不同：手工创建直接冻结任务快照，插件配置先冻结自动化配置快照，之后每次触发再从该配置创建任务快照。
+
+#### 17.3.1 Profile 管理
+
+在 Settings 增加 Review Profiles 页面，使用左侧 Profile 列表和右侧编辑器的桌面双栏布局：
+
+- 列表展示名称、Fixed/Adaptive、Budget 和默认标记；
+- 编辑器负责名称、是否默认、选择模式和 Budget；
+- Adaptive 只说明 Planner 的选择范围，不显示 Reviewer 多选；
+- Fixed 显示版本化 Reviewer 多选，选择 General 后立即清除并禁用专项 Reviewer；选择专项 Reviewer 时 General 不可选；
+- Budget 使用面向用户的 `Economy`、`Standard`、`Deep` 标签，协议值分别为 `lean`、`standard`、`deep`；
+- Duplicate 创建独立 Profile；删除默认 Profile 前必须先设置另一个默认值；
+- 页面明确提示 Profile 可变、任务与插件配置快照不可变。
+
+新安装至少创建一个 Adaptive + Standard 的默认 Profile。已有 `correctness:v1` 任务和插件配置不自动改变；新建或复制 Profile 的 Reviewer 选择器不展示 `correctness:v1`。
+
+#### 17.3.2 创建 Review
+
+现有创建页继续使用 Repository/Scope 主列和 Recent Repositories 侧栏。Review 策略默认只显示紧凑 Profile 摘要卡，包含 Profile 名称、Fixed/Adaptive、Budget 和关键行为说明：
+
+- 默认选中实例默认 Profile，常规用户确认 Scope 后可以直接启动；
+- “更换或调整”在当前位置展开 Profile 选择和 `ReviewStrategyEditor`，不进入 Wizard、Drawer 或新页面；
+- 切换 Profile 会替换当前草稿；修改草稿只影响当前 Review；
+- 用户可以显式勾选“另存为新 Profile”，否则不修改 Profile；
+- Adaptive 提示实际 Reviewer 会在 Review Plan 生成后展示，运行前不要求用户确认；
+- Fixed 和 Adaptive 都在提交前做 Catalog 版本、General 互斥和 Budget 校验；失败时保留表单草稿。
+
+#### 17.3.3 插件配置
+
+插件 Trigger 配置页把标准字段 `reviewer_selection` 和 `budget_profile` 作为一个公共 Review Strategy 区域，用 Core 拥有的 `ReviewStrategyEditor` 渲染；插件自有字段继续由 JSON Schema 表单渲染。禁止 Local Hook、Webhook 等插件各自复制 Reviewer UI。
+
+默认态展示策略摘要和来源 Profile 信息，展开后原地编辑。用户可以选择 Profile 初始化配置、显式重新载入或直接调整独立草稿。保存操作把 Review Strategy、`supersede_policy`、Locale、Debounce 和插件自有字段一起校验并原子持久化。自动触发只读取已保存配置，全程不弹窗、不等待用户确认，也不在 Planner 之后允许增选或取消 Reviewer。
+
+#### 17.3.4 执行与结果
+
+结果页采用“最终结果优先、编排过程可追溯”的层级：
+
+1. 页头展示终态、模式、Budget、Scope 和耗时；`partial` 必须紧邻终态显示。
+2. 紧凑 Review Plan 展示 Planner、并行 Reviewer、Resolver 和 Verifier；默认折叠节点日志，允许展开查看单节点状态、重试和失败原因。
+3. 默认 Tab 只展示 Published Findings，按严重级别和位置组织；Candidate、被抑制结果和原始 Transcript 不进入普通 Finding 列表。
+4. Coverage Tab 展示 Planned、Completed、Failed、Omitted 视角。任何 Reviewer、Resolver 或 Verifier 失败都必须说明结果缺口，不能只改变颜色。
+5. Execution 与 Logs Tab 承载诊断信息，避免把主结果页变成 Agent 控制台。
+
+Finding 卡片显示严重级别、类别、位置、建议、发布或验证状态，以及 CodeLens 内部可见的规范主 Reviewer 和合并来源。Comment v2 的 `evidence_strength`、`impact_certainty`、`reproducibility` 使用类别标签表达；新任务不显示或按数字置信度排序。Legacy `correctness:v1` 的数字置信度只保留在历史数据与兼容接口中，不提升为新版结果页的主信息。
+
+General 或 Fixed Single Specialist 没有 Resolver/Verifier 时，Review Plan 自动压缩未创建的 Pass，而不是显示伪造的 `skipped` 节点。Planning、Running、Partial、Failed、Cancelled 和 Superseded 都使用同一结果页骨架，避免任务完成时页面结构跳变。
+
+#### 17.3.5 共享组件与状态
+
+前端至少形成以下边界：
+
+- `ReviewProfilePicker`：选择 Profile，只负责模板来源；
+- `ReviewStrategySummary`：在创建页和插件页显示紧凑摘要；
+- `ReviewStrategyEditor`：唯一的 Fixed/Adaptive、General 互斥和 Budget 编辑器；
+- `ReviewPlanSummary`：把持久化 DAG 投影为紧凑进度；
+- `CoverageSummary`：展示视角完成度和缺口；
+- `FindingList`：只消费 Published Finding 视图，不读取 Candidate 或 Resolver 内部记录。
+
+公共组件消费经过 API Client 校验的类型，不直接解释插件 Manifest、领域实体或 SSE 原始 Payload。SSE 事件只更新查询缓存中的稳定 Review 投影；页面刷新后必须能仅靠查询 API 恢复相同状态。
 
 ### 17.4 插件自动触发
 
@@ -670,6 +734,8 @@ repository + base/head Snapshot
 插件默认使用 `latest_snapshot`：同一仓库和配置下，旧排队任务进入 `superseded`，运行中旧任务发起协作取消，新 Snapshot 创建新任务。需要逐 Commit 审计时可以显式配置 `preserve_all`。
 
 插件全过程不产生用户确认步骤。
+
+插件 API v1 到 v2 的 Manifest、Trigger 配置、`ReviewCreatorPort`、自动触发、Report Envelope 和迁移要求见 [`docs/plugin-upgradev2.md`](../../plugin-upgradev2.md)。
 
 ## 18. SSE 与 Transcript
 
@@ -775,7 +841,8 @@ Planner 主动未选择某一视角、General 策略或 Optional Capability 的�
 - MCP Adapter 未来实现时必须使用假 Server 做契约测试，并覆盖 Schema 漂移、Secret 脱敏、输出注入和不可用语义。
 - Skill 测试验证确定性激活、内容 Hash 冻结、Required Capability 校验和禁止扩权。
 - 插件集成测试覆盖相同事件幂等、`latest_snapshot` Supersede 和 `preserve_all`。
-- 前端在 `1280x800` 覆盖 Fixed、Adaptive、General、Planning、Partial、Failed 和长文本状态。
+- 前端组件测试覆盖 Profile 草稿隔离、General 互斥、Adaptive 隐藏 Reviewer、插件显式重新载入和 Profile Revision 冲突。
+- 前端在 `1280x800` 覆盖 Profile 列表与编辑、创建页折叠与展开、Fixed、Adaptive、General、Planning、Partial、Failed、Superseded 和长文本状态。
 
 ## 23. 最终不变量
 
@@ -791,3 +858,4 @@ Planner 主动未选择某一视角、General 策略或 Optional Capability 的�
 10. 所有模型可见代码数据永远受 Snapshot、路径、Hash 和大小边界约束。
 11. 重试、恢复和配置变化永远不能改变冻结 Plan 的执行定义。
 12. 插件自动触发和手动 Review 永远使用同一领域协议与失败语义。
+13. 可变 Profile 永远不能改变已创建任务或已保存插件自动化配置的快照。
