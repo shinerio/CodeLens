@@ -189,12 +189,24 @@ def _finding_from_payload(payload: str) -> Finding:
     )
 
 
+def _review_scope_refs(scope: dict[str, object]) -> tuple[str | None, str | None]:
+    scope_type = scope.get("type")
+    if scope_type == "branch":
+        return str(scope.get("base_ref", "")) or None, str(scope.get("target_ref", "")) or None
+    if scope_type == "commit":
+        return None, str(scope.get("target_ref", "")) or None
+    if scope_type == "full":
+        return None, str(scope.get("target_ref", "")) or None
+    return None, None
+
+
 def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
     scope: dict[str, object] = json.loads(str(row["scope_json"]))
     selected_agents: list[str] = json.loads(str(row["selected_agent_versions_json"]))
     external_context = None
     if row["external_context_json"] is not None:
         external_context = json.loads(str(row["external_context_json"]))
+    base_ref, target_ref = _review_scope_refs(scope)
     return ReviewRecord(
         task_id=str(row["task_id"]),
         repository_id=str(row["repository_id"]),
@@ -203,6 +215,8 @@ def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
         scope_type=_review_scope_type(scope),
         base_oid=str(row["base_oid"]),
         head_oid=str(row["head_oid"]),
+        base_ref=base_ref,
+        target_ref=target_ref,
         selected_agent_versions=tuple(selected_agents),
         status=str(row["status"]),
         cancellation_requested=bool(row["cancellation_requested"]),

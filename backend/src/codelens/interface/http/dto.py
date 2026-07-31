@@ -330,6 +330,8 @@ class ReviewResponse(StrictDto):
     scope_type: str
     base_oid: str
     head_oid: str
+    base_ref: str | None = None
+    target_ref: str | None = None
     selected_agents: list[str]
     worktree_status: Literal["pending"] = "pending"
     repository_id: str
@@ -348,6 +350,8 @@ class ReviewResponse(StrictDto):
             scope_type=review.scope_type,
             base_oid=review.base_oid,
             head_oid=review.head_oid,
+            base_ref=review.base_ref,
+            target_ref=review.target_ref,
             selected_agents=list(review.selected_agent_versions),
             repository_id=review.repository_id,
             repository_realpath_hash=review.repository_realpath_hash,

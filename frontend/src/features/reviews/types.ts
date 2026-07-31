@@ -41,6 +41,8 @@ export type ReviewResponse = {
   scope_type: string;
   base_oid: string;
   head_oid: string;
+  base_ref: string | null;
+  target_ref: string | null;
   selected_agents: string[];
   worktree_status: "pending";
   repository_id: string;

@@ -115,6 +115,8 @@ class ReviewRecord:
     scope_type: str
     base_oid: str
     head_oid: str
+    base_ref: str | None
+    target_ref: str | None
     selected_agent_versions: tuple[str, ...]
     status: str
     cancellation_requested: bool

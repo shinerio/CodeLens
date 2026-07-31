@@ -450,6 +450,18 @@ export function ReviewRunPage() {
                 <dt>{t("run.scope")}</dt>
                 <dd>{scopeLabel(reviewQuery.data?.scope_type ?? "", t)}</dd>
               </div>
+              {reviewQuery.data?.base_ref ? (
+                <div>
+                  <dt>{t("run.baseBranch")}</dt>
+                  <dd><code>{reviewQuery.data.base_ref}</code></dd>
+                </div>
+              ) : null}
+              {reviewQuery.data?.target_ref ? (
+                <div>
+                  <dt>{t("run.targetBranch")}</dt>
+                  <dd><code>{reviewQuery.data.target_ref}</code></dd>
+                </div>
+              ) : null}
               {reviewQuery.data?.base_oid ? (
                 <div>
                   <dt>{t("run.baseCommit")}</dt>
