@@ -1,6 +1,7 @@
 import hashlib
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Literal
 
 from codelens.shared.domain.errors import DomainError
 
@@ -23,6 +24,10 @@ class AgentRunStatus(StrEnum):
     TIMED_OUT = "timed_out"
     CANCELED = "canceled"
     SKIPPED = "skipped"
+    SUPERSEDED = "superseded"
+
+
+type AgentRunRole = Literal["planner", "reviewer", "resolver", "verifier"]
 
 
 def _run_id(
@@ -46,12 +51,15 @@ class AgentRun:
     pass_index: int
     shard_id: str
     logical_attempt_group: str
+    node_role: AgentRunRole | None = None
+    capability_fingerprint: str | None = None
     execution_attempts: int = 0
     output_artifact_ref: str | None = None
     output_artifact_hash: str | None = None
     input_tokens: int = 0
     output_tokens: int = 0
     error_code: str | None = None
+    result_summary: dict[str, object] | None = None
     _status: AgentRunStatus = field(default=AgentRunStatus.PENDING, init=False, repr=False)
 
     @classmethod
@@ -63,11 +71,15 @@ class AgentRun:
         pass_index: int,
         shard_id: str,
         logical_attempt_group: str,
+        node_role: AgentRunRole | None = None,
+        capability_fingerprint: str | None = None,
     ) -> "AgentRun":
         """Create a stable node identity independent of execution retries."""
 
         if pass_index < 0:
             raise ValueError("Agent pass index cannot be negative")
+        if capability_fingerprint is not None and len(capability_fingerprint) != 64:
+            raise ValueError("Capability fingerprint must be SHA-256")
         return cls(
             run_id=_run_id(
                 task_id,
@@ -81,6 +93,8 @@ class AgentRun:
             pass_index=pass_index,
             shard_id=shard_id,
             logical_attempt_group=logical_attempt_group,
+            node_role=node_role,
+            capability_fingerprint=capability_fingerprint,
         )
 
     @property
@@ -152,6 +166,15 @@ class AgentRun:
         if self.execution_attempts >= max_attempts:
             raise InvalidAgentRunStateError("AgentRun retry policy is exhausted")
         self._status = AgentRunStatus.PENDING
+
+    def skip(self, reason_code: str) -> None:
+        """Terminally omit one preplanned conditional node without executing it."""
+
+        self._require(AgentRunStatus.PENDING)
+        if not reason_code:
+            raise ValueError("Skipped AgentRun requires a reason code")
+        self.error_code = reason_code
+        self._status = AgentRunStatus.SKIPPED
 
     def _require(self, expected: AgentRunStatus) -> None:
         if self._status is not expected:

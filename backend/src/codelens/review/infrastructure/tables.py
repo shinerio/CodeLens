@@ -5,6 +5,7 @@ from sqlalchemy import (
     DateTime,
     Float,
     ForeignKey,
+    ForeignKeyConstraint,
     Index,
     Integer,
     MetaData,
@@ -66,6 +67,7 @@ review_tasks = Table(
     Column("trigger_slot_key", String(64)),
     Column("planning_context_json", Text),
     Column("planning_context_hash", String(64)),
+    Column("has_partial_coverage", Boolean, nullable=False, default=False, server_default="0"),
     Column("prompt_locale", String(8), nullable=False, default="en"),
     Column("external_context_json", Text),
     Column("worktree_id", String(128)),
@@ -161,8 +163,21 @@ dag_checkpoints = Table(
     Column("artifact_hash", String(64)),
     Column("review_completion_status", String(32), nullable=False, server_default="complete"),
     Column("error_code", String(128)),
+    Column("run_id", String(128)),
+    Column("node_role", String(32)),
+    Column("agent_version", String(128)),
+    Column("pass_index", Integer),
+    Column("shard_id", String(128)),
+    Column("capability_fingerprint", String(64)),
+    Column("result_summary_json", Text),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
+)
+Index(
+    "uq_dag_checkpoints_run_id",
+    dag_checkpoints.c.run_id,
+    unique=True,
+    sqlite_where=dag_checkpoints.c.run_id.is_not(None),
 )
 
 events = Table(
@@ -192,6 +207,182 @@ artifacts = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
 
+review_plans = Table(
+    "review_plans",
+    metadata,
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("plan_json", Text, nullable=False),
+    Column("plan_hash", String(64), nullable=False),
+    Column("catalog_version", String(128), nullable=False),
+    Column("budget_json", Text, nullable=False),
+    Column("capability_fingerprint", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+agent_execution_specs = Table(
+    "agent_execution_specs",
+    metadata,
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("logical_node_id", String(128), primary_key=True),
+    Column("spec_json", Text, nullable=False),
+    Column("fingerprint", String(64), nullable=False),
+    Column(
+        "prompt_artifact_ref",
+        String(128),
+        ForeignKey("artifacts.reference"),
+        nullable=False,
+    ),
+    Column("prompt_artifact_hash", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+agent_execution_skill_artifacts = Table(
+    "agent_execution_skill_artifacts",
+    metadata,
+    Column("task_id", String(128), primary_key=True),
+    Column("logical_node_id", String(128), primary_key=True),
+    Column("ordinal", Integer, primary_key=True),
+    Column(
+        "artifact_ref",
+        String(128),
+        ForeignKey("artifacts.reference"),
+        nullable=False,
+    ),
+    Column("artifact_hash", String(64), nullable=False),
+    ForeignKeyConstraint(
+        ("task_id", "logical_node_id"),
+        ("agent_execution_specs.task_id", "agent_execution_specs.logical_node_id"),
+        ondelete="CASCADE",
+    ),
+)
+
+candidate_findings = Table(
+    "candidate_findings",
+    metadata,
+    Column("candidate_id", String(128), primary_key=True),
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("node_key", String(256), nullable=False),
+    Column("run_id", String(128), nullable=False, index=True),
+    Column("snapshot_id", String(128), nullable=False),
+    Column("reviewer_reference", String(128), nullable=False),
+    Column("fingerprint", String(256), nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    ForeignKeyConstraint(
+        ("task_id", "node_key"),
+        ("dag_checkpoints.task_id", "dag_checkpoints.node_key"),
+        ondelete="CASCADE",
+    ),
+)
+
+finding_clusters = Table(
+    "finding_clusters",
+    metadata,
+    Column("cluster_id", String(128), primary_key=True),
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("snapshot_id", String(128), nullable=False),
+    Column("cluster_key", String(256), nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("task_id", "cluster_key", name="uq_finding_clusters_task_key"),
+)
+
+finding_cluster_candidates = Table(
+    "finding_cluster_candidates",
+    metadata,
+    Column(
+        "cluster_id",
+        String(128),
+        ForeignKey("finding_clusters.cluster_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "candidate_id",
+        String(128),
+        ForeignKey("candidate_findings.candidate_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("ordinal", Integer, nullable=False),
+    UniqueConstraint("candidate_id", name="uq_cluster_candidate_membership"),
+    UniqueConstraint("cluster_id", "ordinal", name="uq_cluster_candidate_ordinal"),
+)
+
+resolution_decisions = Table(
+    "resolution_decisions",
+    metadata,
+    Column("decision_id", String(128), primary_key=True),
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "cluster_id",
+        String(128),
+        ForeignKey("finding_clusters.cluster_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
+    Column("resolver_run_id", String(128)),
+    Column("outcome", String(32), nullable=False),
+    Column("canonical_candidate_id", String(128), ForeignKey("candidate_findings.candidate_id")),
+    Column("payload_json", Text, nullable=False),
+    Column("verification_status", String(32)),
+    Column("publication_status", String(32), nullable=False, server_default="pending"),
+    Column("published_finding_id", String(128), ForeignKey("findings.finding_id")),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    Column("updated_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint("task_id", "cluster_id", name="uq_resolution_decisions_task_cluster"),
+)
+
+verification_decisions = Table(
+    "verification_decisions",
+    metadata,
+    Column("verification_decision_id", String(128), primary_key=True),
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column(
+        "resolution_decision_id",
+        String(128),
+        ForeignKey("resolution_decisions.decision_id", ondelete="CASCADE"),
+        nullable=False,
+        unique=True,
+    ),
+    Column("verifier_run_id", String(128), nullable=False),
+    Column("outcome", String(32), nullable=False),
+    Column("reason_code", String(128), nullable=False),
+    Column("payload_json", Text, nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
 findings = Table(
     "findings",
     metadata,
@@ -207,7 +398,8 @@ findings = Table(
     Column("fingerprint", String(256), nullable=False),
     Column("payload_json", Text, nullable=False),
     Column("severity", String(16), nullable=False),
-    Column("confidence", Float, nullable=False),
+    Column("confidence", Float),
+    Column("verification_status", String(32)),
     Column("path", String(1024), nullable=False),
     Column("start_line", Integer, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),

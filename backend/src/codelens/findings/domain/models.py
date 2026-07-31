@@ -70,7 +70,7 @@ class Finding:
     title: str
     severity: FindingSeverity
     disposition: FindingDisposition
-    confidence: float
+    confidence: float | None
     primary_location: SourceLocation
     related_locations: tuple[SourceLocation, ...]
     changed_hunk_id: str | None

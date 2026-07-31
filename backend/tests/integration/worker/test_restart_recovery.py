@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
 
@@ -17,6 +18,7 @@ from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import UnvalidatedAgentOutput
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import (
+    SqlAgentExecutionSpecStore,
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlJobQueue,
@@ -212,5 +214,61 @@ async def test_crash_inside_finding_transaction_rolls_back_then_reuses_output(
             "review-restart"
         )
         assert runtime.calls == 1
+    finally:
+        await reopened.dispose()
+
+
+async def test_restart_uses_stored_spec_artifact_after_current_configuration_changes(
+    tmp_path: Path,
+) -> None:
+    """Recovery follows frozen Artifact identities and fails closed on byte tampering."""
+
+    url = f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}"
+    artifact_root = tmp_path / "frozen-artifacts"
+    database = Database(url)
+    await database.migrate()
+    await SqlReviewStore(database).create_with_job(_task(tmp_path))
+    artifact_store = FilesystemRunArtifactStore(database, artifact_root)
+    prompt_bytes = b"frozen prompt and skill policy"
+    prompt_artifact = await artifact_store.write_output("prompt-run", prompt_bytes)
+    agent = correctness_agent()
+    spec = CapabilityResolver.testing().resolve(
+        agent=replace(agent, prompt_template=prompt_bytes.decode()),
+        prompt_content_hash=prompt_artifact.content_hash,
+        facts=SkillActivationFacts.empty(),
+        execution_limits=AgentExecutionLimits.legacy_default(),
+    )
+    await SqlAgentExecutionSpecStore(database).save(
+        task_id="review-restart",
+        logical_node_id="node-reviewer",
+        execution_spec=spec,
+        prompt_artifact_ref=prompt_artifact.reference,
+        prompt_artifact_hash=prompt_artifact.content_hash,
+        skill_artifacts=(),
+    )
+    await database.dispose()
+
+    # Simulate mutable Catalog/prompt configuration changing after task creation.
+    changed_current_agent = replace(agent, prompt_template="new current prompt")
+    assert changed_current_agent.prompt_template != prompt_bytes.decode()
+
+    reopened = Database(url)
+    try:
+        stored = await SqlAgentExecutionSpecStore(reopened).get(
+            "review-restart", "node-reviewer"
+        )
+        assert stored is not None
+        assert stored.fingerprint == spec.fingerprint
+        reopened_artifacts = FilesystemRunArtifactStore(reopened, artifact_root)
+        assert await reopened_artifacts.read_output(
+            stored.prompt_artifact_ref, stored.prompt_artifact_hash
+        ) == prompt_bytes
+
+        artifact_file = next(path for path in artifact_root.iterdir() if path.is_file())
+        await asyncio.to_thread(artifact_file.write_bytes, b"tampered current bytes")
+        with pytest.raises(ValueError, match="hash mismatch"):
+            await reopened_artifacts.read_output(
+                stored.prompt_artifact_ref, stored.prompt_artifact_hash
+            )
     finally:
         await reopened.dispose()

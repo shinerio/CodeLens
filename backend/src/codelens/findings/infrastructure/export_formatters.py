@@ -85,7 +85,12 @@ class MarkdownFindingExportFormatter:
             lines.append(f"| ID | `{finding.finding_id}` |")
             lines.append(f"| Category | {finding.category} |")
             lines.append(f"| Severity | {finding.severity} |")
-            lines.append(f"| Confidence | {finding.confidence * 100:.0f}% |")
+            confidence = (
+                f"{finding.confidence * 100:.0f}%"
+                if finding.confidence is not None
+                else "not applicable"
+            )
+            lines.append(f"| Confidence | {confidence} |")
             lines.append(f"| Disposition | {finding.disposition} |")
             lines.append(f"| Change Origin | {finding.change_origin} |")
             lines.append(

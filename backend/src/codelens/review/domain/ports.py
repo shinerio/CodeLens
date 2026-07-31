@@ -5,8 +5,11 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
+from codelens.findings.domain.candidates import CandidateFinding, CandidateFindingBatch
 from codelens.findings.domain.models import FindingBatch
+from codelens.findings.domain.resolution import FindingCluster, ResolutionDecision
 from codelens.review.domain.models import ReviewTask
+from codelens.review.domain.review_plan import ReviewPlan
 from codelens.review.domain.review_profile import ReviewProfile
 from codelens.review.domain.review_strategy import (
     BudgetProfile,
@@ -177,6 +180,7 @@ class ReviewRecord:
     is_deleted: bool
     finding_count: int = 0
     external_context: dict | None = None
+    has_partial_coverage: bool = False
 
 
 @dataclass(frozen=True)
@@ -215,6 +219,7 @@ class ReviewExecutionRecord:
     )
     planning_context_json: str | None = None
     planning_context_hash: str | None = None
+    has_partial_coverage: bool = False
 
 
 @dataclass(frozen=True)
@@ -225,6 +230,97 @@ class ReviewEvent:
     task_id: str
     event_type: str
     payload: dict[str, object]
+
+
+@dataclass(frozen=True)
+class ArtifactIdentity:
+    """Reference one hash-verified restricted Artifact without exposing its bytes."""
+
+    reference: str
+    content_hash: str
+
+
+@dataclass(frozen=True)
+class ReviewPlanRecord:
+    """Carry one hash-verified frozen plan and its selection-policy identities."""
+
+    plan: ReviewPlan
+    catalog_version: str
+    budget_json: str
+    capability_fingerprint: str
+    created_at: datetime
+
+
+@dataclass(frozen=True)
+class AgentExecutionSpecRecord:
+    """Expose safe frozen execution metadata plus restricted Artifact identities."""
+
+    task_id: str
+    logical_node_id: str
+    spec_json: str
+    fingerprint: str
+    prompt_artifact_ref: str
+    prompt_artifact_hash: str
+    skill_artifacts: tuple[ArtifactIdentity, ...]
+    created_at: datetime
+
+
+class ReviewPlanStorePort(Protocol):
+    """Create and reload one immutable Review Plan per task."""
+
+    async def save(
+        self,
+        plan: ReviewPlan,
+        *,
+        catalog_version: str,
+        budget_json: str,
+        capability_fingerprint: str,
+    ) -> ReviewPlanRecord: ...
+
+    async def get(self, task_id: str) -> ReviewPlanRecord | None: ...
+
+
+class AgentExecutionSpecStorePort(Protocol):
+    """Persist safe spec metadata while keeping prompt and Skill bodies in Artifacts."""
+
+    async def save(
+        self,
+        *,
+        task_id: str,
+        logical_node_id: str,
+        execution_spec: FrozenAgentExecutionSpec,
+        prompt_artifact_ref: str,
+        prompt_artifact_hash: str,
+        skill_artifacts: tuple[ArtifactIdentity, ...],
+    ) -> AgentExecutionSpecRecord: ...
+
+    async def get(
+        self, task_id: str, logical_node_id: str
+    ) -> AgentExecutionSpecRecord | None: ...
+
+    async def list_for_task(self, task_id: str) -> tuple[AgentExecutionSpecRecord, ...]: ...
+
+
+class CandidateFindingStorePort(Protocol):
+    """Persist validated pre-publication Candidate audit records."""
+
+    async def list_for_task(self, task_id: str) -> tuple[CandidateFinding, ...]: ...
+
+
+class ResolutionStorePort(Protocol):
+    """Persist deterministic clusters and their no-invention decisions."""
+
+    async def save_clusters(
+        self, task_id: str, snapshot_id: str, clusters: tuple[FindingCluster, ...]
+    ) -> None: ...
+
+    async def list_clusters(self, task_id: str) -> tuple[FindingCluster, ...]: ...
+
+    async def save_decisions(
+        self, task_id: str, decisions: tuple[ResolutionDecision, ...]
+    ) -> None: ...
+
+    async def list_decisions(self, task_id: str) -> tuple[ResolutionDecision, ...]: ...
 
 
 class RecentRepositoryStorePort(Protocol):
@@ -395,6 +491,18 @@ class AgentRunCompletionPort(Protocol):
         findings: FindingBatch,
     ) -> None:
         """Complete only an OUTPUT_SAVED or VALIDATING run in one transaction."""
+
+        raise NotImplementedError
+
+    async def complete_with_candidates(
+        self,
+        task_id: str,
+        node_key: str,
+        candidates: CandidateFindingBatch,
+        *,
+        result_summary: dict[str, object] | None = None,
+    ) -> None:
+        """Atomically persist Candidates, node success, and one completion event."""
 
         raise NotImplementedError
 

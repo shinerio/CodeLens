@@ -1,4 +1,5 @@
 import asyncio
+import hashlib
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
@@ -9,6 +10,20 @@ from alembic import command
 from alembic.config import Config
 from sqlalchemy.exc import IntegrityError
 
+from codelens.capabilities.application.resolve import CapabilityResolver
+from codelens.capabilities.domain.models import (
+    AgentExecutionLimits,
+    FrozenAgentExecutionSpec,
+    FrozenSkillActivation,
+)
+from codelens.capabilities.domain.skills import SkillActivationFacts
+from codelens.findings.domain.candidates import (
+    CandidateFinding,
+    CandidateFindingBatch,
+    EvidenceStrength,
+    ImpactCertainty,
+    Reproducibility,
+)
 from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
@@ -19,6 +34,7 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
+from codelens.findings.domain.resolution import FindingCluster, ResolutionDecision
 from codelens.review.application.review_profiles import (
     CreateReviewProfileHandler,
     DeleteReviewProfileHandler,
@@ -26,6 +42,13 @@ from codelens.review.application.review_profiles import (
 )
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
+from codelens.review.domain.ports import ArtifactIdentity
+from codelens.review.domain.review_plan import (
+    ReviewPass,
+    ReviewPlan,
+    ReviewPlanNode,
+    ReviewPlanNodeType,
+)
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
     BudgetProfile,
@@ -33,15 +56,20 @@ from codelens.review.domain.review_strategy import (
 )
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import (
+    SqlAgentExecutionSpecStore,
+    SqlCandidateFindingStore,
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlJobQueue,
     SqlRecentRepositoryStore,
+    SqlResolutionStore,
+    SqlReviewPlanStore,
     SqlReviewProfileRepository,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
+from codelens.reviewer_catalog.infrastructure.builtin_agents import builtin_agent_catalog
 from codelens.workspace.domain.models import BranchScope, ReviewTarget, TaskWorktree
 
 
@@ -99,6 +127,74 @@ def _finding(finding_id: str) -> Finding:
     )
 
 
+def _multi_plan(task_id: str) -> ReviewPlan:
+    reviewers = tuple(
+        ReviewPlanNode.create(
+            task_id=task_id,
+            node_type=ReviewPlanNodeType.REVIEWER,
+            agent_reference=reference,
+            pass_index=ReviewPass.REVIEWER,
+            shard_id="root",
+            logical_attempt_group="primary",
+            depends_on=(),
+        )
+        for reference in ("correctness:v2", "security:v1")
+    )
+    resolver = ReviewPlanNode.create(
+        task_id=task_id,
+        node_type=ReviewPlanNodeType.RESOLVER,
+        agent_reference="review-resolver:v1",
+        pass_index=ReviewPass.RESOLVER,
+        shard_id="root",
+        logical_attempt_group="primary",
+        depends_on=tuple(node.node_id for node in reviewers),
+    )
+    verifier = ReviewPlanNode.create(
+        task_id=task_id,
+        node_type=ReviewPlanNodeType.VERIFIER,
+        agent_reference="review-verifier:v1",
+        pass_index=ReviewPass.VERIFIER,
+        shard_id="batch",
+        logical_attempt_group="primary",
+        depends_on=(resolver.node_id,),
+    )
+    return ReviewPlan.create(
+        task_id=task_id,
+        selection_mode="fixed",
+        budget_profile="standard",
+        reviewer_references=("correctness:v2", "security:v1"),
+        nodes=(*reviewers, resolver, verifier),
+        planner_reason=None,
+    )
+
+
+def _candidate(task_id: str, run_id: str, candidate_id: str) -> CandidateFinding:
+    location = SourceLocation("src/state.py", 2, 2, "new", "a" * 64, False)
+    return CandidateFinding(
+        task_id=task_id,
+        candidate_id=candidate_id,
+        run_id=run_id,
+        snapshot_id="snapshot-1",
+        reviewer_reference="security:v1",
+        category="authorization",
+        title="Authorization is bypassed",
+        severity=FindingSeverity.HIGH,
+        primary_dimension="security",
+        secondary_dimensions=(),
+        evidence_strength=EvidenceStrength.DIRECT,
+        impact_certainty=ImpactCertainty.CONFIRMED,
+        reproducibility=Reproducibility.DETERMINISTIC,
+        primary_location=location,
+        related_locations=(),
+        changed_hunk_id="hunk-1",
+        existing_code_hash="b" * 64,
+        evidence_hashes=("b" * 64,),
+        content="The new branch skips authorization.",
+        recommendation="Restore the authorization check.",
+        fingerprint=f"fingerprint-{candidate_id}",
+    )
+
+
 async def _database(tmp_path: Path) -> Database:
     database = Database(f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}")
     await database.migrate()
@@ -111,6 +207,15 @@ def _migrate_to(database_path: Path, revision: str) -> None:
     config.set_main_option("script_location", str(backend_root / "migrations"))
     config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{database_path}")
     command.upgrade(config, revision)
+
+
+def _downgrade_upgrade(database_path: Path, revision: str) -> None:
+    backend_root = Path(__file__).resolve().parents[3]
+    config = Config(str(backend_root / "alembic.ini"))
+    config.set_main_option("script_location", str(backend_root / "migrations"))
+    config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{database_path}")
+    command.downgrade(config, revision)
+    command.upgrade(config, "head")
 
 
 async def test_review_profile_migration_upgrades_previous_head_and_seeds_empty_table(
@@ -167,6 +272,249 @@ async def test_selection_migration_backfills_legacy_fixed_request(tmp_path: Path
     )
 
 
+async def test_multi_agent_migration_preserves_legacy_confidence_and_round_trips(
+    tmp_path: Path,
+) -> None:
+    database_path = tmp_path / "multi-agent-upgrade.sqlite3"
+    await asyncio.to_thread(_migrate_to, database_path, "0006_review_selection_requests")
+    with sqlite3.connect(database_path) as connection:
+        connection.execute(
+            """INSERT INTO review_tasks
+            (task_id,repository_id,repository_realpath_hash,git_common_dir_hash,scope_json,
+             base_oid,head_oid,status,selected_agent_versions_json,prompt_locale,
+             cancellation_requested,created_at,updated_at)
+            VALUES ('legacy','repo','a','b','{"type":"branch"}','c','d','created',
+                    '["correctness:v1"]','en',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"""
+        )
+        connection.execute(
+            """INSERT INTO findings
+            (finding_id,task_id,node_key,fingerprint,payload_json,severity,confidence,path,
+             start_line,created_at)
+            VALUES ('finding-legacy','legacy','correctness:v1:0:root','fingerprint',
+                    '{}','high',0.91,'src/state.py',2,CURRENT_TIMESTAMP)"""
+        )
+
+    await asyncio.to_thread(_migrate_to, database_path, "head")
+    with sqlite3.connect(database_path) as connection:
+        confidence = connection.execute(
+            "SELECT confidence FROM findings WHERE finding_id='finding-legacy'"
+        ).fetchone()
+        nullable = next(
+            row[3]
+            for row in connection.execute("PRAGMA table_info(findings)").fetchall()
+            if row[1] == "confidence"
+        )
+    assert confidence == (0.91,)
+    assert nullable == 0
+
+    await asyncio.to_thread(
+        _downgrade_upgrade, database_path, "0006_review_selection_requests"
+    )
+
+
+async def test_plan_specs_and_audit_records_survive_restart_without_trusted_bodies(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}"
+    database = Database(database_url)
+    await database.migrate()
+    task_id = "review-plan-audit"
+    plan = _multi_plan(task_id)
+    try:
+        review_store = SqlReviewStore(database)
+        await review_store.create_with_job(_task(task_id))
+        artifact_store = FilesystemRunArtifactStore(database, tmp_path / "artifacts")
+        agent = builtin_agent_catalog()["security:v1"]
+        prompt_bytes = b"frozen security prompt"
+        prompt = await artifact_store.write_output("prompt-security", prompt_bytes)
+        spec = CapabilityResolver.testing().resolve(
+            agent=agent,
+            prompt_content_hash=hashlib.sha256(prompt_bytes).hexdigest(),
+            facts=SkillActivationFacts((), ("src/state.py",)),
+            execution_limits=AgentExecutionLimits.legacy_default(),
+        )
+        security_node = next(
+            node for node in plan.nodes if node.agent_reference == "security:v1"
+        )
+        await SqlReviewPlanStore(database).save(
+            plan,
+            catalog_version="builtin-v1",
+            budget_json='{"profile":"standard"}',
+            capability_fingerprint="c" * 64,
+        )
+        await SqlAgentExecutionSpecStore(database).save(
+            task_id=task_id,
+            logical_node_id=security_node.node_id,
+            execution_spec=spec,
+            prompt_artifact_ref=prompt.reference,
+            prompt_artifact_hash=prompt.content_hash,
+            skill_artifacts=(),
+        )
+        skill_bytes = b"frozen declarative skill"
+        skill_artifact = await artifact_store.write_output("skill-security", skill_bytes)
+        conflicting_spec = FrozenAgentExecutionSpec.create(
+            agent=spec.agent,
+            capability_profile=spec.capability_profile,
+            skill_policy=spec.skill_policy,
+            prompt_content_hash=spec.prompt_content_hash,
+            skills=(
+                FrozenSkillActivation(
+                    skill_id="security-checklist",
+                    version=1,
+                    content_hash=skill_artifact.content_hash,
+                    activation_reason="language:python",
+                    instruction_text=skill_bytes.decode(),
+                ),
+            ),
+            execution_limits=spec.execution_limits,
+        )
+        with pytest.raises(ValueError, match="different frozen inputs"):
+            await SqlAgentExecutionSpecStore(database).save(
+                task_id=task_id,
+                logical_node_id=security_node.node_id,
+                execution_spec=conflicting_spec,
+                prompt_artifact_ref=prompt.reference,
+                prompt_artifact_hash=prompt.content_hash,
+                skill_artifacts=(
+                    ArtifactIdentity(skill_artifact.reference, skill_artifact.content_hash),
+                ),
+            )
+        original_spec = await SqlAgentExecutionSpecStore(database).get(
+            task_id, security_node.node_id
+        )
+        assert original_spec is not None and original_spec.skill_artifacts == ()
+        checkpoints = SqlCheckpointStore(database)
+        await checkpoints.ensure_plan_nodes(
+            plan,
+            capability_fingerprints={security_node.node_id: spec.fingerprint},
+        )
+    finally:
+        await database.dispose()
+
+    reopened = Database(database_url)
+    try:
+        stored_plan = await SqlReviewPlanStore(reopened).get(task_id)
+        assert stored_plan is not None and stored_plan.plan == plan
+        records = await SqlCheckpointStore(reopened).list_for_task(task_id)
+        node_metadata = {
+            (record.node_role, record.agent_version, record.shard_id) for record in records
+        }
+        assert node_metadata >= {
+            ("reviewer", "security:v1", "root"),
+            ("resolver", "review-resolver:v1", "root"),
+            ("verifier", "review-verifier:v1", "batch"),
+        }
+        stored_spec = await SqlAgentExecutionSpecStore(reopened).get(
+            task_id, security_node.node_id
+        )
+        assert stored_spec is not None
+        assert stored_spec.fingerprint == spec.fingerprint
+        assert stored_spec.prompt_artifact_hash == prompt.content_hash
+        assert "frozen security prompt" not in stored_spec.spec_json
+        assert agent.prompt_template not in stored_spec.spec_json
+    finally:
+        await reopened.dispose()
+
+
+async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion(
+    tmp_path: Path,
+) -> None:
+    database = await _database(tmp_path)
+    task_id = "review-candidates"
+    plan = _multi_plan(task_id)
+    try:
+        review_store = SqlReviewStore(database)
+        await review_store.create_with_job(_task(task_id))
+        checkpoints = SqlCheckpointStore(database)
+        await checkpoints.ensure_plan_nodes(plan)
+        security_node = next(
+            node for node in plan.nodes if node.agent_reference == "security:v1"
+        )
+        checkpoint = await checkpoints.get(task_id, security_node.node_id)
+        await checkpoints.mark_running(task_id, security_node.node_id)
+        await checkpoints.mark_output_saved(
+            task_id, security_node.node_id, "artifact-candidate", "a" * 64
+        )
+        candidate = _candidate(task_id, checkpoint.run_id or "", "candidate-a")
+
+        await review_store.complete_agent_run_with_candidates(
+            task_id,
+            security_node.node_id,
+            CandidateFindingBatch((candidate,)),
+            result_summary={"candidate_count": 1},
+        )
+        await review_store.complete_agent_run_with_candidates(
+            task_id,
+            security_node.node_id,
+            CandidateFindingBatch((candidate,)),
+            result_summary={"candidate_count": 1},
+        )
+
+        candidates = await SqlCandidateFindingStore(database).list_for_task(task_id)
+        assert candidates == (candidate,)
+        assert (await checkpoints.get(task_id, security_node.node_id)).status == "succeeded"
+        cluster = FindingCluster("cluster-a", (candidate.candidate_id,))
+        resolutions = SqlResolutionStore(database)
+        await resolutions.save_clusters(task_id, "snapshot-1", (cluster,))
+        with pytest.raises(ValueError, match="already belongs to another cluster"):
+            await resolutions.save_clusters(
+                task_id,
+                "snapshot-1",
+                (FindingCluster("cluster-b", (candidate.candidate_id,)),),
+            )
+        decision = ResolutionDecision.publish(
+            cluster=cluster,
+            canonical_candidate_id=candidate.candidate_id,
+            merged_candidate_ids=(candidate.candidate_id,),
+        )
+        await resolutions.save_decisions(task_id, (decision,))
+        assert await resolutions.list_clusters(task_id) == (cluster,)
+        assert await resolutions.list_decisions(task_id) == (decision,)
+
+        events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
+        assert len([event for event in events if event.event_type == "agent.succeeded"]) == 1
+    finally:
+        await database.dispose()
+
+
+async def test_candidate_completion_rolls_back_candidates_checkpoint_and_event(
+    tmp_path: Path,
+) -> None:
+    async def fail_after_insert(boundary: str) -> None:
+        if boundary == "after_candidate_insert_attempt":
+            raise RuntimeError("injected candidate transaction failure")
+
+    database = await _database(tmp_path)
+    task_id = "review-candidate-rollback"
+    try:
+        store = SqlReviewStore(database, completion_hook=fail_after_insert)
+        await store.create_with_job(_task(task_id))
+        plan = _multi_plan(task_id)
+        checkpoints = SqlCheckpointStore(database)
+        await checkpoints.ensure_plan_nodes(plan)
+        node = next(item for item in plan.nodes if item.agent_reference == "security:v1")
+        checkpoint = await checkpoints.get(task_id, node.node_id)
+        await checkpoints.mark_running(task_id, node.node_id)
+        await checkpoints.mark_output_saved(
+            task_id, node.node_id, "artifact-rollback", "d" * 64
+        )
+        candidate = _candidate(task_id, checkpoint.run_id or "", "candidate-rollback")
+
+        with pytest.raises(RuntimeError, match="injected candidate"):
+            await store.complete_agent_run_with_candidates(
+                task_id, node.node_id, CandidateFindingBatch((candidate,))
+            )
+
+        assert await SqlCandidateFindingStore(database).list_for_task(task_id) == ()
+        assert (await checkpoints.get(task_id, node.node_id)).status == "output_saved"
+        assert not any(
+            event.event_type == "agent.succeeded"
+            for event in await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
+        )
+    finally:
+        await database.dispose()
+
+
 async def test_triggered_create_deduplicates_and_supersedes_atomically(tmp_path: Path) -> None:
     database = await _database(tmp_path)
     store = SqlReviewStore(database)
@@ -193,6 +541,8 @@ async def test_triggered_create_deduplicates_and_supersedes_atomically(tmp_path:
         )
         await store.create_triggered_with_job(second)
         assert (await store.get_review("review-first")).status == "superseded"  # type: ignore[union-attr]
+        with pytest.raises(InvalidAgentRunStateError, match="terminal review"):
+            await store.request_cancellation("review-first")
     finally:
         await database.dispose()
 
@@ -629,6 +979,9 @@ async def test_restart_requeues_running_nodes_but_keeps_saved_outputs(tmp_path: 
         terminal = await checkpoints.get("review-terminal", "correctness:v1:0:root")
         assert (await jobs.get("review-running")).status == "queued"
         assert running.status == "pending"
+        assert running.run_id is None
+        assert running.node_role is None
+        assert running.capability_fingerprint is None
         assert output.status == "output_saved"
         assert terminal.status == "succeeded"
     finally:

@@ -113,6 +113,86 @@ class ReviewPlan:
     planner_reason: str | None
     plan_hash: str
 
+    def canonical_json(self) -> str:
+        """Serialize the complete frozen plan for durable hash verification."""
+
+        return json.dumps(
+            self._payload(
+                self.task_id,
+                self.selection_mode,
+                self.budget_profile,
+                self.reviewer_references,
+                self.nodes,
+                self.planner_reason,
+            ),
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+
+    @classmethod
+    def from_json(cls, payload: str, expected_hash: str) -> "ReviewPlan":
+        """Rebuild a persisted plan and reject any canonical hash mismatch."""
+
+        value = json.loads(payload)
+        nodes = tuple(
+            ReviewPlanNode.create(
+                task_id=str(item["task_id"]),
+                node_type=ReviewPlanNodeType(str(item["node_type"])),
+                agent_reference=str(item["agent_reference"]),
+                pass_index=int(item["pass_index"]),
+                shard_id=str(item["shard_id"]),
+                logical_attempt_group=str(item["logical_attempt_group"]),
+                depends_on=tuple(str(dependency) for dependency in item["depends_on"]),
+            )
+            for item in value["nodes"]
+        )
+        plan = cls.create(
+            task_id=str(value["task_id"]),
+            selection_mode=value["selection_mode"],
+            budget_profile=value["budget_profile"],
+            reviewer_references=tuple(str(item) for item in value["reviewer_references"]),
+            nodes=nodes,
+            planner_reason=(
+                str(value["planner_reason"])
+                if value["planner_reason"] is not None
+                else None
+            ),
+        )
+        if plan.plan_hash != expected_hash or plan.canonical_json() != payload:
+            raise ValueError("persisted Review Plan hash mismatch")
+        return plan
+
+    @staticmethod
+    def _payload(
+        task_id: str,
+        selection_mode: SelectionMode,
+        budget_profile: BudgetProfileValue,
+        reviewer_references: tuple[str, ...],
+        nodes: tuple[ReviewPlanNode, ...],
+        planner_reason: str | None,
+    ) -> dict[str, object]:
+        return {
+            "budget_profile": budget_profile,
+            "nodes": [
+                {
+                    "agent_reference": node.agent_reference,
+                    "depends_on": node.depends_on,
+                    "logical_attempt_group": node.logical_attempt_group,
+                    "node_id": node.node_id,
+                    "node_type": node.node_type.value,
+                    "pass_index": node.pass_index.value,
+                    "shard_id": node.shard_id,
+                    "task_id": node.task_id,
+                }
+                for node in nodes
+            ],
+            "planner_reason": planner_reason,
+            "reviewer_references": reviewer_references,
+            "selection_mode": selection_mode,
+            "task_id": task_id,
+        }
+
     @classmethod
     def create(
         cls,
@@ -167,29 +247,30 @@ class ReviewPlan:
             raise ValueError("multi-specialist plan requires a resolver")
         if resolver_count > 1:
             raise ValueError("Review plan permits at most one resolver")
+        verifier_nodes = tuple(
+            node for node in nodes if node.node_type is ReviewPlanNodeType.VERIFIER
+        )
+        if is_multi_specialist:
+            if len(verifier_nodes) != 1 or verifier_nodes[0].shard_id != "batch":
+                raise ValueError("multi-specialist plan requires one batched verifier")
+            resolver = next(
+                node for node in nodes if node.node_type is ReviewPlanNodeType.RESOLVER
+            )
+            if verifier_nodes[0].depends_on != (resolver.node_id,):
+                raise ValueError("batched verifier must depend on the resolver")
+        elif resolver_count or verifier_nodes:
+            raise ValueError("General and single-specialist plans cannot resolve or verify")
 
         canonical_reviewers = tuple(sorted(reviewer_references))
         canonical_nodes = tuple(sorted(nodes, key=lambda node: node.node_id))
-        payload = {
-            "budget_profile": budget_profile,
-            "nodes": [
-                {
-                    "agent_reference": node.agent_reference,
-                    "depends_on": node.depends_on,
-                    "logical_attempt_group": node.logical_attempt_group,
-                    "node_id": node.node_id,
-                    "node_type": node.node_type.value,
-                    "pass_index": node.pass_index.value,
-                    "shard_id": node.shard_id,
-                    "task_id": node.task_id,
-                }
-                for node in canonical_nodes
-            ],
-            "planner_reason": planner_reason,
-            "reviewer_references": canonical_reviewers,
-            "selection_mode": selection_mode,
-            "task_id": task_id,
-        }
+        payload = cls._payload(
+            task_id,
+            selection_mode,
+            budget_profile,
+            canonical_reviewers,
+            canonical_nodes,
+            planner_reason,
+        )
         canonical_bytes = json.dumps(
             payload,
             ensure_ascii=False,
@@ -205,4 +286,3 @@ class ReviewPlan:
             planner_reason=planner_reason,
             plan_hash=hashlib.sha256(canonical_bytes).hexdigest(),
         )
-

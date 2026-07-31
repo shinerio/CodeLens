@@ -48,6 +48,26 @@ def test_multi_specialist_plan_requires_resolver() -> None:
         )
 
 
+def test_multi_specialist_plan_requires_one_batched_verifier() -> None:
+    reviewers = reviewer_nodes_only()
+    resolver = _node(
+        "review-resolver:v1",
+        ReviewPlanNodeType.RESOLVER,
+        ReviewPass.RESOLVER,
+        depends_on=tuple(node.node_id for node in reviewers),
+    )
+
+    with pytest.raises(ValueError, match="batched verifier"):
+        ReviewPlan.create(
+            task_id=TASK_ID,
+            selection_mode="fixed",
+            budget_profile="standard",
+            reviewer_references=("correctness:v2", "security:v1"),
+            nodes=(*reviewers, resolver),
+            planner_reason=None,
+        )
+
+
 @pytest.mark.parametrize("reviewer_reference", ["general:v1", "security:v1"])
 def test_single_reviewer_plan_does_not_require_resolver(reviewer_reference: str) -> None:
     plan = ReviewPlan.create(
@@ -82,12 +102,21 @@ def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
         ReviewPass.RESOLVER,
         depends_on=tuple(node.node_id for node in reviewers),
     )
+    verifier = ReviewPlanNode.create(
+        task_id=TASK_ID,
+        node_type=ReviewPlanNodeType.VERIFIER,
+        agent_reference="review-verifier:v1",
+        pass_index=ReviewPass.VERIFIER,
+        shard_id="batch",
+        logical_attempt_group="primary",
+        depends_on=(resolver.node_id,),
+    )
     first = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
         budget_profile="deep",
         reviewer_references=("security:v1", "correctness:v2"),
-        nodes=(*reviewers, resolver),
+        nodes=(*reviewers, resolver, verifier),
         planner_reason=None,
     )
     second = ReviewPlan.create(
@@ -95,7 +124,7 @@ def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
         selection_mode="fixed",
         budget_profile="deep",
         reviewer_references=("correctness:v2", "security:v1"),
-        nodes=(resolver, *reversed(reviewers)),
+        nodes=(verifier, resolver, *reversed(reviewers)),
         planner_reason=None,
     )
 
@@ -126,4 +155,3 @@ def test_coverage_status_values_are_stable() -> None:
         CoverageStatus.FAILED,
         CoverageStatus.OMITTED,
     )
-

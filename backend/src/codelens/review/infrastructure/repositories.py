@@ -14,6 +14,17 @@ from sqlalchemy.engine import CursorResult, RowMapping
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from codelens.capabilities.domain.models import (
+    FrozenAgentExecutionSpec,
+    canonical_execution_payload,
+)
+from codelens.findings.domain.candidates import (
+    CandidateFinding,
+    CandidateFindingBatch,
+    EvidenceStrength,
+    ImpactCertainty,
+    Reproducibility,
+)
 from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
@@ -24,17 +35,26 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
-from codelens.review.domain.agent_run import InvalidAgentRunStateError
+from codelens.findings.domain.resolution import (
+    FindingCluster,
+    ResolutionDecision,
+    ResolutionOutcome,
+)
+from codelens.review.domain.agent_run import AgentRun, InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import (
     MAX_RECENT_REPOSITORY_LIMIT,
     MIN_RECENT_REPOSITORY_LIMIT,
+    AgentExecutionSpecRecord,
     AgentReviewCompletionStatus,
+    ArtifactIdentity,
     RecentRepositoryRecord,
     ReviewEvent,
     ReviewExecutionRecord,
+    ReviewPlanRecord,
     ReviewRecord,
 )
+from codelens.review.domain.review_plan import ReviewPlan
 from codelens.review.domain.review_profile import (
     ReviewProfile,
     ReviewProfileDefaultRequiredError,
@@ -51,12 +71,20 @@ from codelens.review.domain.review_strategy import (
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
 from codelens.review.infrastructure.tables import (
+    agent_execution_skill_artifacts,
+    agent_execution_specs,
+    artifacts,
+    candidate_findings,
     dag_checkpoints,
     events,
+    finding_cluster_candidates,
+    finding_clusters,
     findings,
     jobs,
     recent_repositories,
     recent_repository_settings,
+    resolution_decisions,
+    review_plans,
     review_profiles,
     review_tasks,
     task_worktrees,
@@ -88,6 +116,13 @@ class CheckpointRecord:
     artifact_hash: str | None
     review_completion_status: AgentReviewCompletionStatus
     error_code: str | None
+    run_id: str | None = None
+    node_role: str | None = None
+    agent_version: str | None = None
+    pass_index: int | None = None
+    shard_id: str | None = None
+    capability_fingerprint: str | None = None
+    result_summary: dict[str, object] | None = None
 
 
 def _now() -> datetime:
@@ -248,6 +283,33 @@ def _finding_from_payload(payload: str) -> Finding:
     )
 
 
+def _candidate_payload(candidate: CandidateFinding) -> str:
+    return _json(asdict(candidate))
+
+
+def _candidate_from_payload(payload: str) -> CandidateFinding:
+    value: dict[str, Any] = json.loads(payload)
+    primary = SourceLocation(**value.pop("primary_location"))
+    related = tuple(SourceLocation(**item) for item in value.pop("related_locations"))
+    severity = FindingSeverity(value.pop("severity"))
+    evidence_strength = EvidenceStrength(value.pop("evidence_strength"))
+    impact_certainty = ImpactCertainty(value.pop("impact_certainty"))
+    reproducibility = Reproducibility(value.pop("reproducibility"))
+    secondary_dimensions = tuple(value.pop("secondary_dimensions"))
+    evidence_hashes = tuple(value.pop("evidence_hashes"))
+    return CandidateFinding(
+        **value,
+        severity=severity,
+        evidence_strength=evidence_strength,
+        impact_certainty=impact_certainty,
+        reproducibility=reproducibility,
+        primary_location=primary,
+        related_locations=related,
+        secondary_dimensions=secondary_dimensions,
+        evidence_hashes=evidence_hashes,
+    )
+
+
 def _review_scope_refs(scope: dict[str, object]) -> tuple[str | None, str | None]:
     scope_type = scope.get("type")
     if scope_type == "branch":
@@ -315,6 +377,7 @@ def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
         is_deleted=row["deleted_at"] is not None,
         finding_count=finding_count,
         external_context=external_context,
+        has_partial_coverage=bool(row["has_partial_coverage"]),
     )
 
 
@@ -517,6 +580,531 @@ class SqlReviewProfileRepository:
             return updated
 
         return await self._database.run_transaction(operation)
+
+
+class SqlReviewPlanStore:
+    """Persist one canonical, create-once Review Plan per task."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def save(
+        self,
+        plan: ReviewPlan,
+        *,
+        catalog_version: str,
+        budget_json: str,
+        capability_fingerprint: str,
+    ) -> ReviewPlanRecord:
+        """Idempotently freeze a plan, rejecting identity-preserving mutation."""
+
+        if len(capability_fingerprint) != 64:
+            raise ValueError("Capability fingerprint must be SHA-256")
+        if _json(json.loads(budget_json)) != budget_json:
+            raise ValueError("Review Plan budget JSON must be canonical")
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> None:
+            await session.execute(
+                sqlite_insert(review_plans)
+                .values(
+                    task_id=plan.task_id,
+                    plan_json=plan.canonical_json(),
+                    plan_hash=plan.plan_hash,
+                    catalog_version=catalog_version,
+                    budget_json=budget_json,
+                    capability_fingerprint=capability_fingerprint,
+                    created_at=timestamp,
+                )
+                .on_conflict_do_nothing(index_elements=(review_plans.c.task_id,))
+            )
+
+        await self._database.run_transaction(operation)
+        record = await self.get(plan.task_id)
+        if record is None:
+            raise RuntimeError("persisted Review Plan could not be reloaded")
+        if (
+            record.plan != plan
+            or record.catalog_version != catalog_version
+            or record.budget_json != budget_json
+            or record.capability_fingerprint != capability_fingerprint
+        ):
+            raise ValueError("Review Plan already exists with different frozen inputs")
+        return record
+
+    async def get(self, task_id: str) -> ReviewPlanRecord | None:
+        """Load a plan only after recomputing its canonical hash."""
+
+        async with self._database.sessions() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(review_plans).where(review_plans.c.task_id == task_id)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            return None
+        plan = ReviewPlan.from_json(str(row["plan_json"]), str(row["plan_hash"]))
+        budget_json = str(row["budget_json"])
+        if _json(json.loads(budget_json)) != budget_json:
+            raise ValueError("persisted Review Plan budget hash input is not canonical")
+        return ReviewPlanRecord(
+            plan=plan,
+            catalog_version=str(row["catalog_version"]),
+            budget_json=budget_json,
+            capability_fingerprint=str(row["capability_fingerprint"]),
+            created_at=_as_utc(cast(datetime, row["created_at"])),
+        )
+
+
+class SqlAgentExecutionSpecStore:
+    """Persist safe execution metadata and verify every referenced Artifact hash."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def save(
+        self,
+        *,
+        task_id: str,
+        logical_node_id: str,
+        execution_spec: FrozenAgentExecutionSpec,
+        prompt_artifact_ref: str,
+        prompt_artifact_hash: str,
+        skill_artifacts: tuple[ArtifactIdentity, ...],
+    ) -> AgentExecutionSpecRecord:
+        """Create one immutable spec without copying prompt or Skill bodies into SQLite."""
+
+        spec_json = canonical_execution_payload(
+            execution_spec.agent,
+            execution_spec.capability_profile,
+            execution_spec.skill_policy,
+            execution_spec.prompt_content_hash,
+            execution_spec.skills,
+            execution_spec.execution_limits,
+        ).decode("utf-8")
+        if hashlib.sha256(spec_json.encode()).hexdigest() != execution_spec.fingerprint:
+            raise ValueError("execution spec fingerprint mismatch")
+        if prompt_artifact_hash != execution_spec.prompt_content_hash:
+            raise ValueError("prompt Artifact hash does not match the frozen spec")
+        if tuple(item.content_hash for item in skill_artifacts) != tuple(
+            skill.content_hash for skill in execution_spec.skills
+        ):
+            raise ValueError("Skill Artifact hashes do not match the frozen spec")
+        timestamp = _now()
+        expected_identity = (
+            spec_json,
+            execution_spec.fingerprint,
+            prompt_artifact_ref,
+            prompt_artifact_hash,
+            skill_artifacts,
+        )
+
+        async def operation(session: AsyncSession) -> None:
+            await self._verify_artifacts(
+                session,
+                (ArtifactIdentity(prompt_artifact_ref, prompt_artifact_hash), *skill_artifacts),
+            )
+            insert_result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    sqlite_insert(agent_execution_specs)
+                    .values(
+                        task_id=task_id,
+                        logical_node_id=logical_node_id,
+                        spec_json=spec_json,
+                        fingerprint=execution_spec.fingerprint,
+                        prompt_artifact_ref=prompt_artifact_ref,
+                        prompt_artifact_hash=prompt_artifact_hash,
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(
+                            agent_execution_specs.c.task_id,
+                            agent_execution_specs.c.logical_node_id,
+                        )
+                    )
+                ),
+            )
+            if insert_result.rowcount == 0:
+                existing_row = (
+                    (
+                        await session.execute(
+                            select(agent_execution_specs).where(
+                                agent_execution_specs.c.task_id == task_id,
+                                agent_execution_specs.c.logical_node_id == logical_node_id,
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                existing = await self._record(session, existing_row)
+                actual_identity = (
+                    existing.spec_json,
+                    existing.fingerprint,
+                    existing.prompt_artifact_ref,
+                    existing.prompt_artifact_hash,
+                    existing.skill_artifacts,
+                )
+                if actual_identity != expected_identity:
+                    raise ValueError(
+                        "execution spec already exists with different frozen inputs"
+                    )
+                return
+            for ordinal, artifact in enumerate(skill_artifacts):
+                await session.execute(
+                    sqlite_insert(agent_execution_skill_artifacts)
+                    .values(
+                        task_id=task_id,
+                        logical_node_id=logical_node_id,
+                        ordinal=ordinal,
+                        artifact_ref=artifact.reference,
+                        artifact_hash=artifact.content_hash,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(
+                            agent_execution_skill_artifacts.c.task_id,
+                            agent_execution_skill_artifacts.c.logical_node_id,
+                            agent_execution_skill_artifacts.c.ordinal,
+                        )
+                    )
+                )
+
+        await self._database.run_transaction(operation)
+        record = await self.get(task_id, logical_node_id)
+        if record is None:
+            raise RuntimeError("persisted execution spec could not be reloaded")
+        actual = (
+            record.spec_json,
+            record.fingerprint,
+            record.prompt_artifact_ref,
+            record.prompt_artifact_hash,
+            record.skill_artifacts,
+        )
+        if actual != expected_identity:
+            raise ValueError("execution spec already exists with different frozen inputs")
+        return record
+
+    async def get(
+        self, task_id: str, logical_node_id: str
+    ) -> AgentExecutionSpecRecord | None:
+        """Load safe metadata and fail closed if any Artifact identity changed."""
+
+        async with self._database.sessions() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(agent_execution_specs).where(
+                            agent_execution_specs.c.task_id == task_id,
+                            agent_execution_specs.c.logical_node_id == logical_node_id,
+                        )
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+            if row is None:
+                return None
+            return await self._record(session, row)
+
+    async def list_for_task(self, task_id: str) -> tuple[AgentExecutionSpecRecord, ...]:
+        """Return a task's immutable node specs in logical-node order."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(agent_execution_specs)
+                    .where(agent_execution_specs.c.task_id == task_id)
+                    .order_by(agent_execution_specs.c.logical_node_id)
+                )
+            ).mappings()
+            return tuple([await self._record(session, row) for row in rows])
+
+    @staticmethod
+    async def _verify_artifacts(
+        session: AsyncSession, expected: tuple[ArtifactIdentity, ...]
+    ) -> None:
+        if not expected:
+            return
+        references = tuple(item.reference for item in expected)
+        if len(references) != len(set(references)):
+            raise ValueError("execution spec contains duplicate Artifact references")
+        rows = (
+            await session.execute(select(artifacts).where(artifacts.c.reference.in_(references)))
+        ).mappings()
+        actual = {str(row["reference"]): str(row["content_hash"]) for row in rows}
+        if actual != {item.reference: item.content_hash for item in expected}:
+            raise ValueError("execution spec Artifact hash mismatch")
+
+    async def _record(
+        self, session: AsyncSession, row: RowMapping
+    ) -> AgentExecutionSpecRecord:
+        spec_json = str(row["spec_json"])
+        fingerprint = str(row["fingerprint"])
+        if hashlib.sha256(spec_json.encode()).hexdigest() != fingerprint:
+            raise ValueError("persisted execution spec fingerprint mismatch")
+        skill_rows = (
+            await session.execute(
+                select(agent_execution_skill_artifacts)
+                .where(
+                    agent_execution_skill_artifacts.c.task_id == row["task_id"],
+                    agent_execution_skill_artifacts.c.logical_node_id
+                    == row["logical_node_id"],
+                )
+                .order_by(agent_execution_skill_artifacts.c.ordinal)
+            )
+        ).mappings()
+        skills = tuple(
+            ArtifactIdentity(str(item["artifact_ref"]), str(item["artifact_hash"]))
+            for item in skill_rows
+        )
+        prompt = ArtifactIdentity(
+            str(row["prompt_artifact_ref"]), str(row["prompt_artifact_hash"])
+        )
+        await self._verify_artifacts(session, (prompt, *skills))
+        payload = json.loads(spec_json)
+        if payload.get("prompt_content_hash") != prompt.content_hash:
+            raise ValueError("persisted prompt Artifact does not match execution spec")
+        expected_skill_hashes = tuple(
+            str(item["content_hash"]) for item in payload.get("skills", ())
+        )
+        if expected_skill_hashes != tuple(item.content_hash for item in skills):
+            raise ValueError("persisted Skill Artifacts do not match execution spec")
+        return AgentExecutionSpecRecord(
+            task_id=str(row["task_id"]),
+            logical_node_id=str(row["logical_node_id"]),
+            spec_json=spec_json,
+            fingerprint=fingerprint,
+            prompt_artifact_ref=prompt.reference,
+            prompt_artifact_hash=prompt.content_hash,
+            skill_artifacts=skills,
+            created_at=_as_utc(cast(datetime, row["created_at"])),
+        )
+
+
+class SqlCandidateFindingStore:
+    """Read validated Candidate audit records without exposing storage rows."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def list_for_task(self, task_id: str) -> tuple[CandidateFinding, ...]:
+        """Return Candidates in deterministic identity order."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(candidate_findings.c.payload_json)
+                    .where(candidate_findings.c.task_id == task_id)
+                    .order_by(candidate_findings.c.candidate_id)
+                )
+            ).scalars()
+            return tuple(_candidate_from_payload(str(payload)) for payload in rows)
+
+
+class SqlResolutionStore:
+    """Persist normalized cluster membership and create-once Resolution decisions."""
+
+    def __init__(self, database: Database) -> None:
+        self._database = database
+
+    async def save_clusters(
+        self,
+        task_id: str,
+        snapshot_id: str,
+        clusters: tuple[FindingCluster, ...],
+    ) -> None:
+        """Persist a deterministic Candidate partition with normalized membership."""
+
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> None:
+            for cluster in clusters:
+                payload = _json({"candidate_ids": list(cluster.candidate_ids)})
+                await session.execute(
+                    sqlite_insert(finding_clusters)
+                    .values(
+                        cluster_id=cluster.cluster_id,
+                        task_id=task_id,
+                        snapshot_id=snapshot_id,
+                        cluster_key=cluster.cluster_id,
+                        payload_json=payload,
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(index_elements=(finding_clusters.c.cluster_id,))
+                )
+                stored = (
+                    (
+                        await session.execute(
+                            select(finding_clusters).where(
+                                finding_clusters.c.cluster_id == cluster.cluster_id
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                if (
+                    str(stored["task_id"]) != task_id
+                    or str(stored["snapshot_id"]) != snapshot_id
+                    or str(stored["payload_json"]) != payload
+                ):
+                    raise ValueError("Finding cluster identity conflicts with persisted content")
+                candidate_rows = (
+                    await session.execute(
+                        select(
+                            candidate_findings.c.candidate_id,
+                            candidate_findings.c.task_id,
+                        ).where(
+                            candidate_findings.c.candidate_id.in_(cluster.candidate_ids)
+                        )
+                    )
+                ).all()
+                if {str(row.candidate_id) for row in candidate_rows} != set(
+                    cluster.candidate_ids
+                ) or any(str(row.task_id) != task_id for row in candidate_rows):
+                    raise ValueError("Finding cluster references an unknown Candidate")
+                existing_memberships = (
+                    await session.execute(
+                        select(
+                            finding_cluster_candidates.c.candidate_id,
+                            finding_cluster_candidates.c.cluster_id,
+                        ).where(
+                            finding_cluster_candidates.c.candidate_id.in_(
+                                cluster.candidate_ids
+                            )
+                        )
+                    )
+                ).all()
+                if any(
+                    str(row.cluster_id) != cluster.cluster_id
+                    for row in existing_memberships
+                ):
+                    raise ValueError("Candidate already belongs to another cluster")
+                for ordinal, candidate_id in enumerate(cluster.candidate_ids):
+                    await session.execute(
+                        sqlite_insert(finding_cluster_candidates)
+                        .values(
+                            cluster_id=cluster.cluster_id,
+                            candidate_id=candidate_id,
+                            ordinal=ordinal,
+                        )
+                        .on_conflict_do_nothing(
+                            index_elements=(
+                                finding_cluster_candidates.c.cluster_id,
+                                finding_cluster_candidates.c.candidate_id,
+                            )
+                        )
+                    )
+
+        await self._database.run_transaction(operation)
+
+    async def list_clusters(self, task_id: str) -> tuple[FindingCluster, ...]:
+        """Rehydrate clusters from normalized membership order."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(finding_clusters.c.cluster_id)
+                    .where(finding_clusters.c.task_id == task_id)
+                    .order_by(finding_clusters.c.cluster_id)
+                )
+            ).scalars()
+            result: list[FindingCluster] = []
+            for cluster_id in rows:
+                members = (
+                    await session.execute(
+                        select(finding_cluster_candidates.c.candidate_id)
+                        .where(finding_cluster_candidates.c.cluster_id == cluster_id)
+                        .order_by(finding_cluster_candidates.c.ordinal)
+                    )
+                ).scalars()
+                result.append(
+                    FindingCluster(str(cluster_id), tuple(str(member) for member in members))
+                )
+            return tuple(result)
+
+    async def save_decisions(
+        self,
+        task_id: str,
+        decisions: tuple[ResolutionDecision, ...],
+    ) -> None:
+        """Persist one immutable decision per cluster for later verification/publication."""
+
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> None:
+            for decision in decisions:
+                payload = _json(
+                    {
+                        "canonical_candidate_id": decision.canonical_candidate_id,
+                        "cluster_id": decision.cluster_id,
+                        "merged_candidate_ids": list(decision.merged_candidate_ids),
+                        "outcome": decision.outcome.value,
+                    }
+                )
+                decision_id = "decision_" + hashlib.sha256(
+                    f"{task_id}\0{decision.cluster_id}".encode()
+                ).hexdigest()
+                await session.execute(
+                    sqlite_insert(resolution_decisions)
+                    .values(
+                        decision_id=decision_id,
+                        task_id=task_id,
+                        cluster_id=decision.cluster_id,
+                        outcome=decision.outcome.value,
+                        canonical_candidate_id=decision.canonical_candidate_id,
+                        payload_json=payload,
+                        created_at=timestamp,
+                        updated_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(resolution_decisions.c.decision_id,)
+                    )
+                )
+                stored = await session.scalar(
+                    select(resolution_decisions.c.payload_json).where(
+                        resolution_decisions.c.decision_id == decision_id
+                    )
+                )
+                if str(stored) != payload:
+                    raise ValueError("Resolution decision conflicts with persisted content")
+
+        await self._database.run_transaction(operation)
+
+    async def list_decisions(self, task_id: str) -> tuple[ResolutionDecision, ...]:
+        """Return persisted decisions in stable cluster order."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(resolution_decisions.c.payload_json)
+                    .where(resolution_decisions.c.task_id == task_id)
+                    .order_by(resolution_decisions.c.cluster_id)
+                )
+            ).scalars()
+            result: list[ResolutionDecision] = []
+            for payload in rows:
+                value = json.loads(str(payload))
+                result.append(
+                    ResolutionDecision(
+                        cluster_id=str(value["cluster_id"]),
+                        outcome=ResolutionOutcome(str(value["outcome"])),
+                        canonical_candidate_id=(
+                            str(value["canonical_candidate_id"])
+                            if value["canonical_candidate_id"] is not None
+                            else None
+                        ),
+                        merged_candidate_ids=tuple(
+                            str(item) for item in value["merged_candidate_ids"]
+                        ),
+                    )
+                )
+            return tuple(result)
 
 
 class SqlRecentRepositoryStore:
@@ -1267,6 +1855,7 @@ class SqlReviewStore:
             prompt_locale=str(row["prompt_locale"]),
             status=str(row["status"]),
             cancellation_requested=bool(row["cancellation_requested"]),
+            has_partial_coverage=summary.has_partial_coverage,
         )
 
     async def list_active_executions(self) -> tuple[ReviewExecutionRecord, ...]:
@@ -1324,6 +1913,7 @@ class SqlReviewStore:
                     prompt_locale=str(row["prompt_locale"]),
                     status=str(row["status"]),
                     cancellation_requested=bool(row["cancellation_requested"]),
+                    has_partial_coverage=summary.has_partial_coverage,
                 )
             )
         return tuple(executions)
@@ -1335,6 +1925,23 @@ class SqlReviewStore:
         if record is None:
             raise KeyError(task_id)
         return record.status
+
+    async def mark_partial_coverage(self, task_id: str) -> None:
+        """Set the sticky partial marker independently from phase transitions."""
+
+        async def operation(session: AsyncSession) -> None:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(review_tasks)
+                    .where(review_tasks.c.task_id == task_id)
+                    .values(has_partial_coverage=True, updated_at=_now())
+                ),
+            )
+            if result.rowcount != 1:
+                raise KeyError(task_id)
+
+        await self._database.run_transaction(operation)
 
     async def cancellation_requested(self, task_id: str) -> bool:
         record = await self.get_review(task_id)
@@ -1526,7 +2133,13 @@ class SqlReviewStore:
                 return None
             if bool(row["cancellation_requested"]):
                 return _review_record(row)
-            if str(row["status"]) in {"completed", "partial", "failed", "canceled"}:
+            if str(row["status"]) in {
+                "completed",
+                "partial",
+                "failed",
+                "canceled",
+                "superseded",
+            }:
                 raise InvalidAgentRunStateError("terminal review cannot be canceled")
             result = cast(
                 CursorResult[Any],
@@ -1604,15 +2217,34 @@ class SqlReviewStore:
         """Insert Findings, mark SUCCEEDED, and append its event atomically."""
 
         timestamp = _now()
-        captured: list[ReviewEvent] = []
 
-        async def operation(session: AsyncSession) -> None:
+        async def operation(session: AsyncSession) -> ReviewEvent | None:
             status = await session.scalar(
                 select(dag_checkpoints.c.status).where(
                     dag_checkpoints.c.task_id == task_id,
                     dag_checkpoints.c.node_key == node_key,
                 )
             )
+            if status == "succeeded":
+                stored_payloads = tuple(
+                    (
+                        await session.execute(
+                            select(findings.c.payload_json)
+                            .where(
+                                findings.c.task_id == task_id,
+                                findings.c.node_key == node_key,
+                            )
+                            .order_by(findings.c.finding_id)
+                        )
+                    ).scalars()
+                )
+                expected_payloads = tuple(
+                    _finding_payload(finding)
+                    for finding in sorted(batch.findings, key=lambda item: item.finding_id)
+                )
+                if tuple(str(payload) for payload in stored_payloads) != expected_payloads:
+                    raise ValueError("completed AgentRun Findings do not match replay")
+                return None
             if status not in {"output_saved", "validating"}:
                 raise InvalidAgentRunStateError("AgentRun is not ready for atomic completion")
             for finding in batch.findings:
@@ -1653,17 +2285,17 @@ class SqlReviewStore:
                 .returning(events.c.event_id)
             )
             if event_id is not None:
-                captured.append(
-                    ReviewEvent(
-                        event_id=int(event_id),
-                        task_id=task_id,
-                        event_type="agent.succeeded",
-                        payload=event_payload,
-                    )
+                return ReviewEvent(
+                    event_id=int(event_id),
+                    task_id=task_id,
+                    event_type="agent.succeeded",
+                    payload=event_payload,
                 )
+            raise RuntimeError("Agent completion event was not persisted")
 
-        await self._database.run_transaction(operation)
-        await self._publish_events(captured)
+        event = await self._database.run_transaction(operation)
+        if event is not None:
+            await self._publish_events([event])
 
     async def complete_with_findings(
         self,
@@ -1674,6 +2306,148 @@ class SqlReviewStore:
         """Implement the orchestrator atomic-completion Port."""
 
         await self.complete_agent_run(task_id, node_key, findings_batch)
+
+    async def complete_agent_run_with_candidates(
+        self,
+        task_id: str,
+        node_key: str,
+        batch: CandidateFindingBatch,
+        *,
+        result_summary: dict[str, object] | None = None,
+    ) -> None:
+        """Atomically persist v2 Candidates, node success, and its durable event."""
+
+        timestamp = _now()
+        summary_json = _json(result_summary) if result_summary is not None else None
+
+        async def operation(session: AsyncSession) -> ReviewEvent | None:
+            checkpoint = (
+                (
+                    await session.execute(
+                        select(dag_checkpoints).where(
+                            dag_checkpoints.c.task_id == task_id,
+                            dag_checkpoints.c.node_key == node_key,
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            if checkpoint["status"] == "succeeded":
+                stored_payloads = tuple(
+                    (
+                        await session.execute(
+                            select(candidate_findings.c.payload_json)
+                            .where(
+                                candidate_findings.c.task_id == task_id,
+                                candidate_findings.c.node_key == node_key,
+                            )
+                            .order_by(candidate_findings.c.candidate_id)
+                        )
+                    ).scalars()
+                )
+                expected_payloads = tuple(
+                    _candidate_payload(candidate)
+                    for candidate in sorted(
+                        batch.candidates, key=lambda item: item.candidate_id
+                    )
+                )
+                if tuple(str(payload) for payload in stored_payloads) != expected_payloads:
+                    raise ValueError("completed AgentRun Candidates do not match replay")
+                if checkpoint["result_summary_json"] != summary_json:
+                    raise ValueError("completed AgentRun summary does not match replay")
+                return None
+            if checkpoint["status"] not in {"output_saved", "validating"}:
+                raise InvalidAgentRunStateError("AgentRun is not ready for Candidate completion")
+            run_id = checkpoint["run_id"]
+            if run_id is None:
+                raise InvalidAgentRunStateError("Candidate AgentRun lacks a stable run ID")
+            for candidate in batch.candidates:
+                if candidate.task_id != task_id or candidate.run_id != str(run_id):
+                    raise ValueError("Candidate provenance does not match the AgentRun")
+                payload = _candidate_payload(candidate)
+                await session.execute(
+                    sqlite_insert(candidate_findings)
+                    .values(
+                        candidate_id=candidate.candidate_id,
+                        task_id=task_id,
+                        node_key=node_key,
+                        run_id=candidate.run_id,
+                        snapshot_id=candidate.snapshot_id,
+                        reviewer_reference=candidate.reviewer_reference,
+                        fingerprint=candidate.fingerprint,
+                        payload_json=payload,
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(candidate_findings.c.candidate_id,)
+                    )
+                )
+                stored = await session.scalar(
+                    select(candidate_findings.c.payload_json).where(
+                        candidate_findings.c.candidate_id == candidate.candidate_id
+                    )
+                )
+                if str(stored) != payload:
+                    raise ValueError("Candidate identity conflicts with persisted content")
+            if self._completion_hook is not None:
+                await self._completion_hook("after_candidate_insert_attempt")
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status.in_(("output_saved", "validating")),
+                    )
+                    .values(
+                        status="succeeded",
+                        result_summary_json=summary_json,
+                        updated_at=timestamp,
+                    )
+                ),
+            )
+            if result.rowcount != 1:
+                raise InvalidAgentRunStateError("Candidate completion lost its expected state")
+            event_payload = {
+                "node_key": node_key,
+                "candidate_count": len(batch.candidates),
+            }
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, "agent.succeeded", event_payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is None:
+                raise RuntimeError("Candidate completion event was not persisted")
+            return ReviewEvent(
+                event_id=int(event_id),
+                task_id=task_id,
+                event_type="agent.succeeded",
+                payload=event_payload,
+            )
+
+        event = await self._database.run_transaction(operation)
+        if event is not None:
+            await self._publish_events([event])
+
+    async def complete_with_candidates(
+        self,
+        task_id: str,
+        node_key: str,
+        candidates: CandidateFindingBatch,
+        *,
+        result_summary: dict[str, object] | None = None,
+    ) -> None:
+        """Implement the v2 Candidate atomic-completion Port."""
+
+        await self.complete_agent_run_with_candidates(
+            task_id,
+            node_key,
+            candidates,
+            result_summary=result_summary,
+        )
 
     async def list_findings(self, task_id: str) -> tuple[Finding, ...]:
         """Return trusted Findings in stable severity/confidence/path order."""
@@ -1692,9 +2466,10 @@ class SqlReviewStore:
                     .where(findings.c.task_id == task_id)
                     .order_by(
                         severity_order,
-                        findings.c.confidence.desc(),
+                        findings.c.confidence.desc().nullslast(),
                         findings.c.path,
                         findings.c.start_line,
+                        findings.c.finding_id,
                     )
                 )
             ).scalars()
@@ -1777,6 +2552,103 @@ class SqlCheckpointStore:
             )
 
         await self._database.run_transaction(operation)
+
+    async def ensure_plan_nodes(
+        self,
+        plan: ReviewPlan,
+        *,
+        capability_fingerprints: dict[str, str] | None = None,
+    ) -> None:
+        """Create every frozen logical node, including the optional batch Verifier."""
+
+        timestamp = _now()
+        fingerprints = capability_fingerprints or {}
+
+        async def operation(session: AsyncSession) -> None:
+            for node in plan.nodes:
+                fingerprint = fingerprints.get(node.node_id)
+                run = AgentRun.create(
+                    task_id=plan.task_id,
+                    agent_version=node.agent_reference,
+                    pass_index=node.pass_index.value,
+                    shard_id=node.shard_id,
+                    logical_attempt_group=node.logical_attempt_group,
+                    node_role=cast(Any, node.node_type.value),
+                    capability_fingerprint=fingerprint,
+                )
+                await session.execute(
+                    sqlite_insert(dag_checkpoints)
+                    .values(
+                        task_id=plan.task_id,
+                        node_key=node.node_id,
+                        logical_attempt_group=node.logical_attempt_group,
+                        status="pending",
+                        execution_attempts=0,
+                        validation_attempts=0,
+                        run_id=run.run_id,
+                        node_role=node.node_type.value,
+                        agent_version=node.agent_reference,
+                        pass_index=node.pass_index.value,
+                        shard_id=node.shard_id,
+                        capability_fingerprint=fingerprint,
+                        created_at=timestamp,
+                        updated_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(dag_checkpoints.c.task_id, dag_checkpoints.c.node_key)
+                    )
+                )
+                stored = (
+                    (
+                        await session.execute(
+                            select(dag_checkpoints).where(
+                                dag_checkpoints.c.task_id == plan.task_id,
+                                dag_checkpoints.c.node_key == node.node_id,
+                            )
+                        )
+                    )
+                    .mappings()
+                    .one()
+                )
+                expected = (
+                    run.run_id,
+                    node.node_type.value,
+                    node.agent_reference,
+                    node.pass_index.value,
+                    node.shard_id,
+                    fingerprint,
+                )
+                actual = tuple(
+                    stored[name]
+                    for name in (
+                        "run_id",
+                        "node_role",
+                        "agent_version",
+                        "pass_index",
+                        "shard_id",
+                        "capability_fingerprint",
+                    )
+                )
+                if actual != expected:
+                    raise ValueError("checkpoint conflicts with the frozen Review Plan")
+
+        await self._database.run_transaction(operation)
+
+    async def list_for_task(self, task_id: str) -> tuple[CheckpointRecord, ...]:
+        """Return every persisted logical node in stable pass and identity order."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(dag_checkpoints)
+                    .where(dag_checkpoints.c.task_id == task_id)
+                    .order_by(
+                        dag_checkpoints.c.pass_index,
+                        dag_checkpoints.c.node_key,
+                    )
+                )
+            ).mappings()
+            return tuple(self._record(row) for row in rows)
 
     async def mark_validating(self, task_id: str, node_key: str) -> None:
         """Move OUTPUT_SAVED to VALIDATING without changing its Artifact identity."""
@@ -1881,6 +2753,15 @@ class SqlCheckpointStore:
                 .mappings()
                 .one()
             )
+        return self._record(row)
+
+    @staticmethod
+    def _record(row: RowMapping) -> CheckpointRecord:
+        summary = (
+            json.loads(str(row["result_summary_json"]))
+            if row["result_summary_json"] is not None
+            else None
+        )
         return CheckpointRecord(
             task_id=str(row["task_id"]),
             node_key=str(row["node_key"]),
@@ -1895,6 +2776,19 @@ class SqlCheckpointStore:
             ),
             error_code=str(row["error_code"]) if row["error_code"] is not None else None,
             validation_attempts=int(row["validation_attempts"]),
+            run_id=str(row["run_id"]) if row["run_id"] is not None else None,
+            node_role=str(row["node_role"]) if row["node_role"] is not None else None,
+            agent_version=(
+                str(row["agent_version"]) if row["agent_version"] is not None else None
+            ),
+            pass_index=int(row["pass_index"]) if row["pass_index"] is not None else None,
+            shard_id=str(row["shard_id"]) if row["shard_id"] is not None else None,
+            capability_fingerprint=(
+                str(row["capability_fingerprint"])
+                if row["capability_fingerprint"] is not None
+                else None
+            ),
+            result_summary=summary,
         )
 
 

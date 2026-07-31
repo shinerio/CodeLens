@@ -57,7 +57,7 @@ class FindingExportItem:
     title: str
     severity: str
     disposition: str
-    confidence: float
+    confidence: float | None
     change_origin: str
     changed_hunk_id: str | None
     primary_location: SourceLocation
