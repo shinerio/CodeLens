@@ -4,7 +4,10 @@ import hashlib
 import json
 import re
 from dataclasses import dataclass, field
-from typing import Literal, Protocol
+from typing import Annotated, Literal, Protocol
+
+from agents import Tool, function_tool
+from pydantic import Field
 
 from codelens.findings.domain.candidates import (
     CandidateFinding,
@@ -22,6 +25,7 @@ from codelens.review.infrastructure.line_resolver import (
     resolve_from_hunk,
     split_and_normalize,
 )
+from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 from codelens.workspace.domain.models import ReviewSnapshot
 
 
@@ -250,6 +254,20 @@ class ReviewCommentCollectorV2:
         """Return only fully resolved candidates in stable acceptance order."""
 
         return CandidateFindingBatch(tuple(self._candidates))
+
+    def as_comment_agent_tool(self, description: str) -> Tool:
+        """Expose only the version-two comment contract through the SDK adapter."""
+
+        CommentBatch = Annotated[
+            list[CommentV2FindingSchema],
+            Field(min_length=1, max_length=self.tool_limits.comment_batch_size),
+        ]
+
+        @function_tool(name_override="comment", description_override=description)
+        async def comment_tool(comments: CommentBatch) -> str:
+            return await self.submit_many(comments)
+
+        return reject_unknown_arguments(comment_tool)
 
     async def _resolve_line_numbers(
         self,

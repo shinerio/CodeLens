@@ -219,6 +219,16 @@ async def test_accepted_task_done_stops_the_agent_without_another_model_turn() -
         decision = await decision
     assert decision.is_final_output is True
     assert decision.final_output == ""
+    assert runner.starting_agent is not None
+    assert tuple(tool.name for tool in runner.starting_agent.tools) == (
+        "find_files",
+        "grep",
+        "read_file",
+        "get_diff",
+        "comment",
+        "review_file_done",
+        "task_done",
+    )
 
 
 async def test_uses_active_gateway_execution_limits(
