@@ -33,12 +33,18 @@ from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
 from codelens.review.application.context_builder import ContextBuilder
-from codelens.review.application.settings import ReviewCompletionSettingsService
+from codelens.review.application.settings import (
+    ReviewCompletionSettingsService,
+    TriggerIdempotencySettingsService,
+)
 from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.domain.ports import AgentRuntimePort
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
-from codelens.review.infrastructure.file_settings import FilesystemReviewCompletionSettingsStore
+from codelens.review.infrastructure.file_settings import (
+    FilesystemReviewCompletionSettingsStore,
+    FilesystemTriggerIdempotencySettingsStore,
+)
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.model_log import ModelTranscriptLogWriter
@@ -168,6 +174,9 @@ def build_unified_backend(
     instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
     review_completion_settings = ReviewCompletionSettingsService(
         FilesystemReviewCompletionSettingsStore(settings.data_dir)
+    )
+    trigger_idempotency_settings = TriggerIdempotencySettingsService(
+        FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
     )
     tool_limits_service = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
 
@@ -338,7 +347,10 @@ def build_unified_backend(
         Path(__file__).parent.parent / "plugin" / "trigger" / "local_hook"
     )
     review_creator_adapter = ReviewCreatorAdapter(
-        CreateReviewHandler(planner, capture, review_store, input_artifacts),
+        CreateReviewHandler(
+            planner, capture, review_store, input_artifacts,
+            idempotency_settings=trigger_idempotency_settings
+        ),
         repository_inspector,
     )
     trigger_orchestrator = TriggerOrchestrator(
@@ -371,6 +383,7 @@ def build_unified_backend(
         ),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
         review_completion_settings=review_completion_settings,
+        trigger_idempotency_settings=trigger_idempotency_settings,
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

@@ -20,12 +20,14 @@ from codelens.interface.http.dto import (
     ReviewCompletionSettingsResponse,
     RuntimeLogLevelResponse,
     ToolLimitsResponse,
+    TriggerIdempotencySettingsResponse,
     UpdateInstructionFileSettingsRequest,
     UpdateModelGatewayRequest,
     UpdateRecentRepositorySettingsRequest,
     UpdateReviewCompletionSettingsRequest,
     UpdateRuntimeLogLevelRequest,
     UpdateToolLimitsRequest,
+    UpdateTriggerIdempotencySettingsRequest,
 )
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
@@ -186,6 +188,27 @@ async def update_review_completion_settings(
     return ReviewCompletionSettingsResponse(
         max_incomplete_review_retries=settings.max_incomplete_review_retries
     )
+
+
+@router.get("/trigger-idempotency", response_model=TriggerIdempotencySettingsResponse)
+async def get_trigger_idempotency_settings(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> TriggerIdempotencySettingsResponse:
+    """Return the trigger idempotency toggle state."""
+
+    settings = await components.trigger_idempotency_settings.get()
+    return TriggerIdempotencySettingsResponse(enabled=settings.enabled)
+
+
+@router.put("/trigger-idempotency", response_model=TriggerIdempotencySettingsResponse)
+async def update_trigger_idempotency_settings(
+    request: UpdateTriggerIdempotencySettingsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> TriggerIdempotencySettingsResponse:
+    """Persist the trigger idempotency toggle."""
+
+    settings = await components.trigger_idempotency_settings.update(enabled=request.enabled)
+    return TriggerIdempotencySettingsResponse(enabled=settings.enabled)
 
 
 @router.get("/model-gateways", response_model=ModelGatewayCatalogResponse)
@@ -376,6 +399,9 @@ async def reset_all_settings(
         max_incomplete_review_retries=DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
     )
 
+    # Reset trigger idempotency settings
+    trigger_idempotency = await components.trigger_idempotency_settings.update(enabled=False)
+
     # Reset recent repository limit
     recent_repo_limit = await components.update_recent_repository_settings.handle(
         DEFAULT_RECENT_REPOSITORY_LIMIT
@@ -435,6 +461,9 @@ async def reset_all_settings(
         ),
         review_completion=ReviewCompletionSettingsResponse(
             max_incomplete_review_retries=review_completion.max_incomplete_review_retries,
+        ),
+        trigger_idempotency=TriggerIdempotencySettingsResponse(
+            enabled=trigger_idempotency.enabled,
         ),
         recent_repositories=RecentRepositorySettingsResponse(
             recent_repository_limit=recent_repo_limit,

@@ -122,6 +122,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             selected_agent_versions=selected_agents,
             prompt_locale=prompt_locale,
             external_context=external_context,
+            skip_if_duplicate=True,
         )
 
         _LOGGER.info(

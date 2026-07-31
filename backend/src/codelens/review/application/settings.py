@@ -58,3 +58,43 @@ class ReviewCompletionSettingsService:
         )
         await asyncio.to_thread(self._store.save_settings, settings)
         return settings
+
+
+@dataclass(frozen=True)
+class TriggerIdempotencySettings:
+    """Control whether triggered reviews are deduplicated by commit identity."""
+
+    enabled: bool = False
+
+
+class TriggerIdempotencySettingsStorePort(Protocol):
+    """Persist and provide the trigger idempotency toggle."""
+
+    def get_settings(self) -> TriggerIdempotencySettings:
+        """Load persisted settings or product defaults."""
+
+        raise NotImplementedError
+
+    def save_settings(self, settings: TriggerIdempotencySettings) -> None:
+        """Atomically replace the persisted settings."""
+
+        raise NotImplementedError
+
+
+class TriggerIdempotencySettingsService:
+    """Validate and persist trigger idempotency settings outside the event loop."""
+
+    def __init__(self, store: TriggerIdempotencySettingsStorePort) -> None:
+        self._store = store
+
+    async def get(self) -> TriggerIdempotencySettings:
+        """Return the current idempotency toggle state."""
+
+        return await asyncio.to_thread(self._store.get_settings)
+
+    async def update(self, *, enabled: bool) -> TriggerIdempotencySettings:
+        """Validate and atomically persist the idempotency toggle."""
+
+        settings = TriggerIdempotencySettings(enabled=enabled)
+        await asyncio.to_thread(self._store.save_settings, settings)
+        return settings

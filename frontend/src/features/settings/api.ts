@@ -10,6 +10,7 @@ import type {
   RuntimeLogLevel,
   RuntimeLogLevelSettings,
   ToolLimits,
+  TriggerIdempotencySettings,
   UpdateModelGateway,
 } from "./types";
 
@@ -64,6 +65,19 @@ export async function updateReviewCompletionSettings(
   settings: ReviewCompletionSettings,
 ): Promise<ReviewCompletionSettings> {
   return api<ReviewCompletionSettings>("/settings/review-completion", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
+}
+
+export async function getTriggerIdempotencySettings(): Promise<TriggerIdempotencySettings> {
+  return api<TriggerIdempotencySettings>("/settings/trigger-idempotency");
+}
+
+export async function updateTriggerIdempotencySettings(
+  settings: TriggerIdempotencySettings,
+): Promise<TriggerIdempotencySettings> {
+  return api<TriggerIdempotencySettings>("/settings/trigger-idempotency", {
     method: "PUT",
     body: JSON.stringify(settings),
   });

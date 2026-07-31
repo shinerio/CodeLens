@@ -43,6 +43,10 @@ export type ReviewCompletionSettings = {
   max_incomplete_review_retries: number;
 };
 
+export type TriggerIdempotencySettings = {
+  enabled: boolean;
+};
+
 export type CreateModelGateway = {
   name: string;
   api_key: string;
@@ -100,6 +104,7 @@ export type ToolLimits = {
 export type ResetAllSettingsResponse = {
   instruction_files: InstructionFileSettings;
   review_completion: ReviewCompletionSettings;
+  trigger_idempotency: TriggerIdempotencySettings;
   recent_repositories: RecentRepositorySettings;
   tool_limits: ToolLimits;
   logging: RuntimeLogLevelSettings;

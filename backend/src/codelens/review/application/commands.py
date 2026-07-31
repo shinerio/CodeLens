@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 
+from codelens.review.application.settings import TriggerIdempotencySettingsService
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import (
@@ -16,7 +17,7 @@ from codelens.review.domain.ports import (
 from codelens.shared.domain.errors import DomainError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.plan_scope import ScopePlanner
-from codelens.workspace.domain.models import ReviewScope
+from codelens.workspace.domain.models import ReviewScope, UncommittedScope
 from codelens.workspace.domain.ports import (
     InputArtifactPort,
     RepositoryInfo,
@@ -42,6 +43,7 @@ class CreateReviewCommand:
     selected_agent_versions: tuple[str, ...]
     prompt_locale: str = "en"
     external_context: dict | None = None
+    skip_if_duplicate: bool = False
 
 
 class CreateReviewHandler:
@@ -56,6 +58,7 @@ class CreateReviewHandler:
         *,
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
+        idempotency_settings: TriggerIdempotencySettingsService | None = None,
     ) -> None:
         self._planner = planner
         self._capture = capture
@@ -63,6 +66,7 @@ class CreateReviewHandler:
         self._input_artifacts = input_artifacts
         self._id_factory = id_factory or (lambda: f"review_{uuid.uuid4().hex}")
         self._clock = clock or (lambda: datetime.now(UTC))
+        self._idempotency_settings = idempotency_settings
 
     async def handle(self, command: CreateReviewCommand) -> ReviewRecord:
         """Create a task only after all mutable repository input is frozen."""
@@ -75,6 +79,33 @@ class CreateReviewHandler:
         )
         captured = await self._capture.capture(command.repository.path, scope_plan)
         artifact = captured.overlay_artifact
+
+        if (
+            command.skip_if_duplicate
+            and self._idempotency_settings is not None
+            and not isinstance(command.scope, UncommittedScope)
+        ):
+            settings = await self._idempotency_settings.get()
+            if settings.enabled:
+                existing = await self._store.find_duplicate_review(
+                    repository_id=command.repository.repository_id,
+                    base_oid=captured.target.base_oid,
+                    head_oid=captured.target.head_oid,
+                )
+                if existing is not None:
+                    if artifact is not None:
+                        await self._input_artifacts.discard(artifact.reference)
+                    _LOGGER.info(
+                        "Duplicate triggered review skipped",
+                        extra={
+                            "existing_task_id": existing.task_id,
+                            "repository_id": command.repository.repository_id,
+                            "base_oid": captured.target.base_oid,
+                            "head_oid": captured.target.head_oid,
+                        },
+                    )
+                    return existing
+
         task = ReviewTask.create(
             task_id=self._id_factory(),
             repository_id=command.repository.repository_id,

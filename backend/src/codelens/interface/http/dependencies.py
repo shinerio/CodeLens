@@ -32,12 +32,18 @@ from codelens.review.application.commands import (
     RetryReviewHandler,
     UpdateRecentRepositorySettingsHandler,
 )
-from codelens.review.application.settings import ReviewCompletionSettingsService
+from codelens.review.application.settings import (
+    ReviewCompletionSettingsService,
+    TriggerIdempotencySettingsService,
+)
 from codelens.review.application.source_preview import FindingSourcePreviewService
 from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
-from codelens.review.infrastructure.file_settings import FilesystemReviewCompletionSettingsStore
+from codelens.review.infrastructure.file_settings import (
+    FilesystemReviewCompletionSettingsStore,
+    FilesystemTriggerIdempotencySettingsStore,
+)
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
@@ -104,6 +110,7 @@ class HttpComponents:
     update_recent_repository_settings: UpdateRecentRepositorySettingsHandler
     instruction_settings: InstructionSettingsService
     review_completion_settings: ReviewCompletionSettingsService
+    trigger_idempotency_settings: TriggerIdempotencySettingsService
     tool_limits: ToolLimitsService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
@@ -164,6 +171,9 @@ def build_components(settings: Settings) -> HttpComponents:
     review_completion_settings = ReviewCompletionSettingsService(
         FilesystemReviewCompletionSettingsStore(settings.data_dir)
     )
+    trigger_idempotency_settings = TriggerIdempotencySettingsService(
+        FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
+    )
     tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
@@ -195,7 +205,10 @@ def build_components(settings: Settings) -> HttpComponents:
         Path(__file__).parent.parent.parent / "plugin" / "trigger" / "local_hook"
     )
     review_creator_adapter = ReviewCreatorAdapter(
-        CreateReviewHandler(planner, capture, review_store, input_artifacts),
+        CreateReviewHandler(
+            planner, capture, review_store, input_artifacts,
+            idempotency_settings=trigger_idempotency_settings
+        ),
         repository_inspector,
     )
     trigger_orchestrator = TriggerOrchestrator(
@@ -228,6 +241,7 @@ def build_components(settings: Settings) -> HttpComponents:
         ),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
         review_completion_settings=review_completion_settings,
+        trigger_idempotency_settings=trigger_idempotency_settings,
         tool_limits=tool_limits,
         delete_review=DeleteReviewHandler(
             review_store,

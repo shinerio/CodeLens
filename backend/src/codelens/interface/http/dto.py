@@ -86,6 +86,14 @@ class UpdateReviewCompletionSettingsRequest(ReviewCompletionSettingsResponse):
     pass
 
 
+class TriggerIdempotencySettingsResponse(StrictDto):
+    enabled: bool
+
+
+class UpdateTriggerIdempotencySettingsRequest(TriggerIdempotencySettingsResponse):
+    pass
+
+
 class ToolLimitsResponse(StrictDto):
     """Expose configurable tool-level limits for Review Agent evidence operations."""
 
@@ -536,6 +544,7 @@ class ResetAllSettingsResponse(StrictDto):
 
     instruction_files: InstructionFileSettingsResponse
     review_completion: ReviewCompletionSettingsResponse
+    trigger_idempotency: TriggerIdempotencySettingsResponse
     recent_repositories: RecentRepositorySettingsResponse
     tool_limits: ToolLimitsResponse
     logging: RuntimeLogLevelResponse

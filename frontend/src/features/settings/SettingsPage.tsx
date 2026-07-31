@@ -26,6 +26,7 @@ import {
   getReviewCompletionSettings,
   getRuntimeLogLevel,
   getToolLimits,
+  getTriggerIdempotencySettings,
   listModelGateways,
   resetAllSettings,
   testGatewayAvailability,
@@ -36,6 +37,7 @@ import {
   updateReviewCompletionSettings,
   updateModelGateway,
   updateToolLimits,
+  updateTriggerIdempotencySettings,
 } from "./api";
 import type { ToolLimits as ToolLimitsType } from "./types";
 import type {
@@ -54,6 +56,7 @@ const RUNTIME_LOG_LEVEL_QUERY_KEY = ["runtime-log-level"] as const;
 const RECENT_REPOSITORY_SETTINGS_QUERY_KEY = ["recent-repository-settings"] as const;
 const INSTRUCTION_FILE_SETTINGS_QUERY_KEY = ["instruction-file-settings"] as const;
 const REVIEW_COMPLETION_SETTINGS_QUERY_KEY = ["review-completion-settings"] as const;
+const TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY = ["trigger-idempotency-settings"] as const;
 const DEFAULT_AGENT_TIMEOUT = 1800;
 const DEFAULT_MAX_AGENT_TURNS = 100;
 const DEFAULT_MAX_TOOL_CALLS = 300;
@@ -83,6 +86,7 @@ export function SettingsPage() {
   const [rootInstructionLimitDraft, setRootInstructionLimitDraft] = useState("500");
   const [nestedInstructionLimitDraft, setNestedInstructionLimitDraft] = useState("200");
   const [incompleteReviewRetryLimitDraft, setIncompleteReviewRetryLimitDraft] = useState("3");
+  const [triggerIdempotencyEnabledDraft, setTriggerIdempotencyEnabledDraft] = useState(false);
   const [toolLimitsDraft, setToolLimitsDraft] = useState<ToolLimitsType | null>(null);
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
@@ -144,6 +148,17 @@ export function SettingsPage() {
       setIncompleteReviewRetryLimitDraft(String(settings.max_incomplete_review_retries));
     },
   });
+  const triggerIdempotencySettingsQuery = useQuery({
+    queryKey: TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY,
+    queryFn: getTriggerIdempotencySettings,
+  });
+  const triggerIdempotencySettingsMutation = useMutation({
+    mutationFn: updateTriggerIdempotencySettings,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY, settings);
+      setTriggerIdempotencyEnabledDraft(settings.enabled);
+    },
+  });
   const toolLimitsQuery = useQuery({
     queryKey: ["tool-limits"],
     queryFn: getToolLimits,
@@ -160,6 +175,7 @@ export function SettingsPage() {
     onSuccess: (response) => {
       queryClient.setQueryData(INSTRUCTION_FILE_SETTINGS_QUERY_KEY, response.instruction_files);
       queryClient.setQueryData(REVIEW_COMPLETION_SETTINGS_QUERY_KEY, response.review_completion);
+      queryClient.setQueryData(TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY, response.trigger_idempotency);
       queryClient.setQueryData(RECENT_REPOSITORY_SETTINGS_QUERY_KEY, response.recent_repositories);
       queryClient.setQueryData(["tool-limits"], response.tool_limits);
       queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, response.logging);
@@ -168,6 +184,7 @@ export function SettingsPage() {
       setRootInstructionLimitDraft(String(response.instruction_files.root_max_lines));
       setNestedInstructionLimitDraft(String(response.instruction_files.nested_max_lines));
       setIncompleteReviewRetryLimitDraft(String(response.review_completion.max_incomplete_review_retries));
+      setTriggerIdempotencyEnabledDraft(response.trigger_idempotency.enabled);
       setRecentRepositoryLimitDraft(String(response.recent_repositories.recent_repository_limit));
     },
   });
@@ -214,6 +231,12 @@ export function SettingsPage() {
       );
     }
   }, [reviewCompletionSettingsQuery.data]);
+
+  useEffect(() => {
+    if (triggerIdempotencySettingsQuery.data !== undefined) {
+      setTriggerIdempotencyEnabledDraft(triggerIdempotencySettingsQuery.data.enabled);
+    }
+  }, [triggerIdempotencySettingsQuery.data]);
 
   useEffect(() => {
     if (toolLimitsQuery.data !== undefined) {
@@ -851,6 +874,40 @@ export function SettingsPage() {
                     onClick={() =>
                       reviewCompletionSettingsMutation.mutate({
                         max_incomplete_review_retries: parsedIncompleteReviewRetryLimit,
+                      })
+                    }
+                  >
+                    <Check aria-hidden="true" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="settings-field">
+                <label className="settings-field__label">
+                  <input
+                    type="checkbox"
+                    checked={triggerIdempotencyEnabledDraft}
+                    onChange={(event) =>
+                      setTriggerIdempotencyEnabledDraft(event.currentTarget.checked)
+                    }
+                    disabled={triggerIdempotencySettingsQuery.isPending}
+                    style={{ marginRight: "8px" }}
+                  />
+                  {t("settings.triggerIdempotency")}
+                </label>
+                <small>{t("settings.triggerIdempotencyHint")}</small>
+                <div style={{ marginTop: "8px" }}>
+                  <button
+                    aria-label={t("settings.saveTriggerIdempotency")}
+                    className="settings-panel__save-button"
+                    disabled={
+                      triggerIdempotencySettingsMutation.isPending ||
+                      triggerIdempotencyEnabledDraft === triggerIdempotencySettingsQuery.data?.enabled
+                    }
+                    type="button"
+                    onClick={() =>
+                      triggerIdempotencySettingsMutation.mutate({
+                        enabled: triggerIdempotencyEnabledDraft,
                       })
                     }
                   >

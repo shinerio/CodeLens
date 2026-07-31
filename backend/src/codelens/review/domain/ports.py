@@ -204,6 +204,16 @@ class ReviewStorePort(Protocol):
 
         raise NotImplementedError
 
+    async def find_duplicate_review(
+        self,
+        repository_id: str,
+        base_oid: str,
+        head_oid: str,
+    ) -> ReviewRecord | None:
+        """Return the newest non-deleted, non-failed review matching the commit range."""
+
+        raise NotImplementedError
+
     async def list_reviews(self) -> tuple[ReviewRecord, ...]:
         """Return every visible review workspace in newest-first order."""
 

@@ -473,6 +473,35 @@ class SqlReviewStore:
             )
         return _review_record(row) if row is not None else None
 
+    async def find_duplicate_review(
+        self,
+        repository_id: str,
+        base_oid: str,
+        head_oid: str,
+    ) -> ReviewRecord | None:
+        """Return the newest non-deleted, non-failed, non-canceled review matching the commit range."""
+
+        async with self._database.sessions() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(review_tasks)
+                        .where(
+                            review_tasks.c.repository_id == repository_id,
+                            review_tasks.c.base_oid == base_oid,
+                            review_tasks.c.head_oid == head_oid,
+                            review_tasks.c.deleted_at.is_(None),
+                            review_tasks.c.status.not_in(["failed", "canceled"]),
+                        )
+                        .order_by(review_tasks.c.created_at.desc())
+                        .limit(1)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        return _review_record(row) if row is not None else None
+
     async def list_reviews(self) -> tuple[ReviewRecord, ...]:
         """Return non-deleted workspaces in deterministic newest-first order."""
 
