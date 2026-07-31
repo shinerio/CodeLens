@@ -1,6 +1,6 @@
 # CodeLens 插件生态设计文档
 
-> 版本：0.3.0 | 日期：2026-07-29 | 状态：已实现
+> 版本：0.4.0 | 日期：2026-07-31 | 状态：已实现 + 接入指南
 
 ## 1. 文档目的
 
@@ -88,7 +88,9 @@ CodeLens 插件生态采用**统一插件模型**。一个插件是一个独立�
       "config_schema": { "type": "object", "properties": { "..." } }
     }
   },
-  "min_codelens_version": null
+  "min_codelens_version": null,
+  "name_i18n": { "zh-CN": "GitHub 插件" },
+  "description_i18n": { "zh-CN": "GitHub webhook 触发审查，将结果发布为 PR 评论" }
 }
 ```
 
@@ -114,9 +116,34 @@ class PluginManifest:
     version: str
     description: str
     author: str
-    platform: str                              # "local" | "github" | "gitlab"
+    platform: str                              # "local" | "github" | "gitlab" | ...
     capabilities: dict[str, Any]               # {"trigger": TriggerCapability, "report": ReportCapability}
     min_codelens_version: str | None = None
+    name_i18n: dict[str, str] = field(default_factory=dict)           # locale → 翻译名称
+    description_i18n: dict[str, str] = field(default_factory=dict)    # locale → 翻译描述
+```
+
+**国际化字段说明**：
+
+| 字段 | 位置 | 作用 |
+|---|---|---|
+| `name_i18n` | `plugin.json` 顶层 | 覆盖 `name`，前端按用户 locale 匹配显示 |
+| `description_i18n` | `plugin.json` 顶层 | 覆盖 `description`，前端按用户 locale 匹配显示 |
+| `description_i18n` | `config_schema` 每个属性内 | 覆盖属性的 `description`，前端配置表单按 locale 显示 |
+
+示例（config_schema 属性级 i18n）：
+
+```json
+{
+  "debounce_seconds": {
+    "type": "integer",
+    "default": 60,
+    "description": "Minimum seconds between triggers for the same MR/branch",
+    "description_i18n": {
+      "zh-CN": "同一 MR/分支触发评审的最小间隔秒数"
+    }
+  }
+}
 ```
 
 ### 3.2 PluginRecord（插件记录）
@@ -671,7 +698,96 @@ class ReportSinkPort(Protocol):
 - 插件不导入 CodeLens 代码，通过结构化类型满足协议
 - `envelope` 中的 `external_context` 通过属性访问（duck-typing）
 
-### 7.3 插件解耦机制
+### 7.3 FindingExportEnvelope 数据结构
+
+Report 插件接收的 `envelope` 参数结构如下（插件通过属性访问获取字段，不需要导入这些类型）：
+
+```python
+@dataclass(frozen=True)
+class FindingExportEnvelope:
+    schema_version: str                          # 导出结构版本号
+    exported_at: datetime                        # 导出时间
+    review: ReviewExportMeta                     # Review 元数据
+    findings: tuple[FindingExportItem, ...]      # 发现项列表
+
+@dataclass(frozen=True)
+class ReviewExportMeta:
+    task_id: str                                 # Review 任务 ID
+    repository_name: str                         # 仓库名称
+    scope_type: str                              # "commit" | "branch" | "uncommitted"
+    base_oid: str                                # 基准 commit SHA
+    head_oid: str                                # 目标 commit SHA
+    selected_agent_versions: tuple[str, ...]     # 使用的 Agent 版本列表
+    status: str                                  # "completed" | "partial" | "failed" | "canceled"
+    created_at: datetime                         # 创建时间
+    external_context: dict | None = None         # 平台上下文（用于路由）
+
+@dataclass(frozen=True)
+class FindingExportItem:
+    finding_id: str                              # 发现项 ID
+    fingerprint: str                             # 唯一指纹
+    reviewer_id: str                             # 审查 Agent ID
+    category: str                                # 类别（如 "null_safety"）
+    title: str                                   # 标题
+    severity: str                                # "critical" | "high" | "medium" | "low"
+    disposition: str                             # "blocking" | "non_blocking"
+    confidence: float                            # 置信度 0.0-1.0
+    change_origin: str                           # 变更来源
+    changed_hunk_id: str | None                  # 变更块 ID
+    primary_location: SourceLocation             # 主要位置（file, line, column）
+    related_locations: tuple[SourceLocation, ...]# 关联位置
+    evidence: tuple                              # 证据
+    impact: str                                  # 影响描述
+    explanation: str                             # 详细说明
+    reproduction: str | None                     # 复现步骤
+    recommendation: str                          # 修复建议
+    rule_sources: tuple[RuleReference, ...]      # 规则来源
+    source_excerpt: SourceSnippet                # 源代码片段
+```
+
+**Report 插件常用字段**：
+
+| 字段路径 | 用途 | 示例 |
+|---|---|---|
+| `envelope.review.task_id` | 关联 Review 任务 | `"review_abc123"` |
+| `envelope.review.external_context` | 获取平台路由信息 | `{"platform": "github", "project": "owner/repo", "merge_request": 42}` |
+| `envelope.review.head_oid` | 获取目标 commit SHA | `"abc123def"` |
+| `envelope.findings` | 遍历所有发现项 | `for finding in envelope.findings:` |
+| `finding.severity` | 严重级别映射 | `"high"` → 平台对应的严重级别 |
+| `finding.title` | 评论标题 | `"空指针引用风险"` |
+| `finding.explanation` | 评论正文 | `"变量 config 在使用前未做空值检查..."` |
+| `finding.recommendation` | 修复建议 | `"添加空值判断或使用 Optional 类型..."` |
+| `finding.primary_location` | 行级评论位置 | `SourceLocation(file="main.py", line=42, column=5)` |
+
+### 7.4 ExportResult 返回格式
+
+Report 插件的 `export()` 方法必须返回一个与 `ExportResult` 字段完全一致的 dict（无需导入 CodeLens 类型）：
+
+```python
+{
+    "plugin_id": "github",                       # 插件 ID，与 manifest.plugin_id 一致
+    "task_id": "review_abc123",                  # Review 任务 ID
+    "success": True,                             # 是否成功
+    "output_path": None,                         # 输出路径（本地导出用，远端发布填 None）
+    "error": None,                               # 错误信息（失败时填写）
+    "exported_at": "2026-07-31T10:30:00+08:00"   # ISO 8601 格式时间戳
+}
+```
+
+**插件示例**：
+
+```python
+return {
+    "plugin_id": self.sink_id,
+    "task_id": envelope.review.task_id,
+    "success": True,
+    "output_path": None,
+    "error": None,
+    "exported_at": datetime.now().isoformat(),
+}
+```
+
+### 7.5 插件解耦机制
 
 Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。解耦通过以下机制实现：
 
@@ -680,14 +796,14 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 3. **属性访问**：`envelope.review.external_context` 等字段通过属性访问获取
 4. **importlib 加载**：`ImportlibPluginLoader` 通过 `spec_from_file_location()` 加载，检查 `hasattr(sink, "sink_id")` 和 `hasattr(sink, "export")`
 
-### 7.4 触发方式
+### 7.6 触发方式
 
 | 方式 | 触发时机 | 说明 |
 |---|---|---|
 | **自动导出** | Review 到达终态 | `report_auto_export=true` 时，`ExportOrchestrator` 自动执行（受平台路由过滤） |
 | **手动导出** | 用户通过 API 触发 | `POST /api/reviews/{task_id}/export` + `{"plugin_id": "github"}` |
 
-### 7.5 错误处理
+### 7.7 错误处理
 
 | 错误类型 | 处理策略 |
 |---|---|
@@ -695,7 +811,7 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 | **单条 finding 失败**（认证过期、行号无效） | 记录错误，继续处理后续 finding |
 | **全部失败** | `ExportResult.success=False`，`error` 包含所有失败详情 |
 
-### 7.6 评论内容格式
+### 7.8 评论内容格式
 
 每条 Finding 格式化为 Markdown 行级评论：
 
@@ -889,52 +1005,98 @@ class ReviewExportMeta:
 
 ## 11. 插件项目结构
 
-每个平台插件是一个独立项目，同时包含 trigger 和 report 实现：
+每个平台插件是一个独立项目，同时包含 trigger 和 report 实现。以 **GitHub 插件**为例：
 
 ```
 CodeLens-GitHub-Plugin/
 ├── plugin.json                    # 统一清单（platform: "github"）
 ├── github_trigger.py              # TriggerSinkPort 实现（webhook 处理）
-├── github_report.py               # ReportSinkPort 实现（PR comment）
-├── repo_manager.py                # 仓库克隆/更新/清理
-└── tests/
-    ├── test_trigger.py
-    ├── test_report.py
-    └── test_repo_manager.py
-
-CodeLens-GitLab-Plugin/
-├── plugin.json                    # 统一清单（platform: "gitlab"）
-├── gitlab_trigger.py              # TriggerSinkPort 实现（webhook 处理）
-├── gitlab_report.py               # ReportSinkPort 实现（MR comment）
-├── repo_manager.py                # 仓库克隆/更新/清理
-└── tests/
+├── github_report.py               # ReportSinkPort 实现（PR review comment）
+├── repo_manager.py                # 仓库克隆/更新/清理（辅助模块）
+├── README.md                      # 插件说明文档
+└── .gitignore                     # Git 忽略规则
 ```
 
-### plugin.json 示例（GitHub）
+**关键文件说明**：
+
+| 文件 | 作用 | 必需 |
+|---|---|---|
+| `plugin.json` | 插件清单，声明身份、平台、能力和配置 Schema | ✅ |
+| `<platform>_trigger.py` | Trigger 实现，处理 webhook 并创建 review | ✅（若声明 trigger 能力） |
+| `<platform>_report.py` | Report 实现，将 findings 发布到平台 | ✅（若声明 report 能力） |
+| `repo_manager.py` | 仓库管理辅助模块，处理克隆/更新/清理 | 推荐（webhook 插件） |
+
+### 11.1 plugin.json 完整示例（GitHub）
 
 ```json
 {
   "plugin_id": "github",
-  "name": "GitHub Plugin",
-  "version": "0.1.0",
-  "description": "GitHub webhook trigger and PR review comment export",
+  "name": "GitHub Webhook Plugin",
+  "name_i18n": {
+    "zh-CN": "GitHub Webhook 插件"
+  },
+  "version": "1.0.0",
+  "description": "Automatically trigger CodeLens reviews on GitHub PR/push events and post findings as PR review comments",
+  "description_i18n": {
+    "zh-CN": "在 GitHub PR/Push 事件时自动触发 CodeLens 代码审查，并将审查结果以 PR Review 评论形式回写"
+  },
   "author": "CodeLens Team",
   "platform": "github",
   "capabilities": {
     "trigger": {
       "trigger_type": "webhook",
       "supported_events": ["webhook"],
-      "entry_point": "github_trigger:GitHubWebhookTrigger",
+      "entry_point": "github_trigger:GitHubTrigger",
       "config_schema": {
         "type": "object",
         "properties": {
-          "clone_dir": { "type": "string" },
-          "selected_agents": { "type": "array", "items": { "type": "string" } },
-          "prompt_locale": { "type": "string", "default": "en" },
-          "webhook_secret": { "type": "string" },
-          "debounce_seconds": { "type": "integer", "default": 30 }
-        },
-        "required": ["selected_agents"]
+          "pr_events": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "enum": ["opened", "synchronize", "reopened", "closed"]
+            },
+            "default": ["opened", "synchronize"],
+            "description": "Pull request actions to trigger reviews",
+            "description_i18n": {
+              "zh-CN": "触发审查的 PR 事件（opened, synchronize, reopened, closed）"
+            }
+          },
+          "debounce_seconds": {
+            "type": "integer",
+            "default": 60,
+            "minimum": 0,
+            "description": "Minimum seconds between triggers for the same PR/branch (0 = disabled)",
+            "description_i18n": {
+              "zh-CN": "同一 PR/分支触发评审的最小间隔秒数（0 = 禁用）"
+            }
+          },
+          "github_token": {
+            "type": "string",
+            "default": "",
+            "description": "GitHub API token for git clone (or set GITHUB_TOKEN env var)",
+            "description_i18n": {
+              "zh-CN": "GitHub API 令牌，用于 git clone（或设置 GITHUB_TOKEN 环境变量）"
+            }
+          },
+          "selected_agents": {
+            "type": "array",
+            "items": {"type": "string"},
+            "default": [],
+            "description": "Agent IDs to use for review (empty = default agents)",
+            "description_i18n": {
+              "zh-CN": "用于评审的 Agent ID（空 = 默认 Agent）"
+            }
+          },
+          "prompt_locale": {
+            "type": "string",
+            "default": "en",
+            "description": "Locale for review prompts (en, zh-CN)",
+            "description_i18n": {
+              "zh-CN": "审查提示词的语言（en, zh-CN）"
+            }
+          }
+        }
       }
     },
     "report": {
@@ -942,13 +1104,49 @@ CodeLens-GitLab-Plugin/
       "config_schema": {
         "type": "object",
         "properties": {
-          "gh_binary": { "type": "string", "default": "gh" }
+          "gh_binary": {
+            "type": "string",
+            "default": "gh",
+            "description": "Path to gh CLI binary",
+            "description_i18n": {
+              "zh-CN": "gh CLI 二进制文件路径"
+            }
+          },
+          "post_summary": {
+            "type": "boolean",
+            "default": true,
+            "description": "Post a summary comment before individual findings",
+            "description_i18n": {
+              "zh-CN": "在具体问题评论前发布一条汇总评论"
+            }
+          }
         }
       }
     }
   }
 }
 ```
+
+**字段说明**：
+
+| 字段 | 必需 | 说明 |
+|---|---|---|
+| `plugin_id` | ✅ | 唯一标识符，用于路由、存储和 API 路径。不能是保留值 `"local"` |
+| `name` | ✅ | 插件英文名称 |
+| `name_i18n` | 推荐 | 国际化名称，key 为 locale（如 `"zh-CN"`） |
+| `version` | ✅ | 语义化版本号（如 `"1.0.0"`） |
+| `description` | ✅ | 插件英文描述 |
+| `description_i18n` | 推荐 | 国际化描述 |
+| `author` | ✅ | 作者或团队名称 |
+| `platform` | ✅ | 平台标识，用于路由。必须与 `external_context.platform` 一致 |
+| `capabilities` | ✅ | 能力声明，至少包含 `trigger` 或 `report` 之一 |
+| `capabilities.trigger` | 可选 | Trigger 能力声明 |
+| `capabilities.trigger.trigger_type` | ✅ | `"webhook"` 或 `"local-hook"` |
+| `capabilities.trigger.supported_events` | ✅ | 支持的事件列表，webhook 插件填 `["webhook"]` |
+| `capabilities.trigger.entry_point` | ✅ | 格式 `"module:ClassName"`，如 `"github_trigger:GitHubTrigger"` |
+| `capabilities.trigger.config_schema` | ✅ | JSON Schema，描述 trigger 配置项 |
+| `capabilities.report.entry_point` | ✅ | 格式 `"module:ClassName"`，如 `"github_report:GitHubReportSink"` |
+| `capabilities.report.config_schema` | ✅ | JSON Schema，描述 report 配置项 |
 
 ---
 
@@ -970,6 +1168,13 @@ CodeLens-GitLab-Plugin/
 | GitHub | GitHub webhook payload | `gh pr review` / GitHub REST API | `gh` CLI |
 | GitLab | GitLab webhook payload | GitLab Discussions API / `glab` CLI | REST API |
 
+**GitHub 适配细节**：
+
+- **Trigger**：接收 `action` 为 `opened` 或 `synchronize` 的 pull_request webhook
+- **Report**：使用 GitHub REST API 或 `gh` CLI 发布 PR review 评论
+- **认证**：通过 `gh` CLI 的配置文件管理（`gh auth login`）
+- **严重级别映射**：`critical`→`critical`，`high`→`major`，`medium`→`minor`，`low`→`suggestion`
+
 ### 12.3 external_context 各平台示例
 
 **GitHub**：
@@ -981,6 +1186,8 @@ CodeLens-GitLab-Plugin/
 ```json
 {"platform": "gitlab", "project": "group/subgroup/project", "merge_request": 123}
 ```
+
+**注意**：`merge_request` 字段在 push 事件触发的 review 中可能缺失，此时 report 需要通过 commit SHA 查找对应的 MR。
 
 ---
 
@@ -995,13 +1202,545 @@ CodeLens-GitLab-Plugin/
 
 ---
 
-## 14. 实现计划
+## 14. 新插件接入指南
 
-| 阶段 | 内容 | 涉及项目 |
+> 本章节提供从零开发一个新 CodeLens 插件的完整步骤。
+
+### 14.1 接入流程概览
+
+```
+① 创建插件 Git 仓库
+   │ 包含 plugin.json + trigger 实现 + report 实现
+   ▼
+② 安装到 CodeLens
+   │ POST /api/plugins/install  {"git_url": "...", "ref": "main"}
+   ▼
+③ 启用 Trigger 能力
+   │ PUT /api/plugins/{id}/trigger/enable
+   │ PUT /api/plugins/{id}/trigger/config  (配置 webhook 参数)
+   ▼
+④ 启用 Report 能力（需先启用 Trigger）
+   │ PUT /api/plugins/{id}/report/enable
+   │ PUT /api/plugins/{id}/report/config
+   │ PUT /api/plugins/{id}/report/auto-export  {"enabled": true}
+   ▼
+⑤ 在平台侧配置 Webhook
+   │ 指向 CodeLens 的 POST /api/webhooks/{platform}
+   ▼
+⑥ 验证端到端流程
+   │ 触发 webhook → 创建 review → 自动导出到平台
+```
+
+### 14.2 Step 1：创建插件项目
+
+#### 14.2.1 目录结构
+
+```
+CodeLens-<Platform>-Plugin/
+├── plugin.json                  # 必需：插件清单
+├── <platform>_trigger.py        # 必需：Trigger 实现
+├── <platform>_report.py         # 必需：Report 实现
+├── repo_manager.py              # 推荐：仓库管理辅助
+├── README.md                    # 推荐：插件说明
+└── .gitignore
+```
+
+**命名约定**：
+- 仓库名：`CodeLens-<Platform>-Plugin`（如 `CodeLens-GitHub-Plugin`）
+- 模块名：`<platform>_trigger.py` / `<platform>_report.py`
+- 类名：`<Platform>Trigger` / `<Platform>ReportSink`
+
+#### 14.2.2 编写 plugin.json
+
+参考 [第 11 节](#111-pluginjson-完整示例github) 的完整示例。关键要点：
+
+1. `plugin_id` 唯一且不含空格/特殊字符，不能是保留值 `"local"`
+2. `platform` 值必须与 trigger 注入的 `external_context["platform"]` 一致
+3. 外置插件**必须同时声明** trigger 和 report 能力
+4. `entry_point` 格式为 `"module_name:ClassName"`
+5. `config_schema` 使用标准 JSON Schema，推荐提供 `default` 和 `description`/`description_i18n`
+
+### 14.3 Step 2：实现 Trigger 能力
+
+Trigger 实现 `TriggerSinkPort` 协议。以下是完整模板：
+
+```python
+"""<Platform> webhook trigger for CodeLens."""
+
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+# 可导入同目录的辅助模块（loader 会将插件目录加入 sys.path）
+from repo_manager import RepoManager
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class <Platform>Trigger:
+    """Trigger reviews from <Platform> webhook events."""
+
+    def __init__(self, review_creator):
+        """初始化 Trigger。
+
+        Args:
+            review_creator: ReviewCreatorPort，由 CodeLens loader 注入。
+                            调用其 create_review_from_trigger() 创建 review。
+        """
+        self._review_creator = review_creator
+        # 防抖记录：key → 上次触发时间
+        self._last_trigger: dict[str, datetime] = {}
+
+    @property
+    def trigger_id(self) -> str:
+        """稳定标识符，必须与 plugin.json 的 plugin_id 一致。"""
+        return "<plugin_id>"
+
+    @property
+    def display_name(self) -> str:
+        """UI 显示名称。"""
+        return "<Platform> Webhook Trigger"
+
+    async def handle_event(
+        self,
+        event: Any,              # HookEvent 枚举，webhook 插件始终为 HookEvent.WEBHOOK
+        repository_path: Path,   # webhook 模式下为 Path(".")，实际仓库路径由插件管理
+        config: dict[str, Any],  # trigger 配置，来自 plugin.json config_schema
+        event_payload: dict[str, Any],
+        # 结构：{"payload": <webhook_body_dict>, "headers": <dict>}
+        external_context: dict[str, Any] | None = None,
+    ) -> str | None:
+        """处理一个 webhook 事件。
+
+        Returns:
+            创建的 task_id，或 None（被防抖/过滤跳过时）。
+        """
+        payload = event_payload.get("payload", {})
+        # 1. 解析 payload，提取事件类型和关键信息
+        # 2. 按 config 过滤不需要的事件
+        # 3. 防抖检查
+        # 4. 构建 external_context
+        # 5. 克隆/更新仓库
+        # 6. 调用 review_creator 创建 review
+        ...
+```
+
+#### 14.3.1 handle_event 内部模式
+
+以下是 webhook 插件展示的典型模式：
+
+**事件解析**：
+
+```python
+async def handle_event(self, event, repository_path, config, event_payload, external_context=None):
+    payload = event_payload.get("payload", {})
+    object_kind = payload.get("object_kind")
+
+    if object_kind == "merge_request":
+        return await self._handle_mr_event(payload, config)
+    elif object_kind == "push":
+        return await self._handle_push_event(payload, config)
+    return None  # 忽略不关心的事件类型
+```
+
+**防抖机制**：
+
+```python
+def _is_debounced(self, key: str, config: dict) -> bool:
+    """检查是否在防抖窗口内。"""
+    debounce_seconds = config.get("debounce_seconds", 60)
+    if debounce_seconds <= 0:
+        return False
+    now = datetime.now()
+    last = self._last_trigger.get(key)
+    if last and (now - last).total_seconds() < debounce_seconds:
+        return True
+    self._last_trigger[key] = now
+    return False
+```
+
+**构建 external_context**：
+
+```python
+# external_context 是 trigger 和 report 之间的约定
+# 必须包含 "platform" 字段用于路由
+external_context = {
+    "platform": "<platform_id>",     # 必需，与 plugin.json 的 platform 一致
+    "project": project_path,         # 项目标识（平台特定格式）
+    "merge_request": mr_iid,         # MR/PR 编号（若适用）
+}
+```
+
+**创建 Review**：
+
+```python
+# 调用注入的 review_creator 创建 review
+task_id = await self._review_creator.create_review_from_trigger(
+    repository_path=repo_path,         # 本地仓库路径
+    scope_type="branch",               # "commit" | "branch"
+    scope_params={
+        "base_ref": target_branch,     # 基准分支
+        "target_ref": source_branch,   # 目标分支
+    },
+    selected_agents=tuple(agents),     # Agent ID 列表
+    prompt_locale=config.get("prompt_locale", "en"),
+    external_context=external_context, # 平台上下文，透传到 report
+)
+return task_id
+```
+
+#### 14.3.2 scope_type 选择
+
+| scope_type | 适用场景 | scope_params |
 |---|---|---|
-| **Phase 1** | CodeLens 核心：统一插件模型 + 存储 + API | CodeLens |
-| **Phase 2** | CodeLens 核心：external_context 透传 + 平台路由 | CodeLens |
-| **Phase 3** | CodeLens 核心：webhook 端点 + trigger 外部加载 | CodeLens |
-| **Phase 4** | GitHub 插件：trigger + report + repo_manager | CodeLens-GitHub-Plugin |
-| **Phase 5** | GitLab 插件：trigger + report + repo_manager | CodeLens-GitLab-Plugin |
-| **Phase 6** | 集成测试 + 端到端验证 | 全部 |
+| `"branch"` | MR/PR 级别审查 | `{"base_ref": "main", "target_ref": "feature/xxx"}` |
+| `"commit"` | 单次 push/commit 级别审查 | `{"base_commit": "<before_sha>", "target_ref": "<after_sha>"}` |
+
+**常见实践**：MR 事件使用 `branch`；Push 事件优先尝试 `commit`（如果 before SHA 是 after SHA 的祖先），否则回退到 `branch`。
+
+#### 14.3.3 仓库管理
+
+Webhook Trigger 需要自行管理仓库克隆。推荐将仓库管理封装为独立的 `RepoManager` 类：
+
+```python
+class RepoManager:
+    """管理 webhook trigger 的本地仓库克隆。"""
+
+    def __init__(self, base_dir: Path, token: str = ""):
+        self._base_dir = base_dir
+        self._token = token
+
+    def get_or_update_repo(
+        self, clone_url: str, project_path: str, ref: str, base_ref: str = None
+    ) -> Path:
+        """确保本地仓库存在并更新到指定分支。
+
+        首次调用：git clone
+        后续调用：git fetch + git checkout + git reset --hard
+        """
+        ...
+```
+
+**关键设计决策**：
+
+| 决策 | 理由 |
+|---|---|
+| 目录名使用项目路径的 SHA256 前 16 位 | 避免文件系统特殊字符问题 |
+| 使用 `git fetch + reset` 而非 `pull` | 确保本地分支与远端完全一致 |
+| Token 注入到 clone URL | 支持私有仓库认证 |
+| 同步方法包装在 `asyncio.to_thread()` 中 | 避免阻塞事件循环 |
+
+### 14.4 Step 3：实现 Report 能力
+
+Report 实现 `ReportSinkPort` 协议。与 Trigger 不同，Report **无构造函数参数**：
+
+```python
+"""<Platform> report sink for CodeLens."""
+
+import logging
+from datetime import datetime
+from pathlib import Path
+from typing import Any
+
+_LOGGER = logging.getLogger(__name__)
+
+
+class <Platform>ReportSink:
+    """Post review findings to <Platform> as MR/PR comments."""
+
+    @property
+    def sink_id(self) -> str:
+        """稳定标识符，必须与 plugin.json 的 plugin_id 一致。"""
+        return "<plugin_id>"
+
+    @property
+    def display_name(self) -> str:
+        """UI 显示名称。"""
+        return "<Platform> MR Comments"
+
+    async def export(
+        self,
+        envelope: Any,             # FindingExportEnvelope（通过属性访问字段）
+        config: dict[str, Any],    # report 配置
+        repository_path: Path,     # 仓库路径
+    ) -> Any:                      # 返回 ExportResult 兼容的 dict
+        """导出 findings 到平台。
+
+        关键约束：
+        - 不得抛出异常，所有错误必须捕获并返回失败结果
+        - 通过 envelope.review.external_context 获取平台路由信息
+        """
+        # 1. 提取 external_context
+        external_context = envelope.review.external_context
+        if not external_context:
+            return {
+                "plugin_id": self.sink_id,
+                "task_id": envelope.review.task_id,
+                "success": False,
+                "output_path": None,
+                "error": "No external_context in envelope",
+                "exported_at": datetime.now().isoformat(),
+            }
+
+        platform = external_context.get("platform")
+        project = external_context.get("project")
+        mr_iid = external_context.get("merge_request")
+
+        # 2. 遍历 findings 并发布
+        errors = []
+        for finding in envelope.findings:
+            try:
+                self._post_finding(project, mr_iid, finding, config)
+            except Exception as e:
+                errors.append(f"Finding {finding.finding_id}: {e}")
+
+        # 3. 返回结果
+        return {
+            "plugin_id": self.sink_id,
+            "task_id": envelope.review.task_id,
+            "success": len(errors) == 0,
+            "output_path": None,
+            "error": "; ".join(errors) if errors else None,
+            "exported_at": datetime.now().isoformat(),
+        }
+```
+
+#### 14.4.1 Report 关键模式
+
+**external_context 缺失时的处理**：
+
+Report 必须处理 `external_context` 为 `None` 或缺少必要字段的情况。这是 push 事件触发的 review 可能出现的场景（没有 MR 信息）。推荐的应对策略是主动查找 MR：
+
+```python
+# 如果没有 merge_request 信息，尝试通过 commit SHA 查找 MR
+if not mr_iid:
+    head_oid = envelope.review.head_oid
+    mr_iid = await self._find_mr_by_commit(project, head_oid)
+    if not mr_iid:
+        return {"success": False, "error": "No MR found for commit", ...}
+```
+
+**严重级别映射**：
+
+各平台的严重级别命名不同，需要在 Report 中做映射。典型的映射示例：
+
+| CodeLens severity | 平台 severity |
+|---|---|
+| `critical` | `critical` |
+| `high` | `major` |
+| `medium` | `minor` |
+| `low` | `suggestion` |
+
+**评论内容格式**：
+
+大多数平台使用 Markdown 格式发布行级评论：
+
+```python
+body_lines = [f"**{finding.title}**", ""]
+if finding.explanation:
+    body_lines.append(finding.explanation)
+    body_lines.append("")
+if finding.recommendation:
+    body_lines.append("**Recommendation:**")
+    body_lines.append(finding.recommendation)
+body = "\n".join(body_lines)
+```
+
+通过 stdin 传递评论内容（`--body-file -`），避免 shell 转义问题。
+
+### 14.5 Step 4：安装与配置
+
+#### 14.5.1 安装插件
+
+```bash
+# 通过 API 安装
+curl -X POST http://localhost:8000/api/plugins/install \
+  -H "Content-Type: application/json" \
+  -d '{"git_url": "https://github.com/your-org/CodeLens-<Platform>-Plugin.git", "ref": "main"}'
+```
+
+安装流程：
+1. CodeLens 克隆插件仓库到临时目录
+2. 读取并验证 `plugin.json`
+3. 移动到 `{data_dir}/plugins/{plugin_id}/`
+4. 创建 `PluginRecord`（trigger 和 report 默认关闭）
+5. 从 `config_schema` 的 `default` 值生成默认配置
+
+#### 14.5.2 启用能力
+
+```bash
+# 1. 启用 Trigger
+curl -X PUT http://localhost:8000/api/plugins/<plugin_id>/trigger/enable
+
+# 2. 配置 Trigger
+curl -X PUT http://localhost:8000/api/plugins/<plugin_id>/trigger/config \
+  -H "Content-Type: application/json" \
+  -d '{
+    "debounce_seconds": 60,
+    "selected_agents": ["correctness:v1"],
+    "prompt_locale": "zh-CN"
+  }'
+
+# 3. 启用 Report（必须先启用 Trigger）
+curl -X PUT http://localhost:8000/api/plugins/<plugin_id>/report/enable
+
+# 4. 配置 Report
+curl -X PUT http://localhost:8000/api/plugins/<plugin_id>/report/config \
+  -H "Content-Type: application/json" \
+  -d '{"gh_binary": "gh", "post_summary": true}'
+
+# 5. 启用自动导出
+curl -X PUT http://localhost:8000/api/plugins/<plugin_id>/report/auto-export \
+  -H "Content-Type: application/json" \
+  -d '{"enabled": true}'
+```
+
+#### 14.5.3 配置平台 Webhook
+
+在目标平台的项目设置中配置 Webhook：
+
+| 配置项 | 值 |
+|---|---|
+| URL | `http(s)://<codelens-host>:<port>/api/webhooks/<platform>` |
+| 方法 | POST |
+| Content-Type | application/json |
+| 触发事件 | MR/PR 创建、更新等（根据插件支持的事件选择） |
+
+### 14.6 加载机制详解
+
+理解加载机制有助于排查问题：
+
+#### 14.6.1 动态加载流程
+
+```
+CompositePluginLoader.load_plugin(plugin_id)
+    │
+    ├── 检查缓存 _trigger_instances[plugin_id]
+    │   └── 命中 → 直接返回
+    │
+    ├── 尝试内置加载（plugin_id == "local"）
+    │   └── 成功 → 缓存并返回
+    │
+    └── 外部加载（importlib）
+        │
+        ├── 解析 entry_point: "github_trigger:GitHubTrigger"
+        │   → module_name = "github_trigger"
+        │   → class_name = "GitHubTrigger"
+        │
+        ├── 定位模块文件: install_path / "github_trigger.py"
+        │
+        ├── 将 install_path 加入 sys.path（append，最低优先级）
+        │   → 使同目录的 repo_manager.py 等辅助模块可导入
+        │
+        ├── 使用 importlib.util.spec_from_file_location() 创建模块
+        │   → 模块名: "codelens_ext_plugin_{plugin_id}_{generation}"
+        │
+        ├── 编译并 exec() 源码
+        │
+        ├── 提取类: getattr(module, class_name)
+        │
+        ├── 实例化: trigger_class(review_creator)
+        │   → review_creator 是 ReviewCreatorPort 的适配器实例
+        │
+        ├── 验证: hasattr(instance, "trigger_id") and hasattr(instance, "handle_event")
+        │
+        └── 缓存并返回实例
+```
+
+#### 14.6.2 关键约束
+
+| 约束 | 说明 |
+|---|---|
+| **不导入 CodeLens 代码** | 插件是独立项目，不能 `import codelens.*`。所有交互通过 Protocol duck-typing |
+| **模块名唯一** | entry_point 的 module 部分对应插件目录下的 `.py` 文件名 |
+| **Trigger 构造函数接收 review_creator** | `__init__(self, review_creator)` 是唯一参数 |
+| **Report 无构造参数** | `__init__(self)` 无参数 |
+| **可导入同目录模块** | loader 会将 `install_path` 加入 `sys.path`，因此 `from repo_manager import RepoManager` 可行 |
+| **缓存失效** | 安装/卸载/重新配置插件时自动清除缓存，下次调用重新加载 |
+
+### 14.7 测试与调试
+
+#### 14.7.1 手动触发 Webhook 测试
+
+```bash
+# 模拟 webhook 请求
+curl -X POST http://localhost:8000/api/webhooks/<platform> \
+  -H "Content-Type: application/json" \
+  -d '{
+    "object_kind": "merge_request",
+    "object_attributes": {
+      "iid": 1,
+      "action": "open",
+      "source_branch": "feature/test",
+      "target_branch": "main"
+    },
+    "project": {
+      "path_with_namespace": "group/project"
+    }
+  }'
+```
+
+#### 14.7.2 查看插件状态
+
+```bash
+# 列出所有插件及其状态
+curl http://localhost:8000/api/plugins | python -m json.tool
+```
+
+#### 14.7.3 日志排查
+
+插件日志通过 CodeLens 的日志系统输出。Trigger 和 Report 中的 `_LOGGER` 调用会出现在 CodeLens 的运行日志中。关键排查点：
+
+| 场景 | 检查点 |
+|---|---|
+| Webhook 未触发 review | 检查 `platform` 是否匹配、`trigger_enabled` 是否为 `true` |
+| Review 创建失败 | 检查 `repository_path` 是否有效、`scope_params` 是否正确 |
+| Report 未导出 | 检查 `report_enabled` + `report_auto_export` 是否都为 `true` |
+| Report 导出失败 | 检查 `external_context` 是否包含正确的 `platform`、`project`、`merge_request` |
+| 模块加载失败 | 检查 `entry_point` 格式是否正确、类名是否匹配 |
+
+#### 14.7.4 配置验证
+
+配置通过 `jsonschema` 严格验证。`config_schema` 中的约束（如 `enum`、`minimum`、`additionalProperties: false`）会自动执行。修改配置时如果违反 schema，API 会返回 422 错误。
+
+### 14.8 接入检查清单
+
+开发完成后，逐项确认：
+
+- [ ] `plugin.json` 格式正确，`plugin_id` 唯一且非保留值
+- [ ] `platform` 值与 trigger 注入的 `external_context["platform"]` 一致
+- [ ] `entry_point` 格式为 `"module:ClassName"`，模块文件存在于插件根目录
+- [ ] Trigger 类实现 `trigger_id`（property）、`display_name`（property）、`handle_event()`
+- [ ] Trigger 构造函数接收 `review_creator` 单参数
+- [ ] Report 类实现 `sink_id`（property）、`display_name`（property）、`export()`
+- [ ] Report 类无构造参数
+- [ ] `export()` 返回 ExportResult 兼容的 dict，不抛出异常
+- [ ] `config_schema` 中所有配置项都有 `default` 值和 `description`
+- [ ] 提供 `name_i18n` / `description_i18n` 国际化字段
+- [ ] 仓库管理使用 `asyncio.to_thread()` 包装同步操作（避免阻塞事件循环）
+- [ ] 防抖机制合理配置（默认 60 秒）
+- [ ] Webhook 端点 URL 格式为 `/api/webhooks/{platform}`
+- [ ] 端到端验证通过：webhook → review → auto-export → 平台评论
+
+### 14.9 参考实现速查
+
+| 文件 | 行数 | 关键功能 |
+|---|---|---|
+| `plugin.json` | 130 行 | 完整清单，含 trigger（8 个配置项）和 report（3 个配置项）的 config_schema |
+| `<platform>_trigger.py` | ~200 行 | MR/Push 事件处理、防抖、scope 选择、external_context 构建 |
+| `<platform>_report.py` | ~200 行 | MR 发现（含 push 事件的 MR 查找）、行级评论发布、API 调用 |
+| `repo_manager.py` | ~150 行 | SHA256 哈希目录名、clone/fetch/reset、token 注入、超时控制 |
+
+---
+
+## 15. 实现状态
+
+所有核心功能已实现并验证。
+
+| 阶段 | 内容 | 状态 |
+|---|---|---|
+| **Phase 1** | CodeLens 核心：统一插件模型 + 存储 + API | ✅ 已完成 |
+| **Phase 2** | CodeLens 核心：external_context 透传 + 平台路由 | ✅ 已完成 |
+| **Phase 3** | CodeLens 核心：webhook 端点 + trigger 外部加载 | ✅ 已完成 |
+| **Phase 4** | 插件生态：trigger + report + repo_manager 参考实现 | ✅ 已验证 |
