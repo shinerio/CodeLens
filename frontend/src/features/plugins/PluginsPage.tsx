@@ -956,7 +956,46 @@ function ConfigField({
     );
   }
 
-  const stringValue = typeof value === "string" ? value : String(defaultValue ?? "");
+  // Array without enum: render as comma-separated text input
+  if (type === "array") {
+    const arrayValue = Array.isArray(value) ? value : Array.isArray(defaultValue) ? defaultValue : [];
+    const textValue = arrayValue.join(", ");
+    return (
+      <div className="config-field">
+        <label className="config-field__label">{label}</label>
+        <input
+          className="config-field__input"
+          type="text"
+          value={textValue}
+          placeholder="value1, value2, ..."
+          onChange={(e) => {
+            const items = e.target.value
+              .split(",")
+              .map((s) => s.trim())
+              .filter((s) => s.length > 0);
+            onChange(items);
+          }}
+        />
+      </div>
+    );
+  }
+
+  // String with newlines: render as textarea
+  const stringValue = typeof value === "string" ? value : typeof defaultValue === "string" ? defaultValue : "";
+  if (stringValue.includes("\n") || label.toLowerCase().includes("footer") || label.toLowerCase().includes("content")) {
+    return (
+      <div className="config-field">
+        <label className="config-field__label">{label}</label>
+        <textarea
+          className="config-field__input config-field__textarea"
+          rows={4}
+          value={stringValue}
+          onChange={(e) => onChange(e.target.value)}
+        />
+      </div>
+    );
+  }
+
   return (
     <div className="config-field">
       <label className="config-field__label">{label}</label>

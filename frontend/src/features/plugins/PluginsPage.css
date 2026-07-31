@@ -475,6 +475,20 @@
   font-size: 0.8125rem;
 }
 
+.config-field__textarea {
+  width: 100%;
+  max-width: 480px;
+  min-height: 80px;
+  padding: 8px 10px;
+  border: 1px solid var(--line);
+  border-radius: 4px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.8125rem;
+  font-family: monospace;
+  resize: vertical;
+}
+
 .config-field__checkboxes {
   display: flex;
   gap: 16px;
