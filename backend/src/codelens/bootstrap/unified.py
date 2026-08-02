@@ -426,6 +426,9 @@ def build_unified_backend(
         events=SqlEventOutbox(database, event_bus=event_bus),
         event_bus=event_bus,
         review_store=review_store,
+        review_plan_store=SqlReviewPlanStore(database),
+        checkpoints=SqlCheckpointStore(database),
+        resolution_store=SqlResolutionStore(database),
         input_artifacts=input_artifacts,
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()

@@ -18,6 +18,7 @@ from codelens.interface.http.dependencies import (
 from codelens.interface.http.routers.plugins import router as plugins_router
 from codelens.interface.http.routers.repositories import router as repositories_router
 from codelens.interface.http.routers.review_profiles import router as review_profiles_router
+from codelens.interface.http.routers.reviewer_catalog import router as reviewer_catalog_router
 from codelens.interface.http.routers.reviewer_prompts import router as reviewer_prompts_router
 from codelens.interface.http.routers.reviews import router as reviews_router
 from codelens.interface.http.routers.settings import router as settings_router
@@ -214,6 +215,7 @@ def create_app_with_components(
     app.include_router(reviews_router)
     app.include_router(settings_router)
     app.include_router(reviewer_prompts_router)
+    app.include_router(reviewer_catalog_router)
     app.include_router(plugins_router)
     app.include_router(webhooks_router)
     app.include_router(trigger_events_router)

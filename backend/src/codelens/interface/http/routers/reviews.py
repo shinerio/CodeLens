@@ -24,11 +24,8 @@ from codelens.interface.http.dto import (
 )
 from codelens.review.application.commands import CreateReviewCommand
 from codelens.review.application.process_report import ProcessTranscriptEntry, build_process_report
-from codelens.review.domain.review_strategy import (
-    BudgetProfile,
-    FixedReviewerSelection,
-    ReviewProfileSnapshot,
-)
+from codelens.review.domain.ports import ReviewRecord
+from codelens.review.domain.review_plan import ReviewPlanNodeType
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 _LOGGER = logging.getLogger("codelens.reviews")
@@ -47,6 +44,53 @@ _TERMINAL_EVENTS = {
 _TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled", "superseded"}
 
 
+async def _review_response(
+    review: ReviewRecord, components: HttpComponents
+) -> ReviewResponse:
+    """Project public multi-Agent state exclusively from durable Plan and checkpoints."""
+
+    plan_record = await components.review_plan_store.get(review.task_id)
+    if plan_record is None:
+        return ReviewResponse.from_domain(review)
+    plan = plan_record.plan
+    checkpoint_records = {
+        item.node_key: item
+        for item in await components.checkpoints.list_for_task(review.task_id)
+    }
+    coverage: dict[str, list[str]] = {
+        "planned": [],
+        "completed": [],
+        "failed": [],
+        "omitted": [],
+    }
+    for node in plan.nodes:
+        if node.node_type is not ReviewPlanNodeType.REVIEWER:
+            continue
+        checkpoint = checkpoint_records.get(node.node_id)
+        status = checkpoint.status if checkpoint is not None else "pending"
+        target = (
+            "completed"
+            if status == "succeeded"
+            else "failed"
+            if status in {"failed", "timed_out", "canceled"}
+            else "omitted"
+            if status in {"skipped", "superseded"}
+            else "planned"
+        )
+        coverage[target].append(node.agent_reference)
+    decisions = await components.resolution_store.list_decisions(review.task_id)
+    resolution_summary = {"publish": 0, "suppress": 0, "verify": 0}
+    for decision in decisions:
+        resolution_summary[decision.outcome.value] += 1
+    return ReviewResponse.from_domain(
+        review,
+        selected_agents=list(plan.reviewer_references),
+        review_plan=json.loads(plan.canonical_json()),
+        coverage=coverage,
+        resolution_summary=resolution_summary,
+    )
+
+
 @router.post("", response_model=ReviewResponse, status_code=202)
 async def create_review(
     request: CreateReviewRequest,
@@ -61,9 +105,7 @@ async def create_review(
             CreateReviewCommand(
                 repository=repository,
                 scope=request.scope.to_domain(),
-                review_profile=ReviewProfileSnapshot(
-                    FixedReviewerSelection(tuple(request.selected_agents)), BudgetProfile.STANDARD
-                ),
+                review_profile=request.review_profile_snapshot(),
                 prompt_locale=request.prompt_locale,
                 external_context=request.external_context,
             )
@@ -80,7 +122,7 @@ async def create_review(
         "Review created",
         extra={"task_id": record.task_id, "scope_type": request.scope.type},
     )
-    return ReviewResponse.from_domain(record)
+    return await _review_response(record, components)
 
 
 @router.get("", response_model=list[ReviewResponse])
@@ -89,7 +131,14 @@ async def list_reviews(
 ) -> list[ReviewResponse]:
     """Return persistent visible Review workspaces in newest-first order."""
 
-    return [ReviewResponse.from_domain(record) for record in await components.list_reviews.handle()]
+    return list(
+        await asyncio.gather(
+            *(
+                _review_response(record, components)
+                for record in await components.list_reviews.handle()
+            )
+        )
+    )
 
 
 @router.get("/{task_id}", response_model=ReviewResponse)
@@ -99,7 +148,7 @@ async def get_review(
 ) -> ReviewResponse:
     """Return one path-free persisted review summary."""
 
-    return ReviewResponse.from_domain(await components.get_review.handle(task_id))
+    return await _review_response(await components.get_review.handle(task_id), components)
 
 
 @router.delete("/{task_id}", status_code=204)
@@ -121,7 +170,9 @@ async def cancel_review(
 ) -> ReviewResponse:
     """Persist cancellation intent; the singleton Worker performs propagation."""
 
-    return ReviewResponse.from_domain(await components.cancel_review.handle(task_id))
+    return await _review_response(
+        await components.cancel_review.handle(task_id), components
+    )
 
 
 @router.post("/{task_id}/retry", response_model=ReviewResponse, status_code=202)
@@ -132,7 +183,7 @@ async def retry_review(
 ) -> ReviewResponse:
     """Create and enqueue an independent Review from one failed task's frozen input."""
 
-    return ReviewResponse.from_domain(await components.retry_review.handle(task_id))
+    return await _review_response(await components.retry_review.handle(task_id), components)
 
 
 @router.get("/{task_id}/report")

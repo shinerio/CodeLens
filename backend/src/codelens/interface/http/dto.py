@@ -19,7 +19,9 @@ from codelens.review.domain.ports import RecentRepositoryRecord, ReviewRecord
 from codelens.review.domain.review_profile import ReviewProfile
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
+    BudgetProfile,
     FixedReviewerSelection,
+    ReviewProfileSnapshot,
 )
 from codelens.workspace.domain.models import (
     BranchScope,
@@ -395,9 +397,54 @@ class DirectoryListingResponse(StrictDto):
 class CreateReviewRequest(StrictDto):
     repository_path: Path
     scope: ScopeRequest
-    selected_agents: Annotated[list[AgentReference], Field(min_length=1, max_length=32)]
+    reviewer_selection: ReviewerSelectionDto | None = None
+    budget_profile: Literal["lean", "standard", "deep"] = "standard"
+    profile_source: "ReviewProfileSourceDto | None" = None
+    selected_agents: Annotated[
+        list[AgentReference] | None, Field(min_length=1, max_length=32)
+    ] = None
     prompt_locale: Literal["en", "zh-CN"] = "en"
     external_context: dict[str, Any] | None = None
+
+    @model_validator(mode="after")
+    def validate_selection_contract(self) -> "CreateReviewRequest":
+        """Require exactly one v2 selection or the explicit legacy adapter field."""
+
+        if (self.reviewer_selection is None) == (self.selected_agents is None):
+            raise ValueError(
+                "exactly one of reviewer_selection or selected_agents is required"
+            )
+        if self.selected_agents is not None and (
+            self.budget_profile != "standard" or self.profile_source is not None
+        ):
+            raise ValueError(
+                "legacy selected_agents cannot set v2 budget or profile provenance"
+            )
+        return self
+
+    def review_profile_snapshot(self) -> ReviewProfileSnapshot:
+        selection = self.reviewer_selection
+        if selection is None:
+            selection = FixedReviewerSelectionDto(
+                mode="fixed", reviewer_versions=self.selected_agents or []
+            )
+        domain_selection = (
+            AdaptiveReviewerSelection()
+            if isinstance(selection, AdaptiveReviewerSelectionDto)
+            else FixedReviewerSelection(tuple(selection.reviewer_versions))
+        )
+        source = self.profile_source
+        return ReviewProfileSnapshot(
+            reviewer_selection=domain_selection,
+            budget_profile=BudgetProfile(self.budget_profile),
+            source_profile_id=source.profile_id if source is not None else None,
+            source_profile_revision=source.revision if source is not None else None,
+        )
+
+
+class ReviewProfileSourceDto(StrictDto):
+    profile_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    revision: Annotated[int, Field(ge=1)]
 
 
 class UpdateReviewerPromptRequest(StrictDto):
@@ -431,9 +478,40 @@ class ReviewResponse(StrictDto):
     created_at: datetime
     finding_count: Annotated[int, Field(ge=0)] = 0
     external_context: dict[str, Any] | None = None
+    selection_request: dict[str, object]
+    budget_profile: Literal["lean", "standard", "deep"]
+    profile_source: dict[str, object] | None = None
+    review_plan: dict[str, object] | None = None
+    coverage: dict[str, list[str]]
+    resolution_summary: dict[str, int]
 
     @classmethod
-    def from_domain(cls, review: ReviewRecord) -> "ReviewResponse":
+    def from_domain(
+        cls,
+        review: ReviewRecord,
+        *,
+        selected_agents: list[str] | None = None,
+        review_plan: dict[str, object] | None = None,
+        coverage: dict[str, list[str]] | None = None,
+        resolution_summary: dict[str, int] | None = None,
+    ) -> "ReviewResponse":
+        selection = review.review_profile.reviewer_selection
+        selection_request: dict[str, object] = (
+            {"mode": "adaptive"}
+            if isinstance(selection, AdaptiveReviewerSelection)
+            else {
+                "mode": "fixed",
+                "reviewer_versions": list(selection.reviewer_versions),
+            }
+        )
+        source: dict[str, object] | None = (
+            {
+                "profile_id": review.review_profile.source_profile_id,
+                "revision": review.review_profile.source_profile_revision,
+            }
+            if review.review_profile.source_profile_id is not None
+            else None
+        )
         return cls(
             task_id=review.task_id,
             status=review.status,
@@ -442,7 +520,7 @@ class ReviewResponse(StrictDto):
             head_oid=review.head_oid,
             base_ref=review.base_ref,
             target_ref=review.target_ref,
-            selected_agents=list(review.selected_agent_versions),
+            selected_agents=selected_agents or list(review.selected_agent_versions),
             repository_id=review.repository_id,
             repository_realpath_hash=review.repository_realpath_hash,
             git_common_dir_hash=review.git_common_dir_hash,
@@ -451,6 +529,14 @@ class ReviewResponse(StrictDto):
             created_at=review.created_at,
             finding_count=review.finding_count,
             external_context=review.external_context,
+            selection_request=selection_request,
+            budget_profile=review.review_profile.budget_profile.value,
+            profile_source=source,
+            review_plan=review_plan,
+            coverage=coverage
+            or {"planned": [], "completed": [], "failed": [], "omitted": []},
+            resolution_summary=resolution_summary
+            or {"publish": 0, "suppress": 0, "verify": 0},
         )
 
 

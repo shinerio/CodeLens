@@ -640,6 +640,11 @@ class SqlReviewPlanStore:
         timestamp = _now()
 
         async def operation(session: AsyncSession) -> None:
+            existing = await session.scalar(
+                select(review_plans.c.task_id).where(
+                    review_plans.c.task_id == plan.task_id
+                )
+            )
             await session.execute(
                 sqlite_insert(review_plans)
                 .values(
@@ -653,6 +658,16 @@ class SqlReviewPlanStore:
                 )
                 .on_conflict_do_nothing(index_elements=(review_plans.c.task_id,))
             )
+            if existing is None:
+                await session.execute(
+                    insert(events).values(
+                        **_event_values(
+                            plan.task_id,
+                            "review.plan_created",
+                            {"plan_hash": plan.plan_hash},
+                        )
+                    )
+                )
 
         await self._database.run_transaction(operation)
         record = await self.get(plan.task_id)
@@ -2385,6 +2400,11 @@ class SqlReviewStore:
             if result.rowcount != 1:
                 raise InvalidAgentRunStateError("AgentRun completion lost its expected state")
             event_payload = {"node_key": node_key, "finding_count": len(batch.findings)}
+            await session.execute(
+                insert(events).values(
+                    **_event_values(task_id, "agent_run.completed", event_payload)
+                )
+            )
             event_id = await session.scalar(
                 insert(events)
                 .values(**_event_values(task_id, "agent.succeeded", event_payload))
@@ -2520,6 +2540,11 @@ class SqlReviewStore:
                 "node_key": node_key,
                 "candidate_count": len(batch.candidates),
             }
+            await session.execute(
+                insert(events).values(
+                    **_event_values(task_id, "agent_run.completed", event_payload)
+                )
+            )
             event_id = await session.scalar(
                 insert(events)
                 .values(**_event_values(task_id, "agent.succeeded", event_payload))
@@ -2634,6 +2659,20 @@ class SqlReviewStore:
                 "node_key": node_key,
                 "resolution_count": len(decisions),
             }
+            await session.execute(
+                insert(events).values(
+                    **_event_values(task_id, "agent_run.completed", event_payload)
+                )
+            )
+            await session.execute(
+                insert(events).values(
+                    **_event_values(
+                        task_id,
+                        "review.resolution_completed",
+                        {"resolution_count": len(decisions)},
+                    )
+                )
+            )
             event_id = await session.scalar(
                 insert(events)
                 .values(**_event_values(task_id, "agent.succeeded", event_payload))
@@ -2760,6 +2799,20 @@ class SqlReviewStore:
                 "node_key": node_key,
                 "verification_count": len(decisions),
             }
+            await session.execute(
+                insert(events).values(
+                    **_event_values(task_id, "agent_run.completed", event_payload)
+                )
+            )
+            await session.execute(
+                insert(events).values(
+                    **_event_values(
+                        task_id,
+                        "review.verification_completed",
+                        {"verification_count": len(decisions)},
+                    )
+                )
+            )
             event_id = await session.scalar(
                 insert(events)
                 .values(**_event_values(task_id, "agent.succeeded", event_payload))
@@ -3127,6 +3180,15 @@ class SqlCheckpointStore:
             )
             if result.rowcount != 1:
                 raise InvalidAgentRunStateError("checkpoint is not pending")
+            await session.execute(
+                insert(events).values(
+                    **_event_values(
+                        task_id,
+                        "agent_run.started",
+                        {"node_key": node_key},
+                    )
+                )
+            )
 
         await self._database.run_transaction(operation)
 
@@ -3199,6 +3261,15 @@ class SqlCheckpointStore:
                 if current == target:
                     return
                 raise InvalidAgentRunStateError("checkpoint is not active")
+            await session.execute(
+                insert(events).values(
+                    **_event_values(
+                        task_id,
+                        "agent_run.failed",
+                        {"node_key": node_key, "error_code": error_code},
+                    )
+                )
+            )
 
         await self._database.run_transaction(operation)
 

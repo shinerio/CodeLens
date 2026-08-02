@@ -488,6 +488,12 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
 
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
         assert len([event for event in events if event.event_type == "agent.succeeded"]) == 2
+        assert len(
+            [event for event in events if event.event_type == "agent_run.completed"]
+        ) == 2
+        assert any(
+            event.event_type == "review.resolution_completed" for event in events
+        )
     finally:
         await database.dispose()
 
@@ -569,6 +575,9 @@ async def test_verification_and_publication_replay_are_exactly_once(
         assert await store.list_findings(task_id) == (finding,)
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
         assert len([item for item in events if item.event_type == "finding.published"]) == 1
+        assert any(
+            item.event_type == "review.verification_completed" for item in events
+        )
     finally:
         await database.dispose()
 

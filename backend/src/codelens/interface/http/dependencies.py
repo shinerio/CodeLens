@@ -55,8 +55,11 @@ from codelens.review.infrastructure.file_settings import (
 )
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
+    SqlCheckpointStore,
     SqlEventOutbox,
     SqlRecentRepositoryStore,
+    SqlResolutionStore,
+    SqlReviewPlanStore,
     SqlReviewProfileRepository,
     SqlReviewStore,
     SqlWorktreeRegistry,
@@ -134,6 +137,9 @@ class HttpComponents:
     events: SqlEventOutbox
     event_bus: InMemoryEventBus
     review_store: SqlReviewStore
+    review_plan_store: SqlReviewPlanStore
+    checkpoints: SqlCheckpointStore
+    resolution_store: SqlResolutionStore
     input_artifacts: FilesystemInputArtifactStore
     model_gateways: ModelGatewaySettingsService
     reviewer_prompts: ReviewerPromptSettingsService
@@ -279,6 +285,9 @@ def build_components(settings: Settings) -> HttpComponents:
         events=SqlEventOutbox(database, event_bus=event_bus),
         event_bus=event_bus,
         review_store=review_store,
+        review_plan_store=SqlReviewPlanStore(database),
+        checkpoints=SqlCheckpointStore(database),
+        resolution_store=SqlResolutionStore(database),
         input_artifacts=input_artifacts,
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()

@@ -53,6 +53,57 @@ def _request(repository: Path, scope: dict[str, object]) -> dict[str, object]:
     }
 
 
+def test_create_review_rejects_legacy_and_v2_selection_together(
+    tmp_path: Path, git_repository: Path
+) -> None:
+    _prepared_repository(git_repository)
+    payload = _request(git_repository, {"type": "uncommitted"})
+    payload["reviewer_selection"] = {
+        "mode": "fixed",
+        "reviewer_versions": ["general:v1"],
+    }
+
+    with TestClient(
+        create_app(_settings(tmp_path, tmp_path)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        response = client.post("/api/reviews", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_v2_adaptive_selection_is_persisted_without_legacy_upgrade(
+    tmp_path: Path, git_repository: Path
+) -> None:
+    _prepared_repository(git_repository)
+    payload = {
+        "repository_path": str(git_repository),
+        "scope": {
+            "type": "branch",
+            "base_ref": "main",
+            "target_ref": "feature-one",
+            "include_workspace_changes": False,
+        },
+        "reviewer_selection": {"mode": "adaptive"},
+        "budget_profile": "deep",
+        "prompt_locale": "en",
+    }
+
+    with TestClient(
+        create_app(_settings(tmp_path, tmp_path)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        created = client.post("/api/reviews", json=payload)
+        response = client.get(f"/api/reviews/{created.json()['task_id']}")
+
+    assert created.status_code == 202
+    assert response.status_code == 200
+    assert response.json()["selection_request"] == {"mode": "adaptive"}
+    assert response.json()["budget_profile"] == "deep"
+    assert response.json()["selected_agents"] == []
+    assert response.json()["review_plan"] is None
+
+
 def _run_git_safe(*arguments: str) -> subprocess.CompletedProcess[bytes]:
     return subprocess.run(
         ["git", "-c", "commit.gpgsign=false", *arguments],
