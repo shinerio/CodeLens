@@ -136,6 +136,7 @@ class RuntimeToolContext:
     completion_settings: ReviewCompletionSettings
     call_limits: ToolExecutionLimits
     role_output_tools: tuple[RoleOutputToolBinding, ...] = ()
+    logical_run_id: str | None = None
     collector_contract_version: str | None = field(default=None, init=False)
     reviewer_output: ReviewerOutputState | None = field(default=None, init=False)
     role_output_state: RoleOutputState | None = field(default=None, init=False)
@@ -301,7 +302,11 @@ class CapabilityToolAssembler:
                     available[(tool.name, 1)] = tool
             collector = ReviewCommentCollectorV2(
                 task_id=context.snapshot.worktree.task_id,
-                run_id=spec.fingerprint,
+                run_id=(
+                    context.logical_run_id
+                    if context.logical_run_id is not None
+                    else spec.fingerprint
+                ),
                 snapshot=context.snapshot,
                 reviewer_reference=spec.agent.reference,
                 reviewer_dimensions=spec.agent.dimensions,

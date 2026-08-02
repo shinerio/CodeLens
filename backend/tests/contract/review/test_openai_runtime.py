@@ -26,7 +26,10 @@ from codelens.review.domain.errors import (
     TransientAgentRuntimeError,
 )
 from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
-from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
+from codelens.review.infrastructure.openai_runtime import (
+    OpenAIAgentRuntime,
+    _split_agent_input,
+)
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
 from codelens.reviewer_catalog.infrastructure.builtin_agents import (
@@ -165,6 +168,43 @@ class PlannerRunner(FakeRunner):
         )
 
 
+class ResolverRunner(FakeRunner):
+    @staticmethod
+    async def complete_review(starting_agent: Agent[None]) -> None:
+        tool = next(tool for tool in starting_agent.tools if tool.name == "submit_resolution")
+        arguments = json.dumps(
+            {
+                "submission": {
+                    "schema_version": "1",
+                    "decisions": [
+                        {
+                            "cluster_id": "cluster-a",
+                            "outcome": "suppress",
+                            "canonical_candidate_id": None,
+                            "merged_candidate_ids": [],
+                            "severity": None,
+                            "title": None,
+                            "content": None,
+                            "recommendation": None,
+                            "reason_code": "insufficient-evidence",
+                        }
+                    ],
+                }
+            }
+        )
+        await tool.on_invoke_tool(
+            ToolContext(
+                None,
+                usage=Usage(),
+                tool_name="submit_resolution",
+                tool_call_id="fake-submit-resolution",
+                tool_arguments=arguments,
+                run_config=RunConfig(),
+            ),
+            arguments,
+        )
+
+
 class StaticProviderConfigStore:
     def __init__(self, config: ModelProviderConfig | None = None) -> None:
         self.config = config
@@ -232,8 +272,32 @@ def _planner_spec() -> FrozenAgentExecutionSpec:
     )
 
 
+def _resolver_spec() -> FrozenAgentExecutionSpec:
+    agent = builtin_agent_catalog()["review-resolver:v1"]
+    return CapabilityResolver.testing().resolve(
+        agent=agent,
+        prompt_content_hash=hashlib.sha256(agent.prompt_template.encode()).hexdigest(),
+        facts=SkillActivationFacts.empty(),
+        execution_limits=AgentExecutionLimits.legacy_default(),
+    )
+
+
 def _runtime_input() -> bytes:
     return b'{"repository_instructions":[],"review_files":[]}'
+
+
+def test_host_role_context_is_not_model_visible() -> None:
+    user_input, _instructions, role_context = _split_agent_input(
+        b'{"repository_instructions":[],"review_files":[],"role_context":'
+        b'{"_host_run_id":"run_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",'
+        b'"planner_guidance":{"focus_paths":[]}}}'
+    )
+
+    assert json.loads(user_input)["role_context"] == {
+        "planner_guidance": {"focus_paths": []}
+    }
+    assert role_context is not None
+    assert role_context["_host_run_id"].startswith("run_")
 
 
 def _planner_runtime_input() -> bytes:
@@ -246,6 +310,44 @@ def _planner_runtime_input() -> bytes:
                 "unavailable_reviewer_references": [],
                 "target_paths": [],
                 "allowed_reason_codes": ["broad-risk"],
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+
+def _resolver_runtime_input() -> bytes:
+    return json.dumps(
+        {
+            "repository_instructions": [],
+            "review_files": [],
+            "role_context": {
+                "resolution_context": {
+                    "schema_version": "1",
+                    "clusters": [
+                        {"cluster_id": "cluster-a", "candidate_ids": ["candidate-a"]}
+                    ],
+                    "candidates": [
+                        {
+                            "candidate_id": "candidate-a",
+                            "severity": "high",
+                            "title": "Missing signature check",
+                            "content": "Unsigned requests are accepted.",
+                            "recommendation": "Verify signatures first.",
+                            "category": "authentication",
+                            "evidence_hashes": ["a" * 64],
+                            "evidence_strength": "direct",
+                            "impact_certainty": "confirmed",
+                            "location": {
+                                "path": "src/webhook.py",
+                                "side": "new",
+                                "start_line": 5,
+                                "end_line": 5,
+                            },
+                        }
+                    ],
+                }
             },
         },
         sort_keys=True,
@@ -298,6 +400,44 @@ async def test_planner_runtime_uses_typed_submission_as_its_completion_signal() 
     }
     assert runner.starting_agent is not None
     assert tuple(tool.name for tool in runner.starting_agent.tools)[-1] == "submit_review_plan"
+
+
+async def test_resolver_runtime_uses_strict_one_shot_submission() -> None:
+    runner = ResolverRunner(
+        FakeResult(
+            final_output=None,
+            raw_responses=(
+                FakeResponse("resp-resolution", "req-resolution", FakeUsage(3, 2), ()),
+            ),
+        )
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    output = await runtime.invoke(
+        _resolver_spec(), _resolver_runtime_input(), _snapshot(), "en"
+    )
+
+    assert json.loads(output.canonical_bytes)["decisions"] == [
+        {
+            "canonical_candidate_id": None,
+            "cluster_id": "cluster-a",
+            "content": None,
+            "merged_candidate_ids": [],
+            "outcome": "suppress",
+            "reason_code": "insufficient-evidence",
+            "recommendation": None,
+            "severity": None,
+            "title": None,
+        }
+    ]
+    assert runner.starting_agent is not None
+    assert tuple(tool.name for tool in runner.starting_agent.tools)[-1] == "submit_resolution"
 
 
 async def test_successful_provider_responses_are_not_marked_as_parse_failures() -> None:

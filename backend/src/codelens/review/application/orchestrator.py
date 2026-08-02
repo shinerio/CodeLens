@@ -8,7 +8,9 @@ from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypeVar
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
+from codelens.findings.domain.candidates import CandidateFindingBatch
 from codelens.findings.domain.models import FindingBatch
+from codelens.findings.infrastructure.resolver_output import ValidatedResolutionBatch
 from codelens.review.application.dag_scheduler import (
     PersistedDagScheduler,
     reviewer_stage_outcome,
@@ -90,6 +92,9 @@ class CheckpointView(Protocol):
     @property
     def execution_attempts(self) -> int: ...
 
+    @property
+    def run_id(self) -> str | None: ...
+
 
 _CheckpointViewT = TypeVar("_CheckpointViewT", bound=CheckpointView, covariant=True)
 
@@ -127,7 +132,9 @@ class _ValidatorPort(Protocol):
     @property
     def warnings(self) -> tuple[FindingValidationWarning, ...]: ...
 
-    async def validate(self, payload: bytes) -> FindingBatch: ...
+    async def validate(
+        self, payload: bytes
+    ) -> FindingBatch | CandidateFindingBatch | ValidatedResolutionBatch: ...
 
 
 class _CrashInjectorPort(Protocol):
@@ -173,6 +180,7 @@ class ReviewOrchestrator:
         completion: AgentRunCompletionPort,
         agent_semaphore: asyncio.Semaphore,
         max_agent_runs_per_review: int,
+        prepare_resolution: Callable[[str, PreparedReview], Awaitable[None]] | None = None,
         transcript: _TranscriptPort | None = None,
         crash_injector: _CrashInjectorPort | None = None,
     ) -> None:
@@ -185,6 +193,7 @@ class ReviewOrchestrator:
         self._completion = completion
         self._agent_semaphore = agent_semaphore
         self._review_agent_semaphore = asyncio.Semaphore(max_agent_runs_per_review)
+        self._prepare_resolution = prepare_resolution
         self._crash_injector = crash_injector
         self._transcript = transcript
 
@@ -355,6 +364,8 @@ class ReviewOrchestrator:
                 ),
                 None,
             )
+            if reviewers_terminal and self._prepare_resolution is not None:
+                await self._prepare_resolution(task_id, prepared)
             if resolver is not None and reviewers_terminal:
                 resolver_status = by_node[resolver.node_id].status
                 if resolver_status in {"failed", "timed_out"}:
@@ -597,9 +608,17 @@ class ReviewOrchestrator:
             node_key,
             prepared,
             execution_spec.agent,
+            checkpoint,
         )
-        findings = await validator.validate(payload)
+        validated = await validator.validate(payload)
         if validator.warnings:
+            retained_count = (
+                len(validated.candidates)
+                if isinstance(validated, CandidateFindingBatch)
+                else len(validated.findings)
+                if isinstance(validated, FindingBatch)
+                else len(validated.decisions)
+            )
             duplicate_count = sum(
                 warning.reason_code == "duplicate" for warning in validator.warnings
             )
@@ -608,19 +627,31 @@ class ReviewOrchestrator:
                 task_id,
                 "lifecycle",
                 (
-                    f"Finding validation retained {len(findings.findings)} and skipped "
+                    f"Finding validation retained {retained_count} and skipped "
                     f"{len(validator.warnings)} model candidates"
                 ),
                 {
                     "agent": self._agent_key(execution_spec),
                     "warning_code": "finding_validation_partial",
-                    "retained_count": str(len(findings.findings)),
+                    "retained_count": str(retained_count),
                     "skipped_count": str(len(validator.warnings)),
                     "duplicate_count": str(duplicate_count),
                     "invalid_count": str(invalid_count),
                 },
             )
-        await self._completion.complete_with_findings(task_id, node_key, findings)
+        if isinstance(validated, ValidatedResolutionBatch):
+            await self._completion.complete_with_resolutions(
+                task_id, node_key, validated.decisions
+            )
+        elif isinstance(validated, CandidateFindingBatch):
+            await self._completion.complete_with_candidates(
+                task_id,
+                node_key,
+                validated,
+                result_summary={"candidate_count": len(validated.candidates)},
+            )
+        else:
+            await self._completion.complete_with_findings(task_id, node_key, validated)
         await self._hit("after_finding_completion")
 
     async def _task_completion_status(

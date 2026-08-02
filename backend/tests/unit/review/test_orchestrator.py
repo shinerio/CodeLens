@@ -11,6 +11,7 @@ from codelens.capabilities.domain.models import (
     FrozenAgentExecutionSpec,
 )
 from codelens.capabilities.domain.skills import SkillActivationFacts
+from codelens.findings.domain.candidates import CandidateFindingBatch
 from codelens.findings.domain.models import FindingBatch
 from codelens.review.application.dag_scheduler import (
     PersistedDagScheduler,
@@ -251,10 +252,18 @@ class WarningValidator:
         return FindingBatch("1", ())
 
 
+class EmptyCandidateValidator:
+    warnings: tuple[FindingValidationWarning, ...] = ()
+
+    async def validate(self, _payload: bytes) -> CandidateFindingBatch:
+        return CandidateFindingBatch(())
+
+
 class RecordingCompletion:
     def __init__(self, checkpoints: MemoryCheckpoints) -> None:
         self.checkpoints = checkpoints
         self.calls = 0
+        self.candidate_calls = 0
 
     async def complete_with_findings(
         self,
@@ -263,6 +272,18 @@ class RecordingCompletion:
         _findings: FindingBatch,
     ) -> None:
         self.calls += 1
+        self.checkpoints.value.status = "succeeded"
+
+    async def complete_with_candidates(
+        self,
+        _task_id: str,
+        _node_key: str,
+        _candidates: CandidateFindingBatch,
+        *,
+        result_summary: dict[str, object] | None = None,
+    ) -> None:
+        assert result_summary == {"candidate_count": 0}
+        self.candidate_calls += 1
         self.checkpoints.value.status = "succeeded"
 
 
@@ -353,6 +374,35 @@ async def test_happy_path_persists_the_complete_state_sequence() -> None:
     assert runtime.specs[0].capability_profile.reference == "legacy-reviewer:v1"
     assert len(runtime.specs[0].fingerprint) == 64
     assert workflow.job_completed
+
+
+async def test_candidate_output_uses_prepublication_completion_path() -> None:
+    workflow = MemoryWorkflow()
+    checkpoints = MemoryCheckpoints()
+    runtime = RecordingRuntime(b'{"schema_version":"2","candidates":[]}')
+    artifacts = MemoryArtifacts()
+    completion = RecordingCompletion(checkpoints)
+
+    async def prepare(_task_id: str) -> PreparedReview:
+        return _prepared()
+
+    orchestrator = ReviewOrchestrator(
+        workflow=workflow,
+        prepare=prepare,
+        runtime=runtime,
+        artifacts=artifacts,
+        checkpoints=checkpoints,
+        validator_factory=lambda *_args: EmptyCandidateValidator(),
+        completion=completion,
+        agent_semaphore=asyncio.Semaphore(1),
+        max_agent_runs_per_review=1,
+    )
+
+    await orchestrator.execute("review-1")
+
+    assert completion.calls == 0
+    assert completion.candidate_calls == 1
+    assert workflow.status == "completed"
 
 
 async def test_streamed_model_events_publish_the_prompt_before_completion() -> None:

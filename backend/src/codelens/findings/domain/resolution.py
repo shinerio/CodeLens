@@ -1,6 +1,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from codelens.findings.domain.models import FindingSeverity
+
 
 @dataclass(frozen=True)
 class FindingCluster:
@@ -34,6 +36,11 @@ class ResolutionDecision:
     outcome: ResolutionOutcome
     canonical_candidate_id: str | None
     merged_candidate_ids: tuple[str, ...]
+    severity: FindingSeverity | None = None
+    title: str | None = None
+    content: str | None = None
+    recommendation: str | None = None
+    reason_code: str | None = None
 
     @property
     def is_publishable(self) -> bool:
@@ -48,6 +55,11 @@ class ResolutionDecision:
         cluster: FindingCluster,
         canonical_candidate_id: str,
         merged_candidate_ids: tuple[str, ...],
+        severity: FindingSeverity | None = None,
+        title: str | None = None,
+        content: str | None = None,
+        recommendation: str | None = None,
+        reason_code: str | None = None,
     ) -> "ResolutionDecision":
         """Publish a canonical candidate supported only by its source cluster."""
 
@@ -56,13 +68,26 @@ class ResolutionDecision:
             outcome=ResolutionOutcome.PUBLISH,
             canonical_candidate_id=canonical_candidate_id,
             merged_candidate_ids=merged_candidate_ids,
+            severity=severity,
+            title=title,
+            content=content,
+            recommendation=recommendation,
+            reason_code=reason_code,
         )
 
     @classmethod
-    def suppress(cls, *, cluster: FindingCluster) -> "ResolutionDecision":
+    def suppress(
+        cls, *, cluster: FindingCluster, reason_code: str | None = None
+    ) -> "ResolutionDecision":
         """Suppress a cluster without manufacturing a canonical candidate."""
 
-        return cls(cluster.cluster_id, ResolutionOutcome.SUPPRESS, None, ())
+        return cls(
+            cluster.cluster_id,
+            ResolutionOutcome.SUPPRESS,
+            None,
+            (),
+            reason_code=reason_code,
+        )
 
     @classmethod
     def verify(
@@ -71,6 +96,11 @@ class ResolutionDecision:
         cluster: FindingCluster,
         canonical_candidate_id: str,
         merged_candidate_ids: tuple[str, ...],
+        severity: FindingSeverity | None = None,
+        title: str | None = None,
+        content: str | None = None,
+        recommendation: str | None = None,
+        reason_code: str | None = None,
     ) -> "ResolutionDecision":
         """Request bounded verification while retaining only cluster candidates."""
 
@@ -79,6 +109,11 @@ class ResolutionDecision:
             outcome=ResolutionOutcome.VERIFY,
             canonical_candidate_id=canonical_candidate_id,
             merged_candidate_ids=merged_candidate_ids,
+            severity=severity,
+            title=title,
+            content=content,
+            recommendation=recommendation,
+            reason_code=reason_code,
         )
 
     @classmethod
@@ -89,6 +124,11 @@ class ResolutionDecision:
         outcome: ResolutionOutcome,
         canonical_candidate_id: str,
         merged_candidate_ids: tuple[str, ...],
+        severity: FindingSeverity | None,
+        title: str | None,
+        content: str | None,
+        recommendation: str | None,
+        reason_code: str | None,
     ) -> "ResolutionDecision":
         if not merged_candidate_ids:
             raise ValueError("Resolution requires at least one merged candidate")
@@ -107,6 +147,11 @@ class ResolutionDecision:
             outcome=outcome,
             canonical_candidate_id=canonical_candidate_id,
             merged_candidate_ids=tuple(sorted(merged_candidate_ids)),
+            severity=severity,
+            title=title,
+            content=content,
+            recommendation=recommendation,
+            reason_code=reason_code,
         )
 
 
@@ -165,4 +210,3 @@ class VerificationDecision:
         if target_id not in batch_target_ids:
             raise ValueError("Verification target is outside the verification batch")
         return cls(target_id=target_id, outcome=outcome)
-

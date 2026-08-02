@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, fields, is_dataclass, replace
 from typing import Any, Literal, Protocol, cast
 
 import httpx
@@ -42,6 +42,11 @@ from openai import (
 )
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
+from codelens.findings.application.validate_candidates import CandidateBatchCodec
+from codelens.findings.domain.candidates import CandidateFindingBatch
+from codelens.findings.domain.models import FindingSeverity
+from codelens.findings.domain.resolution import FindingCluster, ResolutionDecision
+from codelens.findings.infrastructure.resolver_output import ResolverOutputCodec
 from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
 from codelens.review.application.settings import (
     ReviewCompletionSettings,
@@ -70,6 +75,7 @@ from codelens.review.infrastructure.capability_tools import (
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
+from codelens.review.infrastructure.resolution_tools import ResolutionSubmissionCollector
 from codelens.reviewer_catalog.domain.models import AgentRole
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
 from codelens.workspace.domain.models import ReviewSnapshot
@@ -216,7 +222,10 @@ class OpenAIAgentRuntime:
             else ToolLimits()
         )
         is_reviewer = agent.role is AgentRole.REVIEWER
-        if is_reviewer and agent.output_contract_version != self._output_codec.schema_version:
+        if is_reviewer and agent.output_contract_version not in {
+            self._output_codec.schema_version,
+            "2",
+        }:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
         provider_config = replace(
@@ -240,11 +249,17 @@ class OpenAIAgentRuntime:
         )
         role_output_tools: tuple[RoleOutputToolBinding, ...] = ()
         planner_codec: PlannerOutputCodec | None = None
+        resolver_codec: ResolverOutputCodec | None = None
         if agent.role is AgentRole.PLANNER:
             planner_codec = _planner_codec(role_context)
             planner_collector = ReviewPlanSubmissionCollector(planner_codec)
             planner_description = prompts.tools["submit_review_plan"].description
             role_output_tools = (planner_collector.binding(planner_description),)
+        elif agent.role is AgentRole.RESOLVER:
+            resolver_codec = _resolver_codec(role_context)
+            resolver_collector = ResolutionSubmissionCollector(resolver_codec)
+            resolver_description = prompts.tools["submit_resolution"].description
+            role_output_tools = (resolver_collector.binding(resolver_description),)
         tool_context = RuntimeToolContext(
             snapshot=snapshot,
             git=self._git,
@@ -258,6 +273,7 @@ class OpenAIAgentRuntime:
                 tool_loop_warning_template=prompts.tool_loop_warning,
             ),
             role_output_tools=role_output_tools,
+            logical_run_id=_host_run_id(role_context),
         )
         model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)
@@ -408,6 +424,18 @@ class OpenAIAgentRuntime:
                 if not isinstance(final_output, PlannerSelection):
                     raise ValueError("Planner output state has the wrong value")
                 canonical_bytes = planner_codec.canonical_bytes(final_output)
+            elif resolver_codec is not None:
+                final_output = tool_context.final_output()
+                if not isinstance(final_output, tuple) or not all(
+                    isinstance(item, ResolutionDecision) for item in final_output
+                ):
+                    raise ValueError("Resolver output state has the wrong value")
+                canonical_bytes = resolver_codec.canonical_bytes(final_output)
+            elif agent.output_contract_version == "2":
+                final_output = tool_context.final_output()
+                if not isinstance(final_output, CandidateFindingBatch):
+                    raise ValueError("Comment v2 output state has the wrong value")
+                canonical_bytes = CandidateBatchCodec().encode(final_output)
             else:
                 canonical_bytes = self._output_codec.encode(tool_context.final_output())
         except ValueError as error:
@@ -701,11 +729,24 @@ def _split_agent_input(input_payload: bytes) -> tuple[str, str, dict[str, object
     if role_context is not None and not isinstance(role_context, dict):
         raise PermanentAgentOutputError("Agent role_context input has an invalid shape")
 
+    model_role_context = (
+        {
+            key: value
+            for key, value in role_context.items()
+            if not key.startswith("_host_")
+        }
+        if role_context is not None
+        else None
+    )
     return (
         json.dumps(
             {
                 "review_files": review_files,
-                **({"role_context": role_context} if role_context is not None else {}),
+                **(
+                    {"role_context": model_role_context}
+                    if model_role_context
+                    else {}
+                ),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -750,6 +791,63 @@ def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec
         target_paths=string_tuple("target_paths"),
         allowed_reason_codes=frozenset(string_tuple("allowed_reason_codes")),
     )
+
+
+def _host_run_id(role_context: dict[str, object] | None) -> str | None:
+    if role_context is None or "_host_run_id" not in role_context:
+        return None
+    value = role_context["_host_run_id"]
+    if not isinstance(value, str) or not value.startswith("run_") or len(value) != 68:
+        raise PermanentAgentOutputError("Agent host run identity is invalid")
+    return value
+
+
+@dataclass(frozen=True)
+class _ResolverCandidate:
+    candidate_id: str
+    severity: FindingSeverity
+
+
+def _resolver_codec(role_context: dict[str, object] | None) -> ResolverOutputCodec:
+    """Rebuild Resolver constraints from the bounded, execution-order-free projection."""
+
+    context = role_context.get("resolution_context") if role_context is not None else None
+    if not isinstance(context, dict) or set(context) != {
+        "candidates",
+        "clusters",
+        "schema_version",
+    }:
+        raise PermanentAgentOutputError("Resolver role context has an invalid shape")
+    raw_clusters = context["clusters"]
+    raw_candidates = context["candidates"]
+    if context["schema_version"] != "1" or not isinstance(
+        raw_clusters, list
+    ) or not isinstance(raw_candidates, list):
+        raise PermanentAgentOutputError("Resolver role context has an invalid value")
+    try:
+        clusters = tuple(
+            FindingCluster(
+                cluster_id=item["cluster_id"],
+                candidate_ids=tuple(item["candidate_ids"]),
+            )
+            for item in raw_clusters
+            if isinstance(item, dict)
+        )
+        candidates = tuple(
+            _ResolverCandidate(
+                candidate_id=item["candidate_id"],
+                severity=FindingSeverity(item["severity"]),
+            )
+            for item in raw_candidates
+            if isinstance(item, dict)
+        )
+        if len(clusters) != len(raw_clusters) or len(candidates) != len(raw_candidates):
+            raise ValueError("Resolver projection contains non-object values")
+        return ResolverOutputCodec(clusters, candidates)
+    except (KeyError, TypeError, ValueError) as error:
+        raise PermanentAgentOutputError(
+            "Resolver role context has an invalid value"
+        ) from error
 
 
 def _model_input(

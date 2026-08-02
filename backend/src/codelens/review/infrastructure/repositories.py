@@ -310,6 +310,22 @@ def _candidate_from_payload(payload: str) -> CandidateFinding:
     )
 
 
+def _resolution_payload(decision: ResolutionDecision) -> str:
+    return _json(
+        {
+            "canonical_candidate_id": decision.canonical_candidate_id,
+            "cluster_id": decision.cluster_id,
+            "merged_candidate_ids": list(decision.merged_candidate_ids),
+            "outcome": decision.outcome.value,
+            "severity": decision.severity.value if decision.severity is not None else None,
+            "title": decision.title,
+            "content": decision.content,
+            "recommendation": decision.recommendation,
+            "reason_code": decision.reason_code,
+        }
+    )
+
+
 def _review_scope_refs(scope: dict[str, object]) -> tuple[str | None, str | None]:
     scope_type = scope.get("type")
     if scope_type == "branch":
@@ -1039,14 +1055,7 @@ class SqlResolutionStore:
 
         async def operation(session: AsyncSession) -> None:
             for decision in decisions:
-                payload = _json(
-                    {
-                        "canonical_candidate_id": decision.canonical_candidate_id,
-                        "cluster_id": decision.cluster_id,
-                        "merged_candidate_ids": list(decision.merged_candidate_ids),
-                        "outcome": decision.outcome.value,
-                    }
-                )
+                payload = _resolution_payload(decision)
                 decision_id = "decision_" + hashlib.sha256(
                     f"{task_id}\0{decision.cluster_id}".encode()
                 ).hexdigest()
@@ -1101,6 +1110,31 @@ class SqlResolutionStore:
                         ),
                         merged_candidate_ids=tuple(
                             str(item) for item in value["merged_candidate_ids"]
+                        ),
+                        severity=(
+                            FindingSeverity(str(value["severity"]))
+                            if value.get("severity") is not None
+                            else None
+                        ),
+                        title=(
+                            str(value["title"])
+                            if value.get("title") is not None
+                            else None
+                        ),
+                        content=(
+                            str(value["content"])
+                            if value.get("content") is not None
+                            else None
+                        ),
+                        recommendation=(
+                            str(value["recommendation"])
+                            if value.get("recommendation") is not None
+                            else None
+                        ),
+                        reason_code=(
+                            str(value["reason_code"])
+                            if value.get("reason_code") is not None
+                            else None
                         ),
                     )
                 )
@@ -2469,6 +2503,103 @@ class SqlReviewStore:
             candidates,
             result_summary=result_summary,
         )
+
+    async def complete_with_resolutions(
+        self,
+        task_id: str,
+        node_key: str,
+        decisions: tuple[ResolutionDecision, ...],
+    ) -> None:
+        """Atomically persist no-invention decisions and complete the Resolver run."""
+
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> ReviewEvent | None:
+            checkpoint_status = await session.scalar(
+                select(dag_checkpoints.c.status).where(
+                    dag_checkpoints.c.task_id == task_id,
+                    dag_checkpoints.c.node_key == node_key,
+                )
+            )
+            if checkpoint_status == "succeeded":
+                return None
+            if checkpoint_status not in {"output_saved", "validating"}:
+                raise InvalidAgentRunStateError(
+                    "Resolver AgentRun is not ready for completion"
+                )
+            for decision in decisions:
+                payload = _resolution_payload(decision)
+                decision_id = "decision_" + hashlib.sha256(
+                    f"{task_id}\0{decision.cluster_id}".encode()
+                ).hexdigest()
+                await session.execute(
+                    sqlite_insert(resolution_decisions)
+                    .values(
+                        decision_id=decision_id,
+                        task_id=task_id,
+                        cluster_id=decision.cluster_id,
+                        outcome=decision.outcome.value,
+                        canonical_candidate_id=decision.canonical_candidate_id,
+                        payload_json=payload,
+                        created_at=timestamp,
+                        updated_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(resolution_decisions.c.decision_id,)
+                    )
+                )
+                stored = await session.scalar(
+                    select(resolution_decisions.c.payload_json).where(
+                        resolution_decisions.c.decision_id == decision_id
+                    )
+                )
+                if str(stored) != payload:
+                    raise ValueError(
+                        "Resolution decision conflicts with persisted content"
+                    )
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status.in_(("output_saved", "validating")),
+                    )
+                    .values(
+                        status="succeeded",
+                        result_summary_json=_json(
+                            {"resolution_count": len(decisions)}
+                        ),
+                        updated_at=timestamp,
+                    )
+                ),
+            )
+            if result.rowcount != 1:
+                raise InvalidAgentRunStateError(
+                    "Resolver completion lost its expected state"
+                )
+            event_payload = {
+                "node_key": node_key,
+                "resolution_count": len(decisions),
+            }
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, "agent.succeeded", event_payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is None:
+                raise RuntimeError("Resolver completion event was not persisted")
+            return ReviewEvent(
+                event_id=int(event_id),
+                task_id=task_id,
+                event_type="agent.succeeded",
+                payload=event_payload,
+            )
+
+        event = await self._database.run_transaction(operation)
+        if event is not None:
+            await self._publish_events([event])
 
     async def list_findings(self, task_id: str) -> tuple[Finding, ...]:
         """Return trusted Findings in stable severity/confidence/path order."""

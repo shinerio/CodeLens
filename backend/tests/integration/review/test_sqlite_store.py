@@ -467,12 +467,22 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
             canonical_candidate_id=candidate.candidate_id,
             merged_candidate_ids=(candidate.candidate_id,),
         )
-        await resolutions.save_decisions(task_id, (decision,))
+        resolver_node = next(
+            node for node in plan.nodes if node.agent_reference == "review-resolver:v1"
+        )
+        await checkpoints.mark_running(task_id, resolver_node.node_id)
+        await checkpoints.mark_output_saved(
+            task_id, resolver_node.node_id, "artifact-resolution", "b" * 64
+        )
+        await review_store.complete_with_resolutions(
+            task_id, resolver_node.node_id, (decision,)
+        )
         assert await resolutions.list_clusters(task_id) == (cluster,)
         assert await resolutions.list_decisions(task_id) == (decision,)
+        assert (await checkpoints.get(task_id, resolver_node.node_id)).status == "succeeded"
 
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
-        assert len([event for event in events if event.event_type == "agent.succeeded"]) == 1
+        assert len([event for event in events if event.event_type == "agent.succeeded"]) == 2
     finally:
         await database.dispose()
 

@@ -60,10 +60,12 @@ from codelens.review.infrastructure.model_log import ModelTranscriptLogWriter
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.review.infrastructure.repositories import (
     SqlAgentExecutionSpecStore,
+    SqlCandidateFindingStore,
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlJobQueue,
     SqlRecentRepositoryStore,
+    SqlResolutionStore,
     SqlReviewPlanStore,
     SqlReviewProfileRepository,
     SqlReviewStore,
@@ -275,6 +277,8 @@ def build_unified_backend(
         tool_limits_service=tool_limits_service,
         execution_spec_store=SqlAgentExecutionSpecStore(database),
         review_plan_store=SqlReviewPlanStore(database),
+        candidate_store=SqlCandidateFindingStore(database),
+        resolution_store=SqlResolutionStore(database),
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),

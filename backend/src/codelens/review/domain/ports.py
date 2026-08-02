@@ -506,6 +506,16 @@ class AgentRunCompletionPort(Protocol):
 
         raise NotImplementedError
 
+    async def complete_with_resolutions(
+        self,
+        task_id: str,
+        node_key: str,
+        decisions: tuple[ResolutionDecision, ...],
+    ) -> None:
+        """Atomically persist Resolution decisions and complete their AgentRun."""
+
+        raise NotImplementedError
+
 
 class ToolLimitsStorePort(Protocol):
     """Persist and provide configurable tool-level limits for Agent evidence operations."""

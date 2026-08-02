@@ -17,7 +17,10 @@ from codelens.capabilities.infrastructure.builtin_profiles import (
     builtin_capability_profiles,
     builtin_skill_policies,
 )
+from codelens.findings.application.resolve_clusters import ResolutionService
+from codelens.findings.application.validate_candidates import CandidateValidator
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
+from codelens.findings.infrastructure.resolver_output import ResolverOutputCodec
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.orchestrator import (
     CheckpointView,
@@ -26,7 +29,7 @@ from codelens.review.application.orchestrator import (
 )
 from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.application.validate_findings import FindingValidator
-from codelens.review.domain.agent_run import InvalidAgentRunStateError
+from codelens.review.domain.agent_run import AgentRun, InvalidAgentRunStateError
 from codelens.review.domain.errors import AgentRuntimeError
 from codelens.review.domain.ports import (
     AgentReviewCompletionStatus,
@@ -41,12 +44,15 @@ from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimits
 from codelens.review.infrastructure.repositories import (
     CheckpointRecord,
     SqlAgentExecutionSpecStore,
+    SqlCandidateFindingStore,
     SqlCheckpointStore,
     SqlJobQueue,
+    SqlResolutionStore,
     SqlReviewPlanStore,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
+from codelens.review.infrastructure.resolution_tools import ResolutionValidator
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.review.infrastructure.transcripts import WorkerTranscriptStore
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
@@ -145,6 +151,22 @@ def add_reviewer_plan_guidance(
             "reason_codes": list(reason_codes),
         }
     }
+    return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
+
+
+def add_host_run_identity(input_payload: bytes, run_id: str) -> bytes:
+    """Attach trusted execution identity that the runtime strips from model input."""
+
+    try:
+        envelope = json.loads(input_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Agent input is not canonical JSON") from error
+    if not isinstance(envelope, dict):
+        raise ValueError("Agent input has an invalid shape")
+    role_context = envelope.setdefault("role_context", {})
+    if not isinstance(role_context, dict):
+        raise ValueError("Agent role context must be an object")
+    role_context["_host_run_id"] = run_id
     return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
 
 
@@ -306,6 +328,8 @@ class WorkerReviewExecutor:
         capability_resolver: CapabilityResolver | None = None,
         execution_spec_store: SqlAgentExecutionSpecStore | None = None,
         review_plan_store: SqlReviewPlanStore | None = None,
+        candidate_store: SqlCandidateFindingStore | None = None,
+        resolution_store: SqlResolutionStore | None = None,
     ) -> None:
         self._settings = settings
         self._review_store = review_store
@@ -340,6 +364,9 @@ class WorkerReviewExecutor:
         )
         self._execution_spec_store = execution_spec_store
         self._review_plan_store = review_plan_store
+        self._candidate_store = candidate_store
+        self._resolution_store = resolution_store
+        self._resolution_codecs: dict[tuple[str, str], ResolverOutputCodec] = {}
 
     async def recover(self) -> None:
         """Recover Task 11 checkpoints and reconcile every registered owned worktree."""
@@ -377,6 +404,7 @@ class WorkerReviewExecutor:
                 global_limit=self._settings.max_active_agent_runs,
                 max_active_reviews=self._settings.max_active_reviews,
             ),
+            prepare_resolution=self._prepare_resolution,
             transcript=self._transcripts,
         )
         await orchestrator.execute(task_id)
@@ -453,7 +481,7 @@ class WorkerReviewExecutor:
             plan_payloads: dict[str, bytes] = {}
             for node in plan.nodes:
                 guidance = guidance_by_reference.get(node.agent_reference)
-                plan_payloads[node.node_id] = (
+                visible_payload = (
                     add_reviewer_plan_guidance(
                         base_input,
                         reason_codes=guidance.reason_codes,
@@ -461,6 +489,20 @@ class WorkerReviewExecutor:
                     )
                     if guidance is not None
                     else base_input
+                )
+                run = AgentRun.create(
+                    task_id=task_id,
+                    agent_version=node.agent_reference,
+                    pass_index=node.pass_index,
+                    shard_id=node.shard_id,
+                    logical_attempt_group=node.logical_attempt_group,
+                    node_role=node.node_type.value,
+                    capability_fingerprint=execution_specs_by_node[
+                        node.node_id
+                    ].fingerprint,
+                )
+                plan_payloads[node.node_id] = add_host_run_identity(
+                    visible_payload, run.run_id
                 )
             return PreparedReview(
                 snapshot=snapshot,
@@ -623,7 +665,23 @@ class WorkerReviewExecutor:
         node_key: str,
         prepared: PreparedReview,
         agent: AgentVersion,
-    ) -> FindingValidator:
+        checkpoint: CheckpointRecord,
+    ) -> FindingValidator | CandidateValidator | ResolutionValidator:
+        if agent.role.value == "resolver":
+            codec = self._resolution_codecs.get((task_id, node_key))
+            if codec is None:
+                raise ValueError("Resolver constraints were not prepared")
+            return ResolutionValidator(codec)
+        if agent.output_contract_version == "2":
+            if checkpoint.run_id is None:
+                raise ValueError("Candidate AgentRun lacks a stable run ID")
+            return CandidateValidator(
+                task_id=task_id,
+                run_id=checkpoint.run_id,
+                snapshot=prepared.snapshot,
+                agent=agent,
+                excerpt_reader=self._excerpt_reader,
+            )
         return FindingValidator(
             task_id=task_id,
             node_key=node_key,
@@ -631,6 +689,51 @@ class WorkerReviewExecutor:
             agent=agent,
             codec=self._codec,
             excerpt_reader=self._excerpt_reader,
+        )
+
+    async def _prepare_resolution(
+        self, task_id: str, prepared: PreparedReview
+    ) -> None:
+        """Persist deterministic clusters and prepare direct or Resolver decisions."""
+
+        if self._candidate_store is None or self._resolution_store is None:
+            return
+        plan = prepared.plan
+        if plan is None:
+            return
+        candidates = await self._candidate_store.list_for_task(task_id)
+        service = ResolutionService(self._resolution_store)
+        clusters = await service.prepare(
+            task_id=task_id,
+            snapshot_id=prepared.snapshot.snapshot_id,
+            candidates=candidates,
+        )
+        resolver = next(
+            (node for node in plan.nodes if node.node_type.value == "resolver"),
+            None,
+        )
+        if resolver is None:
+            await self._resolution_store.save_decisions(
+                task_id, ResolutionService.direct_decisions(candidates)
+            )
+            return
+        context = json.loads(
+            ResolutionService.resolver_input_payload(
+                plan_hash=plan.plan_hash,
+                clusters=clusters,
+                candidates=candidates,
+            )
+        )
+        envelope = json.loads(prepared.input_payloads[resolver.node_id])
+        role_context = envelope.setdefault("role_context", {})
+        if not isinstance(role_context, dict):
+            raise ValueError("Resolver role context must be an object")
+        role_context["resolution_context"] = context
+        prepared.input_payloads[resolver.node_id] = json.dumps(
+            envelope, sort_keys=True, separators=(",", ":")
+        ).encode()
+        self._resolution_codecs[(task_id, resolver.node_id)] = ResolverOutputCodec(
+            clusters, candidates
         )
 
 
