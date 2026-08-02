@@ -26,6 +26,37 @@ class ReviewPlanNodeType(StrEnum):
     VERIFIER = "verifier"
 
 
+@dataclass(frozen=True)
+class ReviewerPlanGuidance:
+    """Persist bounded Planner attention hints without narrowing Snapshot access."""
+
+    reviewer_reference: str
+    reason_codes: tuple[str, ...]
+    focus_paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.reviewer_reference:
+            raise ValueError("Reviewer guidance requires a reviewer reference")
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("Reviewer guidance contains duplicate reason codes")
+        if len(self.focus_paths) != len(set(self.focus_paths)):
+            raise ValueError("Reviewer guidance contains duplicate focus paths")
+
+
+@dataclass(frozen=True)
+class PlanCapabilityDegradation:
+    """Record optional frozen capability omissions without changing task success."""
+
+    agent_reference: str
+    reason_codes: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if not self.agent_reference or not self.reason_codes:
+            raise ValueError("Capability degradation requires an Agent and reason codes")
+        if len(self.reason_codes) != len(set(self.reason_codes)):
+            raise ValueError("Capability degradation contains duplicate reason codes")
+
+
 class CoverageStatus(StrEnum):
     """Describe whether one planned Review perspective produced a result."""
 
@@ -112,6 +143,8 @@ class ReviewPlan:
     nodes: tuple[ReviewPlanNode, ...]
     planner_reason: str | None
     plan_hash: str
+    reviewer_guidance: tuple[ReviewerPlanGuidance, ...] = ()
+    capability_degradations: tuple[PlanCapabilityDegradation, ...] = ()
 
     def canonical_json(self) -> str:
         """Serialize the complete frozen plan for durable hash verification."""
@@ -124,6 +157,8 @@ class ReviewPlan:
                 self.reviewer_references,
                 self.nodes,
                 self.planner_reason,
+                self.reviewer_guidance,
+                self.capability_degradations,
             ),
             ensure_ascii=False,
             sort_keys=True,
@@ -158,6 +193,21 @@ class ReviewPlan:
                 if value["planner_reason"] is not None
                 else None
             ),
+            reviewer_guidance=tuple(
+                ReviewerPlanGuidance(
+                    reviewer_reference=str(item["reviewer_reference"]),
+                    reason_codes=tuple(str(code) for code in item["reason_codes"]),
+                    focus_paths=tuple(str(path) for path in item["focus_paths"]),
+                )
+                for item in value.get("reviewer_guidance", ())
+            ),
+            capability_degradations=tuple(
+                PlanCapabilityDegradation(
+                    agent_reference=str(item["agent_reference"]),
+                    reason_codes=tuple(str(code) for code in item["reason_codes"]),
+                )
+                for item in value.get("capability_degradations", ())
+            ),
         )
         if plan.plan_hash != expected_hash or plan.canonical_json() != payload:
             raise ValueError("persisted Review Plan hash mismatch")
@@ -171,9 +221,18 @@ class ReviewPlan:
         reviewer_references: tuple[str, ...],
         nodes: tuple[ReviewPlanNode, ...],
         planner_reason: str | None,
+        reviewer_guidance: tuple[ReviewerPlanGuidance, ...],
+        capability_degradations: tuple[PlanCapabilityDegradation, ...],
     ) -> dict[str, object]:
         return {
             "budget_profile": budget_profile,
+            "capability_degradations": [
+                {
+                    "agent_reference": degradation.agent_reference,
+                    "reason_codes": degradation.reason_codes,
+                }
+                for degradation in capability_degradations
+            ],
             "nodes": [
                 {
                     "agent_reference": node.agent_reference,
@@ -189,6 +248,14 @@ class ReviewPlan:
             ],
             "planner_reason": planner_reason,
             "reviewer_references": reviewer_references,
+            "reviewer_guidance": [
+                {
+                    "focus_paths": guidance.focus_paths,
+                    "reason_codes": guidance.reason_codes,
+                    "reviewer_reference": guidance.reviewer_reference,
+                }
+                for guidance in reviewer_guidance
+            ],
             "selection_mode": selection_mode,
             "task_id": task_id,
         }
@@ -203,6 +270,8 @@ class ReviewPlan:
         reviewer_references: tuple[str, ...],
         nodes: tuple[ReviewPlanNode, ...],
         planner_reason: str | None,
+        reviewer_guidance: tuple[ReviewerPlanGuidance, ...] = (),
+        capability_degradations: tuple[PlanCapabilityDegradation, ...] = (),
     ) -> "ReviewPlan":
         """Canonicalize plan inputs and enforce topology invariants before hashing."""
 
@@ -220,6 +289,18 @@ class ReviewPlan:
             raise ValueError("Adaptive plan requires a planner reason")
         if selection_mode == "fixed" and planner_reason is not None:
             raise ValueError("Fixed plan cannot contain a planner reason")
+        guidance_references = tuple(item.reviewer_reference for item in reviewer_guidance)
+        if len(guidance_references) != len(set(guidance_references)):
+            raise ValueError("Review plan contains duplicate reviewer guidance")
+        if not set(guidance_references).issubset(reviewer_references):
+            raise ValueError("Review plan guidance references an unselected reviewer")
+        degradation_references = tuple(
+            item.agent_reference for item in capability_degradations
+        )
+        if len(degradation_references) != len(set(degradation_references)):
+            raise ValueError("Review plan contains duplicate capability degradations")
+        if not set(degradation_references).issubset(reviewer_references):
+            raise ValueError("Capability degradation references an unselected reviewer")
         if any(node.task_id != task_id for node in nodes):
             raise ValueError("Review plan node belongs to another task")
         node_ids = tuple(node.node_id for node in nodes)
@@ -239,6 +320,24 @@ class ReviewPlan:
         }
         if reviewer_node_references != set(reviewer_references):
             raise ValueError("Review plan reviewer nodes do not match selected reviewers")
+        planner_nodes = tuple(
+            node for node in nodes if node.node_type is ReviewPlanNodeType.PLANNER
+        )
+        reviewer_nodes = tuple(
+            node for node in nodes if node.node_type is ReviewPlanNodeType.REVIEWER
+        )
+        if selection_mode == "adaptive":
+            if (
+                len(planner_nodes) != 1
+                or planner_nodes[0].agent_reference != "review-planner:v1"
+            ):
+                raise ValueError("Adaptive plan requires one review-planner:v1 node")
+            if any(node.depends_on != (planner_nodes[0].node_id,) for node in reviewer_nodes):
+                raise ValueError("Adaptive Reviewer nodes must depend on the Planner")
+        elif planner_nodes:
+            raise ValueError("Fixed plan cannot contain a Planner node")
+        elif any(node.depends_on for node in reviewer_nodes):
+            raise ValueError("Fixed Reviewer nodes cannot have dependencies")
         resolver_count = sum(
             node.node_type is ReviewPlanNodeType.RESOLVER for node in nodes
         )
@@ -256,6 +355,10 @@ class ReviewPlan:
             resolver = next(
                 node for node in nodes if node.node_type is ReviewPlanNodeType.RESOLVER
             )
+            if resolver.depends_on != tuple(
+                sorted(node.node_id for node in reviewer_nodes)
+            ):
+                raise ValueError("Resolver must depend on every Reviewer node")
             if verifier_nodes[0].depends_on != (resolver.node_id,):
                 raise ValueError("batched verifier must depend on the resolver")
         elif resolver_count or verifier_nodes:
@@ -263,6 +366,12 @@ class ReviewPlan:
 
         canonical_reviewers = tuple(sorted(reviewer_references))
         canonical_nodes = tuple(sorted(nodes, key=lambda node: node.node_id))
+        canonical_guidance = tuple(
+            sorted(reviewer_guidance, key=lambda item: item.reviewer_reference)
+        )
+        canonical_degradations = tuple(
+            sorted(capability_degradations, key=lambda item: item.agent_reference)
+        )
         payload = cls._payload(
             task_id,
             selection_mode,
@@ -270,6 +379,8 @@ class ReviewPlan:
             canonical_reviewers,
             canonical_nodes,
             planner_reason,
+            canonical_guidance,
+            canonical_degradations,
         )
         canonical_bytes = json.dumps(
             payload,
@@ -285,4 +396,6 @@ class ReviewPlan:
             nodes=canonical_nodes,
             planner_reason=planner_reason,
             plan_hash=hashlib.sha256(canonical_bytes).hexdigest(),
+            reviewer_guidance=canonical_guidance,
+            capability_degradations=canonical_degradations,
         )

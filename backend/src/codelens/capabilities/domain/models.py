@@ -4,7 +4,7 @@ import re
 from dataclasses import dataclass
 from typing import Protocol
 
-from codelens.reviewer_catalog.domain.models import AgentVersion
+from codelens.reviewer_catalog.domain.models import AgentRole, AgentVersion
 
 _IDENTIFIER_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]*$")
 _SHA256_PATTERN = re.compile(r"^[0-9a-f]{64}$")
@@ -42,14 +42,29 @@ class ToolContractReference:
 class McpToolBindingView(Protocol):
     """Expose immutable MCP binding fields needed by execution fingerprinting."""
 
-    contract: ToolContractReference
-    server_id: str
-    remote_tool_name: str
-    schema_hash: str
-    snapshot_scoped: bool
-    data_egress: bool
-    timeout_seconds: float
-    max_result_bytes: int
+    @property
+    def contract(self) -> ToolContractReference: ...
+
+    @property
+    def server_id(self) -> str: ...
+
+    @property
+    def remote_tool_name(self) -> str: ...
+
+    @property
+    def schema_hash(self) -> str: ...
+
+    @property
+    def snapshot_scoped(self) -> bool: ...
+
+    @property
+    def data_egress(self) -> bool: ...
+
+    @property
+    def timeout_seconds(self) -> float: ...
+
+    @property
+    def max_result_bytes(self) -> int: ...
 
 
 @dataclass(frozen=True)
@@ -225,9 +240,20 @@ def canonical_execution_payload(
 
     payload = {
         "agent": {
+            "confidence_floor": agent.confidence_floor,
             "content_hash": agent.content_hash,
+            "dimensions": list(agent.dimensions),
+            "failure_policy": agent.failure_policy,
+            "is_legacy": agent.is_legacy,
+            "is_public": agent.is_public,
+            "max_turns": agent.max_turns,
+            "model_profile_id": agent.model_profile_id,
             "output_contract_version": agent.output_contract_version,
+            "planner_eligible": agent.planner_eligible,
+            "prompt_key": agent.prompt_key,
             "reference": agent.reference,
+            "role": agent.role.value,
+            "timeout_seconds": agent.timeout_seconds,
         },
         "capability_profile": {
             "builtin_tools": [tool.reference for tool in capability_profile.builtin_tools],
@@ -280,3 +306,121 @@ def canonical_execution_payload(
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
+
+
+def hydrate_execution_spec(
+    spec_json: str,
+    *,
+    prompt_text: str,
+    skill_instruction_texts: tuple[str, ...],
+) -> FrozenAgentExecutionSpec:
+    """Rebuild a frozen spec from safe metadata and hash-verified Artifact bytes."""
+
+    from codelens.capabilities.domain.mcp import McpToolBinding
+
+    payload = json.loads(spec_json)
+    if not isinstance(payload, dict):
+        raise ValueError("frozen execution spec must be a JSON object")
+    prompt_content_hash = str(payload["prompt_content_hash"])
+    if hashlib.sha256(prompt_text.encode("utf-8")).hexdigest() != prompt_content_hash:
+        raise ValueError("frozen prompt bytes do not match execution spec")
+    agent_payload = payload["agent"]
+    agent_id, version_text = str(agent_payload["reference"]).rsplit(":v", 1)
+    capability_payload = payload["capability_profile"]
+    profile_id, profile_version_text = str(capability_payload["reference"]).rsplit(
+        ":v", 1
+    )
+    skill_policy_id, skill_policy_version_text = str(payload["skill_policy"]).rsplit(
+        ":v", 1
+    )
+
+    def tool_reference(value: str) -> ToolContractReference:
+        name, tool_version = value.rsplit(":v", 1)
+        return ToolContractReference(name, int(tool_version))
+
+    agent = AgentVersion(
+        agent_id=agent_id,
+        version=int(version_text),
+        prompt_template=prompt_text,
+        model_profile_id=str(agent_payload["model_profile_id"]),
+        output_contract_version=str(agent_payload["output_contract_version"]),
+        timeout_seconds=float(agent_payload["timeout_seconds"]),
+        max_turns=int(agent_payload["max_turns"]),
+        confidence_floor=(
+            float(agent_payload["confidence_floor"])
+            if agent_payload["confidence_floor"] is not None
+            else None
+        ),
+        failure_policy=str(agent_payload["failure_policy"]),
+        content_hash=str(agent_payload["content_hash"]),
+        role=AgentRole(str(agent_payload["role"])),
+        prompt_key=str(agent_payload["prompt_key"]),
+        capability_profile_ref=str(capability_payload["reference"]),
+        skill_policy_ref=str(payload["skill_policy"]),
+        dimensions=tuple(str(item) for item in agent_payload["dimensions"]),
+        planner_eligible=bool(agent_payload["planner_eligible"]),
+        is_public=bool(agent_payload["is_public"]),
+        is_legacy=bool(agent_payload["is_legacy"]),
+    )
+    profile = CapabilityProfile(
+        profile_id=profile_id,
+        version=int(profile_version_text),
+        builtin_tools=tuple(
+            tool_reference(str(item)) for item in capability_payload["builtin_tools"]
+        ),
+        mcp_tools=tuple(
+            McpToolBinding(
+                contract=tool_reference(str(item["contract"])),
+                server_id=str(item["server_id"]),
+                remote_tool_name=str(item["remote_tool_name"]),
+                schema_hash=str(item["schema_hash"]),
+                snapshot_scoped=bool(item["snapshot_scoped"]),
+                data_egress=bool(item["data_egress"]),
+                timeout_seconds=float(item["timeout_seconds"]),
+                max_result_bytes=int(item["max_result_bytes"]),
+            )
+            for item in capability_payload["mcp_tools"]
+        ),
+        is_read_only=bool(capability_payload["is_read_only"]),
+    )
+    skill_payloads = payload["skills"]
+    if len(skill_payloads) != len(skill_instruction_texts):
+        raise ValueError("frozen Skill Artifact count does not match execution spec")
+    if any(
+        hashlib.sha256(instruction_text.encode("utf-8")).hexdigest()
+        != str(item["content_hash"])
+        for item, instruction_text in zip(
+            skill_payloads, skill_instruction_texts, strict=True
+        )
+    ):
+        raise ValueError("frozen Skill bytes do not match execution spec")
+    skills = tuple(
+        FrozenSkillActivation(
+            skill_id=str(item["skill_id"]),
+            version=int(item["version"]),
+            content_hash=str(item["content_hash"]),
+            activation_reason=str(item["activation_reason"]),
+            instruction_text=instruction_text,
+        )
+        for item, instruction_text in zip(
+            skill_payloads, skill_instruction_texts, strict=True
+        )
+    )
+    limits_payload = payload["execution_limits"]
+    return FrozenAgentExecutionSpec.create(
+        agent=agent,
+        capability_profile=profile,
+        skill_policy=SkillPolicyReference(
+            skill_policy_id, int(skill_policy_version_text)
+        ),
+        prompt_content_hash=prompt_content_hash,
+        skills=skills,
+        execution_limits=AgentExecutionLimits(
+            max_turns=int(limits_payload["max_turns"]),
+            max_tool_calls=int(limits_payload["max_tool_calls"]),
+            max_input_tokens=int(limits_payload["max_input_tokens"]),
+            max_output_tokens=int(limits_payload["max_output_tokens"]),
+            timeout_seconds=float(limits_payload["timeout_seconds"]),
+            max_tool_result_bytes=int(limits_payload["max_tool_result_bytes"]),
+        ),
+    )

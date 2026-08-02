@@ -26,6 +26,7 @@ from codelens.review.infrastructure.repositories import (
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
+from codelens.worker.execution import load_frozen_execution_specs
 from codelens.workspace.domain.models import (
     BranchScope,
     ChangeIndex,
@@ -263,6 +264,12 @@ async def test_restart_uses_stored_spec_artifact_after_current_configuration_cha
         assert await reopened_artifacts.read_output(
             stored.prompt_artifact_ref, stored.prompt_artifact_hash
         ) == prompt_bytes
+        hydrated = await load_frozen_execution_specs(
+            "review-restart",
+            SqlAgentExecutionSpecStore(reopened),
+            reopened_artifacts,
+        )
+        assert hydrated["node-reviewer"] == spec
 
         artifact_file = next(path for path in artifact_root.iterdir() if path.is_file())
         await asyncio.to_thread(artifact_file.write_bytes, b"tampered current bytes")

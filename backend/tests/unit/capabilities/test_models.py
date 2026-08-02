@@ -1,3 +1,4 @@
+import hashlib
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
@@ -9,6 +10,8 @@ from codelens.capabilities.domain.models import (
     FrozenSkillActivation,
     SkillPolicyReference,
     ToolContractReference,
+    canonical_execution_payload,
+    hydrate_execution_spec,
 )
 from codelens.reviewer_catalog.infrastructure.builtin_agents import builtin_agent_catalog
 
@@ -134,3 +137,84 @@ def test_legacy_limits_are_frozen_to_the_approved_values() -> None:
         max_tool_result_bytes=1_048_576,
     )
 
+
+def test_hydrate_execution_spec_reconstructs_the_frozen_runtime_values() -> None:
+    prompt_text = "Frozen reviewer prompt."
+    instruction_text = "Inspect Python changes."
+    skill = FrozenSkillActivation(
+        skill_id="python-review",
+        version=1,
+        content_hash=hashlib.sha256(instruction_text.encode()).hexdigest(),
+        activation_reason="python changed",
+        instruction_text=instruction_text,
+    )
+    spec = FrozenAgentExecutionSpec.create(
+        agent=replace(
+            builtin_agent_catalog()["correctness:v1"], prompt_template=prompt_text
+        ),
+        capability_profile=_profile(ToolContractReference("read_file", 1)),
+        skill_policy=SkillPolicyReference("none", 1),
+        prompt_content_hash=hashlib.sha256(prompt_text.encode()).hexdigest(),
+        skills=(skill,),
+        execution_limits=AgentExecutionLimits.legacy_default(),
+    )
+    spec_json = canonical_execution_payload(
+        spec.agent,
+        spec.capability_profile,
+        spec.skill_policy,
+        spec.prompt_content_hash,
+        spec.skills,
+        spec.execution_limits,
+    ).decode()
+
+    hydrated = hydrate_execution_spec(
+        spec_json,
+        prompt_text=prompt_text,
+        skill_instruction_texts=(instruction_text,),
+    )
+
+    assert hydrated == spec
+
+
+@pytest.mark.parametrize(
+    ("prompt_text", "skill_text", "message"),
+    (
+        ("changed prompt", "Inspect Python changes.", "prompt bytes"),
+        ("Frozen reviewer prompt.", "changed skill", "Skill bytes"),
+    ),
+)
+def test_hydrate_execution_spec_rejects_changed_artifact_bytes(
+    prompt_text: str, skill_text: str, message: str
+) -> None:
+    original_prompt = "Frozen reviewer prompt."
+    original_skill = "Inspect Python changes."
+    skill = FrozenSkillActivation(
+        skill_id="python-review",
+        version=1,
+        content_hash=hashlib.sha256(original_skill.encode()).hexdigest(),
+        activation_reason="python changed",
+        instruction_text=original_skill,
+    )
+    spec = FrozenAgentExecutionSpec.create(
+        agent=builtin_agent_catalog()["correctness:v1"],
+        capability_profile=_profile(ToolContractReference("read_file", 1)),
+        skill_policy=SkillPolicyReference("none", 1),
+        prompt_content_hash=hashlib.sha256(original_prompt.encode()).hexdigest(),
+        skills=(skill,),
+        execution_limits=AgentExecutionLimits.legacy_default(),
+    )
+    spec_json = canonical_execution_payload(
+        spec.agent,
+        spec.capability_profile,
+        spec.skill_policy,
+        spec.prompt_content_hash,
+        spec.skills,
+        spec.execution_limits,
+    ).decode()
+
+    with pytest.raises(ValueError, match=message):
+        hydrate_execution_spec(
+            spec_json,
+            prompt_text=prompt_text,
+            skill_instruction_texts=(skill_text,),
+        )

@@ -1,7 +1,7 @@
 """Assemble model-visible built-ins from one frozen Capability Profile."""
 
 from dataclasses import dataclass, field
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol
 
 from agents import FunctionTool, Tool, function_tool
 from pydantic import StringConstraints
@@ -46,12 +46,25 @@ class ToolExecutionLimits:
         return cls(100, 3, 30.0, "Repeated {repeated_count}; {remaining} attempts remain.")
 
 
+class RoleOutputState(Protocol):
+    """Expose completion and canonicalizable output for one internal Agent role."""
+
+    @property
+    def is_completed(self) -> bool: ...
+
+    @property
+    def incomplete_review_files(self) -> tuple[str, ...]: ...
+
+    def final_output(self) -> object: ...
+
+
 @dataclass(frozen=True)
 class RoleOutputToolBinding:
     """Bind one host-owned role output tool to a stable CodeLens contract."""
 
     contract: ToolContractReference
     tool: Tool
+    state: RoleOutputState | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.tool, FunctionTool):
@@ -125,29 +138,33 @@ class RuntimeToolContext:
     role_output_tools: tuple[RoleOutputToolBinding, ...] = ()
     collector_contract_version: str | None = field(default=None, init=False)
     reviewer_output: ReviewerOutputState | None = field(default=None, init=False)
+    role_output_state: RoleOutputState | None = field(default=None, init=False)
 
     @property
     def is_completed(self) -> bool:
         """Return the retained reviewer's completion state, failing for non-review roles."""
 
-        if self.reviewer_output is None:
-            raise RuntimeError("Runtime tool context has no Reviewer output state")
-        return self.reviewer_output.is_completed
+        state = self.reviewer_output or self.role_output_state
+        if state is None:
+            raise RuntimeError("Runtime tool context has no output state")
+        return state.is_completed
 
     @property
     def incomplete_review_files(self) -> tuple[str, ...]:
         """Expose retained completion coverage for the current Reviewer Run."""
 
-        if self.reviewer_output is None:
-            raise RuntimeError("Runtime tool context has no Reviewer output state")
-        return self.reviewer_output.incomplete_review_files
+        state = self.reviewer_output or self.role_output_state
+        if state is None:
+            raise RuntimeError("Runtime tool context has no output state")
+        return state.incomplete_review_files
 
-    def final_output(self) -> dict[str, object] | CandidateFindingBatch:
-        """Return the retained v1 Finding or v2 Candidate batch."""
+    def final_output(self) -> object:
+        """Return the retained versioned output for the current Agent role."""
 
-        if self.reviewer_output is None:
-            raise RuntimeError("Runtime tool context has no Reviewer output state")
-        return self.reviewer_output.final_output()
+        state = self.reviewer_output or self.role_output_state
+        if state is None:
+            raise RuntimeError("Runtime tool context has no output state")
+        return state.final_output()
 
     @classmethod
     def for_test(
@@ -201,6 +218,7 @@ class CapabilityToolAssembler:
 
         context.collector_contract_version = None
         context.reviewer_output = None
+        context.role_output_state = None
         available = self._available_tools(spec, context)
         selected: list[Tool] = []
         for reference in spec.capability_profile.builtin_tools:
@@ -300,4 +318,8 @@ class CapabilityToolAssembler:
             if key in available:
                 raise ValueError("duplicate built-in tool contract binding")
             available[key] = binding.tool
+            if key in requested and binding.state is not None:
+                if context.role_output_state is not None:
+                    raise ValueError("multiple role output states were selected")
+                context.role_output_state = binding.state
         return available

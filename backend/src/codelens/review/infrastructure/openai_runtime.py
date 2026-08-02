@@ -63,10 +63,14 @@ from codelens.review.domain.ports import (
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.capability_tools import (
     CapabilityToolAssembler,
+    RoleOutputToolBinding,
     RuntimeToolContext,
     ToolExecutionLimits,
 )
+from codelens.review.infrastructure.planner_output import PlannerOutputCodec
+from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
+from codelens.reviewer_catalog.domain.models import AgentRole
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
 from codelens.workspace.domain.models import ReviewSnapshot
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -199,7 +203,7 @@ class OpenAIAgentRuntime:
         provider_config = await self._config_store.load()
         if provider_config is None:
             raise PermanentAgentOutputError("Model provider is not configured")
-        user_input, repository_instructions = _split_agent_input(input_payload)
+        user_input, repository_instructions, role_context = _split_agent_input(input_payload)
         prompts = self._prompt_loader.get(prompt_locale)
         completion_settings = (
             await self._completion_settings.get()
@@ -211,7 +215,8 @@ class OpenAIAgentRuntime:
             if self._tool_limits_service is not None
             else ToolLimits()
         )
-        if agent.output_contract_version != self._output_codec.schema_version:
+        is_reviewer = agent.role is AgentRole.REVIEWER
+        if is_reviewer and agent.output_contract_version != self._output_codec.schema_version:
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
         provider_config = replace(
@@ -233,6 +238,13 @@ class OpenAIAgentRuntime:
                 execution_spec.execution_limits.max_tool_result_bytes,
             ),
         )
+        role_output_tools: tuple[RoleOutputToolBinding, ...] = ()
+        planner_codec: PlannerOutputCodec | None = None
+        if agent.role is AgentRole.PLANNER:
+            planner_codec = _planner_codec(role_context)
+            planner_collector = ReviewPlanSubmissionCollector(planner_codec)
+            planner_description = prompts.tools["submit_review_plan"].description
+            role_output_tools = (planner_collector.binding(planner_description),)
         tool_context = RuntimeToolContext(
             snapshot=snapshot,
             git=self._git,
@@ -245,6 +257,7 @@ class OpenAIAgentRuntime:
                 tool_timeout_seconds=provider_config.tool_timeout_seconds,
                 tool_loop_warning_template=prompts.tool_loop_warning,
             ),
+            role_output_tools=role_output_tools,
         )
         model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)
@@ -382,13 +395,21 @@ class OpenAIAgentRuntime:
         if not tool_context.is_completed:
             await client.close()
             raise PermanentAgentOutputError(
-                "Code investigation ended without an accepted task_done call.",
+                "Agent execution ended without an accepted output submission.",
                 phase="investigation",
                 reason_code="review_completion_not_declared",
                 retryable=False,
             ) from None
         try:
-            canonical_bytes = self._output_codec.encode(tool_context.final_output())
+            if planner_codec is not None:
+                final_output = tool_context.final_output()
+                from codelens.review.application.planning import PlannerSelection
+
+                if not isinstance(final_output, PlannerSelection):
+                    raise ValueError("Planner output state has the wrong value")
+                canonical_bytes = planner_codec.canonical_bytes(final_output)
+            else:
+                canonical_bytes = self._output_codec.encode(tool_context.final_output())
         except ValueError as error:
             await client.close()
             raise PermanentAgentOutputError(
@@ -650,7 +671,7 @@ def _json_compatible(value: object) -> object:
     return str(value)
 
 
-def _split_agent_input(input_payload: bytes) -> tuple[str, str]:
+def _split_agent_input(input_payload: bytes) -> tuple[str, str, dict[str, object] | None]:
     """Split the internal context envelope into user scope and trusted instructions."""
 
     try:
@@ -659,13 +680,14 @@ def _split_agent_input(input_payload: bytes) -> tuple[str, str]:
     except (UnicodeDecodeError, json.JSONDecodeError):
         raise PermanentAgentOutputError("Agent input is not valid JSON UTF-8") from None
 
-    if not isinstance(envelope, dict) or set(envelope) != {
-        "review_files",
-        "repository_instructions",
-    }:
+    if not isinstance(envelope, dict) or set(envelope) not in (
+        {"review_files", "repository_instructions"},
+        {"review_files", "repository_instructions", "role_context"},
+    ):
         raise PermanentAgentOutputError("Agent input envelope has an invalid shape")
     review_files = envelope["review_files"]
     repository_instructions = envelope["repository_instructions"]
+    role_context = envelope.get("role_context")
     if not isinstance(review_files, list) or not all(
         isinstance(item, dict) for item in review_files
     ):
@@ -676,10 +698,15 @@ def _split_agent_input(input_payload: bytes) -> tuple[str, str]:
         raise PermanentAgentOutputError(
             "Agent repository_instructions input has an invalid shape"
         )
+    if role_context is not None and not isinstance(role_context, dict):
+        raise PermanentAgentOutputError("Agent role_context input has an invalid shape")
 
     return (
         json.dumps(
-            {"review_files": review_files},
+            {
+                "review_files": review_files,
+                **({"role_context": role_context} if role_context is not None else {}),
+            },
             ensure_ascii=False,
             sort_keys=True,
             separators=(",", ":"),
@@ -690,6 +717,38 @@ def _split_agent_input(input_payload: bytes) -> tuple[str, str]:
             sort_keys=True,
             separators=(",", ":"),
         ),
+        cast(dict[str, object] | None, role_context),
+    )
+
+
+def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec:
+    """Build the Planner validator only from bounded frozen input metadata."""
+
+    required = {
+        "eligible_reviewer_references",
+        "unavailable_reviewer_references",
+        "target_paths",
+        "allowed_reason_codes",
+    }
+    allowed = required | {"budget_limits", "change_risk_summary", "reviewer_catalog"}
+    if role_context is None or not required.issubset(role_context) or not set(
+        role_context
+    ).issubset(allowed):
+        raise PermanentAgentOutputError("Planner role context has an invalid shape")
+
+    def string_tuple(name: str) -> tuple[str, ...]:
+        value = role_context[name]
+        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
+            raise PermanentAgentOutputError("Planner role context has an invalid value")
+        return tuple(value)
+
+    return PlannerOutputCodec(
+        eligible_reviewer_references=string_tuple("eligible_reviewer_references"),
+        unavailable_reviewer_references=string_tuple(
+            "unavailable_reviewer_references"
+        ),
+        target_paths=string_tuple("target_paths"),
+        allowed_reason_codes=frozenset(string_tuple("allowed_reason_codes")),
     )
 
 

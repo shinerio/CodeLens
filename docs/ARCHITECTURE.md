@@ -154,7 +154,11 @@ Interface 层当前包含 FastAPI 路由、请求/响应 DTO、SSE 端点和 Wor
 
 ### 5.1 Capability 管控的内置 Review 工具
 
-每个不可变 Reviewer/内部 Agent 版本静态绑定一个 Capability Profile 和 Skill Policy 引用。Worker 在模型调用前解析版本化 Prompt、Capability Profile、声明式 Skill 激活和执行限制，生成包含 Agent 身份、Prompt 内容哈希、完整工具契约、MCP Schema 哈希、Skill 内容哈希及所有执行限制的 `FrozenAgentExecutionSpec`。该规格的指纹是确定性的；Runtime 在供应商调用前重新验证 Prompt、Skill 内容哈希和执行指纹，不能根据模型输出、Planner、插件或运行期发现改变工具集合。
+每个不可变 Reviewer/内部 Agent 版本静态绑定一个 Capability Profile 和 Skill Policy 引用。任务创建边界解析版本化 Prompt、Capability Profile、声明式 Skill 激活和执行限制，生成包含 Agent 身份、Prompt 内容哈希、完整工具契约、MCP Schema 哈希、Skill 内容哈希及所有执行限制的 `FrozenAgentExecutionSpec`；Prompt 与 Skill 正文只进入哈希映射的受限 Artifact，数据库仅保存安全元数据和 Artifact 身份。Worker 重启后必须从这些 Artifact 重建规格并校验内容哈希和执行指纹，不得从当前 Catalog、Prompt 设置或 Capability 配置重新解析。该规格的指纹是确定性的；Runtime 在供应商调用前重新验证 Prompt、Skill 内容哈希和执行指纹，不能根据模型输出、Planner、插件或运行期发现改变工具集合。
+
+Fixed 选择由宿主直接编译为不可变 Review Plan，绝不调用 Planner；Adaptive 选择只允许 `review-planner:v1` 通过一次 `submit_review_plan:v1` 提交完整的 Catalog 决策。Planner 只能选择冻结 Catalog 中 Ready 的公开 Reviewer 并提供受限原因代码和 Snapshot 内关注路径，不能提交工具、能力、Finding、Prompt 或自由 DAG；Reviewer、Resolver 和 Verifier 的节点及依赖全部由宿主编译。General 与单 Specialist 不包含 Resolver/Verifier，多 Specialist 必须预建 Resolver 和批量 Verifier。计划在任何 Reviewer 扇出前持久化；Plan 哈希覆盖选择、节点、Planner 指引与能力降级，任务 planning context 另行哈希覆盖预算策略版本和解析后限制。可选 MCP/Skill 不可用只形成降级元数据，不改变任务完成状态。
+
+每个预算 Profile 冻结任务级 Reviewer 数、模型节点数、并发、Token、单节点输出、轮次、工具调用、估算时长和 Verifier cluster 上限。调度前，任务账本必须以版本化的供应商无关估算器原子预留 `estimated_input_tokens + max_output_tokens` 以及节点和工具容量，再以供应商报告的实际用量核销；并发节点按最坏输出预留，因此不得超卖总预算。任务估算时长不是跨 Agent 的硬截止时间，各节点仍只服从自身冻结超时和正常失败策略。
 
 模型可见工具由冻结 Profile 按角色精确选择：
 

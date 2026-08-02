@@ -29,7 +29,10 @@ from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfig
-from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
+from codelens.reviewer_catalog.infrastructure.builtin_agents import (
+    builtin_agent_catalog,
+    correctness_agent,
+)
 from codelens.workspace.domain.models import (
     ChangeIndex,
     RepositoryFingerprint,
@@ -126,6 +129,42 @@ class SlowRunner(FakeRunner):
         )
 
 
+class PlannerRunner(FakeRunner):
+    @staticmethod
+    async def complete_review(starting_agent: Agent[None]) -> None:
+        tool = next(
+            tool for tool in starting_agent.tools if tool.name == "submit_review_plan"
+        )
+        arguments = json.dumps(
+            {
+                "submission": {
+                    "schema_version": "1",
+                    "strategy": "generalist",
+                    "risk_signals": [],
+                    "reviewer_decisions": [
+                        {
+                            "reviewer_reference": "general:v1",
+                            "is_selected": True,
+                            "reason_codes": ["broad-risk"],
+                            "focus_paths": [],
+                        }
+                    ],
+                }
+            }
+        )
+        await tool.on_invoke_tool(
+            ToolContext(
+                None,
+                usage=Usage(),
+                tool_name="submit_review_plan",
+                tool_call_id="fake-submit-review-plan",
+                tool_arguments=arguments,
+                run_config=RunConfig(),
+            ),
+            arguments,
+        )
+
+
 class StaticProviderConfigStore:
     def __init__(self, config: ModelProviderConfig | None = None) -> None:
         self.config = config
@@ -183,8 +222,35 @@ def _spec(config: ModelProviderConfig | None = None) -> FrozenAgentExecutionSpec
     )
 
 
+def _planner_spec() -> FrozenAgentExecutionSpec:
+    agent = builtin_agent_catalog()["review-planner:v1"]
+    return CapabilityResolver.testing().resolve(
+        agent=agent,
+        prompt_content_hash=hashlib.sha256(agent.prompt_template.encode()).hexdigest(),
+        facts=SkillActivationFacts.empty(),
+        execution_limits=AgentExecutionLimits.legacy_default(),
+    )
+
+
 def _runtime_input() -> bytes:
     return b'{"repository_instructions":[],"review_files":[]}'
+
+
+def _planner_runtime_input() -> bytes:
+    return json.dumps(
+        {
+            "repository_instructions": [],
+            "review_files": [],
+            "role_context": {
+                "eligible_reviewer_references": ["general:v1"],
+                "unavailable_reviewer_references": [],
+                "target_paths": [],
+                "allowed_reason_codes": ["broad-risk"],
+            },
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
 
 
 def _snapshot() -> ReviewSnapshot:
@@ -196,6 +262,42 @@ def _snapshot() -> ReviewSnapshot:
         manifest=SnapshotManifest((), (), (), entries=()),
         change_index=ChangeIndex(()),
     )
+
+
+async def test_planner_runtime_uses_typed_submission_as_its_completion_signal() -> None:
+    runner = PlannerRunner(
+        FakeResult(
+            final_output=None,
+            raw_responses=(FakeResponse("resp-plan", "req-plan", FakeUsage(3, 2), ()),),
+        )
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        output_codec=AgentOutputCodec("1"),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    output = await runtime.invoke(
+        _planner_spec(), _planner_runtime_input(), _snapshot(), "en"
+    )
+
+    assert json.loads(output.canonical_bytes) == {
+        "reviewer_decisions": [
+            {
+                "focus_paths": [],
+                "is_selected": True,
+                "reason_codes": ["broad-risk"],
+                "reviewer_reference": "general:v1",
+            }
+        ],
+        "risk_signals": [],
+        "schema_version": "1",
+        "strategy": "generalist",
+    }
+    assert runner.starting_agent is not None
+    assert tuple(tool.name for tool in runner.starting_agent.tools)[-1] == "submit_review_plan"
 
 
 async def test_successful_provider_responses_are_not_marked_as_parse_failures() -> None:
@@ -382,9 +484,12 @@ def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_lo
         "read_file",
         "get_diff",
         "comment",
-        "review_file_done",
-        "task_done",
-    }
+            "review_file_done",
+            "task_done",
+            "submit_review_plan",
+            "submit_resolution",
+            "submit_verification",
+        }
 
     assert set(loader.get("en").tools) == expected
     assert set(loader.get("zh-CN").tools) == expected

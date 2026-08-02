@@ -59,6 +59,7 @@ from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.model_log import ModelTranscriptLogWriter
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.review.infrastructure.repositories import (
+    SqlAgentExecutionSpecStore,
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlJobQueue,
@@ -271,6 +272,7 @@ def build_unified_backend(
         repository_inspector=repository_inspector,
         provider_config=provider_config_store,
         tool_limits_service=tool_limits_service,
+        execution_spec_store=SqlAgentExecutionSpecStore(database),
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),

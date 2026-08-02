@@ -9,6 +9,7 @@ from codelens.capabilities.application.resolve import CapabilityResolver
 from codelens.capabilities.domain.models import (
     AgentExecutionLimits,
     FrozenAgentExecutionSpec,
+    hydrate_execution_spec,
 )
 from codelens.capabilities.domain.skills import SkillActivationFacts
 from codelens.capabilities.infrastructure.builtin_profiles import (
@@ -36,6 +37,7 @@ from codelens.review.domain.ports import (
 )
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
+    SqlAgentExecutionSpecStore,
     SqlCheckpointStore,
     SqlJobQueue,
     SqlReviewStore,
@@ -76,6 +78,40 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
 
 _TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled"}
+
+
+async def load_frozen_execution_specs(
+    task_id: str,
+    store: SqlAgentExecutionSpecStore,
+    artifacts: FilesystemRunArtifactStore,
+) -> dict[str, FrozenAgentExecutionSpec]:
+    """Hydrate task specs exclusively from hash-verified frozen Artifact bytes."""
+
+    hydrated: dict[str, FrozenAgentExecutionSpec] = {}
+    for record in await store.list_for_task(task_id):
+        prompt_bytes = await artifacts.read_output(
+            record.prompt_artifact_ref, record.prompt_artifact_hash
+        )
+        loaded_skill_bytes: list[bytes] = []
+        for identity in record.skill_artifacts:
+            loaded_skill_bytes.append(
+                await artifacts.read_output(identity.reference, identity.content_hash)
+            )
+        skill_bytes = tuple(loaded_skill_bytes)
+        try:
+            execution_spec = hydrate_execution_spec(
+                record.spec_json,
+                prompt_text=prompt_bytes.decode("utf-8"),
+                skill_instruction_texts=tuple(
+                    payload.decode("utf-8") for payload in skill_bytes
+                ),
+            )
+        except UnicodeDecodeError as error:
+            raise ValueError("frozen execution Artifact is not valid UTF-8") from error
+        if execution_spec.fingerprint != record.fingerprint:
+            raise ValueError("hydrated execution spec fingerprint mismatch")
+        hydrated[record.logical_node_id] = execution_spec
+    return hydrated
 
 
 @dataclass(frozen=True)
@@ -206,6 +242,7 @@ class WorkerReviewExecutor:
         provider_config: ModelProviderConfigPort | None = None,
         tool_limits_service: ToolLimitsService | None = None,
         capability_resolver: CapabilityResolver | None = None,
+        execution_spec_store: SqlAgentExecutionSpecStore | None = None,
     ) -> None:
         self._settings = settings
         self._review_store = review_store
@@ -238,6 +275,7 @@ class WorkerReviewExecutor:
             builtin_capability_profiles(),
             builtin_skill_policies(),
         )
+        self._execution_spec_store = execution_spec_store
 
     async def recover(self) -> None:
         """Recover Task 11 checkpoints and reconcile every registered owned worktree."""
@@ -315,19 +353,39 @@ class WorkerReviewExecutor:
         if provider_config is None:
             provider_config = ModelProviderConfig(api_key="", model="", base_url="")
         tool_limits = await self._tool_limits_service.get()
-        execution_specs = await self._execution_specs(
-            record.selected_agent_versions,
-            record.prompt_locale,
-            snapshot,
-            AgentExecutionLimits(
-                max_turns=provider_config.max_agent_turns,
-                max_tool_calls=provider_config.max_tool_calls,
-                max_input_tokens=provider_config.max_tokens,
-                max_output_tokens=provider_config.max_tokens,
-                timeout_seconds=provider_config.agent_timeout,
-                max_tool_result_bytes=tool_limits.max_read_bytes,
-            ),
+        stored_specs = (
+            await load_frozen_execution_specs(
+                task_id, self._execution_spec_store, self._output_artifacts
+            )
+            if self._execution_spec_store is not None
+            else {}
         )
+        selected_stored_specs = {
+            spec.agent.reference: spec
+            for spec in stored_specs.values()
+            if spec.agent.reference in record.selected_agent_versions
+        }
+        if stored_specs:
+            if set(selected_stored_specs) != set(record.selected_agent_versions):
+                raise ValueError("task has an incomplete frozen execution spec set")
+            execution_specs = tuple(
+                selected_stored_specs[reference]
+                for reference in record.selected_agent_versions
+            )
+        else:
+            execution_specs = await self._execution_specs(
+                record.selected_agent_versions,
+                record.prompt_locale,
+                snapshot,
+                AgentExecutionLimits(
+                    max_turns=provider_config.max_agent_turns,
+                    max_tool_calls=provider_config.max_tool_calls,
+                    max_input_tokens=provider_config.max_tokens,
+                    max_output_tokens=provider_config.max_tokens,
+                    timeout_seconds=provider_config.agent_timeout,
+                    max_tool_result_bytes=tool_limits.max_read_bytes,
+                ),
+            )
         payloads: dict[str, bytes] = {}
         for execution_spec in execution_specs:
             agent_input = self._context_builder.build(snapshot, instructions)
