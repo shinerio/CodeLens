@@ -69,6 +69,7 @@ from codelens.review.infrastructure.repositories import (
     SqlReviewPlanStore,
     SqlReviewProfileRepository,
     SqlReviewStore,
+    SqlVerificationStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
@@ -279,6 +280,7 @@ def build_unified_backend(
         review_plan_store=SqlReviewPlanStore(database),
         candidate_store=SqlCandidateFindingStore(database),
         resolution_store=SqlResolutionStore(database),
+        verification_store=SqlVerificationStore(database),
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),

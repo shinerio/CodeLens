@@ -17,10 +17,13 @@ from codelens.capabilities.infrastructure.builtin_profiles import (
     builtin_capability_profiles,
     builtin_skill_policies,
 )
+from codelens.findings.application.publish_findings import FindingPublisher
 from codelens.findings.application.resolve_clusters import ResolutionService
 from codelens.findings.application.validate_candidates import CandidateValidator
+from codelens.findings.application.verify_resolutions import VerificationPolicy
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.findings.infrastructure.resolver_output import ResolverOutputCodec
+from codelens.findings.infrastructure.verifier_output import VerifierOutputCodec
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.orchestrator import (
     CheckpointView,
@@ -50,11 +53,13 @@ from codelens.review.infrastructure.repositories import (
     SqlResolutionStore,
     SqlReviewPlanStore,
     SqlReviewStore,
+    SqlVerificationStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.resolution_tools import ResolutionValidator
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.review.infrastructure.transcripts import WorkerTranscriptStore
+from codelens.review.infrastructure.verification_tools import VerificationValidator
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import (
@@ -330,6 +335,7 @@ class WorkerReviewExecutor:
         review_plan_store: SqlReviewPlanStore | None = None,
         candidate_store: SqlCandidateFindingStore | None = None,
         resolution_store: SqlResolutionStore | None = None,
+        verification_store: SqlVerificationStore | None = None,
     ) -> None:
         self._settings = settings
         self._review_store = review_store
@@ -366,7 +372,9 @@ class WorkerReviewExecutor:
         self._review_plan_store = review_plan_store
         self._candidate_store = candidate_store
         self._resolution_store = resolution_store
+        self._verification_store = verification_store
         self._resolution_codecs: dict[tuple[str, str], ResolverOutputCodec] = {}
+        self._verification_codecs: dict[tuple[str, str], VerifierOutputCodec] = {}
 
     async def recover(self) -> None:
         """Recover Task 11 checkpoints and reconcile every registered owned worktree."""
@@ -405,6 +413,8 @@ class WorkerReviewExecutor:
                 max_active_reviews=self._settings.max_active_reviews,
             ),
             prepare_resolution=self._prepare_resolution,
+            verification_required=self._verification_required,
+            publish_findings=self._publish_findings,
             transcript=self._transcripts,
         )
         await orchestrator.execute(task_id)
@@ -666,12 +676,22 @@ class WorkerReviewExecutor:
         prepared: PreparedReview,
         agent: AgentVersion,
         checkpoint: CheckpointRecord,
-    ) -> FindingValidator | CandidateValidator | ResolutionValidator:
+    ) -> (
+        FindingValidator
+        | CandidateValidator
+        | ResolutionValidator
+        | VerificationValidator
+    ):
         if agent.role.value == "resolver":
             codec = self._resolution_codecs.get((task_id, node_key))
             if codec is None:
                 raise ValueError("Resolver constraints were not prepared")
             return ResolutionValidator(codec)
+        if agent.role.value == "verifier":
+            verifier_codec = self._verification_codecs.get((task_id, node_key))
+            if verifier_codec is None:
+                raise ValueError("Verifier constraints were not prepared")
+            return VerificationValidator(verifier_codec)
         if agent.output_contract_version == "2":
             if checkpoint.run_id is None:
                 raise ValueError("Candidate AgentRun lacks a stable run ID")
@@ -714,7 +734,8 @@ class WorkerReviewExecutor:
         )
         if resolver is None:
             await self._resolution_store.save_decisions(
-                task_id, ResolutionService.direct_decisions(candidates)
+                task_id,
+                ResolutionService.direct_decisions(candidates, clusters=clusters),
             )
             return
         context = json.loads(
@@ -734,6 +755,70 @@ class WorkerReviewExecutor:
         ).encode()
         self._resolution_codecs[(task_id, resolver.node_id)] = ResolverOutputCodec(
             clusters, candidates
+        )
+        decisions = await self._resolution_store.list_decisions(task_id)
+        verification_targets = VerificationPolicy.select(decisions)
+        verifier = next(
+            (node for node in plan.nodes if node.node_type.value == "verifier"),
+            None,
+        )
+        if verifier is None or not verification_targets:
+            return
+        verifier_envelope = json.loads(prepared.input_payloads[verifier.node_id])
+        verifier_role_context = verifier_envelope.setdefault("role_context", {})
+        if not isinstance(verifier_role_context, dict):
+            raise ValueError("Verifier role context must be an object")
+        cluster_ids = tuple(item.cluster_id for item in verification_targets)
+        verifier_role_context["verification_context"] = {
+            "cluster_ids": list(cluster_ids),
+            "decisions": [
+                {
+                    "canonical_candidate_id": item.canonical_candidate_id,
+                    "cluster_id": item.cluster_id,
+                    "content": item.content,
+                    "recommendation": item.recommendation,
+                    "severity": item.severity.value if item.severity else None,
+                    "title": item.title,
+                }
+                for item in verification_targets
+            ],
+            "schema_version": "1",
+        }
+        prepared.input_payloads[verifier.node_id] = json.dumps(
+            verifier_envelope, sort_keys=True, separators=(",", ":")
+        ).encode()
+        self._verification_codecs[(task_id, verifier.node_id)] = VerifierOutputCodec(
+            cluster_ids
+        )
+
+    async def _verification_required(self, task_id: str) -> bool:
+        if self._resolution_store is None:
+            return False
+        decisions = await self._resolution_store.list_decisions(task_id)
+        return bool(VerificationPolicy.select(decisions))
+
+    async def _publish_findings(self, task_id: str) -> None:
+        if self._candidate_store is None or self._resolution_store is None:
+            return
+        candidates = await self._candidate_store.list_for_task(task_id)
+        resolutions = await self._resolution_store.list_decisions(task_id)
+        verifications = (
+            await self._verification_store.list_for_task(task_id)
+            if self._verification_store is not None
+            else ()
+        )
+        publications = tuple(
+            (resolution.cluster_id, finding)
+            for resolution in resolutions
+            for finding in FindingPublisher.build(
+                task_id=task_id,
+                candidates=candidates,
+                resolutions=(resolution,),
+                verifications=verifications,
+            )
+        )
+        await self._review_store.publish_resolved_findings(
+            task_id, resolutions, publications
         )
 
 

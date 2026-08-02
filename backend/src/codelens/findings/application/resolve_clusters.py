@@ -123,25 +123,39 @@ class ResolutionService:
     @staticmethod
     def direct_decisions(
         candidates: Sequence[CandidateFinding],
+        *,
+        clusters: tuple[FindingCluster, ...] | None = None,
     ) -> tuple[ResolutionDecision, ...]:
         """Publish direct confirmed/plausible evidence and audit-suppress the remainder."""
 
-        decisions: list[ResolutionDecision] = []
-        for candidate in candidates:
-            cluster = FindingCluster(
+        by_id = {candidate.candidate_id: candidate for candidate in candidates}
+        direct_clusters = clusters or tuple(
+            FindingCluster(
                 "cluster_direct_"
                 + hashlib.sha256(candidate.candidate_id.encode()).hexdigest(),
                 (candidate.candidate_id,),
             )
-            if candidate.evidence_strength is EvidenceStrength.DIRECT and (
-                candidate.impact_certainty
+            for candidate in candidates
+        )
+        decisions: list[ResolutionDecision] = []
+        for cluster in direct_clusters:
+            members = tuple(by_id[candidate_id] for candidate_id in cluster.candidate_ids)
+            publishable = tuple(
+                candidate
+                for candidate in members
+                if candidate.evidence_strength is EvidenceStrength.DIRECT
+                and candidate.impact_certainty
                 in {ImpactCertainty.CONFIRMED, ImpactCertainty.PLAUSIBLE}
-            ):
+            )
+            if publishable:
+                candidate = publishable[0]
                 decisions.append(
                     ResolutionDecision.publish(
                         cluster=cluster,
                         canonical_candidate_id=candidate.candidate_id,
-                        merged_candidate_ids=(candidate.candidate_id,),
+                        merged_candidate_ids=tuple(
+                            item.candidate_id for item in publishable
+                        ),
                         severity=candidate.severity,
                         title=candidate.title,
                         content=candidate.content,

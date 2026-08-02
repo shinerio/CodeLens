@@ -67,6 +67,18 @@ def test_direct_policy_suppresses_weak_or_unclear_candidates() -> None:
     assert all(not decision.is_publishable for decision in decisions)
 
 
+def test_direct_policy_reuses_persisted_cluster_identity() -> None:
+    source = candidate("candidate-direct")
+    cluster = FindingCluster("cluster-persisted", (source.candidate_id,))
+
+    decisions = ResolutionService.direct_decisions(
+        (source,), clusters=(cluster,)
+    )
+
+    assert decisions[0].cluster_id == cluster.cluster_id
+    assert decisions[0].is_publishable
+
+
 def test_resolver_projection_is_stable_and_omits_execution_order() -> None:
     candidates = (candidate("candidate-b"), candidate("candidate-a"))
     clusters = tuple(

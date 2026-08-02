@@ -81,6 +81,12 @@ class Finding:
     reproduction: str | None
     recommendation: str
     rule_sources: tuple[RuleReference, ...]
+    primary_dimension: str | None = None
+    secondary_dimensions: tuple[str, ...] = ()
+    evidence_strength: str | None = None
+    impact_certainty: str | None = None
+    reproducibility: str | None = None
+    source_reviewer_references: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

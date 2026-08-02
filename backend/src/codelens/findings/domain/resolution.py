@@ -169,6 +169,7 @@ class VerificationDecision:
 
     target_id: str
     outcome: VerificationOutcome
+    reason_code: str | None = None
 
     @property
     def is_publishable(self) -> bool:
@@ -178,27 +179,45 @@ class VerificationDecision:
 
     @classmethod
     def confirmed(
-        cls, *, target_id: str, batch_target_ids: tuple[str, ...]
+        cls,
+        *,
+        target_id: str,
+        batch_target_ids: tuple[str, ...],
+        reason_code: str | None = None,
     ) -> "VerificationDecision":
         """Confirm one target from the supplied verifier batch."""
 
-        return cls._create(target_id, VerificationOutcome.CONFIRMED, batch_target_ids)
+        return cls._create(
+            target_id, VerificationOutcome.CONFIRMED, batch_target_ids, reason_code
+        )
 
     @classmethod
     def rejected(
-        cls, *, target_id: str, batch_target_ids: tuple[str, ...]
+        cls,
+        *,
+        target_id: str,
+        batch_target_ids: tuple[str, ...],
+        reason_code: str | None = None,
     ) -> "VerificationDecision":
         """Reject one target from the supplied verifier batch."""
 
-        return cls._create(target_id, VerificationOutcome.REJECTED, batch_target_ids)
+        return cls._create(
+            target_id, VerificationOutcome.REJECTED, batch_target_ids, reason_code
+        )
 
     @classmethod
     def unresolved(
-        cls, *, target_id: str, batch_target_ids: tuple[str, ...]
+        cls,
+        *,
+        target_id: str,
+        batch_target_ids: tuple[str, ...],
+        reason_code: str | None = None,
     ) -> "VerificationDecision":
         """Suppress an unresolved target from the supplied verifier batch."""
 
-        return cls._create(target_id, VerificationOutcome.UNRESOLVED, batch_target_ids)
+        return cls._create(
+            target_id, VerificationOutcome.UNRESOLVED, batch_target_ids, reason_code
+        )
 
     @classmethod
     def _create(
@@ -206,7 +225,8 @@ class VerificationDecision:
         target_id: str,
         outcome: VerificationOutcome,
         batch_target_ids: tuple[str, ...],
+        reason_code: str | None,
     ) -> "VerificationDecision":
         if target_id not in batch_target_ids:
             raise ValueError("Verification target is outside the verification batch")
-        return cls(target_id=target_id, outcome=outcome)
+        return cls(target_id=target_id, outcome=outcome, reason_code=reason_code)

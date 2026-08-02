@@ -164,6 +164,8 @@ Fixed 选择由宿主直接编译为不可变 Review Plan，绝不调用 Planner
 
 Comment v2 Reviewer 输出首先形成与 task、AgentRun、Snapshot、Reviewer 和证据哈希绑定的 Candidate 审计记录，不能直接成为公开 Finding。宿主必须重新校验规范路径、侧别、变更 hunk、摘录哈希、维度和证据身份，再按位置、类别、标题、影响和证据的规范化键确定性聚类。多 Specialist 的 Resolver 只接收按 Plan hash 稳定打散、且移除 Reviewer/Run 执行顺序的 Candidate 投影；它必须对每个 Cluster 恰好提交一次 publish、suppress 或 verify 决策，不得引用 Cluster 外 Candidate、发明证据或把严重级别提高到所有合并 Candidate 之上。Cluster、Candidate、Resolution 与 Resolver checkpoint 必须作为审计状态持久化，Resolver 决策和节点成功在同一事务提交。General 与 Fixed 单 Reviewer 不运行 Resolver，仅允许 direct evidence 且影响为 confirmed 或 plausible 的 Candidate 进入直接发布决策，其余 Candidate 只保留为 suppress 审计记录。
 
+Verifier 仅在至少一个 Resolver 决策为 verify 时运行，并且每个任务至多运行一个 `review-verifier:v1` batch 节点；输入覆盖全部待验证 Cluster。模型只能为每个 Cluster 提交 confirmed、rejected 或 unresolved 及有界原因代码，不能修改标题、位置、严重级别、影响、建议或证据。只有 Resolver publish 和 Verifier confirmed 的规范表示可生成最终 Finding；rejected、unresolved 与未完成验证保持抑制。Comment v2 Finding 的 confidence 必须为 null，并保留分类轴、证据强度、影响确定性、可复现性和来源 Reviewer 引用；Comment v1 的数值 confidence 与既有字段保持兼容。最终 Finding 插入、Resolution publication 状态与发布事件必须在一个幂等事务中提交，并继续依赖 `(task_id, fingerprint)` 唯一效应保证重放不会重复发布。Verifier 失败不得撤回已经满足直接发布条件的 Finding，但任务必须保留 partial 状态。
+
 模型可见工具由冻结 Profile 按角色精确选择：
 
 | Agent 角色 | 证据工具 | 输出与控制工具 |

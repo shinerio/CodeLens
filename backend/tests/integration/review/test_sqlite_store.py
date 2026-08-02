@@ -17,6 +17,7 @@ from codelens.capabilities.domain.models import (
     FrozenSkillActivation,
 )
 from codelens.capabilities.domain.skills import SkillActivationFacts
+from codelens.findings.application.publish_findings import FindingPublisher
 from codelens.findings.domain.candidates import (
     CandidateFinding,
     CandidateFindingBatch,
@@ -34,7 +35,11 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
-from codelens.findings.domain.resolution import FindingCluster, ResolutionDecision
+from codelens.findings.domain.resolution import (
+    FindingCluster,
+    ResolutionDecision,
+    VerificationDecision,
+)
 from codelens.review.application.review_profiles import (
     CreateReviewProfileHandler,
     DeleteReviewProfileHandler,
@@ -483,6 +488,87 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
 
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
         assert len([event for event in events if event.event_type == "agent.succeeded"]) == 2
+    finally:
+        await database.dispose()
+
+
+async def test_verification_and_publication_replay_are_exactly_once(
+    tmp_path: Path,
+) -> None:
+    database = await _database(tmp_path)
+    task_id = "review-verification-publication"
+    plan = _multi_plan(task_id)
+    try:
+        store = SqlReviewStore(database)
+        await store.create_with_job(_task(task_id))
+        checkpoints = SqlCheckpointStore(database)
+        await checkpoints.ensure_plan_nodes(plan)
+        reviewer = next(
+            node for node in plan.nodes if node.agent_reference == "security:v1"
+        )
+        reviewer_checkpoint = await checkpoints.get(task_id, reviewer.node_id)
+        await checkpoints.mark_running(task_id, reviewer.node_id)
+        await checkpoints.mark_output_saved(
+            task_id, reviewer.node_id, "artifact-candidate", "a" * 64
+        )
+        candidate = _candidate(
+            task_id, reviewer_checkpoint.run_id or "", "candidate-verify"
+        )
+        await store.complete_with_candidates(
+            task_id, reviewer.node_id, CandidateFindingBatch((candidate,))
+        )
+        cluster = FindingCluster("cluster-verify", (candidate.candidate_id,))
+        resolutions = SqlResolutionStore(database)
+        await resolutions.save_clusters(task_id, "snapshot-1", (cluster,))
+        resolution = ResolutionDecision.verify(
+            cluster=cluster,
+            canonical_candidate_id=candidate.candidate_id,
+            merged_candidate_ids=(candidate.candidate_id,),
+            severity=candidate.severity,
+            title=candidate.title,
+            content=candidate.content,
+            recommendation=candidate.recommendation,
+        )
+        resolver = next(
+            node for node in plan.nodes if node.agent_reference == "review-resolver:v1"
+        )
+        await checkpoints.mark_running(task_id, resolver.node_id)
+        await checkpoints.mark_output_saved(
+            task_id, resolver.node_id, "artifact-resolution", "b" * 64
+        )
+        await store.complete_with_resolutions(task_id, resolver.node_id, (resolution,))
+        verifier = next(
+            node for node in plan.nodes if node.agent_reference == "review-verifier:v1"
+        )
+        await checkpoints.mark_running(task_id, verifier.node_id)
+        await checkpoints.mark_output_saved(
+            task_id, verifier.node_id, "artifact-verification", "c" * 64
+        )
+        verification = VerificationDecision.confirmed(
+            target_id=cluster.cluster_id,
+            batch_target_ids=(cluster.cluster_id,),
+            reason_code="reproduced",
+        )
+        await store.complete_with_verifications(
+            task_id, verifier.node_id, (verification,)
+        )
+        finding = FindingPublisher.build(
+            task_id=task_id,
+            candidates=(candidate,),
+            resolutions=(resolution,),
+            verifications=(verification,),
+        )[0]
+
+        await store.publish_resolved_findings(
+            task_id, (resolution,), ((cluster.cluster_id, finding),)
+        )
+        await store.publish_resolved_findings(
+            task_id, (resolution,), ((cluster.cluster_id, finding),)
+        )
+
+        assert await store.list_findings(task_id) == (finding,)
+        events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
+        assert len([item for item in events if item.event_type == "finding.published"]) == 1
     finally:
         await database.dispose()
 
