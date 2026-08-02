@@ -11,6 +11,18 @@ from codelens.worker.singleton import WorkerSingletonPort
 _LOGGER = logging.getLogger("codelens.worker.scheduler")
 
 
+def fair_per_review_agent_limit(
+    *, configured_limit: int, global_limit: int, max_active_reviews: int
+) -> int:
+    """Reserve global Agent capacity for a peer task whenever concurrency permits."""
+
+    if min(configured_limit, global_limit, max_active_reviews) < 1:
+        raise ValueError("Worker concurrency limits must be positive")
+    if max_active_reviews == 1 or global_limit == 1:
+        return min(configured_limit, global_limit)
+    return min(configured_limit, global_limit - 1)
+
+
 @dataclass(frozen=True)
 class WorkerSemaphores:
     """Share bounded Agent, model, and tool capacity across active reviews."""

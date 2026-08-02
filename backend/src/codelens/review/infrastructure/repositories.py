@@ -1371,7 +1371,10 @@ class SqlReviewStore:
                     "provisioning_worktree",
                     "snapshotting",
                     "preparing",
+                    "planning",
                     "reviewing",
+                    "resolving",
+                    "verifying",
                     "validating",
                     "synthesizing",
                 ]
@@ -1943,6 +1946,19 @@ class SqlReviewStore:
 
         await self._database.run_transaction(operation)
 
+    async def has_partial_coverage(self, task_id: str) -> bool:
+        """Return the sticky partial marker independently from the current phase."""
+
+        async with self._database.sessions() as session:
+            value = await session.scalar(
+                select(review_tasks.c.has_partial_coverage).where(
+                    review_tasks.c.task_id == task_id
+                )
+            )
+        if value is None:
+            raise KeyError(task_id)
+        return bool(value)
+
     async def cancellation_requested(self, task_id: str) -> bool:
         record = await self.get_review(task_id)
         if record is None:
@@ -1956,11 +1972,14 @@ class SqlReviewStore:
             "provisioning_worktree": "created",
             "snapshotting": "provisioning_worktree",
             "preparing": "snapshotting",
-            "reviewing": "preparing",
+            "planning": "preparing",
+            "reviewing": ("preparing", "planning"),
+            "resolving": "reviewing",
+            "verifying": "resolving",
             "validating": "reviewing",
             "synthesizing": "validating",
-            "completed": "synthesizing",
-            "partial": "synthesizing",
+            "completed": ("reviewing", "resolving", "verifying", "synthesizing"),
+            "partial": ("reviewing", "resolving", "verifying", "synthesizing"),
         }
         expected = predecessors.get(status)
         if expected is None:
@@ -1975,7 +1994,9 @@ class SqlReviewStore:
                     update(review_tasks)
                     .where(
                         review_tasks.c.task_id == task_id,
-                        review_tasks.c.status == expected,
+                        review_tasks.c.status.in_(
+                            expected if isinstance(expected, tuple) else (expected,)
+                        ),
                     )
                     .values(status=status, updated_at=_now(), **values)
                 ),
@@ -2734,6 +2755,94 @@ class SqlCheckpointStore:
             )
             if result.rowcount != 1:
                 raise InvalidAgentRunStateError("checkpoint is not running")
+
+        await self._database.run_transaction(operation)
+
+    async def mark_failed(
+        self, task_id: str, node_key: str, error_code: str, *, is_timeout: bool = False
+    ) -> None:
+        """Terminally record one isolated node failure from an expected active state."""
+
+        if not error_code:
+            raise ValueError("failed checkpoint requires an error code")
+        target = "timed_out" if is_timeout else "failed"
+
+        async def operation(session: AsyncSession) -> None:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status.in_(("running", "validating")),
+                    )
+                    .values(status=target, error_code=error_code, updated_at=_now())
+                ),
+            )
+            if result.rowcount != 1:
+                current = await session.scalar(
+                    select(dag_checkpoints.c.status).where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                    )
+                )
+                if current == target:
+                    return
+                raise InvalidAgentRunStateError("checkpoint is not active")
+
+        await self._database.run_transaction(operation)
+
+    async def mark_skipped(
+        self, task_id: str, node_key: str, reason_code: str
+    ) -> None:
+        """Terminally omit one prebuilt conditional node from PENDING."""
+
+        if not reason_code:
+            raise ValueError("skipped checkpoint requires a reason code")
+
+        async def operation(session: AsyncSession) -> None:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status == "pending",
+                    )
+                    .values(
+                        status="skipped", error_code=reason_code, updated_at=_now()
+                    )
+                ),
+            )
+            if result.rowcount != 1:
+                current = await session.scalar(
+                    select(dag_checkpoints.c.status).where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                    )
+                )
+                if current == "skipped":
+                    return
+                raise InvalidAgentRunStateError("checkpoint is not pending")
+
+        await self._database.run_transaction(operation)
+
+    async def cancel_non_terminal(self, task_id: str) -> None:
+        """Propagate task cancellation to every node that has not reached a terminal state."""
+
+        async def operation(session: AsyncSession) -> None:
+            await session.execute(
+                update(dag_checkpoints)
+                .where(
+                    dag_checkpoints.c.task_id == task_id,
+                    dag_checkpoints.c.status.in_(
+                        ("pending", "running", "output_saved", "validating")
+                    ),
+                )
+                .values(status="canceled", error_code="task_canceled", updated_at=_now())
+            )
 
         await self._database.run_transaction(operation)
 

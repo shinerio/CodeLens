@@ -64,6 +64,7 @@ from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
     SqlJobQueue,
     SqlRecentRepositoryStore,
+    SqlReviewPlanStore,
     SqlReviewProfileRepository,
     SqlReviewStore,
     SqlWorktreeRegistry,
@@ -273,6 +274,7 @@ def build_unified_backend(
         provider_config=provider_config_store,
         tool_limits_service=tool_limits_service,
         execution_spec_store=SqlAgentExecutionSpecStore(database),
+        review_plan_store=SqlReviewPlanStore(database),
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),

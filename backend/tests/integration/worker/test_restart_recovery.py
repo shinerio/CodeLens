@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
@@ -16,6 +17,12 @@ from codelens.findings.domain.models import FindingBatch
 from codelens.review.application.orchestrator import PreparedReview, ReviewOrchestrator
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import UnvalidatedAgentOutput
+from codelens.review.domain.review_plan import (
+    ReviewPass,
+    ReviewPlan,
+    ReviewPlanNode,
+    ReviewPlanNodeType,
+)
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import (
     SqlAgentExecutionSpecStore,
@@ -26,7 +33,10 @@ from codelens.review.infrastructure.repositories import (
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
-from codelens.worker.execution import load_frozen_execution_specs
+from codelens.worker.execution import (
+    add_reviewer_plan_guidance,
+    load_frozen_execution_specs,
+)
 from codelens.workspace.domain.models import (
     BranchScope,
     ChangeIndex,
@@ -277,5 +287,106 @@ async def test_restart_uses_stored_spec_artifact_after_current_configuration_cha
             await reopened_artifacts.read_output(
                 stored.prompt_artifact_ref, stored.prompt_artifact_hash
             )
+    finally:
+        await reopened.dispose()
+
+
+def test_adaptive_guidance_preserves_complete_reviewer_snapshot_scope() -> None:
+    base_payload = json.dumps(
+        {
+            "review_files": [
+                {"path": "src/auth.py"},
+                {"path": "src/payments.py"},
+            ],
+            "repository_instructions": [],
+        },
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode()
+
+    payload = json.loads(
+        add_reviewer_plan_guidance(
+            base_payload,
+            reason_codes=("security-risk",),
+            focus_paths=("src/auth.py",),
+        )
+    )
+
+    assert payload["role_context"] == {
+        "planner_guidance": {
+            "focus_paths": ["src/auth.py"],
+            "reason_codes": ["security-risk"],
+        }
+    }
+    assert [item["path"] for item in payload["review_files"]] == [
+        "src/auth.py",
+        "src/payments.py",
+    ]
+
+
+async def test_restart_preserves_one_saved_reviewer_and_requeues_running_peer(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}"
+    database = Database(database_url)
+    await database.migrate()
+    await SqlReviewStore(database).create_with_job(_task(tmp_path))
+    reviewers = tuple(
+        ReviewPlanNode.create(
+            task_id="review-restart",
+            node_type=ReviewPlanNodeType.REVIEWER,
+            agent_reference=reference,
+            pass_index=ReviewPass.REVIEWER,
+            shard_id="root",
+            logical_attempt_group="primary",
+            depends_on=(),
+        )
+        for reference in ("security:v1", "performance:v1")
+    )
+    resolver = ReviewPlanNode.create(
+        task_id="review-restart",
+        node_type=ReviewPlanNodeType.RESOLVER,
+        agent_reference="review-resolver:v1",
+        pass_index=ReviewPass.RESOLVER,
+        shard_id="root",
+        logical_attempt_group="primary",
+        depends_on=tuple(node.node_id for node in reviewers),
+    )
+    verifier = ReviewPlanNode.create(
+        task_id="review-restart",
+        node_type=ReviewPlanNodeType.VERIFIER,
+        agent_reference="review-verifier:v1",
+        pass_index=ReviewPass.VERIFIER,
+        shard_id="batch",
+        logical_attempt_group="primary",
+        depends_on=(resolver.node_id,),
+    )
+    plan = ReviewPlan.create(
+        task_id="review-restart",
+        selection_mode="fixed",
+        budget_profile="standard",
+        reviewer_references=("security:v1", "performance:v1"),
+        nodes=(*reviewers, resolver, verifier),
+        planner_reason=None,
+    )
+    checkpoints = SqlCheckpointStore(database)
+    await checkpoints.ensure_plan_nodes(plan)
+    await checkpoints.mark_running("review-restart", reviewers[0].node_id)
+    await checkpoints.mark_output_saved(
+        "review-restart", reviewers[0].node_id, "artifact-saved", "a" * 64
+    )
+    await checkpoints.mark_running("review-restart", reviewers[1].node_id)
+    await database.dispose()
+
+    reopened = Database(database_url)
+    try:
+        await SqlReviewStore(reopened).recover_after_singleton_restart()
+        recovered = SqlCheckpointStore(reopened)
+        assert (
+            await recovered.get("review-restart", reviewers[0].node_id)
+        ).status == "output_saved"
+        assert (
+            await recovered.get("review-restart", reviewers[1].node_id)
+        ).status == "pending"
     finally:
         await reopened.dispose()

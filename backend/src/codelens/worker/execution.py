@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import json
 from dataclasses import dataclass, replace
 
 from codelens.bootstrap.settings import Settings
@@ -35,11 +36,14 @@ from codelens.review.domain.ports import (
     SnapshotFileReaderPort,
     UnvalidatedAgentOutput,
 )
+from codelens.review.domain.review_plan import ReviewPlan
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
+    CheckpointRecord,
     SqlAgentExecutionSpecStore,
     SqlCheckpointStore,
     SqlJobQueue,
+    SqlReviewPlanStore,
     SqlReviewStore,
     SqlWorktreeRegistry,
 )
@@ -59,7 +63,11 @@ from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
 )
 from codelens.shared.domain.errors import DomainError
-from codelens.worker.scheduler import ClaimedJob, WorkerSemaphores
+from codelens.worker.scheduler import (
+    ClaimedJob,
+    WorkerSemaphores,
+    fair_per_review_agent_limit,
+)
 from codelens.workspace.application.create_snapshot import SnapshotService
 from codelens.workspace.application.inspect_repository import RepositoryInspector
 from codelens.workspace.application.worktree_lifecycle import (
@@ -112,6 +120,32 @@ async def load_frozen_execution_specs(
             raise ValueError("hydrated execution spec fingerprint mismatch")
         hydrated[record.logical_node_id] = execution_spec
     return hydrated
+
+
+def add_reviewer_plan_guidance(
+    base_payload: bytes,
+    *,
+    reason_codes: tuple[str, ...],
+    focus_paths: tuple[str, ...],
+) -> bytes:
+    """Add bounded Planner attention hints without changing Snapshot evidence scope."""
+
+    try:
+        envelope = json.loads(base_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Reviewer input is not canonical JSON") from error
+    if not isinstance(envelope, dict) or set(envelope) != {
+        "review_files",
+        "repository_instructions",
+    }:
+        raise ValueError("Reviewer input has an invalid shape")
+    envelope["role_context"] = {
+        "planner_guidance": {
+            "focus_paths": list(focus_paths),
+            "reason_codes": list(reason_codes),
+        }
+    }
+    return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
 
 
 @dataclass(frozen=True)
@@ -206,6 +240,34 @@ class SqlCheckpointPortAdapter:
     async def mark_validating(self, task_id: str, node_key: str) -> None:
         await self._checkpoints.mark_validating(task_id, node_key)
 
+    async def ensure_plan_nodes(
+        self,
+        plan: ReviewPlan,
+        *,
+        capability_fingerprints: dict[str, str] | None = None,
+    ) -> None:
+        await self._checkpoints.ensure_plan_nodes(
+            plan, capability_fingerprints=capability_fingerprints
+        )
+
+    async def list_for_task(self, task_id: str) -> tuple[CheckpointRecord, ...]:
+        return await self._checkpoints.list_for_task(task_id)
+
+    async def mark_failed(
+        self, task_id: str, node_key: str, error_code: str, *, is_timeout: bool = False
+    ) -> None:
+        await self._checkpoints.mark_failed(
+            task_id, node_key, error_code, is_timeout=is_timeout
+        )
+
+    async def mark_skipped(
+        self, task_id: str, node_key: str, reason_code: str
+    ) -> None:
+        await self._checkpoints.mark_skipped(task_id, node_key, reason_code)
+
+    async def cancel_non_terminal(self, task_id: str) -> None:
+        await self._checkpoints.cancel_non_terminal(task_id)
+
 
 class SqlJobQueuePortAdapter:
     """Narrow the concrete SQLite queue to the scheduler claim contract."""
@@ -243,6 +305,7 @@ class WorkerReviewExecutor:
         tool_limits_service: ToolLimitsService | None = None,
         capability_resolver: CapabilityResolver | None = None,
         execution_spec_store: SqlAgentExecutionSpecStore | None = None,
+        review_plan_store: SqlReviewPlanStore | None = None,
     ) -> None:
         self._settings = settings
         self._review_store = review_store
@@ -276,6 +339,7 @@ class WorkerReviewExecutor:
             builtin_skill_policies(),
         )
         self._execution_spec_store = execution_spec_store
+        self._review_plan_store = review_plan_store
 
     async def recover(self) -> None:
         """Recover Task 11 checkpoints and reconcile every registered owned worktree."""
@@ -308,7 +372,11 @@ class WorkerReviewExecutor:
             validator_factory=self._validator,
             completion=self._review_store,
             agent_semaphore=self._semaphores.agent,
-            max_agent_runs_per_review=self._settings.max_agent_runs_per_review,
+            max_agent_runs_per_review=fair_per_review_agent_limit(
+                configured_limit=self._settings.max_agent_runs_per_review,
+                global_limit=self._settings.max_active_agent_runs,
+                max_active_reviews=self._settings.max_active_reviews,
+            ),
             transcript=self._transcripts,
         )
         await orchestrator.execute(task_id)
@@ -353,6 +421,11 @@ class WorkerReviewExecutor:
         if provider_config is None:
             provider_config = ModelProviderConfig(api_key="", model="", base_url="")
         tool_limits = await self._tool_limits_service.get()
+        plan_record = (
+            await self._review_plan_store.get(task_id)
+            if self._review_plan_store is not None
+            else None
+        )
         stored_specs = (
             await load_frozen_execution_specs(
                 task_id, self._execution_spec_store, self._output_artifacts
@@ -365,6 +438,38 @@ class WorkerReviewExecutor:
             for spec in stored_specs.values()
             if spec.agent.reference in record.selected_agent_versions
         }
+        if plan_record is not None:
+            plan = plan_record.plan
+            if set(stored_specs) != {node.node_id for node in plan.nodes}:
+                raise ValueError("task has an incomplete frozen Plan execution spec set")
+            execution_specs_by_node = {
+                node.node_id: stored_specs[node.node_id] for node in plan.nodes
+            }
+            base_input = self._context_builder.build(snapshot, instructions).canonical_bytes()
+            guidance_by_reference = {
+                guidance.reviewer_reference: guidance
+                for guidance in plan.reviewer_guidance
+            }
+            plan_payloads: dict[str, bytes] = {}
+            for node in plan.nodes:
+                guidance = guidance_by_reference.get(node.agent_reference)
+                plan_payloads[node.node_id] = (
+                    add_reviewer_plan_guidance(
+                        base_input,
+                        reason_codes=guidance.reason_codes,
+                        focus_paths=guidance.focus_paths,
+                    )
+                    if guidance is not None
+                    else base_input
+                )
+            return PreparedReview(
+                snapshot=snapshot,
+                execution_specs=tuple(execution_specs_by_node.values()),
+                input_payloads=plan_payloads,
+                prompt_locale=record.prompt_locale,
+                plan=plan,
+                execution_specs_by_node=execution_specs_by_node,
+            )
         if stored_specs:
             if set(selected_stored_specs) != set(record.selected_agent_versions):
                 raise ValueError("task has an incomplete frozen execution spec set")

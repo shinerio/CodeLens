@@ -29,7 +29,10 @@ class ReviewStatus(StrEnum):
     PROVISIONING_WORKTREE = "provisioning_worktree"
     SNAPSHOTTING = "snapshotting"
     PREPARING = "preparing"
+    PLANNING = "planning"
     REVIEWING = "reviewing"
+    RESOLVING = "resolving"
+    VERIFYING = "verifying"
     VALIDATING = "validating"
     SYNTHESIZING = "synthesizing"
     COMPLETED = "completed"
@@ -60,8 +63,20 @@ _ALLOWED_TRANSITIONS = {
     ReviewStatus.CREATED: {ReviewStatus.PROVISIONING_WORKTREE},
     ReviewStatus.PROVISIONING_WORKTREE: {ReviewStatus.SNAPSHOTTING},
     ReviewStatus.SNAPSHOTTING: {ReviewStatus.PREPARING},
-    ReviewStatus.PREPARING: {ReviewStatus.REVIEWING},
-    ReviewStatus.REVIEWING: {ReviewStatus.VALIDATING},
+    ReviewStatus.PLANNING: {ReviewStatus.REVIEWING},
+    ReviewStatus.PREPARING: {ReviewStatus.PLANNING, ReviewStatus.REVIEWING},
+    ReviewStatus.REVIEWING: {
+        ReviewStatus.VALIDATING,
+        ReviewStatus.RESOLVING,
+        ReviewStatus.COMPLETED,
+        ReviewStatus.PARTIAL,
+    },
+    ReviewStatus.RESOLVING: {
+        ReviewStatus.VERIFYING,
+        ReviewStatus.COMPLETED,
+        ReviewStatus.PARTIAL,
+    },
+    ReviewStatus.VERIFYING: {ReviewStatus.COMPLETED, ReviewStatus.PARTIAL},
     ReviewStatus.VALIDATING: {ReviewStatus.SYNTHESIZING},
     ReviewStatus.SYNTHESIZING: {ReviewStatus.COMPLETED, ReviewStatus.PARTIAL},
 }

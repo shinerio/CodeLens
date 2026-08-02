@@ -160,6 +160,8 @@ Fixed 选择由宿主直接编译为不可变 Review Plan，绝不调用 Planner
 
 每个预算 Profile 冻结任务级 Reviewer 数、模型节点数、并发、Token、单节点输出、轮次、工具调用、估算时长和 Verifier cluster 上限。调度前，任务账本必须以版本化的供应商无关估算器原子预留 `estimated_input_tokens + max_output_tokens` 以及节点和工具容量，再以供应商报告的实际用量核销；并发节点按最坏输出预留，因此不得超卖总预算。任务估算时长不是跨 Agent 的硬截止时间，各节点仍只服从自身冻结超时和正常失败策略。
 
+多 Agent 执行的就绪判断、失败归约和重启恢复只能读取持久化 Plan 与 AgentRun checkpoint，不能以进程内 `gather` 返回值作为阶段事实。Reviewer 节点相互隔离：至少一个成功时允许 Resolver 在全部 Reviewer 终态后继续，任一 Reviewer 失败或超时设置不可被后续成功阶段清除的 sticky partial 标记；全部 Reviewer 失败时跳过未运行的下游节点并使任务失败。General 与 Fixed 单 Reviewer 失败直接使任务失败。取消必须传播到全部非终态节点，已经持久化的模型输出在普通重启后保留并从验证边界继续。Worker 以全局 Agent、模型和工具信号量、每任务信号量及为并发任务保留容量的公平上限共同约束模型调用，单个 Deep Review 不得占满可并行 Worker 的全部 Agent 槽位。
+
 模型可见工具由冻结 Profile 按角色精确选择：
 
 | Agent 角色 | 证据工具 | 输出与控制工具 |

@@ -10,7 +10,11 @@ from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import UnvalidatedAgentOutput
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import SqlReviewStore, SqlWorktreeRegistry
-from codelens.worker.scheduler import ReviewScheduler, WorkerSemaphores
+from codelens.worker.scheduler import (
+    ReviewScheduler,
+    WorkerSemaphores,
+    fair_per_review_agent_limit,
+)
 from codelens.workspace.domain.models import BranchScope, ReviewSnapshot, ReviewTarget
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
@@ -39,6 +43,18 @@ class Singleton:
 
     async def release(self) -> None:
         self.released = True
+
+
+def test_fair_share_keeps_one_global_agent_slot_for_another_task() -> None:
+    assert fair_per_review_agent_limit(
+        configured_limit=4, global_limit=4, max_active_reviews=2
+    ) == 3
+    assert fair_per_review_agent_limit(
+        configured_limit=4, global_limit=8, max_active_reviews=4
+    ) == 4
+    assert fair_per_review_agent_limit(
+        configured_limit=4, global_limit=4, max_active_reviews=1
+    ) == 4
 
 
 async def test_scheduler_runs_distinct_tasks_concurrently_and_releases_after_close() -> None:

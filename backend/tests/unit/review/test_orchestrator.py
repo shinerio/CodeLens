@@ -12,6 +12,10 @@ from codelens.capabilities.domain.models import (
 )
 from codelens.capabilities.domain.skills import SkillActivationFacts
 from codelens.findings.domain.models import FindingBatch
+from codelens.review.application.dag_scheduler import (
+    PersistedDagScheduler,
+    reviewer_stage_outcome,
+)
 from codelens.review.application.orchestrator import (
     PreparedReview,
     ReviewOrchestrator,
@@ -24,7 +28,16 @@ from codelens.review.domain.ports import (
     RunOutputArtifact,
     UnvalidatedAgentOutput,
 )
-from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
+from codelens.review.domain.review_plan import (
+    ReviewPass,
+    ReviewPlan,
+    ReviewPlanNode,
+    ReviewPlanNodeType,
+)
+from codelens.reviewer_catalog.infrastructure.builtin_agents import (
+    builtin_agent_catalog,
+    correctness_agent,
+)
 from codelens.workspace.domain.models import (
     ChangeIndex,
     RepositoryFingerprint,
@@ -51,6 +64,7 @@ class MemoryWorkflow:
         self.transitions: list[str] = []
         self.is_cancellation_requested = False
         self.job_completed = False
+        self.is_partial = False
 
     async def get_status(self, _task_id: str) -> str:
         return self.status
@@ -73,6 +87,12 @@ class MemoryWorkflow:
 
     async def complete_job(self, _task_id: str) -> None:
         self.job_completed = True
+
+    async def mark_partial_coverage(self, _task_id: str) -> None:
+        self.is_partial = True
+
+    async def has_partial_coverage(self, _task_id: str) -> bool:
+        return self.is_partial
 
 
 class MemoryCheckpoints:
@@ -108,6 +128,10 @@ class MemoryCheckpoints:
         assert self.value.status == "output_saved"
         self.value.status = "validating"
         self.value.validation_attempts += 1
+
+    async def cancel_non_terminal(self, _task_id: str) -> None:
+        if self.value.status not in {"succeeded", "failed", "canceled"}:
+            self.value.status = "canceled"
 
 
 class RecordingRuntime:
@@ -410,7 +434,7 @@ async def test_cancellation_after_model_output_stops_before_validation_and_aggre
     ).execute("review-1")
 
     assert workflow.status == "canceled"
-    assert checkpoints.value.status == "output_saved"
+    assert checkpoints.value.status == "canceled"
     assert completion.calls == 0
     assert not aggregation_crash.did_crash
 
@@ -561,3 +585,427 @@ async def test_replay_before_output_saved_reinvokes_the_interrupted_model_call()
     assert runtime.calls == 2
     assert checkpoints.value.validation_attempts == 1
     assert completion.calls == 1
+
+
+@dataclass(frozen=True)
+class _DagRecord:
+    node_key: str
+    status: str
+
+
+class _DagCheckpoints:
+    def __init__(self, statuses: dict[str, str]) -> None:
+        self.statuses = statuses
+
+    async def ensure_plan_nodes(
+        self, _plan: ReviewPlan, *, capability_fingerprints: object = None
+    ) -> None:
+        return None
+
+    async def list_for_task(self, _task_id: str) -> tuple[_DagRecord, ...]:
+        return tuple(_DagRecord(key, status) for key, status in self.statuses.items())
+
+
+def _multi_plan() -> ReviewPlan:
+    reviewer_nodes = tuple(
+        ReviewPlanNode.create(
+            task_id="review-1",
+            node_type=ReviewPlanNodeType.REVIEWER,
+            agent_reference=reference,
+            pass_index=ReviewPass.REVIEWER,
+            shard_id="root",
+            logical_attempt_group="primary",
+            depends_on=(),
+        )
+        for reference in ("security:v1", "performance:v1")
+    )
+    resolver = ReviewPlanNode.create(
+        task_id="review-1",
+        node_type=ReviewPlanNodeType.RESOLVER,
+        agent_reference="review-resolver:v1",
+        pass_index=ReviewPass.RESOLVER,
+        shard_id="root",
+        logical_attempt_group="primary",
+        depends_on=tuple(node.node_id for node in reviewer_nodes),
+    )
+    verifier = ReviewPlanNode.create(
+        task_id="review-1",
+        node_type=ReviewPlanNodeType.VERIFIER,
+        agent_reference="review-verifier:v1",
+        pass_index=ReviewPass.VERIFIER,
+        shard_id="batch",
+        logical_attempt_group="primary",
+        depends_on=(resolver.node_id,),
+    )
+    return ReviewPlan.create(
+        task_id="review-1",
+        selection_mode="fixed",
+        budget_profile="standard",
+        reviewer_references=("security:v1", "performance:v1"),
+        nodes=(*reviewer_nodes, resolver, verifier),
+        planner_reason=None,
+    )
+
+
+async def test_persisted_dag_waits_for_all_reviewers_then_allows_partial_team() -> None:
+    plan = _multi_plan()
+    reviewers = tuple(
+        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.REVIEWER
+    )
+    resolver = next(
+        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.RESOLVER
+    )
+    statuses = {node.node_id: "pending" for node in plan.nodes}
+    store = _DagCheckpoints(statuses)
+    scheduler = PersistedDagScheduler(plan, store)
+
+    assert set(await scheduler.next_ready_nodes("review-1")) == set(reviewers)
+    statuses[reviewers[0].node_id] = "succeeded"
+    statuses[reviewers[1].node_id] = "running"
+    assert await scheduler.next_ready_nodes("review-1") == ()
+    statuses[reviewers[1].node_id] = "failed"
+    assert await scheduler.next_ready_nodes("review-1") == (resolver,)
+
+
+def test_reviewer_stage_outcome_is_derived_from_persisted_terminal_records() -> None:
+    assert reviewer_stage_outcome((_DagRecord("a", "succeeded"),)) == "continue"
+    assert reviewer_stage_outcome(
+        (_DagRecord("a", "succeeded"), _DagRecord("b", "failed"))
+    ) == "partial"
+    assert reviewer_stage_outcome(
+        (_DagRecord("a", "timed_out"), _DagRecord("b", "failed"))
+    ) == "failed"
+
+
+@dataclass
+class _PlanCheckpoint:
+    node_key: str
+    status: str = "pending"
+    artifact_ref: str | None = None
+    artifact_hash: str | None = None
+    review_completion_status: str = "complete"
+    execution_attempts: int = 0
+
+
+class _PlanCheckpoints:
+    def __init__(self) -> None:
+        self.records: dict[str, _PlanCheckpoint] = {}
+
+    async def ensure_plan_nodes(
+        self, plan: ReviewPlan, *, capability_fingerprints: object = None
+    ) -> None:
+        for node in plan.nodes:
+            self.records.setdefault(node.node_id, _PlanCheckpoint(node.node_id))
+
+    async def ensure(self, _task_id: str, node_key: str, _group: str) -> None:
+        assert node_key in self.records
+
+    async def list_for_task(self, _task_id: str) -> tuple[_PlanCheckpoint, ...]:
+        return tuple(self.records.values())
+
+    async def get(self, _task_id: str, node_key: str) -> _PlanCheckpoint:
+        return self.records[node_key]
+
+    async def mark_running(self, _task_id: str, node_key: str) -> None:
+        record = self.records[node_key]
+        assert record.status == "pending"
+        record.status = "running"
+        record.execution_attempts += 1
+
+    async def mark_output_saved(
+        self,
+        _task_id: str,
+        node_key: str,
+        reference: str,
+        content_hash: str,
+        review_completion_status: str,
+    ) -> None:
+        record = self.records[node_key]
+        assert record.status == "running"
+        record.status = "output_saved"
+        record.artifact_ref = reference
+        record.artifact_hash = content_hash
+        record.review_completion_status = review_completion_status
+
+    async def mark_validating(self, _task_id: str, node_key: str) -> None:
+        record = self.records[node_key]
+        assert record.status == "output_saved"
+        record.status = "validating"
+
+    async def mark_failed(
+        self,
+        _task_id: str,
+        node_key: str,
+        _error_code: str,
+        *,
+        is_timeout: bool = False,
+    ) -> None:
+        self.records[node_key].status = "timed_out" if is_timeout else "failed"
+
+    async def mark_skipped(
+        self, _task_id: str, node_key: str, _reason_code: str
+    ) -> None:
+        self.records[node_key].status = "skipped"
+
+    async def cancel_non_terminal(self, _task_id: str) -> None:
+        for record in self.records.values():
+            if record.status not in {"succeeded", "failed", "skipped"}:
+                record.status = "canceled"
+
+
+class _PlanCompletion:
+    def __init__(self, checkpoints: _PlanCheckpoints) -> None:
+        self._checkpoints = checkpoints
+
+    async def complete_with_findings(
+        self, _task_id: str, node_key: str, _findings: FindingBatch
+    ) -> None:
+        self._checkpoints.records[node_key].status = "succeeded"
+
+
+class _ScriptedRuntime:
+    def __init__(self, failures: set[str]) -> None:
+        self.failures = failures
+        self.calls: list[str] = []
+
+    async def invoke(
+        self,
+        execution_spec: FrozenAgentExecutionSpec,
+        _input_payload: bytes,
+        _snapshot: object,
+        _prompt_locale: str,
+    ) -> UnvalidatedAgentOutput:
+        reference = execution_spec.agent.reference
+        self.calls.append(reference)
+        if reference in self.failures:
+            raise RuntimeError("scripted provider failure")
+        return UnvalidatedAgentOutput(
+            b'{"schema_version":"1","findings":[]}', (), "fake", 0, 0, ()
+        )
+
+
+def _prepared_plan(plan: ReviewPlan) -> PreparedReview:
+    base = _prepared()
+    catalog = builtin_agent_catalog()
+    resolver = CapabilityResolver.testing()
+    specs_by_node = {
+        node.node_id: resolver.resolve(
+            agent=catalog[node.agent_reference],
+            prompt_content_hash="a" * 64,
+            facts=SkillActivationFacts.empty(),
+            execution_limits=AgentExecutionLimits.legacy_default(),
+        )
+        for node in plan.nodes
+    }
+    return PreparedReview(
+        snapshot=base.snapshot,
+        execution_specs=tuple(specs_by_node.values()),
+        input_payloads={node_id: b"{}" for node_id in specs_by_node},
+        prompt_locale="en",
+        plan=plan,
+        execution_specs_by_node=specs_by_node,
+    )
+
+
+async def _run_multi_plan(failures: set[str]) -> tuple[
+    MemoryWorkflow, _PlanCheckpoints, _ScriptedRuntime
+]:
+    workflow = MemoryWorkflow("preparing")
+    checkpoints = _PlanCheckpoints()
+    runtime = _ScriptedRuntime(failures)
+    prepared = _prepared_plan(_multi_plan())
+
+    async def prepare(_task_id: str) -> PreparedReview:
+        return prepared
+
+    orchestrator = ReviewOrchestrator(
+        workflow=workflow,
+        prepare=prepare,
+        runtime=runtime,
+        artifacts=MemoryArtifacts(),
+        checkpoints=checkpoints,
+        validator_factory=lambda *_args: EmptyValidator(),
+        completion=_PlanCompletion(checkpoints),
+        agent_semaphore=asyncio.Semaphore(4),
+        max_agent_runs_per_review=2,
+    )
+    await orchestrator.execute("review-1")
+    return workflow, checkpoints, runtime
+
+
+async def test_one_reviewer_failure_allows_resolver_and_keeps_sticky_partial() -> None:
+    workflow, checkpoints, runtime = await _run_multi_plan({"security:v1"})
+    plan = _multi_plan()
+
+    assert workflow.status == "partial"
+    assert checkpoints.records[
+        next(
+            node.node_id
+            for node in plan.nodes
+            if node.agent_reference == "security:v1"
+        )
+    ].status == "failed"
+    assert "review-resolver:v1" in runtime.calls
+    verifier = next(
+        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER
+    )
+    assert checkpoints.records[verifier.node_id].status == "skipped"
+
+
+async def test_all_reviewer_failures_fail_task_without_running_resolver() -> None:
+    workflow, checkpoints, runtime = await _run_multi_plan(
+        {"security:v1", "performance:v1"}
+    )
+    plan = _multi_plan()
+    resolver = next(
+        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.RESOLVER
+    )
+
+    assert workflow.status == "failed"
+    assert "review-resolver:v1" not in runtime.calls
+    assert checkpoints.records[resolver.node_id].status == "skipped"
+
+
+@pytest.mark.parametrize("reference", ("general:v1", "security:v1"))
+async def test_general_or_fixed_single_reviewer_failure_fails_task(
+    reference: str,
+) -> None:
+    reviewer = ReviewPlanNode.create(
+        task_id="review-1",
+        node_type=ReviewPlanNodeType.REVIEWER,
+        agent_reference=reference,
+        pass_index=ReviewPass.REVIEWER,
+        shard_id="root",
+        logical_attempt_group="primary",
+        depends_on=(),
+    )
+    plan = ReviewPlan.create(
+        task_id="review-1",
+        selection_mode="fixed",
+        budget_profile="lean",
+        reviewer_references=(reference,),
+        nodes=(reviewer,),
+        planner_reason=None,
+    )
+    workflow = MemoryWorkflow("preparing")
+    checkpoints = _PlanCheckpoints()
+    runtime = _ScriptedRuntime({reference})
+    prepared = _prepared_plan(plan)
+
+    async def prepare(_task_id: str) -> PreparedReview:
+        return prepared
+
+    await ReviewOrchestrator(
+        workflow=workflow,
+        prepare=prepare,
+        runtime=runtime,
+        artifacts=MemoryArtifacts(),
+        checkpoints=checkpoints,
+        validator_factory=lambda *_args: EmptyValidator(),
+        completion=_PlanCompletion(checkpoints),
+        agent_semaphore=asyncio.Semaphore(1),
+        max_agent_runs_per_review=1,
+    ).execute("review-1")
+
+    assert workflow.status == "failed"
+
+
+class _GatedPlanRuntime(_ScriptedRuntime):
+    def __init__(self) -> None:
+        super().__init__(set())
+        self.entered = asyncio.Event()
+        self.release = asyncio.Event()
+        self.active_reviewers = 0
+        self.maximum_reviewers = 0
+
+    async def invoke(
+        self,
+        execution_spec: FrozenAgentExecutionSpec,
+        input_payload: bytes,
+        snapshot: object,
+        prompt_locale: str,
+    ) -> UnvalidatedAgentOutput:
+        if execution_spec.agent.role.value == "reviewer":
+            self.active_reviewers += 1
+            self.maximum_reviewers = max(
+                self.maximum_reviewers, self.active_reviewers
+            )
+            if self.active_reviewers == 2:
+                self.entered.set()
+            try:
+                await self.release.wait()
+            finally:
+                self.active_reviewers -= 1
+        return await super().invoke(
+            execution_spec, input_payload, snapshot, prompt_locale
+        )
+
+
+async def test_persisted_reviewer_fanout_obeys_task_level_concurrency() -> None:
+    reviewer_nodes = tuple(
+        ReviewPlanNode.create(
+            task_id="review-1",
+            node_type=ReviewPlanNodeType.REVIEWER,
+            agent_reference=reference,
+            pass_index=ReviewPass.REVIEWER,
+            shard_id="root",
+            logical_attempt_group="primary",
+            depends_on=(),
+        )
+        for reference in ("security:v1", "performance:v1", "architecture:v1")
+    )
+    resolver = ReviewPlanNode.create(
+        task_id="review-1",
+        node_type=ReviewPlanNodeType.RESOLVER,
+        agent_reference="review-resolver:v1",
+        pass_index=ReviewPass.RESOLVER,
+        shard_id="root",
+        logical_attempt_group="primary",
+        depends_on=tuple(node.node_id for node in reviewer_nodes),
+    )
+    verifier = ReviewPlanNode.create(
+        task_id="review-1",
+        node_type=ReviewPlanNodeType.VERIFIER,
+        agent_reference="review-verifier:v1",
+        pass_index=ReviewPass.VERIFIER,
+        shard_id="batch",
+        logical_attempt_group="primary",
+        depends_on=(resolver.node_id,),
+    )
+    plan = ReviewPlan.create(
+        task_id="review-1",
+        selection_mode="fixed",
+        budget_profile="standard",
+        reviewer_references=tuple(
+            node.agent_reference for node in reviewer_nodes
+        ),
+        nodes=(*reviewer_nodes, resolver, verifier),
+        planner_reason=None,
+    )
+    prepared = _prepared_plan(plan)
+    workflow = MemoryWorkflow("preparing")
+    checkpoints = _PlanCheckpoints()
+    runtime = _GatedPlanRuntime()
+
+    async def prepare(_task_id: str) -> PreparedReview:
+        return prepared
+
+    running = asyncio.create_task(
+        ReviewOrchestrator(
+            workflow=workflow,
+            prepare=prepare,
+            runtime=runtime,
+            artifacts=MemoryArtifacts(),
+            checkpoints=checkpoints,
+            validator_factory=lambda *_args: EmptyValidator(),
+            completion=_PlanCompletion(checkpoints),
+            agent_semaphore=asyncio.Semaphore(3),
+            max_agent_runs_per_review=2,
+        ).execute("review-1")
+    )
+    await asyncio.wait_for(runtime.entered.wait(), timeout=1)
+    assert runtime.maximum_reviewers == 2
+    runtime.release.set()
+    await asyncio.wait_for(running, timeout=1)
+
+    assert workflow.status == "completed"
