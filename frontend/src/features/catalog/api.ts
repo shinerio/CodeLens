@@ -27,6 +27,18 @@ export async function listReviewerCatalog(): Promise<ReviewerCatalogEntry[]> {
 }
 
 export type ReviewerPrompt = { agent_id: string; version: number; locale: "en" | "zh-CN"; system_prompt: string; prompt: string; is_custom: boolean };
-export function getReviewerPrompt(locale: ReviewerPrompt["locale"]) { return api<ReviewerPrompt>(`/reviewer-prompts/correctness?locale=${encodeURIComponent(locale)}`); }
-export function updateReviewerPrompt(locale: ReviewerPrompt["locale"], prompt: string) { return api<ReviewerPrompt>(`/reviewer-prompts/correctness?locale=${encodeURIComponent(locale)}`, { method: "PUT", body: JSON.stringify({ prompt }) }); }
-export function resetReviewerPrompt(locale: ReviewerPrompt["locale"]) { return api<ReviewerPrompt>(`/reviewer-prompts/correctness?locale=${encodeURIComponent(locale)}`, { method: "DELETE" }); }
+function reviewerPromptPath(agentId: string, version: number, locale: ReviewerPrompt["locale"]) {
+  return `/reviewer-prompts/${encodeURIComponent(agentId)}?locale=${encodeURIComponent(locale)}&version=${version}`;
+}
+
+export function getReviewerPrompt(agentId: string, version: number, locale: ReviewerPrompt["locale"]) {
+  return api<ReviewerPrompt>(reviewerPromptPath(agentId, version, locale));
+}
+
+export function updateReviewerPrompt(agentId: string, version: number, locale: ReviewerPrompt["locale"], prompt: string) {
+  return api<ReviewerPrompt>(reviewerPromptPath(agentId, version, locale), { method: "PUT", body: JSON.stringify({ prompt }) });
+}
+
+export function resetReviewerPrompt(agentId: string, version: number, locale: ReviewerPrompt["locale"]) {
+  return api<ReviewerPrompt>(reviewerPromptPath(agentId, version, locale), { method: "DELETE" });
+}

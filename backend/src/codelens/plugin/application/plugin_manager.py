@@ -78,9 +78,6 @@ class PluginManager:
         report (file-export) capabilities.
         """
         existing = await self._store.get_plugin(self.BUILTIN_PLUGIN_ID)
-        if existing is not None:
-            return
-
         manifest = PluginManifest(
             plugin_id=self.BUILTIN_PLUGIN_ID,
             name="Local Development Plugin",
@@ -172,6 +169,28 @@ class PluginManager:
                 ),
             },
         )
+
+        if existing is not None:
+            migrated_trigger_config = migrate_config_to_v2(
+                manifest_id=existing.plugin_id,
+                source_api_version=existing.manifest.plugin_api_version,
+                config=existing.trigger_config,
+            )
+            if (
+                existing.manifest == manifest
+                and existing.trigger_config == migrated_trigger_config
+            ):
+                return
+            await self._store.save_plugin(
+                replace(
+                    existing,
+                    manifest=manifest,
+                    trigger_config=migrated_trigger_config,
+                    config_revision=existing.config_revision + 1,
+                )
+            )
+            self._invalidate_plugin(existing.plugin_id)
+            return
 
         record = PluginRecord(
             plugin_id=self.BUILTIN_PLUGIN_ID,

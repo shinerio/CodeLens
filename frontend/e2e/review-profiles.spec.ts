@@ -5,7 +5,9 @@ test("creates, edits, duplicates, and deletes a review profile", async ({ page }
   const profileName = `Adaptive deep E2E ${runSuffix}`;
   const renamedProfile = `${profileName} revised`;
 
-  await page.goto("/settings/review-profiles");
+  await page.goto("/agents");
+  await page.getByRole("link", { name: "Review profiles" }).click();
+  await expect(page).toHaveURL(/\/settings\/review-profiles$/);
   await expect(page.getByRole("heading", { name: "Review Profiles" })).toBeVisible();
 
   await page.getByRole("button", { name: "New profile" }).click();

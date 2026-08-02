@@ -356,7 +356,7 @@ function TriggerCapabilitySection({
   onConfigUpdate,
 }: TriggerCapabilitySectionProps) {
   const { t, locale } = useI18n();
-  const isPluginApiVersionTwo = plugin.plugin_api_version === "2";
+  const isPluginApiVersionTwo = (plugin.plugin_api_version ?? plugin.manifest.plugin_api_version) === "2";
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(plugin.trigger_config);
   const [profileSourceDraft, setProfileSourceDraft] = useState<PluginProfileSource | null>(
     plugin.profile_source ?? null,

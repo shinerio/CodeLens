@@ -175,3 +175,13 @@ test("keeps a copied v2 profile snapshot until reload is explicit", async ({ pag
     },
   });
 });
+
+test("shows profile and multi-agent strategy controls for the built-in local plugin", async ({ page }) => {
+  await page.goto("/plugins");
+
+  const strategy = page.getByRole("region", { name: "Plugin review strategy" });
+  await expect(strategy).toBeVisible();
+  await expect(strategy.getByLabel("Review profile")).toBeVisible();
+  await expect(strategy.getByRole("radio", { name: /Fixed/ })).toBeVisible();
+  await expect(strategy.getByRole("radio", { name: /Adaptive/ })).toBeVisible();
+});

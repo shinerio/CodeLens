@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,6 +15,7 @@ from codelens.plugin.domain.models import (
     TriggerCapability,
 )
 from codelens.plugin.domain.ports import PluginInstallerPort, PluginStorePort
+from codelens.plugin.domain.versioning import PluginApiVersion
 
 
 class MemoryPluginStore:
@@ -161,6 +163,55 @@ async def test_builtin_trigger_rejects_an_empty_reviewer_selection() -> None:
         "mode": "fixed",
         "reviewer_versions": ["correctness:v1"],
     }
+
+
+async def test_existing_builtin_v1_is_migrated_to_current_v2_manifest() -> None:
+    store = EmptyPluginStore()
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, object()),
+        Path("/unused"),
+    )
+    await manager.initialize_builtin()
+    current = store.record
+    assert current is not None
+    store.record = replace(
+        current,
+        manifest=replace(
+            current.manifest,
+            version="1.0.0",
+            min_codelens_version=None,
+            plugin_api_version=PluginApiVersion.V1,
+        ),
+        trigger_enabled=True,
+        trigger_config={
+            "repository_paths": ["/workspace/repository"],
+            "events": ["post-commit"],
+            "scope_type": "commit",
+            "base_ref": None,
+            "target_ref": None,
+            "selected_agents": ["correctness:v1"],
+            "prompt_locale": "zh-CN",
+            "debounce_seconds": 15,
+        },
+        config_revision=4,
+    )
+
+    await manager.initialize_builtin()
+
+    migrated = store.record
+    assert migrated is not None
+    assert migrated.manifest.plugin_api_version is PluginApiVersion.V2
+    assert migrated.manifest.version == "2.0.0"
+    assert migrated.trigger_enabled is True
+    assert migrated.trigger_config["reviewer_selection"] == {
+        "mode": "fixed",
+        "reviewer_versions": ["correctness:v1"],
+    }
+    assert migrated.trigger_config["budget_profile"] == "standard"
+    assert migrated.trigger_config["prompt_locale"] == "zh-CN"
+    assert "selected_agents" not in migrated.trigger_config
+    assert migrated.config_revision == 5
 
 
 class MockInstaller:
