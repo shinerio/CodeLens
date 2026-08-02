@@ -26,6 +26,13 @@ function reviewCompletionSettingsResponse(maxIncompleteReviewRetries = 3) {
   });
 }
 
+function triggerIdempotencySettingsResponse(enabled = false) {
+  return new Response(JSON.stringify({ enabled }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function toolLimitsResponse() {
   return new Response(JSON.stringify({
     max_results: 200,
@@ -76,6 +83,7 @@ it("creates the first persistent model gateway without retaining its API key", a
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(
@@ -173,6 +181,7 @@ it("switches the active gateway without asking for the stored key", async () => 
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(
@@ -330,6 +339,7 @@ it("sends a connectivity test request when the test connectivity button is click
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(
@@ -391,6 +401,7 @@ it("sends an availability test request when the test availability button is clic
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(
@@ -440,6 +451,7 @@ it("updates the recent repository list limit", async () => {
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ recent_repository_limit: 15 }), {
@@ -490,6 +502,7 @@ it("updates instruction file limits and omits credential handling details", asyn
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(instructionSettingsResponse(800, 240));
   const user = userEvent.setup();
@@ -539,6 +552,7 @@ it("updates the maximum incomplete review retry count", async () => {
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse(5));
   const user = userEvent.setup();

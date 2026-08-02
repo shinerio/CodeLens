@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from codelens.plugin.application.plugin_manager import PluginManager
-from codelens.plugin.domain.models import HookEvent, PluginRecord
+from codelens.plugin.domain.models import HookEvent, PluginProfileSource, PluginRecord
 from codelens.plugin.domain.ports import HookInstallerPort, TriggerRepositoryValidatorPort
 
 
@@ -103,6 +103,9 @@ class TriggerHookService:
         self,
         plugin_id: str,
         config: dict[str, Any],
+        *,
+        profile_source: PluginProfileSource | None = None,
+        should_replace_profile_source: bool = False,
     ) -> PluginRecord | None:
         """Validate, persist, and synchronize a trigger configuration update."""
 
@@ -110,7 +113,12 @@ class TriggerHookService:
         if current is None:
             return None
         if not self._is_local_hook(current):
-            return await self._plugin_manager.update_trigger_config(plugin_id, config)
+            return await self._plugin_manager.update_trigger_config(
+                plugin_id,
+                config,
+                profile_source=profile_source,
+                should_replace_profile_source=should_replace_profile_source,
+            )
 
         merged = {**current.trigger_config, **config}
         self._plugin_manager.validate_trigger_config(current, merged)
@@ -138,6 +146,8 @@ class TriggerHookService:
             return await self._plugin_manager.update_trigger_config(
                 plugin_id,
                 canonical_config,
+                profile_source=profile_source,
+                should_replace_profile_source=should_replace_profile_source,
             )
         except BaseException:
             await self._restore_state(previous)

@@ -1056,3 +1056,25 @@
     transition: none;
   }
 }
+.run-plan-stack { display: grid; grid-template-columns: minmax(0,.9fr) minmax(0,1.1fr); gap: 14px; margin: 0 0 18px; }
+.review-plan-summary, .coverage-summary { border: 1px solid #ced7d3; background: rgba(255,255,255,.9); padding: 16px; }
+.review-plan-summary { display: grid; grid-template-columns: auto auto minmax(0,1fr); gap: 12px; align-items: center; }
+.review-plan-summary > div { display: grid; gap: 3px; padding-right: 12px; border-right: 1px solid #d7dcd9; }
+.review-plan-summary span, .coverage-summary span { color: #6b746f; font-size: .68rem; letter-spacing: .09em; text-transform: uppercase; }
+.review-plan-summary__reviewers strong { overflow-wrap: anywhere; }
+.review-plan-summary > p { grid-column: 1 / -1; margin: 0; color: #46534d; overflow-wrap: anywhere; }
+.review-plan-summary code, .review-plan-summary__pending { grid-column: 1 / -1; }
+.coverage-summary--degraded { border-left: 5px solid #ca7d35; background: #fffaf1; }
+.coverage-summary header { display: flex; justify-content: space-between; gap: 12px; }
+.coverage-summary header > div { display: grid; }
+.coverage-summary header p { margin: 0; color: #75552e; }
+.coverage-summary__grid { display: grid; grid-template-columns: repeat(4,1fr); gap: 8px; margin-top: 12px; }
+.coverage-summary__grid > div { min-width: 0; padding: 9px; background: rgba(231,235,231,.65); }
+.coverage-summary__grid strong { display: block; font-size: 1.4rem; }
+.coverage-summary__grid p { margin: 4px 0 0; overflow-wrap: anywhere; font-size: .78rem; }
+.agent-run-timeline { display: grid; gap: 0; padding: 0; margin: 0 0 16px; list-style: none; border: 1px solid #303a3a; }
+.agent-run-timeline li { display: grid; grid-template-columns: 34px minmax(0,1fr) auto; align-items: center; gap: 12px; padding: 10px 12px; border-bottom: 1px solid #303a3a; background: #172121; color: #e9eee9; }
+.agent-run-timeline li:last-child { border-bottom: 0; }
+.agent-run-timeline li > span { color: #e3aa45; font-family: monospace; }
+.agent-run-timeline div { display: flex; gap: 10px; min-width: 0; }
+.agent-run-timeline code { overflow-wrap: anywhere; color: #a8c5be; }

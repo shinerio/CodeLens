@@ -23,6 +23,7 @@ from codelens.plugin.domain.models import (
     PluginConfigurationError,
     PluginInstallError,
     PluginManifest,
+    PluginProfileSource,
     PluginRecord,
     ReportCapability,
     TriggerCapability,
@@ -478,7 +479,12 @@ class PluginManager:
         return updated
 
     async def update_trigger_config(
-        self, plugin_id: str, config: dict[str, Any]
+        self,
+        plugin_id: str,
+        config: dict[str, Any],
+        *,
+        profile_source: PluginProfileSource | None = None,
+        should_replace_profile_source: bool = False,
     ) -> PluginRecord | None:
         """Update the trigger configuration of a plugin.
 
@@ -508,6 +514,11 @@ class PluginManager:
             record,
             trigger_config=merged,
             config_revision=record.config_revision + 1,
+            profile_source=(
+                profile_source
+                if should_replace_profile_source
+                else record.profile_source
+            ),
         )
         await self._store.save_plugin(updated)
         return updated

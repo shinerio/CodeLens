@@ -22,6 +22,7 @@ from codelens.plugin.domain.models import (
     PluginCapabilityError,
     PluginConfigurationError,
     PluginInstallError,
+    PluginProfileSource,
     PluginRecord,
     ReportCapability,
     TriggerCapability,
@@ -162,6 +163,27 @@ class UpdateConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: dict[str, Any]
+    profile_source: "PluginProfileSourceRequest | None" = None
+
+
+class PluginProfileSourceRequest(BaseModel):
+    """Identify the Profile snapshot explicitly copied into plugin config."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: Annotated[str, Field(min_length=1, max_length=128)]
+    profile_name: Annotated[str, Field(min_length=1, max_length=200)]
+    profile_revision: Annotated[int, Field(ge=1)]
+
+    def to_domain(self) -> PluginProfileSource:
+        """Attach server-owned copy time without placing provenance in plugin config."""
+
+        return PluginProfileSource(
+            profile_id=self.profile_id,
+            profile_name=self.profile_name,
+            profile_revision=self.profile_revision,
+            copied_at=datetime.now(UTC),
+        )
 
 
 class HookStatusResponse(BaseModel):
@@ -394,7 +416,16 @@ async def update_trigger_config(
 
     _LOGGER.info("Updating trigger config for plugin: %s", plugin_id)
     try:
-        record = await components.trigger_hooks.update_config(plugin_id, request.config)
+        record = await components.trigger_hooks.update_config(
+            plugin_id,
+            request.config,
+            profile_source=(
+                request.profile_source.to_domain()
+                if request.profile_source is not None
+                else None
+            ),
+            should_replace_profile_source="profile_source" in request.model_fields_set,
+        )
     except HookConfigurationError as error:
         _raise_hook_problem(error)
     except HookInstallationError as error:

@@ -28,10 +28,30 @@ export type ScopeRequest =
   | UncommittedScopeRequest
   | FullRepositoryScopeRequest;
 
+export type BudgetProfile = "lean" | "standard" | "deep";
+
+export type ReviewerSelection =
+  | { mode: "fixed"; reviewer_versions: string[] }
+  | { mode: "adaptive" };
+
+export type ReviewStrategySnapshot = {
+  reviewerSelection:
+    | { mode: "fixed"; reviewerVersions: readonly string[] }
+    | { mode: "adaptive" };
+  budgetProfile: BudgetProfile;
+};
+
+export type ReviewProfileSourceRequest = {
+  profile_id: string;
+  revision: number;
+};
+
 export type CreateReviewRequest = {
   repository_path: string;
   scope: ScopeRequest;
-  selected_agents: string[];
+  reviewer_selection: ReviewerSelection;
+  budget_profile: BudgetProfile;
+  profile_source?: ReviewProfileSourceRequest;
   prompt_locale: "en" | "zh-CN";
 };
 
@@ -53,4 +73,37 @@ export type ReviewResponse = {
   created_at: string;
   finding_count: number;
   external_context: Record<string, unknown> | null;
+  selection_request: ReviewerSelection;
+  budget_profile: BudgetProfile;
+  profile_source: ReviewProfileSourceRequest | null;
+  review_plan: ReviewPlanProjection | null;
+  coverage: ReviewCoverageProjection;
+  resolution_summary: Record<"publish" | "suppress" | "verify", number>;
 };
+
+export type ReviewPlanNodeRole = "planner" | "reviewer" | "resolver" | "verifier";
+
+export type ReviewPlanNodeProjection = {
+  node_id: string;
+  node_type: ReviewPlanNodeRole;
+  agent_reference: string;
+  depends_on: string[];
+  pass_index: number;
+  shard_id: string;
+  logical_attempt_group: string;
+  task_id: string;
+};
+
+export type ReviewPlanProjection = {
+  selection_mode: "fixed" | "adaptive";
+  reviewer_references: string[];
+  plan_hash: string;
+  nodes: ReviewPlanNodeProjection[];
+  budget_profile: BudgetProfile;
+  planner_reason: string | null;
+};
+
+export type ReviewCoverageProjection = Record<
+  "planned" | "completed" | "failed" | "omitted",
+  string[]
+>;

@@ -1,6 +1,101 @@
 import { api } from "../../shared/api/client";
 import type { FindingRecord, FindingSourcePreview } from "../findings/types";
 import type { CreateReviewRequest, ReviewResponse } from "./types";
+import type { ReviewStrategySnapshot, ScopeRequest } from "./types";
+
+type ReviewResponseDto = Omit<
+  ReviewResponse,
+  | "selection_request"
+  | "budget_profile"
+  | "profile_source"
+  | "review_plan"
+  | "coverage"
+  | "resolution_summary"
+> &
+  Partial<
+    Pick<
+      ReviewResponse,
+      | "selection_request"
+      | "budget_profile"
+      | "profile_source"
+      | "review_plan"
+      | "resolution_summary"
+    >
+  > & {
+    coverage?: Partial<ReviewResponse["coverage"]>;
+  };
+
+export function toCreateReviewRequest(input: {
+  repositoryPath: string;
+  scope: ScopeRequest;
+  strategy: ReviewStrategySnapshot;
+  promptLocale: "en" | "zh-CN";
+  profileSource?: { id: string; revision: number };
+}): CreateReviewRequest {
+  const selection = input.strategy.reviewerSelection;
+  return {
+    repository_path: input.repositoryPath,
+    scope: input.scope,
+    reviewer_selection:
+      selection.mode === "adaptive"
+        ? { mode: "adaptive" }
+        : { mode: "fixed", reviewer_versions: [...selection.reviewerVersions] },
+    budget_profile: input.strategy.budgetProfile,
+    prompt_locale: input.promptLocale,
+    ...(input.profileSource === undefined
+      ? {}
+      : {
+          profile_source: {
+            profile_id: input.profileSource.id,
+            revision: input.profileSource.revision,
+          },
+        }),
+  };
+}
+
+export function parseReviewResponse(value: ReviewResponseDto): ReviewResponse {
+  const isVersionTwoResponse = value.selection_request !== undefined;
+  const selectionRequest = value.selection_request ?? {
+    mode: "fixed" as const,
+    reviewer_versions: value.selected_agents,
+  };
+  if (selectionRequest.mode !== "fixed" && selectionRequest.mode !== "adaptive") {
+    throw new Error("Unknown reviewer selection mode");
+  }
+  const reviewPlan = value.review_plan ?? null;
+  if (reviewPlan !== null) {
+    const validRoles = new Set(["planner", "reviewer", "resolver", "verifier"]);
+    if (reviewPlan.nodes.some((node) => !validRoles.has(node.node_type))) {
+      throw new Error("Unknown Review Plan node role");
+    }
+  }
+  for (const key of ["planned", "completed", "failed", "omitted"] as const) {
+    if (isVersionTwoResponse && !Array.isArray(value.coverage?.[key])) {
+      throw new Error(`Missing Review coverage field: ${key}`);
+    }
+  }
+  const coverage = {
+    planned: value.coverage?.planned ?? value.selected_agents,
+    completed:
+      value.coverage?.completed ??
+      (value.status === "completed" ? value.selected_agents : []),
+    failed: value.coverage?.failed ?? [],
+    omitted: value.coverage?.omitted ?? [],
+  };
+  return {
+    ...value,
+    selection_request: selectionRequest,
+    budget_profile: value.budget_profile ?? "standard",
+    profile_source: value.profile_source ?? null,
+    review_plan: reviewPlan,
+    coverage,
+    resolution_summary: value.resolution_summary ?? {
+      publish: 0,
+      suppress: 0,
+      verify: 0,
+    },
+  };
+}
 
 export interface TranscriptEntry {
   sequence: number;
@@ -53,18 +148,18 @@ export interface ReviewProcessReport {
 }
 
 export async function getReview(taskId: string): Promise<ReviewResponse> {
-  return api<ReviewResponse>(`/reviews/${taskId}`);
+  return parseReviewResponse(await api<ReviewResponseDto>(`/reviews/${taskId}`));
 }
 
 export async function createReview(request: CreateReviewRequest): Promise<ReviewResponse> {
-  return api<ReviewResponse>("/reviews", {
+  return parseReviewResponse(await api<ReviewResponseDto>("/reviews", {
     method: "POST",
     body: JSON.stringify(request),
-  });
+  }));
 }
 
 export async function listReviews(): Promise<ReviewResponse[]> {
-  return api<ReviewResponse[]>("/reviews");
+  return (await api<ReviewResponseDto[]>("/reviews")).map(parseReviewResponse);
 }
 
 export async function deleteReview(taskId: string): Promise<void> {
@@ -72,17 +167,17 @@ export async function deleteReview(taskId: string): Promise<void> {
 }
 
 export async function cancelReview(taskId: string): Promise<ReviewResponse> {
-  return api<ReviewResponse>(`/reviews/${taskId}/cancel`, {
+  return parseReviewResponse(await api<ReviewResponseDto>(`/reviews/${taskId}/cancel`, {
     method: "POST",
     body: JSON.stringify({}),
-  });
+  }));
 }
 
 export async function retryReview(taskId: string): Promise<ReviewResponse> {
-  return api<ReviewResponse>(`/reviews/${taskId}/retry`, {
+  return parseReviewResponse(await api<ReviewResponseDto>(`/reviews/${taskId}/retry`, {
     method: "POST",
     body: JSON.stringify({}),
-  });
+  }));
 }
 
 export async function listFindings(taskId: string): Promise<FindingRecord[]> {

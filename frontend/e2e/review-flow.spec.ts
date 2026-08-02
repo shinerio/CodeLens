@@ -92,15 +92,12 @@ test("streams the correctness fixture from inspect to validated findings", async
   await expect(page.locator(".review-run-page__subtitle")).toContainText("completed", {
     timeout: 15000,
   });
+  await page.getByRole("tab", { name: /Execution/ }).click();
   await expect(page.getByRole("heading", { name: "Process report" })).toBeVisible({
     timeout: 15000,
   });
 
-  const toolUsage = page.getByRole("region", { name: "Tool usage" });
-  await expect(toolUsage).toContainText("comment");
-  await expect(toolUsage).toContainText("task_done");
-
-  await page.getByRole("button", { name: /Findings/ }).click();
+  await page.getByRole("tab", { name: /Findings/ }).click();
   await page
     .getByRole("button", { name: /Inverted transition guard allows invalid states/ })
     .click();

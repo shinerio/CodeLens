@@ -490,6 +490,7 @@ export function SettingsPage() {
           <h1>{t("settings.title")}</h1>
           <p>{t("settings.subtitle")}</p>
         </div>
+        <a className="settings-profile-link" href="/settings/review-profiles">{t("settings.reviewProfiles")}</a>
         <div
           className={gateways.length > 0 ? "provider-state provider-state--ready" : "provider-state"}
           aria-live="polite"

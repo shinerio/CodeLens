@@ -76,6 +76,34 @@ function installApiMock({
       }
       return jsonResponse(recentRepositories);
     }
+    if (url === "/api/review-profiles") {
+      return jsonResponse([
+        {
+          profile_id: "profile-default",
+          revision: 1,
+          name: "Default",
+          is_default: true,
+          reviewer_selection: { mode: "adaptive" },
+          budget_profile: "standard",
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+      ]);
+    }
+    if (url === "/api/reviewer-catalog") {
+      return jsonResponse([
+        {
+          reference: "general:v1",
+          agent_id: "general",
+          version: 1,
+          dimensions: ["general"],
+          cost_class: "balanced",
+          planner_eligible: true,
+          capability_readiness: "ready",
+          is_legacy: false,
+        },
+      ]);
+    }
     if (url === "/api/repositories/browse") {
       const body = JSON.parse(String(init?.body)) as { path: string | null };
       if (body.path === null) {
@@ -156,7 +184,10 @@ it("creates a branch review using Git branch dropdowns", async () => {
 
   const reviewCall = fetchMock.mock.calls.find(([url]) => url === "/api/reviews");
   const body = JSON.parse(String(reviewCall?.[1]?.body)) as {
+    budget_profile: string;
+    profile_source?: { profile_id: string; revision: number };
     repository_path: string;
+    reviewer_selection: { mode: string };
     scope: { base_ref: string; target_ref: string; type: string };
   };
   expect(body.repository_path).toBe("/app");
@@ -165,6 +196,9 @@ it("creates a branch review using Git branch dropdowns", async () => {
     base_ref: "origin/main",
     target_ref: "feature",
   });
+  expect(body.reviewer_selection).toEqual({ mode: "adaptive" });
+  expect(body.budget_profile).toBe("standard");
+  expect(body.profile_source).toEqual({ profile_id: "profile-default", revision: 1 });
 });
 
 it("inspects a repository path entered directly into the path field", async () => {

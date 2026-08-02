@@ -66,7 +66,7 @@ from codelens.reviewer_catalog.domain.provider_config import (
     ModelProviderConfig,
     ModelProviderConfigPort,
 )
-from codelens.reviewer_catalog.infrastructure.builtin_agents import correctness_agent
+from codelens.reviewer_catalog.infrastructure.builtin_agents import builtin_agent_catalog
 from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
     FilesystemReviewerPromptStore,
 )
@@ -619,7 +619,7 @@ class WorkerReviewExecutor:
         snapshot: ReviewSnapshot,
         execution_limits: AgentExecutionLimits,
     ) -> tuple[FrozenAgentExecutionSpec, ...]:
-        catalog = {"correctness:v1": correctness_agent()}
+        catalog = builtin_agent_catalog()
         try:
             specs: list[FrozenAgentExecutionSpec] = []
             for reference in references:

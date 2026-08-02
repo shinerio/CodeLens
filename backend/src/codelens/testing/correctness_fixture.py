@@ -7,6 +7,7 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.findings.infrastructure.model_output import FindingBatchSchema
 from codelens.review.domain.ports import (
@@ -180,12 +181,12 @@ class FixtureRuntime:
 
     async def invoke(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         _payload: bytes,
         snapshot: ReviewSnapshot,
         _prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
-        return await self._collect(agent, snapshot)
+        return await self._collect(execution_spec.agent, snapshot)
 
     async def _collect(
         self,
@@ -230,7 +231,7 @@ class FixtureRuntime:
 
     async def invoke_stream(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,
@@ -251,7 +252,7 @@ class FixtureRuntime:
                 {"tool_call_id": comment_call_id, "tool_name": "comment"},
             )
         )
-        output = await self._collect(agent, snapshot)
+        output = await self._collect(execution_spec.agent, snapshot)
         await sink(
             AgentRuntimeEvent(
                 "tool_result",

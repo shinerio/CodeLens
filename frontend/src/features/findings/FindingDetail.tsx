@@ -11,7 +11,7 @@ import { createRoot, type Root } from "react-dom/client";
 import ReactMarkdown from "react-markdown";
 import type { editor as MonacoEditor, IDisposable, Range } from "monaco-editor";
 
-import { useI18n } from "../../shared/i18n/i18n";
+import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { classifyDiffChange, selectDiffSide } from "./diff-change";
 import type { FindingRecord, FindingSourcePreview } from "./types";
 
@@ -40,6 +40,27 @@ function formatLocation(finding: FindingRecord) {
 
 function formatConfidence(value: number) {
   return `${Math.round(value * 100)}%`;
+}
+
+const CATEGORICAL_VALUE_KEYS: Readonly<Record<string, TranslationKey>> = {
+  weak: "finding.valueWeak",
+  moderate: "finding.valueModerate",
+  strong: "finding.valueStrong",
+  speculative: "finding.valueSpeculative",
+  plausible: "finding.valuePlausible",
+  confirmed: "finding.valueConfirmed",
+  unverified: "finding.valueUnverified",
+  reasoned: "finding.valueReasoned",
+  reproduced: "finding.valueReproduced",
+  not_required: "finding.valueNotRequired",
+  verified: "finding.valueVerified",
+  rejected: "finding.valueRejected",
+  unresolved: "finding.valueUnresolved",
+};
+
+function categoricalLabel(value: string, t: (key: TranslationKey) => string) {
+  const key = CATEGORICAL_VALUE_KEYS[value];
+  return key === undefined ? value.replaceAll("_", " ") : t(key);
 }
 
 function measureCommentHeight(host: HTMLElement, content: HTMLElement) {
@@ -403,7 +424,7 @@ function SourceComparison({
 
   return (
     <div
-      aria-label="Pinned source comparison"
+      aria-label={t("finding.sourceComparison")}
       className={`finding-review-viewport${isReadingAreaExpanded ? " finding-review-viewport--expanded" : ""}`}
       data-comment-side={source.highlight_side}
       ref={reviewRef}
@@ -497,9 +518,12 @@ export function FindingDetail({ finding, source }: { finding: FindingRecord | nu
               <dd>{finding.category}</dd>
             </div>
             <div>
-              <dt>{t("finding.confidence")}</dt>
-              <dd>{formatConfidence(finding.confidence)}</dd>
+              <dt>{finding.confidence === null ? t("finding.evidence") : t("finding.confidence")}</dt>
+              <dd>{finding.confidence === null ? finding.evidence_strength === null || finding.evidence_strength === undefined ? t("finding.validated") : categoricalLabel(finding.evidence_strength, t) : formatConfidence(finding.confidence)}</dd>
             </div>
+            {finding.reproducibility != null ? <div><dt>{t("finding.reproducibility")}</dt><dd>{categoricalLabel(finding.reproducibility, t)}</dd></div> : null}
+            {finding.impact_certainty != null ? <div><dt>{t("finding.impactCertainty")}</dt><dd>{categoricalLabel(finding.impact_certainty, t)}</dd></div> : null}
+            {finding.verification_state != null ? <div><dt>{t("finding.verification")}</dt><dd>{categoricalLabel(finding.verification_state, t)}</dd></div> : null}
           </dl>
           <h3>{finding.title}</h3>
         </div>

@@ -29,7 +29,7 @@ export type FindingRecord = {
   title: string;
   severity: FindingSeverity;
   disposition: string;
-  confidence: number;
+  confidence: number | null;
   primary_location: FindingLocation;
   related_locations: FindingLocation[];
   changed_hunk_id: string | null;
@@ -40,6 +40,10 @@ export type FindingRecord = {
   reproduction: string | null;
   recommendation: string;
   rule_sources: RuleReferenceRecord[];
+  evidence_strength?: "weak" | "moderate" | "strong" | null;
+  impact_certainty?: "speculative" | "plausible" | "confirmed" | null;
+  reproducibility?: "unverified" | "reasoned" | "reproduced" | null;
+  verification_state?: "not_required" | "verified" | "rejected" | "unresolved" | null;
 };
 
 export type PinnedSourceVersion = {

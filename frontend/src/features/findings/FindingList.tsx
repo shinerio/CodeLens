@@ -5,10 +5,6 @@ function formatLocation(finding: FindingRecord) {
   return `${finding.primary_location.path}:${finding.primary_location.start_line}-${finding.primary_location.end_line}`;
 }
 
-function formatConfidence(value: number) {
-  return `${Math.round(value * 100)}%`;
-}
-
 function formatSeverity(value: string) {
   return value.replaceAll("_", " ");
 }
@@ -49,7 +45,7 @@ export function FindingList({
                 <span className="finding-list__severity">{formatSeverity(finding.severity)}</span>
                 <span className="finding-list__title">{finding.title}</span>
                 <span className="finding-list__meta">
-                  {finding.category} · {formatConfidence(finding.confidence)} · {formatLocation(finding)}
+                  {finding.category} · {finding.confidence === null ? t("finding.evidenceBased") : `${Math.round(finding.confidence * 100)}%`} · {formatLocation(finding)}
                 </span>
               </button>
             </li>

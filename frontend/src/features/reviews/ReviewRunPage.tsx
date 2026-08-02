@@ -21,15 +21,18 @@ import type { FindingRecord } from "../findings/types";
 import { listPlugins, PLUGIN_QUERY_KEY } from "../plugins/api";
 import { cancelReview, exportFindings, getFindingSource, getProcessReport, getReview, getTranscript, listExportHistory, listFindings, type ExportResultResponse, type TranscriptEntry } from "./api";
 import { PluginPanels } from "./PluginPanels";
+import { AgentRunTimeline } from "./AgentRunTimeline";
+import { CoverageSummary } from "./CoverageSummary";
 import { failureDetails } from "./failure-details";
 import { ReviewConsole } from "./ReviewConsole";
+import { ReviewPlanSummary } from "./ReviewPlanSummary";
 import { ReviewProcessReport } from "./ReviewProcessReport";
 import { useReviewEvents } from "./useReviewEvents";
 import "./ReviewRunPage.css";
 
-type TabName = "overview" | "findings" | "agent_runs" | "artifacts";
+type TabName = "findings" | "coverage" | "execution" | "logs" | "plugins";
 
-const TERMINAL_STATUSES = new Set(["completed", "partial", "failed", "canceled"]);
+const TERMINAL_STATUSES = new Set(["completed", "partial", "failed", "canceled", "superseded"]);
 
 const TAB_OPTIONS: Array<{
   icon: typeof PanelTop;
@@ -37,10 +40,11 @@ const TAB_OPTIONS: Array<{
   labelKey: TranslationKey;
   noteKey: TranslationKey;
 }> = [
-  { id: "overview", labelKey: "run.overview", noteKey: "run.overviewNote", icon: PanelTop },
   { id: "findings", labelKey: "run.findings", noteKey: "run.findingsNote", icon: ListChecks },
-  { id: "agent_runs", labelKey: "run.agentRuns", noteKey: "run.agentRunsNote", icon: Activity },
-  { id: "artifacts", labelKey: "run.artifacts", noteKey: "run.artifactsNote", icon: FileDigit },
+  { id: "coverage", labelKey: "run.coverage", noteKey: "run.coverageNote", icon: PanelTop },
+  { id: "execution", labelKey: "run.execution", noteKey: "run.executionNote", icon: Activity },
+  { id: "logs", labelKey: "run.logs", noteKey: "run.logsNote", icon: FileDigit },
+  { id: "plugins", labelKey: "run.plugins", noteKey: "run.pluginsNote", icon: Download },
 ];
 
 const STATUS_KEYS: Readonly<Record<string, TranslationKey>> = {
@@ -99,7 +103,7 @@ export function ReviewRunPage() {
   const queryClient = useQueryClient();
   const params = useParams();
   const taskId = params.taskId;
-  const [activeTab, setActiveTab] = useState<TabName>("agent_runs");
+  const [activeTab, setActiveTab] = useState<TabName>("findings");
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const terminalRef = useRef<string | null>(null);
   const { status: eventStatus, events, connectionState } = useReviewEvents(taskId);
@@ -399,13 +403,28 @@ export function ReviewRunPage() {
       ) : null}
       {cancelMutation.isError ? <p className="run-action-error" role="alert">{cancelMutation.error instanceof Error ? cancelMutation.error.message : t("run.unableLoad")}</p> : null}
 
-      <nav className="review-run-page__tabs" aria-label={t("run.sections")}>
-        {TAB_OPTIONS.map((tab) => {
+      {reviewQuery.data !== undefined ? (
+        <div className="run-plan-stack">
+          <ReviewPlanSummary
+            budget={reviewQuery.data.budget_profile}
+            plan={reviewQuery.data.review_plan}
+            selection={reviewQuery.data.selection_request}
+          />
+          <CoverageSummary coverage={reviewQuery.data.coverage} status={currentStatus} />
+        </div>
+      ) : null}
+
+      <nav className="review-run-page__tabs" aria-label={t("run.sections")} role="tablist">
+        {TAB_OPTIONS.filter(
+          (tab) => tab.id !== "plugins" || (pluginsQuery.data?.length ?? 0) > 0,
+        ).map((tab) => {
           const Icon = tab.icon;
           return (
             <button
               className={activeTab === tab.id ? "run-tab run-tab--active" : "run-tab"}
               key={tab.id}
+              aria-selected={activeTab === tab.id}
+              role="tab"
               type="button"
               onClick={() => setActiveTab(tab.id)}
             >
@@ -423,7 +442,7 @@ export function ReviewRunPage() {
         })}
       </nav>
 
-      {activeTab === "overview" ? (
+      {activeTab === "execution" ? (
         <section className="run-layout">
           <article className="run-panel">
             <h2>{t("run.overview")}</h2>
@@ -497,11 +516,19 @@ export function ReviewRunPage() {
             </div>
           </article>
 
-          <PluginPanels
-            externalContext={reviewQuery.data?.external_context ?? null}
-            plugins={pluginsQuery.data ?? []}
-            exportHistory={exportHistoryQuery.data}
-          />
+          <article className="run-panel run-panel--wide">
+            <h2>{t("run.execution")}</h2>
+            <AgentRunTimeline plan={reviewQuery.data?.review_plan ?? null} />
+          </article>
+          {processReportQuery.data !== undefined ? (
+            <ReviewProcessReport report={processReportQuery.data} />
+          ) : null}
+        </section>
+      ) : null}
+
+      {activeTab === "coverage" && reviewQuery.data !== undefined ? (
+        <section className="run-layout">
+          <CoverageSummary coverage={reviewQuery.data.coverage} status={currentStatus} />
         </section>
       ) : null}
 
@@ -530,11 +557,9 @@ export function ReviewRunPage() {
         </section>
       ) : null}
 
-      {activeTab === "agent_runs" ? (
+      {activeTab === "logs" ? (
         <section className="run-layout">
-          {processReportQuery.data !== undefined ? (
-            <ReviewProcessReport report={processReportQuery.data} />
-          ) : TERMINAL_STATUSES.has(currentStatus) && transcriptQuery.data.length > 0 ? (
+          {TERMINAL_STATUSES.has(currentStatus) && transcriptQuery.data.length > 0 && processReportQuery.data === undefined ? (
             <article className="run-panel run-panel--wide process-report__state" role={processReportQuery.isError ? "alert" : "status"}>
               {processReportQuery.isError ? t("run.processReportError") : t("run.processReportLoading")}
             </article>
@@ -552,12 +577,13 @@ export function ReviewRunPage() {
         </section>
       ) : null}
 
-      {activeTab === "artifacts" ? (
+      {activeTab === "plugins" ? (
         <section className="run-layout">
-          <article className="run-panel run-panel--wide">
-            <h2>{t("run.artifacts")}</h2>
-            <p className="run-muted">{t("run.artifactPlaceholder")}</p>
-          </article>
+          <PluginPanels
+            externalContext={reviewQuery.data?.external_context ?? null}
+            plugins={pluginsQuery.data ?? []}
+            exportHistory={exportHistoryQuery.data}
+          />
         </section>
       ) : null}
     </section>
