@@ -9,12 +9,16 @@ import importlib.util
 import sys
 from pathlib import Path
 
+from packaging.version import InvalidVersion, Version
+
+import codelens
 from codelens.plugin.domain.models import PluginManifest
 from codelens.plugin.domain.ports import (
     ReportSinkPort,
     ReviewCreatorPort,
     TriggerSinkPort,
 )
+from codelens.plugin.domain.versioning import PluginApiVersion, ensure_plugin_compatible
 from codelens.plugin.trigger.local_hook.local_hook_trigger import (
     LocalHookTriggerAdapter,
 )
@@ -80,6 +84,7 @@ class CompositePluginLoader:
                 f"Unsupported trigger plugin: {plugin_id}. "
                 f"External plugins require manifest and install_path."
             )
+        self._ensure_compatible(manifest)
 
         trigger_cap = manifest.trigger
         if trigger_cap is None:
@@ -114,6 +119,7 @@ class CompositePluginLoader:
             PluginLoadError: If plugin cannot be loaded.
         """
         plugin_id = manifest.plugin_id
+        self._ensure_compatible(manifest)
         if plugin_id in self._report_instances:
             return self._report_instances[plugin_id]
 
@@ -284,6 +290,25 @@ class CompositePluginLoader:
     def _module_cache_key(self, plugin_id: str) -> str:
         generation = self._generations.get(plugin_id, 0)
         return f"{self._module_cache_prefix(plugin_id)}_{generation}"
+
+    @staticmethod
+    def _ensure_compatible(manifest: PluginManifest) -> None:
+        """Revalidate persisted metadata immediately before untrusted code loads."""
+
+        try:
+            plugin_version = Version(manifest.version)
+            if manifest.plugin_api_version is PluginApiVersion.V2:
+                if manifest.min_codelens_version is None or plugin_version.major < 2:
+                    raise PluginLoadError("plugin declares an invalid v2 compatibility range")
+            ensure_plugin_compatible(
+                plugin_api_version=manifest.plugin_api_version,
+                minimum_codelens_version=Version(manifest.min_codelens_version or "0"),
+                current_codelens_version=Version(codelens.__version__),
+            )
+        except (InvalidVersion, ValueError) as error:
+            raise PluginLoadError(
+                f"plugin is incompatible with this CodeLens host: {error}"
+            ) from error
 
     @classmethod
     def _module_cache_prefix(cls, plugin_id: str) -> str:

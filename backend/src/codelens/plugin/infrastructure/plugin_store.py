@@ -8,15 +8,18 @@ import asyncio
 import json
 import os
 import tempfile
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from codelens.plugin.domain.models import (
     PluginManifest,
+    PluginProfileSource,
     PluginRecord,
     ReportCapability,
     TriggerCapability,
 )
+from codelens.plugin.domain.versioning import PluginApiVersion
 
 
 class FilesystemPluginStore:
@@ -125,6 +128,7 @@ def _serialize_record(record: PluginRecord) -> dict:
         "min_codelens_version": record.manifest.min_codelens_version,
         "name_i18n": record.manifest.name_i18n,
         "description_i18n": record.manifest.description_i18n,
+        "plugin_api_version": record.manifest.plugin_api_version.value,
     }
 
     # Serialize capabilities
@@ -158,6 +162,17 @@ def _serialize_record(record: PluginRecord) -> dict:
         "report_config": record.report_config,
         "git_url": record.git_url,
         "git_ref": record.git_ref,
+        "config_revision": record.config_revision,
+        "profile_source": (
+            {
+                "profile_id": record.profile_source.profile_id,
+                "profile_name": record.profile_source.profile_name,
+                "profile_revision": record.profile_source.profile_revision,
+                "copied_at": record.profile_source.copied_at.isoformat(),
+            }
+            if record.profile_source is not None
+            else None
+        ),
     }
 
 
@@ -194,8 +209,22 @@ def _deserialize_record(data: dict) -> PluginRecord | None:
             min_codelens_version=manifest_data.get("min_codelens_version"),
             name_i18n=manifest_data.get("name_i18n", {}),
             description_i18n=manifest_data.get("description_i18n", {}),
+            plugin_api_version=PluginApiVersion(
+                str(manifest_data.get("plugin_api_version", "1"))
+            ),
         )
 
+        raw_profile_source = data.get("profile_source")
+        profile_source = (
+            PluginProfileSource(
+                profile_id=raw_profile_source["profile_id"],
+                profile_name=raw_profile_source["profile_name"],
+                profile_revision=int(raw_profile_source["profile_revision"]),
+                copied_at=datetime.fromisoformat(raw_profile_source["copied_at"]),
+            )
+            if isinstance(raw_profile_source, dict)
+            else None
+        )
         return PluginRecord(
             plugin_id=data["plugin_id"],
             manifest=manifest,
@@ -208,6 +237,8 @@ def _deserialize_record(data: dict) -> PluginRecord | None:
             report_config=data.get("report_config", {}),
             git_url=data.get("git_url"),
             git_ref=data.get("git_ref"),
+            config_revision=int(data.get("config_revision", 1)),
+            profile_source=profile_source,
         )
     except (KeyError, TypeError, ValueError):
         return None

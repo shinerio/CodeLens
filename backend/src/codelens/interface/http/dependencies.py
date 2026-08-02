@@ -216,6 +216,8 @@ def build_components(settings: Settings) -> HttpComponents:
         plugin_store,
         plugin_loader,
         export_history,
+        SqlReviewPlanStore(database),
+        SqlCheckpointStore(database),
     )
 
     async def _terminal_export_hook(task_id: str, _status: str) -> None:

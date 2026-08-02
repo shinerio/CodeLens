@@ -8,12 +8,19 @@ from pathlib import Path
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
+from packaging.version import InvalidVersion, Version
 
+import codelens
 from codelens.plugin.domain.models import (
     PluginInstallError,
     PluginManifest,
     ReportCapability,
     TriggerCapability,
+)
+from codelens.plugin.domain.versioning import (
+    PluginApiVersion,
+    PluginCompatibilityError,
+    ensure_plugin_compatible,
 )
 from codelens.shared.domain.errors import InvalidRepositoryError
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -128,10 +135,13 @@ class GitPluginInstaller:
                 min_codelens_version=raw.get("min_codelens_version"),
                 name_i18n=raw.get("name_i18n", {}),
                 description_i18n=raw.get("description_i18n", {}),
+                plugin_api_version=PluginApiVersion(
+                    str(raw.get("plugin_api_version", "1"))
+                ),
             )
-        except KeyError as error:
+        except (KeyError, ValueError) as error:
             raise PluginInstallError(
-                f"plugin manifest missing required field: {error}"
+                f"plugin manifest is incompatible or missing a required field: {error}"
             ) from error
 
     def _parse_capabilities(self, raw_capabilities: dict) -> dict:
@@ -156,6 +166,25 @@ class GitPluginInstaller:
         return capabilities
 
     def _validate_manifest(self, manifest: PluginManifest) -> None:
+        try:
+            plugin_version = Version(manifest.version)
+            if manifest.plugin_api_version is PluginApiVersion.V2:
+                if manifest.min_codelens_version is None:
+                    raise PluginCompatibilityError(
+                        "v2 plugin requires min_codelens_version"
+                    )
+                if plugin_version.major < 2:
+                    raise PluginCompatibilityError(
+                        "v2 plugin API requires plugin version 2 or later"
+                    )
+            minimum = Version(manifest.min_codelens_version or "0")
+            ensure_plugin_compatible(
+                plugin_api_version=manifest.plugin_api_version,
+                minimum_codelens_version=minimum,
+                current_codelens_version=Version(codelens.__version__),
+            )
+        except (InvalidVersion, PluginCompatibilityError) as error:
+            raise PluginInstallError(str(error)) from error
         if not manifest.plugin_id or not manifest.plugin_id.replace("-", "_").isidentifier():
             raise PluginInstallError(
                 f"plugin_id must be a valid identifier, got: {manifest.plugin_id}"

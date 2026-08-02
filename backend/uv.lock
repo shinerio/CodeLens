@@ -158,7 +158,7 @@ wheels = [
 
 [[package]]
 name = "codelens-review"
-version = "0.1.0"
+version = "0.2.0"
 source = { editable = "." }
 dependencies = [
     { name = "aiosqlite" },
@@ -167,6 +167,7 @@ dependencies = [
     { name = "jsonschema" },
     { name = "markdown-it-py" },
     { name = "openai-agents" },
+    { name = "packaging" },
     { name = "pathspec" },
     { name = "pydantic" },
     { name = "pydantic-settings" },
@@ -195,6 +196,7 @@ requires-dist = [
     { name = "jsonschema", specifier = ">=4.26,<5" },
     { name = "markdown-it-py" },
     { name = "openai-agents" },
+    { name = "packaging", specifier = ">=26,<27" },
     { name = "pathspec" },
     { name = "pydantic", specifier = ">=2,<3" },
     { name = "pydantic-settings", specifier = ">=2,<3" },

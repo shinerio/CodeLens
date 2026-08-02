@@ -141,7 +141,7 @@ async def test_auto_export_requires_a_declared_report_capability() -> None:
     assert store.record.report_auto_export is False
 
 
-async def test_builtin_trigger_rejects_an_empty_agent_selection() -> None:
+async def test_builtin_trigger_rejects_an_empty_reviewer_selection() -> None:
     store = EmptyPluginStore()
     manager = PluginManager(
         cast(PluginStorePort, store),
@@ -151,10 +151,16 @@ async def test_builtin_trigger_rejects_an_empty_agent_selection() -> None:
     await manager.initialize_builtin()
 
     with pytest.raises(PluginConfigurationError):
-        await manager.update_trigger_config("local", {"selected_agents": []})
+        await manager.update_trigger_config(
+            "local",
+            {"reviewer_selection": {"mode": "fixed", "reviewer_versions": []}},
+        )
 
     assert store.record is not None
-    assert store.record.trigger_config["selected_agents"] == ["correctness:v1"]
+    assert store.record.trigger_config["reviewer_selection"] == {
+        "mode": "fixed",
+        "reviewer_versions": ["correctness:v1"],
+    }
 
 
 class MockInstaller:

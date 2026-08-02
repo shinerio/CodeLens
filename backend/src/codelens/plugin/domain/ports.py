@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol
 
+from codelens.plugin.api.v2 import TriggerReviewPolicy
 from codelens.plugin.domain.models import (
     ExportHistoryEntry,
     ExportResult,
@@ -29,8 +30,7 @@ class ReviewCreatorPort(Protocol):
         repository_path: Path,
         scope_type: str,
         scope_params: dict[str, str | None],
-        selected_agents: tuple[str, ...],
-        prompt_locale: str,
+        review_policy: TriggerReviewPolicy,
         external_context: dict[str, Any] | None = None,
     ) -> str:
         """Create a review and return the task_id.

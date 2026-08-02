@@ -5,7 +5,10 @@ from pathlib import Path
 from codelens.plugin.report.local_file_export.sink import LocalFileExportSink
 from codelens.review.application.export_findings import (
     FindingExportEnvelope,
+    ReviewCoverageDto,
     ReviewExportMeta,
+    ReviewPlanSummaryDto,
+    SelectionRequestDto,
 )
 from codelens.workspace.infrastructure.git_cli import GitCli
 
@@ -13,7 +16,7 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 def _export_envelope() -> FindingExportEnvelope:
     created_at = datetime(2026, 7, 30, 8, 0, tzinfo=UTC)
     return FindingExportEnvelope(
-        schema_version="1.0",
+        schema_version="2.0",
         exported_at=created_at,
         review=ReviewExportMeta(
             task_id="review_timestamped_export",
@@ -23,8 +26,21 @@ def _export_envelope() -> FindingExportEnvelope:
             head_oid="b" * 40,
             base_ref=None,
             target_ref=None,
-            selected_agent_versions=("correctness:v1",),
             status="completed",
+            selection_request=SelectionRequestDto(
+                mode="fixed", reviewer_versions=("correctness:v1",)
+            ),
+            plan_summary=ReviewPlanSummaryDto(
+                strategy="fixed",
+                selected_reviewer_versions=("correctness:v1",),
+                planner_version=None,
+                plan_hash="a" * 64,
+            ),
+            coverage=ReviewCoverageDto(
+                completed_reviewer_versions=("correctness:v1",),
+                failed_reviewer_versions=(),
+                omitted_reviewer_versions=(),
+            ),
             created_at=created_at,
         ),
         findings=(),

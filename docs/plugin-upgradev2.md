@@ -4,7 +4,7 @@
 
 本文面向 CodeLens Trigger/Report 插件作者，说明如何从当前插件 API v1 迁移到支持多 Agent Review 的插件 API v2。
 
-本文描述的是目标 v2 契约。当前代码仍使用 `selected_agents`、`ReviewCreatorPort` v1 和 `FindingExportEnvelope` 1.0；在 CodeLens 核心实现插件 API v2 之前，按本文修改的插件不能在当前 `0.1.0` Runtime 中启用。
+CodeLens `0.2.0` 已实现本文的 v2 契约。历史 v1 插件仍可在兼容窗口内加载；新插件应直接使用公共 `codelens.plugin.api.v2` 类型与 Envelope 2.0。
 
 示例假设首个支持插件 API v2 的 CodeLens 版本为 `0.2.0`。如果实际发布版本不同，只需相应调整 Manifest 的 `min_codelens_version`，其他 v2 契约不变。
 
@@ -313,7 +313,7 @@ reviewer_selection:
 
 ### 6.2 插件自有字段
 
-当前 `PluginManager._merge_config` 只保留新 Schema 中仍存在的同名顶层字段、补充 Default 并删除其他字段。插件作者应：
+更新时，Core 先按新 Schema 保留同名字段并补充 Default，再执行 v1→v2 策略迁移与完整校验；代码目录和配置记录只有在整组操作成功后才对用户生效。插件作者应：
 
 - 尽量保持自有字段名称和类型稳定；
 - 为新增可选字段提供 Default；

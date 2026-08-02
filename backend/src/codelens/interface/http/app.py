@@ -171,7 +171,7 @@ def create_app_with_components(
             if manage_components:
                 await components.close()
 
-    app = FastAPI(title="CodeLens Review API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="CodeLens Review API", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.components = components
     app.add_middleware(LocalHttpSafetyMiddleware, configured_host=settings.host)

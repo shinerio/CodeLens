@@ -1,6 +1,7 @@
 from pathlib import Path
 from typing import Any
 
+from codelens.plugin.api.v2 import TriggerReviewPolicy
 from codelens.plugin.application.trigger_orchestrator import TriggerOrchestrator
 from codelens.plugin.domain.models import (
     HookEvent,
@@ -28,8 +29,7 @@ class RecordingReviewCreator:
         repository_path: Path,
         scope_type: str,
         scope_params: dict[str, str | None],
-        selected_agents: tuple[str, ...],
-        prompt_locale: str,
+        review_policy: TriggerReviewPolicy,
         external_context: dict[str, Any] | None = None,
     ) -> str:
         self.requests.append(
@@ -37,8 +37,7 @@ class RecordingReviewCreator:
                 "repository_path": repository_path,
                 "scope_type": scope_type,
                 "scope_params": scope_params,
-                "selected_agents": selected_agents,
-                "prompt_locale": prompt_locale,
+                "review_policy": review_policy,
                 "external_context": external_context,
             }
         )
@@ -102,8 +101,17 @@ async def test_builtin_local_plugin_dispatches_post_commit_with_composite_loader
                 "base_commit": f"{'a' * 40}~1",
                 "target_ref": "a" * 40,
             },
-            "selected_agents": ("correctness:v1",),
-            "prompt_locale": "zh-CN",
+            "review_policy": TriggerReviewPolicy.from_config(
+                {
+                    "reviewer_selection": {
+                        "mode": "fixed",
+                        "reviewer_versions": ["correctness:v1"],
+                    },
+                    "budget_profile": "standard",
+                    "supersede_policy": "latest_snapshot",
+                    "prompt_locale": "zh-CN",
+                }
+            ),
             "external_context": None,
         }
     ]

@@ -4,9 +4,16 @@ import logging
 from pathlib import Path
 from typing import Protocol
 
+from codelens.plugin.api.v2 import (
+    AdaptiveReviewerSelection as PluginAdaptiveReviewerSelection,
+)
+from codelens.plugin.api.v2 import (
+    TriggerReviewPolicy,
+)
 from codelens.plugin.domain.ports import ReviewCreatorPort, TriggerRepositoryValidatorPort
 from codelens.review.application.commands import CreateReviewCommand, CreateReviewHandler
 from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
     BudgetProfile,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
@@ -86,8 +93,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
         repository_path: Path,
         scope_type: str,
         scope_params: dict[str, str | None],
-        selected_agents: tuple[str, ...],
-        prompt_locale: str,
+        review_policy: TriggerReviewPolicy,
         external_context: dict | None = None,
     ) -> str:
         """Create a review from a trigger event.
@@ -125,10 +131,21 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             repository=repository_info,
             scope=scope,
             review_profile=ReviewProfileSnapshot(
-                FixedReviewerSelection(selected_agents), BudgetProfile.STANDARD
+                (
+                    AdaptiveReviewerSelection()
+                    if isinstance(
+                        review_policy.reviewer_selection,
+                        PluginAdaptiveReviewerSelection,
+                    )
+                    else FixedReviewerSelection(
+                        review_policy.reviewer_selection.reviewer_versions
+                    )
+                ),
+                BudgetProfile(review_policy.budget_profile.value),
             ),
             trigger_source="plugin",
-            prompt_locale=prompt_locale,
+            supersede_policy=review_policy.supersede_policy.value,
+            prompt_locale=review_policy.prompt_locale,
             external_context=external_context,
             skip_if_duplicate=True,
         )
@@ -137,7 +154,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             "Creating review from trigger: repo=%s, scope=%s, agents=%s",
             repository_path,
             scope_type,
-            selected_agents,
+            review_policy.reviewer_selection,
         )
 
         # Delegate to the review application layer

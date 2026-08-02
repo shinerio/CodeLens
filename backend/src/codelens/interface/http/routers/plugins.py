@@ -46,6 +46,7 @@ class PluginManifestResponse(BaseModel):
     min_codelens_version: str | None
     name_i18n: dict[str, str] = Field(default_factory=dict)
     description_i18n: dict[str, str] = Field(default_factory=dict)
+    plugin_api_version: str
 
 
 class PluginRecordResponse(BaseModel):
@@ -64,6 +65,11 @@ class PluginRecordResponse(BaseModel):
     report_config: dict[str, Any]
     git_url: str | None = None
     git_ref: str | None = None
+    plugin_api_version: str
+    compatibility_status: str
+    config_revision: int
+    config: dict[str, Any]
+    profile_source: dict[str, Any] | None
 
     @classmethod
     def from_domain(cls, record: PluginRecord) -> "PluginRecordResponse":
@@ -95,6 +101,7 @@ class PluginRecordResponse(BaseModel):
                 min_codelens_version=record.manifest.min_codelens_version,
                 name_i18n=record.manifest.name_i18n,
                 description_i18n=record.manifest.description_i18n,
+                plugin_api_version=record.manifest.plugin_api_version.value,
             ),
             is_builtin=record.is_builtin,
             install_path=record.install_path,
@@ -105,6 +112,20 @@ class PluginRecordResponse(BaseModel):
             report_config=record.report_config,
             git_url=record.git_url,
             git_ref=record.git_ref,
+            plugin_api_version=record.manifest.plugin_api_version.value,
+            compatibility_status="compatible",
+            config=record.trigger_config,
+            config_revision=record.config_revision,
+            profile_source=(
+                {
+                    "profile_id": record.profile_source.profile_id,
+                    "profile_name": record.profile_source.profile_name,
+                    "profile_revision": record.profile_source.profile_revision,
+                    "copied_at": record.profile_source.copied_at,
+                }
+                if record.profile_source is not None
+                else None
+            ),
         )
 
 
@@ -213,6 +234,19 @@ async def list_plugins(
 
     records = await components.plugin_manager.list_plugins()
     return [PluginRecordResponse.from_domain(record) for record in records]
+
+
+@router.get("/{plugin_id}", response_model=PluginRecordResponse)
+async def get_plugin(
+    plugin_id: str,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> PluginRecordResponse:
+    """Return one installed plugin through the stable compatibility projection."""
+
+    record = await components.plugin_manager.get_plugin(plugin_id)
+    if record is None:
+        raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
+    return PluginRecordResponse.from_domain(record)
 
 
 @router.post("/install", response_model=InstallPluginResponse, status_code=201)

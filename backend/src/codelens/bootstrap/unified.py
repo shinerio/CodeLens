@@ -352,6 +352,8 @@ def build_unified_backend(
         plugin_store,
         plugin_loader,
         export_history,
+        SqlReviewPlanStore(database),
+        SqlCheckpointStore(database),
     )
 
     async def _terminal_export_hook(task_id: str, _status: str) -> None:

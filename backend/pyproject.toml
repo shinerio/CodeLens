@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "codelens-review"
-version = "0.1.0"
+version = "0.2.0"
 description = "Local multi-agent code review workbench"
 license = "Apache-2.0"
 license-files = ["LICENSE", "NOTICE"]
@@ -16,6 +16,7 @@ dependencies = [
   "jsonschema>=4.26,<5",
   "markdown-it-py",
   "openai-agents",
+  "packaging>=26,<27",
   "pathspec",
   "pydantic>=2,<3",
   "pydantic-settings>=2,<3",

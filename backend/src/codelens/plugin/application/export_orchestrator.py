@@ -4,7 +4,7 @@ import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from codelens.findings.domain.models import Finding
 from codelens.plugin.domain.models import ExportHistoryEntry, ExportResult, PluginRecord
@@ -14,12 +14,20 @@ from codelens.plugin.domain.ports import (
     PluginStorePort,
     ReportSinkPort,
 )
+from codelens.plugin.domain.versioning import PluginApiVersion
 from codelens.plugin.report.local_file_export.sink import LocalFileExportSink
 from codelens.review.application.export_findings import (
     ExportFindingsHandler,
     FindingExportEnvelope,
+    FindingExportEnvelopeV1,
+    to_v1_export_envelope,
 )
-from codelens.review.domain.ports import ReviewExecutionRecord, ReviewRecord
+from codelens.review.domain.ports import ReviewExecutionRecord, ReviewPlanRecord, ReviewRecord
+
+
+class ReviewPlanStorePort(Protocol):
+    async def get(self, task_id: str) -> ReviewPlanRecord | None: ...
+
 
 _LOGGER = logging.getLogger("codelens.plugin.report.orchestrator")
 
@@ -75,6 +83,8 @@ class ExportOrchestrator:
         plugin_store: PluginStorePort,
         plugin_loader: PluginLoaderPort,
         export_history: ExportHistoryPort | None = None,
+        review_plan_store: ReviewPlanStorePort | None = None,
+        checkpoint_store: Any | None = None,
     ) -> None:
         """Initialize the export orchestrator.
 
@@ -90,7 +100,12 @@ class ExportOrchestrator:
         self._plugin_store = plugin_store
         self._plugin_loader = plugin_loader
         self._export_history = export_history
-        self._envelope_builder = ExportFindingsHandler(review_store, revision_reader)
+        self._envelope_builder = ExportFindingsHandler(
+            review_store,
+            revision_reader,
+            review_plan_store,
+            checkpoint_store,
+        )
         self._builtin_sink = LocalFileExportSink()
 
     async def export_findings(
@@ -281,8 +296,11 @@ class ExportOrchestrator:
             )
 
         try:
+            sink_envelope: FindingExportEnvelope | FindingExportEnvelopeV1 = envelope
+            if plugin_record.manifest.plugin_api_version is PluginApiVersion.V1:
+                sink_envelope = to_v1_export_envelope(envelope)
             raw_result = await sink.export(
-                envelope=envelope,
+                envelope=sink_envelope,
                 config=plugin_record.report_config,
                 repository_path=execution.repository_path,
             )

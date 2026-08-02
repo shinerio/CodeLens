@@ -69,8 +69,10 @@ class MarkdownFindingExportFormatter:
         lines.append(f"- **Head OID:** `{envelope.review.head_oid[:12]}`")
         lines.append(f"- **Status:** {envelope.review.status}")
         lines.append(f"- **Created:** {envelope.review.created_at.isoformat()}")
-        if envelope.review.selected_agent_versions:
-            lines.append(f"- **Agents:** {', '.join(envelope.review.selected_agent_versions)}")
+        selected_versions = envelope.review.plan_summary.selected_reviewer_versions
+        if selected_versions:
+            lines.append(f"- **Reviewers:** {', '.join(selected_versions)}")
+        lines.append(f"- **Strategy:** {envelope.review.plan_summary.strategy}")
         lines.append(f"- **Findings:** {len(envelope.findings)}\n")
 
         lines.append("---\n")
