@@ -1,0 +1,231 @@
+import hashlib
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+from types import SimpleNamespace
+from typing import Any
+from unittest.mock import AsyncMock
+
+from codelens.capabilities.application.resolve import CapabilityResolver
+from codelens.capabilities.domain.models import (
+    AgentExecutionLimits,
+    canonical_execution_payload,
+)
+from codelens.capabilities.domain.skills import SkillActivationFacts
+from codelens.review.domain.ports import (
+    AgentExecutionSpecRecord,
+    ReviewExecutionRecord,
+    RunOutputArtifact,
+)
+from codelens.review.domain.review_plan import ReviewPlanNodeType
+from codelens.review.domain.review_strategy import (
+    BudgetProfile,
+    FixedReviewerSelection,
+    ReviewProfileSnapshot,
+)
+from codelens.reviewer_catalog.infrastructure.builtin_agents import builtin_agent_catalog
+from codelens.worker.execution import WorkerReviewExecutor
+from codelens.workspace.domain.models import (
+    ChangeIndex,
+    RepositoryFingerprint,
+    ReviewSnapshot,
+    ReviewTarget,
+    SnapshotManifest,
+    TaskWorktree,
+)
+
+
+class _ReviewStore:
+    def __init__(self, record: ReviewExecutionRecord) -> None:
+        self._record = record
+
+    async def get_execution(self, _task_id: str) -> ReviewExecutionRecord:
+        return self._record
+
+
+class _PlanStore:
+    def __init__(self) -> None:
+        self.record: Any | None = None
+
+    async def get(self, _task_id: str) -> Any | None:
+        return self.record
+
+    async def save(self, plan: Any, **metadata: Any) -> Any:
+        self.record = SimpleNamespace(plan=plan, **metadata)
+        return self.record
+
+
+class _ExecutionSpecStore:
+    def __init__(self) -> None:
+        self.records: dict[str, AgentExecutionSpecRecord] = {}
+
+    async def list_for_task(self, _task_id: str) -> tuple[AgentExecutionSpecRecord, ...]:
+        return tuple(self.records.values())
+
+    async def save(self, **values: Any) -> AgentExecutionSpecRecord:
+        execution_spec = values["execution_spec"]
+        record = AgentExecutionSpecRecord(
+            task_id=values["task_id"],
+            logical_node_id=values["logical_node_id"],
+            spec_json=canonical_execution_payload(
+                execution_spec.agent,
+                execution_spec.capability_profile,
+                execution_spec.skill_policy,
+                execution_spec.prompt_content_hash,
+                execution_spec.skills,
+                execution_spec.execution_limits,
+            ).decode(),
+            fingerprint=execution_spec.fingerprint,
+            prompt_artifact_ref=values["prompt_artifact_ref"],
+            prompt_artifact_hash=values["prompt_artifact_hash"],
+            skill_artifacts=values["skill_artifacts"],
+            created_at=datetime(2026, 8, 3, tzinfo=UTC),
+        )
+        self.records[record.logical_node_id] = record
+        return record
+
+
+class _Artifacts:
+    def __init__(self) -> None:
+        self.payloads: dict[str, bytes] = {}
+
+    async def write_output(self, run_id: str, payload: bytes) -> RunOutputArtifact:
+        content_hash = hashlib.sha256(payload).hexdigest()
+        reference = f"artifact_{len(self.payloads):032x}"
+        self.payloads[reference] = payload
+        return RunOutputArtifact(reference, content_hash, len(payload))
+
+    async def read_output(self, reference: str, expected_hash: str) -> bytes:
+        payload = self.payloads[reference]
+        assert hashlib.sha256(payload).hexdigest() == expected_hash
+        return payload
+
+
+def _snapshot(tmp_path: Path) -> ReviewSnapshot:
+    worktree = TaskWorktree(
+        "worktree-fixed",
+        "review-fixed",
+        "d" * 64,
+        tmp_path,
+        "b" * 40,
+        "e" * 64,
+    )
+    return ReviewSnapshot(
+        "snapshot-fixed",
+        worktree,
+        ReviewTarget("a" * 40, "b" * 40, None),
+        RepositoryFingerprint("b" * 40, "f" * 64, "1" * 64),
+        SnapshotManifest((), (), ()),
+        ChangeIndex(()),
+    )
+
+
+async def test_prepare_compiles_fixed_team_plan_without_planner(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    profile = ReviewProfileSnapshot(
+        FixedReviewerSelection(("correctness:v2", "security:v1")),
+        BudgetProfile.STANDARD,
+    )
+    record = ReviewExecutionRecord(
+        task_id="review-fixed",
+        repository_path=tmp_path,
+        repository_realpath_hash="c" * 64,
+        git_common_dir_hash="d" * 64,
+        base_oid="a" * 40,
+        head_oid="b" * 40,
+        scope_type="branch",
+        base_ref="main",
+        target_ref="feature",
+        overlay_hash=None,
+        overlay_artifact_ref=None,
+        target_paths=("src/review.py",),
+        selected_agent_versions=("correctness:v2", "security:v1"),
+        prompt_locale="en",
+        status="provisioning_worktree",
+        cancellation_requested=False,
+        review_profile=profile,
+    )
+    snapshot = _snapshot(tmp_path)
+    plan_store = _PlanStore()
+    spec_store = _ExecutionSpecStore()
+    artifacts = _Artifacts()
+    executor = object.__new__(WorkerReviewExecutor)
+    executor._review_store = _ReviewStore(record)
+    executor._repository_inspector = SimpleNamespace(inspect=AsyncMock())
+    executor._worktree_registry = SimpleNamespace(get=AsyncMock(return_value=snapshot.worktree))
+    executor._worktree_lifecycle = SimpleNamespace(verify_ownership=AsyncMock())
+    executor._snapshot_service = SimpleNamespace(
+        resolve_instructions=AsyncMock(return_value=()),
+        freeze=AsyncMock(return_value=snapshot),
+    )
+    executor._provider_config = SimpleNamespace(
+        load=AsyncMock(return_value=SimpleNamespace(
+            max_agent_turns=20,
+            max_tool_calls=120,
+            max_tokens=16_000,
+            agent_timeout=600.0,
+        ))
+    )
+    executor._tool_limits_service = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(max_read_bytes=65_536))
+    )
+    executor._review_plan_store = plan_store
+    executor._execution_spec_store = spec_store
+    executor._output_artifacts = artifacts
+    executor._context_builder = SimpleNamespace(
+        build=lambda *_args: SimpleNamespace(
+            canonical_bytes=lambda: json.dumps(
+                {"repository_instructions": [], "review_files": []},
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
+    )
+
+    async def no_repository_check(_record: ReviewExecutionRecord) -> None:
+        return None
+
+    async def execution_specs(references: tuple[str, ...], *_args: Any) -> tuple[Any, ...]:
+        catalog = builtin_agent_catalog()
+        limits = AgentExecutionLimits.legacy_default()
+        return tuple(
+            CapabilityResolver.testing().resolve(
+                agent=catalog[reference],
+                prompt_content_hash=hashlib.sha256(
+                    catalog[reference].prompt_template.encode()
+                ).hexdigest(),
+                facts=SkillActivationFacts.empty(),
+                execution_limits=limits,
+            )
+            for reference in references
+        )
+
+    monkeypatch.setattr(executor, "_validate_repository", no_repository_check)
+    monkeypatch.setattr(executor, "_execution_specs", execution_specs)
+
+    prepared = await executor.prepare("review-fixed")
+
+    assert prepared.plan is not None
+    assert prepared.plan.reviewer_references == ("correctness:v2", "security:v1")
+    assert all(
+        node.node_type is not ReviewPlanNodeType.PLANNER for node in prepared.plan.nodes
+    )
+    assert {node.node_type for node in prepared.plan.nodes} == {
+        ReviewPlanNodeType.REVIEWER,
+        ReviewPlanNodeType.RESOLVER,
+        ReviewPlanNodeType.VERIFIER,
+    }
+    assert set(spec_store.records) == {node.node_id for node in prepared.plan.nodes}
+    assert all(
+        json.loads(payload)["role_context"]["_host_run_id"].startswith("run_")
+        for payload in prepared.input_payloads.values()
+    )
+    first_payloads = prepared.input_payloads
+    artifact_count = len(artifacts.payloads)
+
+    recovered = await executor.prepare("review-fixed")
+
+    assert recovered.plan == prepared.plan
+    assert recovered.input_payloads == first_payloads
+    assert len(artifacts.payloads) == artifact_count

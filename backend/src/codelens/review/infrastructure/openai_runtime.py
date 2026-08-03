@@ -294,17 +294,18 @@ class OpenAIAgentRuntime:
             base_url=provider_config.base_url,
             http_client=httpx.AsyncClient(trust_env=False),
         )
+        instruction_sections = [prompts.review_policy, repository_instructions]
+        if is_reviewer:
+            instruction_sections.append(prompts.review_workflow)
+        instruction_sections.extend(
+            (
+                f"# Agent Policy\n{agent.prompt_template}",
+                *self._skill_instruction_sections(execution_spec),
+            )
+        )
         investigation_agent: Agent[None] = Agent(
             name=f"{agent.agent_id}:v{agent.version}",
-            instructions="\n\n".join(
-                (
-                    prompts.review_policy,
-                    repository_instructions,
-                    prompts.review_workflow,
-                    f"# Reviewer Policy\n{agent.prompt_template}",
-                    *self._skill_instruction_sections(execution_spec),
-                )
-            ),
+            instructions="\n\n".join(instruction_sections),
             model=behavior.model_class(
                 model=provider_config.model,
                 openai_client=client,

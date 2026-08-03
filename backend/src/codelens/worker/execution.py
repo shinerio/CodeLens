@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from codelens.bootstrap.settings import Settings
@@ -24,11 +25,19 @@ from codelens.findings.application.verify_resolutions import VerificationPolicy
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.findings.infrastructure.resolver_output import ResolverOutputCodec
 from codelens.findings.infrastructure.verifier_output import VerifierOutputCodec
+from codelens.review.application.budget_policy import BudgetPolicyCatalog
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.orchestrator import (
     CheckpointView,
     PreparedReview,
     ReviewOrchestrator,
+)
+from codelens.review.application.planning import (
+    CapabilityReadiness,
+    ChangeRiskSummary,
+    PlannerSelection,
+    ReviewPlanCompiler,
+    ReviewPlanningService,
 )
 from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.application.validate_findings import FindingValidator
@@ -38,11 +47,13 @@ from codelens.review.domain.ports import (
     AgentReviewCompletionStatus,
     AgentRuntimeEventSink,
     AgentRuntimePort,
+    ArtifactIdentity,
     ReviewExecutionRecord,
     SnapshotFileReaderPort,
     UnvalidatedAgentOutput,
 )
 from codelens.review.domain.review_plan import ReviewPlan
+from codelens.review.domain.review_strategy import BudgetProfile, FixedReviewerSelection
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
     CheckpointRecord,
@@ -97,6 +108,21 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
 
 _TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled"}
+
+
+class _RejectAdaptivePlanning:
+    """Guard the Fixed-only Worker path against an accidental Planner invocation."""
+
+    async def select(
+        self,
+        *,
+        task_id: str,
+        target_paths: tuple[str, ...],
+        readiness: Mapping[str, CapabilityReadiness],
+        budget_profile: BudgetProfile,
+        risk_summary: ChangeRiskSummary | None,
+    ) -> PlannerSelection:
+        raise RuntimeError("Fixed Review Plan must not invoke the Planner")
 
 
 async def load_frozen_execution_specs(
@@ -476,6 +502,30 @@ class WorkerReviewExecutor:
             for spec in stored_specs.values()
             if spec.agent.reference in record.selected_agent_versions
         }
+        if (
+            plan_record is None
+            and self._review_plan_store is not None
+            and self._execution_spec_store is not None
+            and isinstance(record.review_profile.reviewer_selection, FixedReviewerSelection)
+        ):
+            plan, execution_specs_by_node = await self._persist_fixed_plan(
+                record,
+                snapshot,
+                provider_config,
+                tool_limits.max_read_bytes,
+                stored_specs,
+            )
+            base_input = self._context_builder.build(snapshot, instructions).canonical_bytes()
+            return PreparedReview(
+                snapshot=snapshot,
+                execution_specs=tuple(execution_specs_by_node.values()),
+                input_payloads=self._plan_payloads(
+                    task_id, plan, execution_specs_by_node, base_input
+                ),
+                prompt_locale=record.prompt_locale,
+                plan=plan,
+                execution_specs_by_node=execution_specs_by_node,
+            )
         if plan_record is not None:
             plan = plan_record.plan
             if set(stored_specs) != {node.node_id for node in plan.nodes}:
@@ -484,40 +534,12 @@ class WorkerReviewExecutor:
                 node.node_id: stored_specs[node.node_id] for node in plan.nodes
             }
             base_input = self._context_builder.build(snapshot, instructions).canonical_bytes()
-            guidance_by_reference = {
-                guidance.reviewer_reference: guidance
-                for guidance in plan.reviewer_guidance
-            }
-            plan_payloads: dict[str, bytes] = {}
-            for node in plan.nodes:
-                guidance = guidance_by_reference.get(node.agent_reference)
-                visible_payload = (
-                    add_reviewer_plan_guidance(
-                        base_input,
-                        reason_codes=guidance.reason_codes,
-                        focus_paths=guidance.focus_paths,
-                    )
-                    if guidance is not None
-                    else base_input
-                )
-                run = AgentRun.create(
-                    task_id=task_id,
-                    agent_version=node.agent_reference,
-                    pass_index=node.pass_index,
-                    shard_id=node.shard_id,
-                    logical_attempt_group=node.logical_attempt_group,
-                    node_role=node.node_type.value,
-                    capability_fingerprint=execution_specs_by_node[
-                        node.node_id
-                    ].fingerprint,
-                )
-                plan_payloads[node.node_id] = add_host_run_identity(
-                    visible_payload, run.run_id
-                )
             return PreparedReview(
                 snapshot=snapshot,
                 execution_specs=tuple(execution_specs_by_node.values()),
-                input_payloads=plan_payloads,
+                input_payloads=self._plan_payloads(
+                    task_id, plan, execution_specs_by_node, base_input
+                ),
                 prompt_locale=record.prompt_locale,
                 plan=plan,
                 execution_specs_by_node=execution_specs_by_node,
@@ -553,6 +575,169 @@ class WorkerReviewExecutor:
             input_payloads=payloads,
             prompt_locale=record.prompt_locale,
         )
+
+    async def _persist_fixed_plan(
+        self,
+        record: ReviewExecutionRecord,
+        snapshot: ReviewSnapshot,
+        provider_config: ModelProviderConfig,
+        max_tool_result_bytes: int,
+        stored_specs: dict[str, FrozenAgentExecutionSpec],
+    ) -> tuple[ReviewPlan, dict[str, FrozenAgentExecutionSpec]]:
+        """Compile a host-owned Fixed DAG and freeze every node before fan-out."""
+
+        selection = record.review_profile.reviewer_selection
+        if not isinstance(selection, FixedReviewerSelection):
+            raise ValueError("Fixed Review Plan preparation requires a fixed selection")
+        execution_spec_store = self._execution_spec_store
+        review_plan_store = self._review_plan_store
+        if execution_spec_store is None or review_plan_store is None:
+            raise ValueError("Fixed Review Plan persistence is unavailable")
+        required_references = list(selection.reviewer_versions)
+        if len(selection.reviewer_versions) > 1:
+            required_references.extend(("review-resolver:v1", "review-verifier:v1"))
+        specs_by_reference = {
+            spec.agent.reference: spec for spec in stored_specs.values()
+        }
+        missing_references = tuple(
+            reference
+            for reference in required_references
+            if reference not in specs_by_reference
+        )
+        if missing_references:
+            generated = await self._execution_specs(
+                missing_references,
+                record.prompt_locale,
+                snapshot,
+                AgentExecutionLimits(
+                    max_turns=provider_config.max_agent_turns,
+                    max_tool_calls=provider_config.max_tool_calls,
+                    max_input_tokens=provider_config.max_tokens,
+                    max_output_tokens=provider_config.max_tokens,
+                    timeout_seconds=provider_config.agent_timeout,
+                    max_tool_result_bytes=max_tool_result_bytes,
+                ),
+            )
+            specs_by_reference.update(
+                (spec.agent.reference, spec) for spec in generated
+            )
+        catalog = builtin_agent_catalog()
+        budget_policy = BudgetPolicyCatalog.version_one()
+        plan = ReviewPlanCompiler(catalog, budget_policy).compile(
+            task_id=record.task_id,
+            selection_mode="fixed",
+            reviewer_references=selection.reviewer_versions,
+            budget_profile=record.review_profile.budget_profile,
+            planner_selection=None,
+            execution_specs=specs_by_reference,
+            readiness={
+                reference: CapabilityReadiness("ready", ())
+                for reference in selection.reviewer_versions
+            },
+        )
+        specs_by_node = {
+            node.node_id: specs_by_reference[node.agent_reference] for node in plan.nodes
+        }
+        for node_id, execution_spec in specs_by_node.items():
+            if node_id in stored_specs:
+                if stored_specs[node_id] != execution_spec:
+                    raise ValueError("frozen Plan execution spec conflicts with stored data")
+                continue
+            prompt_artifact = await self._output_artifacts.write_output(
+                f"spec-prompt:{record.task_id}:{node_id}",
+                execution_spec.agent.prompt_template.encode("utf-8"),
+            )
+            skill_artifacts: list[ArtifactIdentity] = []
+            for ordinal, skill in enumerate(execution_spec.skills):
+                artifact = await self._output_artifacts.write_output(
+                    f"spec-skill:{record.task_id}:{node_id}:{ordinal}",
+                    skill.instruction_text.encode("utf-8"),
+                )
+                skill_artifacts.append(
+                    ArtifactIdentity(artifact.reference, artifact.content_hash)
+                )
+            await execution_spec_store.save(
+                task_id=record.task_id,
+                logical_node_id=node_id,
+                execution_spec=execution_spec,
+                prompt_artifact_ref=prompt_artifact.reference,
+                prompt_artifact_hash=prompt_artifact.content_hash,
+                skill_artifacts=tuple(skill_artifacts),
+            )
+        catalog_payload = json.dumps(
+            {
+                reference: catalog[reference].content_hash
+                for reference in sorted(required_references)
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        capability_payload = json.dumps(
+            {
+                node_id: execution_spec.fingerprint
+                for node_id, execution_spec in sorted(specs_by_node.items())
+            },
+            sort_keys=True,
+            separators=(",", ":"),
+        )
+        persisted_plan = await ReviewPlanningService(
+            compiler=ReviewPlanCompiler(catalog, budget_policy),
+            planner=_RejectAdaptivePlanning(),
+            plan_store=review_plan_store,
+            budget_policy=budget_policy,
+        ).plan(
+            task_id=record.task_id,
+            profile=record.review_profile,
+            execution_specs=specs_by_reference,
+            readiness={
+                reference: CapabilityReadiness("ready", ())
+                for reference in selection.reviewer_versions
+            },
+            target_paths=record.target_paths,
+            catalog_version=f"builtin:{hashlib.sha256(catalog_payload.encode()).hexdigest()}",
+            capability_fingerprint=hashlib.sha256(
+                capability_payload.encode()
+            ).hexdigest(),
+        )
+        if persisted_plan != plan:
+            raise ValueError("persisted Fixed Review Plan changed during preparation")
+        return persisted_plan, specs_by_node
+
+    @staticmethod
+    def _plan_payloads(
+        task_id: str,
+        plan: ReviewPlan,
+        execution_specs_by_node: dict[str, FrozenAgentExecutionSpec],
+        base_input: bytes,
+    ) -> dict[str, bytes]:
+        """Attach host-only stable identities to every immutable Plan node input."""
+
+        guidance_by_reference = {
+            guidance.reviewer_reference: guidance for guidance in plan.reviewer_guidance
+        }
+        payloads: dict[str, bytes] = {}
+        for node in plan.nodes:
+            guidance = guidance_by_reference.get(node.agent_reference)
+            visible_payload = (
+                add_reviewer_plan_guidance(
+                    base_input,
+                    reason_codes=guidance.reason_codes,
+                    focus_paths=guidance.focus_paths,
+                )
+                if guidance is not None
+                else base_input
+            )
+            run = AgentRun.create(
+                task_id=task_id,
+                agent_version=node.agent_reference,
+                pass_index=node.pass_index,
+                shard_id=node.shard_id,
+                logical_attempt_group=node.logical_attempt_group,
+                node_role=node.node_type.value,
+                capability_fingerprint=execution_specs_by_node[node.node_id].fingerprint,
+            )
+            payloads[node.node_id] = add_host_run_identity(visible_payload, run.run_id)
+        return payloads
 
     async def record_failure(self, task_id: str, error: Exception) -> None:
         """Record a stable, readable failure without provider response content."""

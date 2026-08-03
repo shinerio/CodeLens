@@ -82,10 +82,12 @@ async def _review_response(
     resolution_summary = {"publish": 0, "suppress": 0, "verify": 0}
     for decision in decisions:
         resolution_summary[decision.outcome.value] += 1
+    review_plan = json.loads(plan.canonical_json())
+    review_plan["plan_hash"] = plan.plan_hash
     return ReviewResponse.from_domain(
         review,
         selected_agents=list(plan.reviewer_references),
-        review_plan=json.loads(plan.canonical_json()),
+        review_plan=review_plan,
         coverage=coverage,
         resolution_summary=resolution_summary,
     )

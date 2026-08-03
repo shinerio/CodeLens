@@ -17,6 +17,12 @@ from codelens.findings.domain.models import (
     SourceLocation,
 )
 from codelens.interface.http.app import create_app
+from codelens.review.domain.review_plan import (
+    ReviewPass,
+    ReviewPlan,
+    ReviewPlanNode,
+    ReviewPlanNodeType,
+)
 from codelens.review.infrastructure.repositories import SqlCheckpointStore
 from tests.fixtures.git_repository import _run_git
 
@@ -102,6 +108,59 @@ def test_v2_adaptive_selection_is_persisted_without_legacy_upgrade(
     assert response.json()["budget_profile"] == "deep"
     assert response.json()["selected_agents"] == []
     assert response.json()["review_plan"] is None
+
+
+def test_review_plan_projection_includes_derived_plan_hash(
+    tmp_path: Path, git_repository: Path
+) -> None:
+    _prepared_repository(git_repository)
+    app = create_app(_settings(tmp_path, tmp_path))
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        task_id = created.json()["task_id"]
+        reviewer = ReviewPlanNode.create(
+            task_id=task_id,
+            node_type=ReviewPlanNodeType.REVIEWER,
+            agent_reference="correctness:v1",
+            pass_index=ReviewPass.REVIEWER,
+            shard_id="root",
+            logical_attempt_group="primary",
+            depends_on=(),
+        )
+        plan = ReviewPlan.create(
+            task_id=task_id,
+            selection_mode="fixed",
+            budget_profile="standard",
+            reviewer_references=("correctness:v1",),
+            nodes=(reviewer,),
+            planner_reason=None,
+        )
+        client.portal.call(
+            partial(
+                app.state.components.review_plan_store.save,
+                plan,
+                catalog_version="test-catalog",
+                budget_json="{}",
+                capability_fingerprint="a" * 64,
+            )
+        )
+
+        response = client.get(f"/api/reviews/{task_id}")
+
+    assert response.status_code == 200
+    assert response.json()["review_plan"]["plan_hash"] == plan.plan_hash
 
 
 def _run_git_safe(*arguments: str) -> subprocess.CompletedProcess[bytes]:
