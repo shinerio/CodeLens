@@ -301,6 +301,70 @@ it("keeps polling an empty transcript after completion until the worker persists
   );
 });
 
+it("shows timeline filters when the persisted review plan arrives", async () => {
+  let reviewRequests = 0;
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/plugins") || url.endsWith("/exports")) return jsonResponse([]);
+    if (url.endsWith("/findings")) return jsonResponse([]);
+    if (url.endsWith("/transcript")) {
+      return jsonResponse([{
+        sequence: 1,
+        kind: "model_output_delta",
+        content: "Security timeline event",
+        created_at: "2026-08-03T00:00:00Z",
+        redacted: false,
+        truncated: false,
+        metadata: { agent: "security:v1", message_id: "security-output" },
+      }]);
+    }
+    if (url.endsWith("/api/reviews/review_plan_refresh")) {
+      reviewRequests += 1;
+      return jsonResponse({
+        task_id: "review_plan_refresh",
+        status: "reviewing",
+        scope_type: "branch",
+        base_oid: "a".repeat(40),
+        head_oid: "b".repeat(40),
+        selected_agents: reviewRequests > 1 ? ["security:v1", "performance:v1"] : [],
+        worktree_status: "pending",
+        repository_id: "repository-1",
+        repository_realpath_hash: "c".repeat(64),
+        git_common_dir_hash: "d".repeat(64),
+        cancellation_requested: false,
+        review_plan: reviewRequests > 1 ? {
+          selection_mode: "fixed",
+          reviewer_references: ["security:v1", "performance:v1"],
+          plan_hash: "1".repeat(64),
+          budget_profile: "deep",
+          planner_reason: null,
+          nodes: [
+            { node_id: "security", node_type: "reviewer", agent_reference: "security:v1", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "security", task_id: "review_plan_refresh" },
+            { node_id: "performance", node_type: "reviewer", agent_reference: "performance:v1", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "performance", task_id: "review_plan_refresh" },
+          ],
+        } : null,
+      });
+    }
+    return jsonResponse({ code: "not_found", message: "not found" }, 404);
+  });
+
+  render(<ReviewRunPage />, {
+    wrapper: ({ children }) => (
+      <TestProviders initialEntries={["/runs/review_plan_refresh"]}>
+        <Routes><Route path="/runs/:taskId" element={children} /></Routes>
+      </TestProviders>
+    ),
+  });
+
+  await userEvent.click(await screen.findByRole("tab", { name: /Logs/ }));
+  expect(screen.queryByRole("button", { name: /Reviewers/ })).not.toBeInTheDocument();
+
+  FakeEventSource.latest?.emit("review.plan_created", { reviewer_count: 2 }, "2");
+
+  expect(await screen.findByRole("button", { name: /Reviewers/ })).toBeInTheDocument();
+  expect(reviewRequests).toBe(2);
+});
+
 it("shows the actionable failure reason in the page banner", async () => {
   fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
     const url = String(input);

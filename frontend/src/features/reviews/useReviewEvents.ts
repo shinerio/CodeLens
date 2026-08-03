@@ -36,6 +36,8 @@ const STATUS_BY_EVENT: Record<string, ReviewStatus> = {
   "review.canceled": "canceled",
 };
 
+const NON_STATUS_EVENT_TYPES = ["review.plan_created"] as const;
+
 const TERMINAL_STATUSES = new Set<ReviewStatus>([
   "completed",
   "partial",
@@ -61,7 +63,7 @@ export function useReviewEvents(taskId: string | undefined) {
     const source = new EventSource(`/api/reviews/${taskId}/events`);
     setConnectionState("connecting");
     setConnectionState("open");
-    const eventTypes = Object.keys(STATUS_BY_EVENT);
+    const eventTypes = [...Object.keys(STATUS_BY_EVENT), ...NON_STATUS_EVENT_TYPES];
     const listeners = eventTypes.map((type) => {
       const listener = (event: MessageEvent<string>) => {
         const payload = JSON.parse(event.data) as Record<string, unknown>;

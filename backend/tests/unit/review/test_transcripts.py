@@ -132,3 +132,86 @@ async def test_worker_transcript_assigns_contiguous_sequences_across_batches(
     entries = await worker_store.list(task_id)
 
     assert [entry.sequence for entry in entries] == [1, 2, 3, 4, 5]
+
+
+async def test_worker_transcript_persists_one_logical_event_for_interleaved_deltas(
+    tmp_path: Path,
+) -> None:
+    """Concurrent Reviewers must not turn token chunks into durable transcript rows."""
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    task_id = "review_" + "i" * 32
+
+    await worker_store.append_many(
+        task_id,
+        (
+            (
+                "model_output_delta",
+                "Security ",
+                {"agent": "security:v1", "message_id": "provider-message"},
+            ),
+            (
+                "model_output_delta",
+                "Correctness ",
+                {"agent": "correctness:v2", "message_id": "provider-message"},
+            ),
+        ),
+    )
+    await worker_store.append_many(
+        task_id,
+        (
+            (
+                "model_output_delta",
+                "complete",
+                {"agent": "security:v1", "message_id": "provider-message"},
+            ),
+            (
+                "model_output_delta",
+                "complete",
+                {"agent": "correctness:v2", "message_id": "provider-message"},
+            ),
+        ),
+    )
+
+    active_entries = await worker_store.list(task_id)
+    assert [entry.sequence for entry in active_entries] == [1, 2]
+    assert [entry.content for entry in active_entries] == [
+        "Security complete",
+        "Correctness complete",
+    ]
+
+    await worker_store.finalize(task_id)
+
+    durable_entries = await durable.list(task_id)
+    assert [entry.sequence for entry in durable_entries] == [1, 2]
+    assert [entry.content for entry in durable_entries] == [
+        "Security complete",
+        "Correctness complete",
+    ]
+
+
+async def test_worker_transcript_starts_a_new_model_event_after_an_agent_boundary(
+    tmp_path: Path,
+) -> None:
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    task_id = "review_" + "j" * 32
+    metadata = {"agent": "security:v1", "message_id": "reused-provider-message"}
+
+    await worker_store.append(task_id, "model_output_delta", "first response", metadata=metadata)
+    await worker_store.append(
+        task_id,
+        "tool_call",
+        "get_diff",
+        metadata={"agent": "security:v1", "tool_name": "get_diff"},
+    )
+    await worker_store.append(task_id, "model_output_delta", "second response", metadata=metadata)
+
+    entries = await worker_store.list(task_id)
+    assert [entry.sequence for entry in entries] == [1, 2, 3]
+    assert [entry.content for entry in entries] == [
+        "first response",
+        "get_diff",
+        "second response",
+    ]

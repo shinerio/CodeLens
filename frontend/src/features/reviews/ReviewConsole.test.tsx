@@ -264,3 +264,142 @@ it("renders streamed Markdown when agent completion finalizes the message", () =
 
   expect(screen.getByRole("heading", { name: "Completed review", level: 1 })).toBeInTheDocument();
 });
+
+it("selects a stage and then one reviewer timeline", () => {
+  render(
+    <ReviewConsole
+      plan={{
+        selection_mode: "fixed",
+        reviewer_references: ["security:v1", "performance:v1"],
+        plan_hash: "plan-hash",
+        budget_profile: "deep",
+        planner_reason: null,
+        nodes: [
+          {
+            node_id: "reviewer-security",
+            node_type: "reviewer",
+            agent_reference: "security:v1",
+            depends_on: [],
+            pass_index: 1,
+            shard_id: "default",
+            logical_attempt_group: "primary",
+            task_id: "review-1",
+          },
+          {
+            node_id: "reviewer-performance",
+            node_type: "reviewer",
+            agent_reference: "performance:v1",
+            depends_on: [],
+            pass_index: 1,
+            shard_id: "default",
+            logical_attempt_group: "primary",
+            task_id: "review-1",
+          },
+          {
+            node_id: "resolver",
+            node_type: "resolver",
+            agent_reference: "review-resolver:v1",
+            depends_on: ["reviewer-security", "reviewer-performance"],
+            pass_index: 2,
+            shard_id: "default",
+            logical_attempt_group: "primary",
+            task_id: "review-1",
+          },
+        ],
+      }}
+      entries={[
+        {
+          sequence: 1,
+          kind: "model_output_delta",
+          content: "Security timeline event",
+          created_at: "2026-07-22T00:00:00Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "security:v1", message_id: "security-output" },
+        },
+        {
+          sequence: 2,
+          kind: "model_output_delta",
+          content: "Performance timeline event",
+          created_at: "2026-07-22T00:00:01Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "performance:v1", message_id: "performance-output" },
+        },
+        {
+          sequence: 3,
+          kind: "model_output_delta",
+          content: "Resolver timeline event",
+          created_at: "2026-07-22T00:00:02Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "review-resolver:v1", message_id: "resolver-output" },
+        },
+      ]}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: /Reviewers/ }));
+  expect(screen.getByText("Security timeline event")).toBeInTheDocument();
+  expect(screen.getByText("Performance timeline event")).toBeInTheDocument();
+  expect(screen.queryByText("Resolver timeline event")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /Security Reviewer/ }));
+  expect(screen.getByText("Security timeline event")).toBeInTheDocument();
+  expect(screen.queryByText("Performance timeline event")).not.toBeInTheDocument();
+});
+
+it("selects reviewers for a fixed team whose legacy execution has no persisted plan", () => {
+  render(
+    <ReviewConsole
+      entries={[
+        {
+          sequence: 1,
+          kind: "model_output_delta",
+          content: "Correctness legacy timeline",
+          created_at: "2026-08-03T00:00:00Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "correctness:v2", message_id: "correctness-output" },
+        },
+        {
+          sequence: 2,
+          kind: "model_output_delta",
+          content: "Security legacy timeline",
+          created_at: "2026-08-03T00:00:01Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "security:v1", message_id: "security-output" },
+        },
+      ]}
+      plan={null}
+      reviewerReferences={["correctness:v2", "security:v1"]}
+    />,
+  );
+
+  fireEvent.click(screen.getByRole("button", { name: /Reviewers/ }));
+  fireEvent.click(screen.getByRole("button", { name: /Security Reviewer/ }));
+
+  expect(screen.getByText("Security legacy timeline")).toBeInTheDocument();
+  expect(screen.queryByText("Correctness legacy timeline")).not.toBeInTheDocument();
+});
+
+it("coalesces interleaved streaming deltas independently for each reviewer", () => {
+  render(
+    <ReviewConsole
+      entries={[
+        { sequence: 1, kind: "model_output_delta", content: "Security ", created_at: "2026-08-03T00:00:00Z", redacted: false, truncated: false, metadata: { agent: "security:v1", message_id: "provider-message" } },
+        { sequence: 2, kind: "model_output_delta", content: "Correctness ", created_at: "2026-08-03T00:00:01Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2", message_id: "provider-message" } },
+        { sequence: 3, kind: "model_output_delta", content: "complete", created_at: "2026-08-03T00:00:02Z", redacted: false, truncated: false, metadata: { agent: "security:v1", message_id: "provider-message" } },
+        { sequence: 4, kind: "model_output_delta", content: "complete", created_at: "2026-08-03T00:00:03Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2", message_id: "provider-message" } },
+      ]}
+      plan={null}
+      reviewerReferences={["correctness:v2", "security:v1"]}
+    />,
+  );
+
+  expect(screen.getByText("Security complete")).toBeInTheDocument();
+  expect(screen.getByText("Correctness complete")).toBeInTheDocument();
+  expect(screen.getAllByText("AI output")).toHaveLength(2);
+  expect(screen.getByText("2 of 2 events")).toBeInTheDocument();
+});

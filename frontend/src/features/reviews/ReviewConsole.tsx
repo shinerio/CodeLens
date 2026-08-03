@@ -2,11 +2,15 @@ import { Brain, ChevronDown, ChevronRight, Search, Wrench } from "lucide-react";
 import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
-import { useI18n } from "../../shared/i18n/i18n";
+import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import type { TranscriptEntry } from "./api";
 import { failureDetails } from "./failure-details";
+import type { ReviewPlanNodeRole, ReviewPlanProjection } from "./types";
 
 type ConsoleMessage = TranscriptEntry & { content: string; messageKey: string; sequence: number };
+type StreamingTranscriptEntry = TranscriptEntry & {
+  kind: "model_reasoning_delta" | "model_output_delta";
+};
 type ConsoleVisibility = {
   prompt: boolean;
   reasoning: boolean;
@@ -23,13 +27,66 @@ const DEFAULT_VISIBILITY: ConsoleVisibility = {
   rawResponses: false,
 };
 
-/** Render the durable execution transcript as a lossless, collapsible conversation. */
-export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
-  const { locale } = useI18n();
+type StageSelection = "all" | ReviewPlanNodeRole;
+
+const STAGE_OPTIONS: ReadonlyArray<{
+  id: ReviewPlanNodeRole;
+  labelKey: TranslationKey;
+}> = [
+  { id: "planner", labelKey: "logs.stagePlanner" },
+  { id: "reviewer", labelKey: "logs.stageReviewers" },
+  { id: "resolver", labelKey: "logs.stageResolver" },
+  { id: "verifier", labelKey: "logs.stageVerifier" },
+];
+
+/** Render the durable transcript as a lossless timeline scoped by Plan stage and Reviewer. */
+export function ReviewConsole({
+  entries,
+  plan,
+  reviewerReferences: fallbackReviewerReferences = [],
+}: {
+  entries: TranscriptEntry[];
+  plan?: ReviewPlanProjection | null;
+  reviewerReferences?: readonly string[];
+}) {
+  const { locale, t } = useI18n();
   const [query, setQuery] = useState("");
   const [collapsed, setCollapsed] = useState<Set<string>>(new Set());
   const [visibility, setVisibility] = useState<ConsoleVisibility>(DEFAULT_VISIBILITY);
-  const messages = useMemo(() => coalesceDeltas(entries), [entries]);
+  const [selectedStage, setSelectedStage] = useState<StageSelection>("all");
+  const [selectedReviewer, setSelectedReviewer] = useState("all");
+  const nodes = plan?.nodes ?? [];
+  const reviewerReferences = Array.from(new Set([
+    ...nodes
+      .filter((node) => node.node_type === "reviewer")
+      .map((node) => node.agent_reference),
+    ...(plan === null || plan === undefined ? fallbackReviewerReferences : []),
+  ]));
+  const nodeRoleByAgent = useMemo(
+    () => new Map<string, ReviewPlanNodeRole>([
+      ...nodes.map((node): [string, ReviewPlanNodeRole] => [node.agent_reference, node.node_type]),
+      ...(
+        plan === null || plan === undefined
+          ? fallbackReviewerReferences.map((reference): [string, ReviewPlanNodeRole] => [reference, "reviewer"])
+          : []
+      ),
+    ]),
+    [fallbackReviewerReferences, nodes, plan],
+  );
+  const availableStages = STAGE_OPTIONS.filter((stage) =>
+    nodes.some((node) => node.node_type === stage.id)
+      || (stage.id === "reviewer" && reviewerReferences.length > 0),
+  );
+  const allMessages = useMemo(() => coalesceDeltas(entries), [entries]);
+  const messages = useMemo(
+    () => allMessages.filter((entry) => {
+      if (selectedStage === "all") return true;
+      const agent = entry.metadata.agent;
+      if (agent === undefined || nodeRoleByAgent.get(agent) !== selectedStage) return false;
+      return selectedStage !== "reviewer" || selectedReviewer === "all" || agent === selectedReviewer;
+    }),
+    [allMessages, nodeRoleByAgent, selectedReviewer, selectedStage],
+  );
   const completedMessages = useMemo(() => completedMessageKeys(entries), [entries]);
   const filtered = messages.filter((entry) =>
     (isToolEntry(entry) || isVisible(entry, visibility)) &&
@@ -37,7 +94,7 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
     !(entry.kind === "model_output_delta" && !entry.content.trim()),
   );
   const visibleCount = filtered.filter((entry) => !isToolEntry(entry) || visibility.tools).length;
-  const parseFailed = entries.some((e) => e.kind === "model_raw_output" && e.metadata?.parse_failed === "true");
+  const parseFailed = messages.some((e) => e.kind === "model_raw_output" && e.metadata?.parse_failed === "true");
 
   function toggle(messageKey: string) {
     setCollapsed((current) => {
@@ -48,6 +105,59 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
   }
 
   return <section className="review-console" aria-label="Review execution console">
+    {nodes.length > 0 || reviewerReferences.length > 1 ? (
+      <div className="review-console__scope">
+        <div className="review-console__stage-heading">
+          <div>
+            <span>{t("logs.timeline")}</span>
+            <strong>{t("logs.chooseStage")}</strong>
+          </div>
+          <small>{t("logs.visibleEvents", { count: String(messages.length), total: String(allMessages.length) })}</small>
+        </div>
+        <nav className="review-console__stage-nav" aria-label={t("logs.stageNavigator")}>
+          <ScopeButton
+            count={allMessages.length}
+            isActive={selectedStage === "all"}
+            label={t("logs.allStages")}
+            onClick={() => {
+              setSelectedStage("all");
+              setSelectedReviewer("all");
+            }}
+          />
+          {availableStages.map((stage) => (
+            <ScopeButton
+              count={allMessages.filter((entry) => nodeRoleByAgent.get(entry.metadata.agent ?? "") === stage.id).length}
+              isActive={selectedStage === stage.id}
+              key={stage.id}
+              label={t(stage.labelKey)}
+              onClick={() => {
+                setSelectedStage(stage.id);
+                setSelectedReviewer("all");
+              }}
+            />
+          ))}
+        </nav>
+        {selectedStage === "reviewer" && reviewerReferences.length > 1 ? (
+          <nav className="review-console__reviewer-nav" aria-label={t("logs.reviewerNavigator")}>
+            <ScopeButton
+              count={allMessages.filter((entry) => nodeRoleByAgent.get(entry.metadata.agent ?? "") === "reviewer").length}
+              isActive={selectedReviewer === "all"}
+              label={t("logs.allReviewers")}
+              onClick={() => setSelectedReviewer("all")}
+            />
+            {reviewerReferences.map((reference) => (
+              <ScopeButton
+                count={allMessages.filter((entry) => entry.metadata.agent === reference).length}
+                isActive={selectedReviewer === reference}
+                key={reference}
+                label={reviewerDisplayName(reference, t)}
+                onClick={() => setSelectedReviewer(reference)}
+              />
+            ))}
+          </nav>
+        ) : null}
+      </div>
+    ) : null}
     <div className="review-console__toolbar">
       <label className="review-console__search"><Search aria-hidden="true" /><span className="sr-only">Search console</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search complete execution output" /></label>
       <fieldset className="review-console__filters">
@@ -85,14 +195,74 @@ export function ReviewConsole({ entries }: { entries: TranscriptEntry[] }) {
   </section>;
 }
 
+function ScopeButton({
+  count,
+  isActive,
+  label,
+  onClick,
+}: {
+  count: number;
+  isActive: boolean;
+  label: string;
+  onClick: () => void;
+}) {
+  return (
+    <button
+      aria-pressed={isActive}
+      className={isActive ? "review-console__scope-button review-console__scope-button--active" : "review-console__scope-button"}
+      onClick={onClick}
+      type="button"
+    >
+      <span>{label}</span>
+      <small>{count}</small>
+    </button>
+  );
+}
+
+function reviewerDisplayName(
+  reference: string,
+  t: (key: TranslationKey, values?: Record<string, string>) => string,
+) {
+  const [agentId] = reference.split(":");
+  if (agentId.length === 0) return reference;
+  const name = `${agentId[0].toUpperCase()}${agentId.slice(1)}`;
+  return t("run.reviewer", { name });
+}
+
 function coalesceDeltas(entries: TranscriptEntry[]): ConsoleMessage[] {
   const result: ConsoleMessage[] = [];
+  const activeDeltaByAgent = new Map<
+    string,
+    Partial<Record<"model_reasoning_delta" | "model_output_delta", {
+      messageId: string | undefined;
+      resultIndex: number;
+    }>>
+  >();
   for (const [index, entry] of entries.entries()) {
-    const previous = result.at(-1);
-    if (isDelta(entry) && previous !== undefined && previous.kind === entry.kind && previous.metadata.message_id === entry.metadata.message_id) {
-      previous.content += entry.content;
+    const agentKey = entry.metadata.agent ?? "<global>";
+    if (isDelta(entry)) {
+      const activeByKind = activeDeltaByAgent.get(agentKey) ?? {};
+      const activeDelta = activeByKind[entry.kind];
+      if (
+        activeDelta !== undefined
+        && activeDelta.messageId === entry.metadata.message_id
+      ) {
+        const activeMessage = result[activeDelta.resultIndex];
+        if (activeMessage !== undefined) activeMessage.content += entry.content;
+        continue;
+      }
+      result.push({
+        ...entry,
+        messageKey: `${entry.sequence}:${entry.created_at}:${entry.kind}:${index}`,
+      });
+      activeByKind[entry.kind] = {
+        messageId: entry.metadata.message_id,
+        resultIndex: result.length - 1,
+      };
+      activeDeltaByAgent.set(agentKey, activeByKind);
       continue;
     }
+    activeDeltaByAgent.delete(agentKey);
     result.push({
       ...entry,
       messageKey: `${entry.sequence}:${entry.created_at}:${entry.kind}:${index}`,
@@ -128,7 +298,7 @@ function isToolEntry(entry: TranscriptEntry) {
   return entry.kind === "tool_call" || entry.kind === "tool_result";
 }
 
-function isDelta(entry: TranscriptEntry) {
+function isDelta(entry: TranscriptEntry): entry is StreamingTranscriptEntry {
   return entry.kind === "model_reasoning_delta" || entry.kind === "model_output_delta";
 }
 

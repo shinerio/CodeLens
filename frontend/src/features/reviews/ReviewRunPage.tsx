@@ -106,6 +106,7 @@ export function ReviewRunPage() {
   const [activeTab, setActiveTab] = useState<TabName>("findings");
   const [selectedFindingId, setSelectedFindingId] = useState<string | null>(null);
   const terminalRef = useRef<string | null>(null);
+  const planRefreshRef = useRef<string | null>(null);
   const { status: eventStatus, events, connectionState } = useReviewEvents(taskId);
   const [exportMenuOpen, setExportMenuOpen] = useState(false);
   const [exportResult, setExportResult] = useState<ExportResultResponse | null>(null);
@@ -248,6 +249,15 @@ export function ReviewRunPage() {
     }
     return selectedAgents.map((reference) => reviewerLabel(reference, t)).join(" · ");
   }, [reviewQuery.data?.selected_agents, t]);
+  const planCreatedEventId = events.findLast((event) => event.type === "review.plan_created")?.id;
+
+  useEffect(() => {
+    if (planCreatedEventId === undefined) return;
+    const refreshKey = `${taskId}:${planCreatedEventId}`;
+    if (planRefreshRef.current === refreshKey) return;
+    planRefreshRef.current = refreshKey;
+    void reviewQuery.refetch();
+  }, [planCreatedEventId, reviewQuery, taskId]);
 
   useEffect(() => {
     if (!TERMINAL_STATUSES.has(currentStatus)) {
@@ -257,8 +267,13 @@ export function ReviewRunPage() {
       return;
     }
     terminalRef.current = currentStatus;
-    void Promise.all([findingsQuery.refetch(), transcriptQuery.refetch(), exportHistoryQuery.refetch()]);
-  }, [currentStatus, findingsQuery, transcriptQuery, exportHistoryQuery]);
+    void Promise.all([
+      reviewQuery.refetch(),
+      findingsQuery.refetch(),
+      transcriptQuery.refetch(),
+      exportHistoryQuery.refetch(),
+    ]);
+  }, [currentStatus, reviewQuery, findingsQuery, transcriptQuery, exportHistoryQuery]);
 
   useEffect(() => {
     if (findingsQuery.data.length > 0 && selectedFindingId === null) {
@@ -572,7 +587,13 @@ export function ReviewRunPage() {
               </div>
               <span className="run-panel__status">{connectionState}</span>
             </div>
-            {transcriptQuery.data.length > 0 ? <ReviewConsole entries={transcriptQuery.data} /> : <p className="event-log__empty">{t("run.waitingEvents")}</p>}
+            {transcriptQuery.data.length > 0 ? (
+              <ReviewConsole
+                entries={transcriptQuery.data}
+                plan={reviewQuery.data?.review_plan ?? null}
+                reviewerReferences={reviewQuery.data?.selected_agents ?? []}
+              />
+            ) : <p className="event-log__empty">{t("run.waitingEvents")}</p>}
           </article>
         </section>
       ) : null}
