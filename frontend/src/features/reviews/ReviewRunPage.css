@@ -930,6 +930,22 @@
 .review-console__scope-button small { min-width: 21px; padding: 2px 5px; background: rgb(255 255 255 / 7%); color: #91a3a7; text-align: center; }
 .review-console__scope-button--active { border-color: #7fd4d0; background: #173437; color: #eafffd; box-shadow: inset 0 -2px 0 #7fd4d0; }
 .review-console__scope-button--active small { background: #7fd4d0; color: #102024; }
+.process-report--embedded {
+  --run-ink: #f1f7f6;
+  --run-muted: #a9bbbd;
+  --run-line: #466168;
+  --run-paper: #152126;
+  --run-paper-strong: #1c2b31;
+  --run-accent: #7fd4d0;
+  margin: 0 0 16px;
+  border-color: var(--run-line);
+  background: var(--run-paper);
+  color: var(--run-ink);
+  box-shadow: 0 12px 28px rgb(0 0 0 / 24%);
+}
+.process-report--embedded .run-panel__status { border-color: #7fd4d0; background: #173437; color: #eafffd; }
+.process-report--embedded .process-report__metrics dd,
+.process-report--embedded .process-report__tables h3 { color: var(--run-ink); }
 .review-console__toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 14px; }
 .review-console__toolbar button { border: 1px solid #466168; background: transparent; color: #dce7e8; padding: 7px 9px; font: inherit; font-size: .75rem; }
 .review-console__filters { display: flex; flex-wrap: wrap; align-items: center; gap: 7px; min-width: 0; margin: 0; padding: 5px 8px; border: 1px solid #466168; }

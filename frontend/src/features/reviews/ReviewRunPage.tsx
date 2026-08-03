@@ -591,6 +591,7 @@ export function ReviewRunPage() {
               <ReviewConsole
                 entries={transcriptQuery.data}
                 plan={reviewQuery.data?.review_plan ?? null}
+                processReport={processReportQuery.data}
                 reviewerReferences={reviewQuery.data?.selected_agents ?? []}
               />
             ) : <p className="event-log__empty">{t("run.waitingEvents")}</p>}

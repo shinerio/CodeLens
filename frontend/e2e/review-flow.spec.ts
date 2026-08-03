@@ -96,6 +96,15 @@ test("streams the correctness fixture from inspect to validated findings", async
   await expect(page.getByRole("heading", { name: "Process report" })).toBeVisible({
     timeout: 15000,
   });
+  await page.getByRole("tab", { name: /Logs/ }).click();
+  const console = page.getByRole("region", { name: "Review execution console" });
+  const embeddedProcessReport = console.getByRole("article", { name: "Process report" });
+  await expect(embeddedProcessReport).toBeVisible();
+  await expect(embeddedProcessReport).toHaveCSS("color", "rgb(241, 247, 246)");
+  await expect(embeddedProcessReport).toHaveCSS("background-color", "rgb(21, 33, 38)");
+  await console.getByRole("button", { name: /Reviewers/ }).click();
+  await expect(console.getByText("correctness:v1", { exact: true })).toBeVisible();
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 
   await page.getByRole("tab", { name: /Findings/ }).click();
   await page

@@ -3,8 +3,9 @@ import { useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
-import type { TranscriptEntry } from "./api";
+import type { ReviewProcessReport as ProcessReport, TranscriptEntry } from "./api";
 import { failureDetails } from "./failure-details";
+import { ReviewProcessReport } from "./ReviewProcessReport";
 import type { ReviewPlanNodeRole, ReviewPlanProjection } from "./types";
 
 type ConsoleMessage = TranscriptEntry & { content: string; messageKey: string; sequence: number };
@@ -43,10 +44,12 @@ const STAGE_OPTIONS: ReadonlyArray<{
 export function ReviewConsole({
   entries,
   plan,
+  processReport,
   reviewerReferences: fallbackReviewerReferences = [],
 }: {
   entries: TranscriptEntry[];
   plan?: ReviewPlanProjection | null;
+  processReport?: ProcessReport;
   reviewerReferences?: readonly string[];
 }) {
   const { locale, t } = useI18n();
@@ -87,6 +90,18 @@ export function ReviewConsole({
     }),
     [allMessages, nodeRoleByAgent, selectedReviewer, selectedStage],
   );
+  const scopedAgentReferences = selectedStage === "all"
+    ? undefined
+    : selectedStage === "reviewer" && selectedReviewer !== "all"
+      ? [selectedReviewer]
+      : Array.from(nodeRoleByAgent.entries())
+        .filter(([, role]) => role === selectedStage)
+        .map(([reference]) => reference);
+  const scopeLabel = selectedStage === "all"
+    ? t("logs.allStages")
+    : selectedStage === "reviewer" && selectedReviewer !== "all"
+      ? reviewerDisplayName(selectedReviewer, t)
+      : t(STAGE_OPTIONS.find((stage) => stage.id === selectedStage)?.labelKey ?? "logs.allStages");
   const completedMessages = useMemo(() => completedMessageKeys(entries), [entries]);
   const filtered = messages.filter((entry) =>
     (isToolEntry(entry) || isVisible(entry, visibility)) &&
@@ -157,6 +172,15 @@ export function ReviewConsole({
           </nav>
         ) : null}
       </div>
+    ) : null}
+    {processReport !== undefined ? (
+      <ReviewProcessReport
+        agentReferences={scopedAgentReferences}
+        entries={entries}
+        isEmbedded
+        report={processReport}
+        scopeLabel={scopeLabel}
+      />
     ) : null}
     <div className="review-console__toolbar">
       <label className="review-console__search"><Search aria-hidden="true" /><span className="sr-only">Search console</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search complete execution output" /></label>

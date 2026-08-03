@@ -1,21 +1,48 @@
 import { Bot, Clock3, Coins, Wrench } from "lucide-react";
 
 import { useI18n } from "../../shared/i18n/i18n";
-import type { ReviewProcessReport as ProcessReport } from "./api";
+import type {
+  AgentProcessSummary,
+  ReviewProcessReport as ProcessReport,
+  ToolUsageSummary,
+  TranscriptEntry,
+} from "./api";
 
 /** Present terminal execution metrics in a compact, comparison-oriented report. */
-export function ReviewProcessReport({ report }: { report: ProcessReport }) {
+export function ReviewProcessReport({
+  report,
+  agentReferences,
+  entries = [],
+  scopeLabel,
+  isEmbedded = false,
+}: {
+  report: ProcessReport;
+  agentReferences?: readonly string[];
+  entries?: readonly TranscriptEntry[];
+  scopeLabel?: string;
+  isEmbedded?: boolean;
+}) {
   const { locale, t } = useI18n();
   const number = new Intl.NumberFormat(locale);
+  const isFiltered = agentReferences !== undefined;
+  const selectedAgents = new Set(agentReferences);
+  const agents = isFiltered
+    ? report.agents.filter((agent) => selectedAgents.has(agent.agent))
+    : report.agents;
+  const totals = isFiltered ? summarizeAgents(agents) : report;
+  const tools = isFiltered ? summarizeTools(entries, selectedAgents) : report.tools;
 
   return (
-    <article className="run-panel run-panel--wide process-report">
+    <article
+      aria-label={t("run.processReport")}
+      className={`run-panel run-panel--wide process-report${isEmbedded ? " process-report--embedded" : ""}`}
+    >
       <div className="run-panel__heading">
         <div>
           <p className="run-panel__eyebrow">{t("run.processReportNote")}</p>
           <h2>{t("run.processReport")}</h2>
         </div>
-        <span className="run-panel__status">{report.status}</span>
+        <span className="run-panel__status">{scopeLabel ?? report.status}</span>
       </div>
 
       {!report.usage_is_complete ? (
@@ -23,27 +50,27 @@ export function ReviewProcessReport({ report }: { report: ProcessReport }) {
       ) : null}
 
       <dl className="process-report__metrics">
-        <Metric icon={Bot} label={t("run.llmCalls")} value={number.format(report.llm_call_count)} />
-        <Metric icon={Coins} label={t("run.totalTokens")} value={number.format(report.total_tokens)} />
-        <Metric icon={Wrench} label={t("run.toolCalls")} value={number.format(report.tool_call_count)} />
-        <Metric icon={Clock3} label={t("run.duration")} value={formatDuration(report.duration_ms, locale)} />
-        <Metric icon={Coins} label={t("run.inputTokens")} value={number.format(report.input_tokens)} />
-        <Metric icon={Coins} label={t("run.outputTokens")} value={number.format(report.output_tokens)} />
-        <Metric icon={Bot} label={t("run.agentRuns")} value={number.format(report.agent_run_count)} />
+        <Metric icon={Bot} label={t("run.llmCalls")} value={number.format(totals.llm_call_count)} />
+        <Metric icon={Coins} label={t("run.totalTokens")} value={number.format(totals.total_tokens)} />
+        <Metric icon={Wrench} label={t("run.toolCalls")} value={number.format(totals.tool_call_count)} />
+        <Metric icon={Clock3} label={t("run.duration")} value={formatDuration(totals.duration_ms, locale)} />
+        <Metric icon={Coins} label={t("run.inputTokens")} value={number.format(totals.input_tokens)} />
+        <Metric icon={Coins} label={t("run.outputTokens")} value={number.format(totals.output_tokens)} />
+        <Metric icon={Bot} label={t("run.agentRuns")} value={number.format(agents.length)} />
         <Metric icon={Wrench} label={t("run.findings")} value={number.format(report.finding_count)} />
       </dl>
 
       <div className="process-report__tables">
         <section aria-labelledby="tool-usage-heading">
           <h3 id="tool-usage-heading">{t("run.toolUsage")}</h3>
-          {report.tools.length > 0 ? (
+          {tools.length > 0 ? (
             <div className="process-report__table">
               <div className="process-report__row process-report__row--header">
                 <span>{t("run.tool")}</span>
                 <span>{t("run.calls")}</span>
                 <span>{t("run.results")}</span>
               </div>
-              {report.tools.map((tool) => (
+              {tools.map((tool) => (
                 <div className="process-report__row" key={tool.tool_name}>
                   <code>{tool.tool_name}</code>
                   <span>{number.format(tool.call_count)}</span>
@@ -63,7 +90,7 @@ export function ReviewProcessReport({ report }: { report: ProcessReport }) {
               <span>{t("run.llmCalls")}</span>
               <span>{t("run.tokens")}</span>
             </div>
-            {report.agents.map((agent) => (
+            {agents.map((agent) => (
               <div className="process-report__row process-report__row--agent" key={agent.agent}>
                 <code>{agent.agent}</code>
                 <span>{agent.model_name ?? "-"}</span>
@@ -75,6 +102,75 @@ export function ReviewProcessReport({ report }: { report: ProcessReport }) {
         </section>
       </div>
     </article>
+  );
+}
+
+type UsageTotals = Pick<
+  ProcessReport,
+  "llm_call_count" | "input_tokens" | "output_tokens" | "total_tokens" | "tool_call_count" | "duration_ms"
+>;
+
+function summarizeAgents(agents: readonly AgentProcessSummary[]): UsageTotals {
+  const startedAt = agents
+    .map((agent) => agent.started_at)
+    .filter((value): value is string => value !== null)
+    .sort()[0];
+  const completedAt = agents
+    .map((agent) => agent.completed_at)
+    .filter((value): value is string => value !== null)
+    .sort()
+    .at(-1);
+  return {
+    llm_call_count: agents.reduce((total, agent) => total + agent.llm_call_count, 0),
+    input_tokens: agents.reduce((total, agent) => total + agent.input_tokens, 0),
+    output_tokens: agents.reduce((total, agent) => total + agent.output_tokens, 0),
+    total_tokens: agents.reduce((total, agent) => total + agent.total_tokens, 0),
+    tool_call_count: agents.reduce((total, agent) => total + agent.tool_call_count, 0),
+    duration_ms: startedAt === undefined || completedAt === undefined
+      ? null
+      : Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
+  };
+}
+
+function summarizeTools(
+  entries: readonly TranscriptEntry[],
+  selectedAgents: ReadonlySet<string>,
+): ToolUsageSummary[] {
+  const callsById = new Map<string, string>();
+  const pendingCalls = new Map<string, string[]>();
+  const totals = new Map<string, ToolUsageSummary>();
+  for (const entry of entries) {
+    const agent = entry.metadata.agent ?? "";
+    if (entry.kind !== "tool_call" || !selectedAgents.has(agent)) continue;
+    const toolName = entry.metadata.tool_name;
+    if (toolName === undefined) continue;
+    const current = totals.get(toolName) ?? { tool_name: toolName, call_count: 0, result_count: 0 };
+    current.call_count += 1;
+    totals.set(toolName, current);
+    pendingCalls.set(agent, [...(pendingCalls.get(agent) ?? []), toolName]);
+    if (entry.metadata.tool_call_id !== undefined) {
+      callsById.set(`${agent}\u0000${entry.metadata.tool_call_id}`, toolName);
+    }
+  }
+  for (const entry of entries) {
+    if (entry.kind !== "tool_result") continue;
+    const agent = entry.metadata.agent ?? "";
+    if (!selectedAgents.has(agent)) continue;
+    const callId = entry.metadata.tool_call_id;
+    let toolName = callId === undefined ? undefined : callsById.get(`${agent}\u0000${callId}`);
+    const agentPendingCalls = pendingCalls.get(agent) ?? [];
+    if (toolName !== undefined) {
+      const pendingIndex = agentPendingCalls.indexOf(toolName);
+      if (pendingIndex >= 0) agentPendingCalls.splice(pendingIndex, 1);
+    } else {
+      toolName = agentPendingCalls.shift();
+    }
+    if (toolName === undefined) continue;
+    const current = totals.get(toolName);
+    if (current !== undefined) current.result_count += 1;
+  }
+  return Array.from(totals.values()).sort((left, right) =>
+    right.call_count - left.call_count || left.tool_name.localeCompare(right.tool_name),
   );
 }
 
