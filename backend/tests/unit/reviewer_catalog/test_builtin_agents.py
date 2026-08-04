@@ -44,7 +44,7 @@ def test_catalog_roles_and_planner_visibility_are_frozen() -> None:
     }
 
     assert all(catalog[reference].planner_eligible for reference in specialists)
-    assert catalog["general:v1"].planner_eligible is True
+    assert catalog["general:v1"].planner_eligible is False
     assert catalog["general:v1"].dimensions == (
         "correctness",
         "security",

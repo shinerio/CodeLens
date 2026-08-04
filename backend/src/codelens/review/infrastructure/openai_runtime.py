@@ -260,8 +260,11 @@ class OpenAIAgentRuntime:
         if agent.role is AgentRole.PLANNER:
             planner_codec = _planner_codec(role_context)
             planner_collector = ReviewPlanSubmissionCollector(planner_codec)
-            planner_description = prompts.tools["submit_review_plan"].description
-            role_output_tools = (planner_collector.binding(planner_description),)
+            submit_description = prompts.tools["submit_review_plan"].description
+            finalize_description = prompts.tools["finalize_plan"].description
+            role_output_tools = planner_collector.bindings(
+                submit_description, finalize_description
+            )
         elif agent.role is AgentRole.RESOLVER:
             resolver_codec = _resolver_codec(role_context)
             resolver_collector = ResolutionSubmissionCollector(resolver_codec)
@@ -788,8 +791,6 @@ def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec
     required = {
         "eligible_reviewer_references",
         "unavailable_reviewer_references",
-        "target_paths",
-        "allowed_reason_codes",
     }
     allowed = required | {"budget_limits", "change_risk_summary", "reviewer_catalog"}
     if role_context is None or not required.issubset(role_context) or not set(
@@ -808,8 +809,6 @@ def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec
         unavailable_reviewer_references=string_tuple(
             "unavailable_reviewer_references"
         ),
-        target_paths=string_tuple("target_paths"),
-        allowed_reason_codes=frozenset(string_tuple("allowed_reason_codes")),
     )
 
 

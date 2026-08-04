@@ -59,7 +59,10 @@ def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
                 ("task_done", 1),
             ),
         ),
-        _profile("planner", _tools(*evidence, ("submit_review_plan", 1))),
+        _profile(
+            "planner",
+            _tools(*evidence, ("submit_review_plan", 1), ("finalize_plan", 1)),
+        ),
         _profile(
             "resolver",
             _tools(("read_file", 1), ("get_diff", 1), ("submit_resolution", 1)),

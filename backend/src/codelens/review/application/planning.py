@@ -136,27 +136,9 @@ class ChangeRiskSummary:
 
 
 @dataclass(frozen=True, slots=True)
-class PlannerReviewerDecision:
-    reviewer_reference: str
-    is_selected: bool
-    reason_codes: tuple[str, ...]
-    focus_paths: tuple[str, ...]
-
-
-@dataclass(frozen=True, slots=True)
 class PlannerSelection:
     schema_version: Literal["1"]
-    strategy: Literal["generalist", "specialist_team"]
-    risk_signals: tuple[PlannerRiskSignal, ...]
-    reviewer_decisions: tuple[PlannerReviewerDecision, ...]
-
-    @property
-    def reviewer_references(self) -> tuple[str, ...]:
-        return tuple(
-            decision.reviewer_reference
-            for decision in self.reviewer_decisions
-            if decision.is_selected
-        )
+    reviewer_references: tuple[str, ...]
 
 
 class PlannerPort(Protocol):
@@ -176,8 +158,6 @@ def build_planner_input_payload(
     *,
     eligible_reviewer_references: tuple[str, ...],
     readiness: Mapping[str, CapabilityReadiness],
-    target_paths: tuple[str, ...],
-    allowed_reason_codes: frozenset[str],
     risk_summary: ChangeRiskSummary,
     budget_limits: Mapping[str, object],
     reviewer_catalog: tuple[Mapping[str, object], ...],
@@ -200,12 +180,10 @@ def build_planner_input_payload(
         == "unavailable"
     )
     envelope["role_context"] = {
-        "allowed_reason_codes": sorted(allowed_reason_codes),
         "budget_limits": dict(budget_limits),
         "change_risk_summary": asdict(risk_summary),
         "eligible_reviewer_references": list(eligible_reviewer_references),
         "reviewer_catalog": [dict(item) for item in reviewer_catalog],
-        "target_paths": list(target_paths),
         "unavailable_reviewer_references": list(unavailable),
     }
     return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
@@ -377,16 +355,6 @@ class ReviewPlanCompiler:
             )
             nodes.extend((resolver, verifier))
         guidance: tuple[ReviewerPlanGuidance, ...] = ()
-        if planner_selection is not None:
-            guidance = tuple(
-                ReviewerPlanGuidance(
-                    decision.reviewer_reference,
-                    decision.reason_codes,
-                    decision.focus_paths,
-                )
-                for decision in planner_selection.reviewer_decisions
-                if decision.is_selected
-            )
         return ReviewPlan.create(
             task_id=task_id,
             selection_mode=selection_mode,

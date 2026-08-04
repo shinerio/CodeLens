@@ -135,27 +135,18 @@ class SlowRunner(FakeRunner):
 class PlannerRunner(FakeRunner):
     @staticmethod
     async def complete_review(starting_agent: Agent[None]) -> None:
-        tool = next(
+        submit_tool = next(
             tool for tool in starting_agent.tools if tool.name == "submit_review_plan"
         )
         arguments = json.dumps(
             {
                 "submission": {
                     "schema_version": "1",
-                    "strategy": "generalist",
-                    "risk_signals": [],
-                    "reviewer_decisions": [
-                        {
-                            "reviewer_reference": "general:v1",
-                            "is_selected": True,
-                            "reason_codes": ["broad-risk"],
-                            "focus_paths": [],
-                        }
-                    ],
+                    "reviewer_references": ["general:v1"],
                 }
             }
         )
-        await tool.on_invoke_tool(
+        await submit_tool.on_invoke_tool(
             ToolContext(
                 None,
                 usage=Usage(),
@@ -165,6 +156,20 @@ class PlannerRunner(FakeRunner):
                 run_config=RunConfig(),
             ),
             arguments,
+        )
+        finalize_tool = next(
+            tool for tool in starting_agent.tools if tool.name == "finalize_plan"
+        )
+        await finalize_tool.on_invoke_tool(
+            ToolContext(
+                None,
+                usage=Usage(),
+                tool_name="finalize_plan",
+                tool_call_id="fake-finalize-plan",
+                tool_arguments="{}",
+                run_config=RunConfig(),
+            ),
+            "{}",
         )
 
 
@@ -308,8 +313,6 @@ def _planner_runtime_input() -> bytes:
             "role_context": {
                 "eligible_reviewer_references": ["general:v1"],
                 "unavailable_reviewer_references": [],
-                "target_paths": [],
-                "allowed_reason_codes": ["broad-risk"],
             },
         },
         sort_keys=True,
@@ -386,20 +389,11 @@ async def test_planner_runtime_uses_typed_submission_as_its_completion_signal() 
     )
 
     assert json.loads(output.canonical_bytes) == {
-        "reviewer_decisions": [
-            {
-                "focus_paths": [],
-                "is_selected": True,
-                "reason_codes": ["broad-risk"],
-                "reviewer_reference": "general:v1",
-            }
-        ],
-        "risk_signals": [],
+        "reviewer_references": ["general:v1"],
         "schema_version": "1",
-        "strategy": "generalist",
     }
     assert runner.starting_agent is not None
-    assert tuple(tool.name for tool in runner.starting_agent.tools)[-1] == "submit_review_plan"
+    assert tuple(tool.name for tool in runner.starting_agent.tools)[-1] == "finalize_plan"
 
 
 async def test_resolver_runtime_uses_strict_one_shot_submission() -> None:
@@ -627,6 +621,7 @@ def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_lo
             "review_file_done",
             "task_done",
             "submit_review_plan",
+            "finalize_plan",
             "submit_resolution",
             "submit_verification",
         }

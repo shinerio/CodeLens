@@ -185,6 +185,7 @@ class RuntimeToolContext:
             "review_file_done",
             "task_done",
             "submit_review_plan",
+            "finalize_plan",
             "submit_resolution",
             "submit_verification",
         )
@@ -194,7 +195,12 @@ class RuntimeToolContext:
                 ToolContractReference(name, 1),
                 _submission_stub(name, descriptions[name]),
             )
-            for name in ("submit_review_plan", "submit_resolution", "submit_verification")
+            for name in (
+                "submit_review_plan",
+                "finalize_plan",
+                "submit_resolution",
+                "submit_verification",
+            )
         )
         return cls(
             snapshot=snapshot,

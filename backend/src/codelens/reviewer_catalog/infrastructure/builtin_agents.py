@@ -152,6 +152,7 @@ def _catalog_entries() -> Iterable[AgentVersion]:
         version=1,
         prompt_key="general",
         dimensions=all_dimensions,
+        planner_eligible=False,
     )
     yield _internal_agent(
         agent_id="review-planner",

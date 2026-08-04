@@ -15,7 +15,6 @@ from codelens.review.application.budget_policy import (
 from codelens.review.application.planning import (
     CapabilityReadiness,
     InvalidReviewPlanError,
-    PlannerReviewerDecision,
     PlannerSelection,
     ReviewPlanCompiler,
     ReviewPlanningService,
@@ -85,15 +84,10 @@ def test_fixed_compiler_builds_host_dag_without_planner() -> None:
 def test_adaptive_rejects_general_plus_specialists() -> None:
     selection = PlannerSelection(
         schema_version="1",
-        strategy="specialist_team",
-        risk_signals=(),
-        reviewer_decisions=(
-            PlannerReviewerDecision("general:v1", True, ("broad-risk",), ()),
-            PlannerReviewerDecision("security:v1", True, ("security-risk",), ()),
-        ),
+        reviewer_references=("general:v1", "security:v1"),
     )
 
-    with pytest.raises(InvalidReviewPlanError, match="General reviewer must run alone"):
+    with pytest.raises(InvalidReviewPlanError, match="not Planner eligible"):
         _compiler().compile(
             task_id=TASK_ID,
             selection_mode="adaptive",
@@ -244,7 +238,7 @@ class _Planner:
 
 async def test_fixed_service_never_invokes_planner_and_persists_before_return() -> None:
     planner = _Planner(
-        PlannerSelection("1", "generalist", (), ())
+        PlannerSelection("1", ("general:v1",))
     )
     store = _PlanStore()
     service = ReviewPlanningService(
@@ -272,9 +266,7 @@ async def test_existing_plan_prevents_adaptive_planner_reinvocation() -> None:
     first_planner = _Planner(
         PlannerSelection(
             "1",
-            "generalist",
-            (),
-            (PlannerReviewerDecision("general:v1", True, ("broad-risk",), ()),),
+            ("security:v1", "performance:v1"),
         )
     )
     service = ReviewPlanningService(
@@ -283,9 +275,15 @@ async def test_existing_plan_prevents_adaptive_planner_reinvocation() -> None:
     inputs = dict(
         task_id=TASK_ID,
         profile=ReviewProfileSnapshot(
-            AdaptiveReviewerSelection(), BudgetProfile.LEAN
+            AdaptiveReviewerSelection(), BudgetProfile.STANDARD
         ),
-        execution_specs=_specs("review-planner:v1", "general:v1"),
+        execution_specs=_specs(
+            "review-planner:v1",
+            "security:v1",
+            "performance:v1",
+            "review-resolver:v1",
+            "review-verifier:v1",
+        ),
         readiness=_ready(),
         target_paths=("src/app.py",),
         catalog_version="builtin-v1",
@@ -298,32 +296,10 @@ async def test_existing_plan_prevents_adaptive_planner_reinvocation() -> None:
     assert first_planner.call_count == 1
 
 
-def test_adaptive_compiler_accepts_general_or_two_specialists_only() -> None:
-    general_selection = PlannerSelection(
-        "1",
-        "generalist",
-        (),
-        (PlannerReviewerDecision("general:v1", True, ("broad-risk",), ()),),
-    )
-    general = _compiler().compile(
-        task_id=TASK_ID,
-        selection_mode="adaptive",
-        reviewer_references=("general:v1",),
-        budget_profile=BudgetProfile.LEAN,
-        planner_selection=general_selection,
-        execution_specs=_specs("review-planner:v1", "general:v1"),
-        readiness=_ready(),
-    )
-    assert general.reviewer_references == ("general:v1",)
-
+def test_adaptive_compiler_accepts_two_or_more_specialists_only() -> None:
     specialist_selection = PlannerSelection(
         "1",
-        "specialist_team",
-        (),
-        (
-            PlannerReviewerDecision("security:v1", True, ("security-risk",), ()),
-            PlannerReviewerDecision("performance:v1", True, ("performance-risk",), ()),
-        ),
+        ("security:v1", "performance:v1"),
     )
     specialists = _compiler().compile(
         task_id=TASK_ID,
@@ -344,9 +320,7 @@ def test_adaptive_compiler_accepts_general_or_two_specialists_only() -> None:
 
     one_specialist = PlannerSelection(
         "1",
-        "specialist_team",
-        (),
-        (PlannerReviewerDecision("security:v1", True, ("security-risk",), ()),),
+        ("security:v1",),
     )
     with pytest.raises(InvalidReviewPlanError, match="at least two"):
         _compiler().compile(
@@ -406,9 +380,15 @@ async def test_adaptive_planner_failure_has_no_host_fallback() -> None:
         await service.plan(
             task_id=TASK_ID,
             profile=ReviewProfileSnapshot(
-                AdaptiveReviewerSelection(), BudgetProfile.LEAN
+                AdaptiveReviewerSelection(), BudgetProfile.STANDARD
             ),
-            execution_specs=_specs("review-planner:v1", "general:v1"),
+            execution_specs=_specs(
+                "review-planner:v1",
+                "security:v1",
+                "performance:v1",
+                "review-resolver:v1",
+                "review-verifier:v1",
+            ),
             readiness=_ready(),
             target_paths=("src/app.py",),
             catalog_version="builtin-v1",
