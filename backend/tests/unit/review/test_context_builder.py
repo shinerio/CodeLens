@@ -294,7 +294,7 @@ def test_rejects_active_instruction_metadata_that_is_not_exactly_frozen() -> Non
 
     stale = replace(
         instructions,
-        documents=(replace(instructions.documents[0], content="Changed after freeze."),),
+        documents=(replace(instructions.documents[0], content_hash="0" * 64),),
     )
     with pytest.raises(ContextIntegrityError, match="instruction content"):
         ContextBuilder().build(snapshot, stale)

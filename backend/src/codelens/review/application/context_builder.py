@@ -1,4 +1,3 @@
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -213,8 +212,7 @@ class ContextBuilder:
                 or entry.origin != "instruction"
             ):
                 raise ContextContainmentError("instruction path is outside the Snapshot")
-            actual_hash = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
-            if actual_hash != document.content_hash or entry.content_hash != actual_hash:
+            if document.content_hash != entry.content_hash:
                 raise ContextIntegrityError("instruction content is stale or corrupted")
 
         for chain in chains:

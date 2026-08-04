@@ -156,6 +156,7 @@ class InstructionResolver:
 
             raw = resolved.read_bytes()
             text = raw.decode("utf-8")
+            content_hash = hashlib.sha256(raw).hexdigest()
             max_lines = (
                 line_limits.root_max_lines
                 if relative.parent == Path(".")
@@ -163,7 +164,6 @@ class InstructionResolver:
             )
             if len(text.splitlines()) > max_lines:
                 text = "\n".join(text.splitlines()[:max_lines])
-                raw = text.encode("utf-8")
                 message = (
                     f"instruction document {relative.as_posix()} exceeds the"
                     f" {max_lines} line limit, truncated"
@@ -175,7 +175,7 @@ class InstructionResolver:
                 InstructionDocument(
                     relative_path=relative.as_posix(),
                     content=text,
-                    content_hash=hashlib.sha256(raw).hexdigest(),
+                    content_hash=content_hash,
                     kind=candidate.kind,
                     scope_path=candidate.scope_path,
                     precedence=candidate.precedence,
