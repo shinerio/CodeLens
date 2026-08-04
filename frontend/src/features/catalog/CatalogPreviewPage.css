@@ -31,7 +31,7 @@
 .catalog-preview-card__meta { display: flex; flex-wrap: wrap; gap: 6px; }
 .catalog-preview-card__meta span { padding: 4px 7px; border: 1px solid var(--line); border-radius: 4px; color: var(--muted); font-size: .67rem; }
 .catalog-preview-card footer { margin-top: auto; padding-top: 16px; }
-.catalog-preview-card footer button:last-child { width: 34px; padding: 0; }
+.catalog-preview-card footer button { white-space: nowrap; }
 .prompt-editor { display: block; max-width: 1200px; min-height: 0; margin: 0 auto 14px; padding: 20px; border-color: color-mix(in srgb, var(--accent) 25%, var(--line)); box-shadow: 0 14px 32px rgb(23 32 39 / 8%); }
 .agent-catalog-workbench .prompt-editor { position: sticky; top: 20px; width: auto; max-width: none; margin: 0; }
 .reviewer-card--active { border-color: var(--accent); box-shadow: inset 3px 0 0 var(--accent), 0 12px 28px rgb(23 32 39 / 9%); }
