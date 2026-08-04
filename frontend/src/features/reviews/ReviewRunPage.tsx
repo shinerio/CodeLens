@@ -421,7 +421,6 @@ export function ReviewRunPage() {
       {reviewQuery.data !== undefined ? (
         <div className="run-plan-stack">
           <ReviewPlanSummary
-            budget={reviewQuery.data.budget_profile}
             plan={reviewQuery.data.review_plan}
             selection={reviewQuery.data.selection_request}
           />

@@ -12,7 +12,6 @@ def test_v1_selected_agents_migrate_without_version_upgrade() -> None:
         "mode": "fixed",
         "reviewer_versions": ["correctness:v1"],
     }
-    assert migrated["budget_profile"] == "standard"
     assert migrated["supersede_policy"] == "latest_snapshot"
 
 

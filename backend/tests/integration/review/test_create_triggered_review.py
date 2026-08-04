@@ -10,7 +10,6 @@ from codelens.review.application.create_triggered_review import (
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     ReviewProfileSnapshot,
 )
 from codelens.workspace.domain.models import BranchScope, ReviewTarget
@@ -40,7 +39,6 @@ class CompleteFreezer:
     ) -> dict[str, object]:
         return {
             "schema_version": 1,
-            "budget_policy": {"version": 1, "profile": "standard"},
             "catalog_snapshot": {"version": "catalog:v1"},
             "capability_readiness": {"policy_fingerprint": "capability:v1"},
             "planner_execution_spec": {"artifact_id": "prompt:planner:v1"},
@@ -92,7 +90,7 @@ async def test_trigger_slot_excludes_snapshot_but_exact_key_includes_it(tmp_path
     command = CreateTriggeredReview(
         repository=repository,
         scope=BranchScope("main", "HEAD"),
-        review_profile=ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD),
+        review_profile=ReviewProfileSnapshot(AdaptiveReviewerSelection()),
         prompt_locale="en",
         supersede_policy="latest_snapshot",
         external_context=None,
@@ -130,7 +128,7 @@ async def test_trigger_rejects_trusted_prompt_bodies_before_creating_task(
                 repository=repository,
                 scope=BranchScope("main", "HEAD"),
                 review_profile=ReviewProfileSnapshot(
-                    AdaptiveReviewerSelection(), BudgetProfile.STANDARD
+                    AdaptiveReviewerSelection()
                 ),
                 prompt_locale="en",
                 supersede_policy="latest_snapshot",
@@ -155,7 +153,7 @@ async def test_prompt_locale_is_part_of_the_frozen_trigger_policy(tmp_path: Path
         current_branch="main",
         is_dirty=False,
     )
-    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection())
 
     for locale in ("en", "zh-CN"):
         await handler.handle(

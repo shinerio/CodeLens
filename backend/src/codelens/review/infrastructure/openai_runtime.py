@@ -792,7 +792,7 @@ def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec
         "eligible_reviewer_references",
         "unavailable_reviewer_references",
     }
-    allowed = required | {"budget_limits", "change_risk_summary", "reviewer_catalog"}
+    allowed = required | {"change_risk_summary", "reviewer_catalog"}
     if role_context is None or not required.issubset(role_context) or not set(
         role_context
     ).issubset(allowed):

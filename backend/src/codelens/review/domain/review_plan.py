@@ -5,7 +5,6 @@ from enum import IntEnum, StrEnum
 from typing import Literal
 
 type SelectionMode = Literal["fixed", "adaptive"]
-type BudgetProfileValue = Literal["lean", "standard", "deep"]
 
 
 class ReviewPass(IntEnum):
@@ -138,7 +137,6 @@ class ReviewPlan:
 
     task_id: str
     selection_mode: SelectionMode
-    budget_profile: BudgetProfileValue
     reviewer_references: tuple[str, ...]
     nodes: tuple[ReviewPlanNode, ...]
     planner_reason: str | None
@@ -153,7 +151,6 @@ class ReviewPlan:
             self._payload(
                 self.task_id,
                 self.selection_mode,
-                self.budget_profile,
                 self.reviewer_references,
                 self.nodes,
                 self.planner_reason,
@@ -185,7 +182,6 @@ class ReviewPlan:
         plan = cls.create(
             task_id=str(value["task_id"]),
             selection_mode=value["selection_mode"],
-            budget_profile=value["budget_profile"],
             reviewer_references=tuple(str(item) for item in value["reviewer_references"]),
             nodes=nodes,
             planner_reason=(
@@ -217,7 +213,6 @@ class ReviewPlan:
     def _payload(
         task_id: str,
         selection_mode: SelectionMode,
-        budget_profile: BudgetProfileValue,
         reviewer_references: tuple[str, ...],
         nodes: tuple[ReviewPlanNode, ...],
         planner_reason: str | None,
@@ -225,7 +220,6 @@ class ReviewPlan:
         capability_degradations: tuple[PlanCapabilityDegradation, ...],
     ) -> dict[str, object]:
         return {
-            "budget_profile": budget_profile,
             "capability_degradations": [
                 {
                     "agent_reference": degradation.agent_reference,
@@ -266,7 +260,6 @@ class ReviewPlan:
         *,
         task_id: str,
         selection_mode: SelectionMode,
-        budget_profile: BudgetProfileValue,
         reviewer_references: tuple[str, ...],
         nodes: tuple[ReviewPlanNode, ...],
         planner_reason: str | None,
@@ -375,7 +368,6 @@ class ReviewPlan:
         payload = cls._payload(
             task_id,
             selection_mode,
-            budget_profile,
             canonical_reviewers,
             canonical_nodes,
             planner_reason,
@@ -391,7 +383,6 @@ class ReviewPlan:
         return cls(
             task_id=task_id,
             selection_mode=selection_mode,
-            budget_profile=budget_profile,
             reviewer_references=canonical_reviewers,
             nodes=canonical_nodes,
             planner_reason=planner_reason,

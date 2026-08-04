@@ -14,7 +14,6 @@ from codelens.plugin.domain.ports import ReviewCreatorPort, TriggerRepositoryVal
 from codelens.review.application.commands import CreateReviewCommand, CreateReviewHandler
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -141,7 +140,6 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
                         review_policy.reviewer_selection.reviewer_versions
                     )
                 ),
-                BudgetProfile(review_policy.budget_profile.value),
             ),
             trigger_source="plugin",
             supersede_policy=review_policy.supersede_policy.value,

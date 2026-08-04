@@ -39,7 +39,6 @@ def _canonical(value: Mapping[str, object]) -> str:
 
 _REQUIRED_CONTEXT_KEYS = {
     "schema_version",
-    "budget_policy",
     "catalog_snapshot",
     "capability_readiness",
     "planner_execution_spec",
@@ -114,7 +113,6 @@ class CreateTriggeredReviewHandler:
                 "repository_id": command.repository.repository_id,
                 "review_profile": {
                     "selection": selection_policy,
-                    "budget": command.review_profile.budget_profile.value,
                 },
                 "prompt_locale": command.prompt_locale,
                 "planning_context_hash": hashlib.sha256(context_json.encode()).hexdigest(),

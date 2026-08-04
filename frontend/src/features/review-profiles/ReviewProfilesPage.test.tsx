@@ -23,7 +23,6 @@ it("creates an Adaptive Deep profile", async () => {
           name: "Adaptive deep",
           is_default: false,
           reviewer_selection: { mode: "adaptive" },
-          budget_profile: "deep",
           created_at: "2026-08-02T00:00:00Z",
           updated_at: "2026-08-02T00:00:00Z",
         }), { status: 201, headers: { "Content-Type": "application/json" } }));
@@ -35,7 +34,6 @@ it("creates an Adaptive Deep profile", async () => {
           name: "Default",
           is_default: true,
           reviewer_selection: { mode: "adaptive" },
-          budget_profile: "standard",
           created_at: "2026-08-01T00:00:00Z",
           updated_at: "2026-08-01T00:00:00Z",
         }]), { status: 200, headers: { "Content-Type": "application/json" } }));
@@ -48,14 +46,12 @@ it("creates an Adaptive Deep profile", async () => {
 
   await user.click(await screen.findByRole("button", { name: "New profile" }));
   await user.type(screen.getByLabelText("Profile name"), "Adaptive deep");
-  await user.click(screen.getByRole("radio", { name: /Deep/ }));
   await user.click(screen.getByRole("button", { name: "Save profile" }));
 
   await waitFor(() => expect(createRequest).toBeDefined());
   expect(JSON.parse(String(createRequest?.body))).toMatchObject({
     name: "Adaptive deep",
     reviewer_selection: { mode: "adaptive" },
-    budget_profile: "deep",
   });
 });
 
@@ -80,7 +76,6 @@ it("preserves edits on a revision conflict and offers an explicit reload", async
             name: "Default",
             is_default: true,
             reviewer_selection: { mode: "adaptive" },
-            budget_profile: "standard",
             created_at: "2026-08-01T00:00:00Z",
             updated_at: "2026-08-01T00:00:00Z",
           },
@@ -90,7 +85,6 @@ it("preserves edits on a revision conflict and offers an explicit reload", async
             name: "Editable",
             is_default: false,
             reviewer_selection: { mode: "adaptive" },
-            budget_profile: "deep",
             created_at: "2026-08-01T00:00:00Z",
             updated_at: "2026-08-02T00:00:00Z",
           },

@@ -1,7 +1,6 @@
 from typing import Literal, cast
 
 from codelens.plugin.api.v2 import (
-    BudgetProfile,
     FixedReviewerSelection,
     SupersedePolicy,
     TriggerReviewPolicy,
@@ -17,7 +16,6 @@ def adapt_v1_trigger_policy(
         raise ValueError("unsupported prompt_locale")
     return TriggerReviewPolicy(
         reviewer_selection=FixedReviewerSelection("fixed", selected_agents),
-        budget_profile=BudgetProfile.STANDARD,
         supersede_policy=SupersedePolicy.PRESERVE_ALL,
         prompt_locale=cast(Literal["en", "zh-CN"], prompt_locale),
     )

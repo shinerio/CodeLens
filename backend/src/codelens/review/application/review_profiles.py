@@ -4,7 +4,7 @@ from datetime import UTC, datetime
 
 from codelens.review.domain.ports import ReviewProfileRepository
 from codelens.review.domain.review_profile import ReviewProfile
-from codelens.review.domain.review_strategy import BudgetProfile, ReviewerSelection
+from codelens.review.domain.review_strategy import ReviewerSelection
 
 
 def _new_profile_id() -> str:
@@ -31,14 +31,12 @@ class CreateReviewProfileHandler:
         name: str,
         is_default: bool,
         reviewer_selection: ReviewerSelection,
-        budget_profile: BudgetProfile,
     ) -> ReviewProfile:
         profile = ReviewProfile.create(
             profile_id=self._id_factory(),
             name=name,
             is_default=is_default,
             reviewer_selection=reviewer_selection,
-            budget_profile=budget_profile,
             created_at=self._clock(),
         )
         return await self._repository.create_review_profile(profile)
@@ -64,7 +62,6 @@ class UpdateReviewProfileHandler:
         name: str,
         is_default: bool,
         reviewer_selection: ReviewerSelection,
-        budget_profile: BudgetProfile,
     ) -> ReviewProfile:
         return await self._repository.update_review_profile(
             profile_id,
@@ -72,7 +69,6 @@ class UpdateReviewProfileHandler:
             name=name,
             is_default=is_default,
             reviewer_selection=reviewer_selection,
-            budget_profile=budget_profile,
             updated_at=self._clock(),
         )
 

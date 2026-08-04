@@ -56,7 +56,6 @@ from codelens.review.domain.review_plan import (
 )
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     ReviewProfileSnapshot,
 )
 from codelens.review.infrastructure.database import Database
@@ -166,7 +165,6 @@ def _multi_plan(task_id: str) -> ReviewPlan:
     return ReviewPlan.create(
         task_id=task_id,
         selection_mode="fixed",
-        budget_profile="standard",
         reviewer_references=("correctness:v2", "security:v1"),
         nodes=(*reviewers, resolver, verifier),
         planner_reason=None,
@@ -230,12 +228,12 @@ async def test_review_profile_migration_upgrades_previous_head_and_seeds_empty_t
     await asyncio.to_thread(_migrate_to, database_path, "0e0e42b05c24")
     await asyncio.to_thread(_migrate_to, database_path, "head")
 
-    def read_profiles() -> list[tuple[str, int, str, int, str, str]]:
+    def read_profiles() -> list[tuple[str, int, str, int, str]]:
         with sqlite3.connect(database_path) as connection:
             return connection.execute(
                 """
                 SELECT profile_id, revision, name, is_default,
-                       reviewer_selection_json, budget_profile
+                       reviewer_selection_json
                 FROM review_profiles
                 """
             ).fetchall()
@@ -247,7 +245,6 @@ async def test_review_profile_migration_upgrades_previous_head_and_seeds_empty_t
             "Balanced Review",
             1,
             '{"mode":"adaptive"}',
-            "standard",
         )
     ]
 
@@ -267,12 +264,11 @@ async def test_selection_migration_backfills_legacy_fixed_request(tmp_path: Path
     await asyncio.to_thread(_migrate_to, database_path, "head")
     with sqlite3.connect(database_path) as connection:
         row = connection.execute(
-            "SELECT selection_request_json,budget_profile,planning_context_json "
+            "SELECT selection_request_json,planning_context_json "
             "FROM review_tasks WHERE task_id='legacy'"
         ).fetchone()
     assert row == (
         '{"mode":"fixed","reviewer_versions":["security:v1","performance:v1"]}',
-        "standard",
         None,
     )
 
@@ -344,7 +340,6 @@ async def test_plan_specs_and_audit_records_survive_restart_without_trusted_bodi
         await SqlReviewPlanStore(database).save(
             plan,
             catalog_version="builtin-v1",
-            budget_json='{"profile":"standard"}',
             capability_fingerprint="c" * 64,
         )
         await SqlAgentExecutionSpecStore(database).save(
@@ -625,7 +620,7 @@ async def test_triggered_create_deduplicates_and_supersedes_atomically(tmp_path:
     store = SqlReviewStore(database)
     try:
         profile = ReviewProfileSnapshot(
-            AdaptiveReviewerSelection(), BudgetProfile.DEEP, "profile-auto", 2
+            AdaptiveReviewerSelection(), source_profile_id="profile-auto", source_profile_revision=2
         )
         first = _task(
             "review-first",
@@ -655,7 +650,7 @@ async def test_triggered_create_deduplicates_and_supersedes_atomically(tmp_path:
 async def test_concurrent_identical_triggers_create_one_sqlite_task(tmp_path: Path) -> None:
     database = await _database(tmp_path)
     store = SqlReviewStore(database)
-    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection())
     try:
         left = _task(
             "review-left",
@@ -681,7 +676,7 @@ async def test_concurrent_identical_triggers_create_one_sqlite_task(tmp_path: Pa
 async def test_latest_snapshot_cancels_running_but_preserves_history(tmp_path: Path) -> None:
     database = await _database(tmp_path)
     store = SqlReviewStore(database)
-    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection())
     try:
         running = _task(
             "review-running",
@@ -725,7 +720,7 @@ async def test_latest_snapshot_requests_cancellation_after_job_claim_before_task
     database = await _database(tmp_path)
     store = SqlReviewStore(database)
     jobs = SqlJobQueue(database)
-    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection())
     try:
         claimed = _task(
             "review-claimed",
@@ -759,7 +754,7 @@ async def test_latest_snapshot_requests_cancellation_after_job_claim_before_task
 async def test_preserve_all_leaves_older_queued_task_unchanged(tmp_path: Path) -> None:
     database = await _database(tmp_path)
     store = SqlReviewStore(database)
-    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection(), BudgetProfile.STANDARD)
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection())
     try:
         older = _task(
             "review-older",
@@ -796,7 +791,6 @@ async def test_review_profiles_keep_exactly_one_default_across_restart(
             name="Deep Review",
             is_default=False,
             reviewer_selection=AdaptiveReviewerSelection(),
-            budget_profile=BudgetProfile.DEEP,
         )
         switched = await SetDefaultReviewProfileHandler(repository).handle(
             custom.profile_id, expected_revision=custom.revision
@@ -883,7 +877,9 @@ async def test_failed_review_retry_creates_an_independent_queued_task(tmp_path: 
         original = _task(
             "review-original",
             review_profile=ReviewProfileSnapshot(
-                AdaptiveReviewerSelection(), BudgetProfile.STANDARD, "profile-auto", 2
+                AdaptiveReviewerSelection(),
+                source_profile_id="profile-auto",
+                source_profile_revision=2,
             ),
             idempotency_key="d" * 64,
             trigger_slot_key="e" * 64,

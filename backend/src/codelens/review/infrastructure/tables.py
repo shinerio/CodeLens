@@ -25,14 +25,9 @@ review_profiles = Table(
     Column("name", String(120), nullable=False),
     Column("is_default", Boolean, nullable=False, default=False),
     Column("reviewer_selection_json", Text, nullable=False),
-    Column("budget_profile", String(32), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
     Column("updated_at", DateTime(timezone=True), nullable=False),
     CheckConstraint("revision >= 1", name="ck_review_profiles_positive_revision"),
-    CheckConstraint(
-        "budget_profile IN ('lean', 'standard', 'deep')",
-        name="ck_review_profiles_budget_profile",
-    ),
 )
 Index(
     "uq_review_profiles_single_default",
@@ -58,7 +53,6 @@ review_tasks = Table(
     Column("status", String(32), nullable=False),
     Column("selected_agent_versions_json", Text, nullable=False),
     Column("selection_request_json", Text),
-    Column("budget_profile", String(16)),
     Column("profile_source_id", String(128)),
     Column("profile_source_revision", Integer),
     Column("trigger_source", String(16)),
@@ -219,7 +213,6 @@ review_plans = Table(
     Column("plan_json", Text, nullable=False),
     Column("plan_hash", String(64), nullable=False),
     Column("catalog_version", String(128), nullable=False),
-    Column("budget_json", Text, nullable=False),
     Column("capability_fingerprint", String(64), nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )

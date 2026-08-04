@@ -58,7 +58,7 @@ function strategyFromPluginConfig(config: Record<string, unknown>): ReviewStrate
   const rawSelection = config.reviewer_selection;
   if (isStringKeyedRecord(rawSelection)) {
     if (rawSelection.mode === "adaptive") {
-      return { reviewerSelection: { mode: "adaptive" }, budgetProfile: budgetFromConfig(config) };
+      return { reviewerSelection: { mode: "adaptive" } };
     }
     if (rawSelection.mode === "fixed" && Array.isArray(rawSelection.reviewer_versions)) {
       return {
@@ -68,7 +68,6 @@ function strategyFromPluginConfig(config: Record<string, unknown>): ReviewStrate
             (reference): reference is string => typeof reference === "string",
           ),
         },
-        budgetProfile: budgetFromConfig(config),
       };
     }
   }
@@ -79,13 +78,7 @@ function strategyFromPluginConfig(config: Record<string, unknown>): ReviewStrate
     : [];
   return {
     reviewerSelection: { mode: "fixed", reviewerVersions: legacyReviewers },
-    budgetProfile: budgetFromConfig(config),
   };
-}
-
-function budgetFromConfig(config: Record<string, unknown>): "lean" | "standard" | "deep" {
-  const budget = config.budget_profile;
-  return budget === "lean" || budget === "deep" ? budget : "standard";
 }
 
 function withStrategy(
@@ -99,7 +92,6 @@ function withStrategy(
       selection.mode === "adaptive"
         ? { mode: "adaptive" }
         : { mode: "fixed", reviewer_versions: [...selection.reviewerVersions] },
-    budget_profile: strategy.budgetProfile,
   };
 }
 

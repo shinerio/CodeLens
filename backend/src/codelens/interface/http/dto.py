@@ -19,7 +19,6 @@ from codelens.review.domain.ports import RecentRepositoryRecord, ReviewRecord
 from codelens.review.domain.review_profile import ReviewProfile
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -77,7 +76,6 @@ class CreateReviewProfileRequest(StrictDto):
     name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
     is_default: bool = False
     reviewer_selection: ReviewerSelectionDto
-    budget_profile: Literal["lean", "standard", "deep"]
 
 
 class UpdateReviewProfileRequest(CreateReviewProfileRequest):
@@ -94,7 +92,6 @@ class ReviewProfileResponse(StrictDto):
     name: str
     is_default: bool
     reviewer_selection: ReviewerSelectionDto
-    budget_profile: Literal["lean", "standard", "deep"]
     created_at: datetime
     updated_at: datetime
 
@@ -117,7 +114,6 @@ class ReviewProfileResponse(StrictDto):
             name=profile.name,
             is_default=profile.is_default,
             reviewer_selection=selection,
-            budget_profile=profile.budget_profile.value,
             created_at=profile.created_at,
             updated_at=profile.updated_at,
         )
@@ -398,7 +394,6 @@ class CreateReviewRequest(StrictDto):
     repository_path: Path
     scope: ScopeRequest
     reviewer_selection: ReviewerSelectionDto | None = None
-    budget_profile: Literal["lean", "standard", "deep"] = "standard"
     profile_source: "ReviewProfileSourceDto | None" = None
     selected_agents: Annotated[
         list[AgentReference] | None, Field(min_length=1, max_length=32)
@@ -414,11 +409,9 @@ class CreateReviewRequest(StrictDto):
             raise ValueError(
                 "exactly one of reviewer_selection or selected_agents is required"
             )
-        if self.selected_agents is not None and (
-            self.budget_profile != "standard" or self.profile_source is not None
-        ):
+        if self.selected_agents is not None and self.profile_source is not None:
             raise ValueError(
-                "legacy selected_agents cannot set v2 budget or profile provenance"
+                "legacy selected_agents cannot set v2 profile provenance"
             )
         return self
 
@@ -436,7 +429,6 @@ class CreateReviewRequest(StrictDto):
         source = self.profile_source
         return ReviewProfileSnapshot(
             reviewer_selection=domain_selection,
-            budget_profile=BudgetProfile(self.budget_profile),
             source_profile_id=source.profile_id if source is not None else None,
             source_profile_revision=source.revision if source is not None else None,
         )
@@ -479,7 +471,6 @@ class ReviewResponse(StrictDto):
     finding_count: Annotated[int, Field(ge=0)] = 0
     external_context: dict[str, Any] | None = None
     selection_request: dict[str, object]
-    budget_profile: Literal["lean", "standard", "deep"]
     profile_source: dict[str, object] | None = None
     review_plan: dict[str, object] | None = None
     coverage: dict[str, list[str]]
@@ -530,7 +521,6 @@ class ReviewResponse(StrictDto):
             finding_count=review.finding_count,
             external_context=review.external_context,
             selection_request=selection_request,
-            budget_profile=review.review_profile.budget_profile.value,
             profile_source=source,
             review_plan=review_plan,
             coverage=coverage

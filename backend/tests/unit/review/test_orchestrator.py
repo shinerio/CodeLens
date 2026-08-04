@@ -690,7 +690,6 @@ def _multi_plan() -> ReviewPlan:
     return ReviewPlan.create(
         task_id="review-1",
         selection_mode="fixed",
-        budget_profile="standard",
         reviewer_references=("security:v1", "performance:v1"),
         nodes=(*reviewer_nodes, resolver, verifier),
         planner_reason=None,
@@ -932,7 +931,6 @@ async def test_general_or_fixed_single_reviewer_failure_fails_task(
     plan = ReviewPlan.create(
         task_id="review-1",
         selection_mode="fixed",
-        budget_profile="lean",
         reviewer_references=(reference,),
         nodes=(reviewer,),
         planner_reason=None,
@@ -1025,7 +1023,6 @@ async def test_persisted_reviewer_fanout_obeys_task_level_concurrency() -> None:
     plan = ReviewPlan.create(
         task_id="review-1",
         selection_mode="fixed",
-        budget_profile="standard",
         reviewer_references=tuple(
             node.agent_reference for node in reviewer_nodes
         ),

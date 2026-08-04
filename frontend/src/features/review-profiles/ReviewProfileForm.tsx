@@ -13,7 +13,6 @@ export function ReviewProfileForm({ profile, catalog, isSaving, error, onSave, o
   const [strategy, setStrategy] = useState<ReviewStrategySnapshot>(
     profile?.strategy ?? {
       reviewerSelection: { mode: "adaptive" },
-      budgetProfile: "standard",
     },
   );
   const [isDefault, setIsDefault] = useState(profile?.isDefault ?? false);
@@ -22,7 +21,6 @@ export function ReviewProfileForm({ profile, catalog, isSaving, error, onSave, o
   const initialDefault = profile?.isDefault ?? false;
   const initialStrategy = JSON.stringify(profile?.strategy ?? {
     reviewerSelection: { mode: "adaptive" },
-    budgetProfile: "standard",
   });
   const isDirty = name !== initialName || isDefault !== initialDefault || JSON.stringify(strategy) !== initialStrategy;
   useEffect(() => {

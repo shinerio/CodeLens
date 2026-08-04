@@ -10,7 +10,6 @@ from codelens.review.domain.models import (
 )
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -80,9 +79,8 @@ def test_fixed_selection_preserves_order_as_actual_team() -> None:
     task = _review_task(
         ReviewProfileSnapshot(
             FixedReviewerSelection(("security:v1", "performance:v1")),
-            BudgetProfile.DEEP,
-            "profile-team",
-            2,
+            source_profile_id="profile-team",
+            source_profile_revision=2,
         )
     )
 
@@ -92,7 +90,9 @@ def test_fixed_selection_preserves_order_as_actual_team() -> None:
 def test_adaptive_selection_has_no_actual_team_before_planning() -> None:
     task = _review_task(
         ReviewProfileSnapshot(
-            AdaptiveReviewerSelection(), BudgetProfile.STANDARD, "profile-auto", 3
+            AdaptiveReviewerSelection(),
+            source_profile_id="profile-auto",
+            source_profile_revision=3,
         )
     )
 

@@ -186,7 +186,7 @@ export function CatalogPreviewPage({ kind }: { kind: PreviewKind }) {
                   <article className={activeReviewer?.reference === entry.reference ? "catalog-preview-card reviewer-card reviewer-card--active" : "catalog-preview-card reviewer-card"} data-testid="reviewer-card" key={entry.reference}>
                     <header><span className="catalog-preview-card__icon"><Icon aria-hidden="true" /></span><div><h2>{name}</h2><small>{entry.reference}</small></div><b>{t(STATUS_KEYS[entry.capabilityStatus])}</b></header>
                     <p>{t(presentation.descriptionKey)}</p>
-                    <div className="catalog-preview-card__meta"><span>{entry.costClass}</span>{entry.dimensions.map((dimension) => <span key={dimension}>{dimension}</span>)}</div>
+                    <div className="catalog-preview-card__meta">{entry.dimensions.map((dimension) => <span key={dimension}>{dimension}</span>)}</div>
                     <footer><button type="button" onClick={() => selectReviewer(entry.reference)}><Settings2 aria-hidden="true" /> {t("catalog.editPrompt")}</button></footer>
                   </article>
                 );

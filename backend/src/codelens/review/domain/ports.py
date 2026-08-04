@@ -16,7 +16,6 @@ from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.review_plan import ReviewPlan
 from codelens.review.domain.review_profile import ReviewProfile
 from codelens.review.domain.review_strategy import (
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewerSelection,
     ReviewProfileSnapshot,
@@ -46,7 +45,6 @@ class ReviewProfileRepository(Protocol):
         name: str,
         is_default: bool,
         reviewer_selection: ReviewerSelection,
-        budget_profile: BudgetProfile,
         updated_at: datetime,
     ) -> ReviewProfile: ...
 
@@ -218,7 +216,7 @@ class ReviewExecutionRecord:
     cancellation_requested: bool
     review_profile: ReviewProfileSnapshot = field(
         default_factory=lambda: ReviewProfileSnapshot(
-            FixedReviewerSelection(("correctness:v1",)), BudgetProfile.STANDARD
+            FixedReviewerSelection(("correctness:v1",))
         )
     )
     planning_context_json: str | None = None
@@ -250,7 +248,6 @@ class ReviewPlanRecord:
 
     plan: ReviewPlan
     catalog_version: str
-    budget_json: str
     capability_fingerprint: str
     created_at: datetime
 
@@ -277,7 +274,6 @@ class ReviewPlanStorePort(Protocol):
         plan: ReviewPlan,
         *,
         catalog_version: str,
-        budget_json: str,
         capability_fingerprint: str,
     ) -> ReviewPlanRecord: ...
 

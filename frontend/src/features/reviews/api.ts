@@ -6,7 +6,6 @@ import type { ReviewStrategySnapshot, ScopeRequest } from "./types";
 type ReviewResponseDto = Omit<
   ReviewResponse,
   | "selection_request"
-  | "budget_profile"
   | "profile_source"
   | "review_plan"
   | "coverage"
@@ -16,7 +15,6 @@ type ReviewResponseDto = Omit<
     Pick<
       ReviewResponse,
       | "selection_request"
-      | "budget_profile"
       | "profile_source"
       | "review_plan"
       | "resolution_summary"
@@ -40,7 +38,6 @@ export function toCreateReviewRequest(input: {
       selection.mode === "adaptive"
         ? { mode: "adaptive" }
         : { mode: "fixed", reviewer_versions: [...selection.reviewerVersions] },
-    budget_profile: input.strategy.budgetProfile,
     prompt_locale: input.promptLocale,
     ...(input.profileSource === undefined
       ? {}
@@ -85,7 +82,6 @@ export function parseReviewResponse(value: ReviewResponseDto): ReviewResponse {
   return {
     ...value,
     selection_request: selectionRequest,
-    budget_profile: value.budget_profile ?? "standard",
     profile_source: value.profile_source ?? null,
     review_plan: reviewPlan,
     coverage,

@@ -12,7 +12,6 @@ from codelens.review.application.commands import (
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import ReviewRecord
 from codelens.review.domain.review_strategy import (
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -145,7 +144,7 @@ def _command(tmp_path: Path) -> CreateReviewCommand:
         repository=repository,
         scope=BranchScope("main", "HEAD", True),
         review_profile=ReviewProfileSnapshot(
-            FixedReviewerSelection(("correctness:v1",)), BudgetProfile.STANDARD
+            FixedReviewerSelection(("correctness:v1",))
         ),
     )
 

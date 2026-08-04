@@ -24,7 +24,6 @@ def migrate_config_to_v2(
             "mode": "fixed",
             "reviewer_versions": selected,
         }
-    migrated.setdefault("budget_profile", "standard")
     migrated.setdefault("supersede_policy", "latest_snapshot")
     migrated.setdefault("prompt_locale", "en")
     TriggerReviewPolicy.from_config(migrated)

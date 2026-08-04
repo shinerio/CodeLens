@@ -65,7 +65,6 @@ from codelens.review.domain.review_profile import (
 )
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewerSelection,
     ReviewProfileSnapshot,
@@ -173,7 +172,6 @@ def _review_profile_from_row(row: RowMapping) -> ReviewProfile:
         name=str(row["name"]),
         is_default=bool(row["is_default"]),
         reviewer_selection=_selection_from_json(str(row["reviewer_selection_json"])),
-        budget_profile=BudgetProfile(str(row["budget_profile"])),
         created_at=_as_utc(cast(datetime, row["created_at"])),
         updated_at=_as_utc(cast(datetime, row["updated_at"])),
     )
@@ -186,7 +184,6 @@ def _review_profile_values(profile: ReviewProfile) -> dict[str, object]:
         "name": profile.name,
         "is_default": profile.is_default,
         "reviewer_selection_json": _selection_json(profile.reviewer_selection),
-        "budget_profile": profile.budget_profile.value,
         "created_at": profile.created_at,
         "updated_at": profile.updated_at,
     }
@@ -371,7 +368,6 @@ def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
     )
     profile = ReviewProfileSnapshot(
         selection,
-        BudgetProfile(str(row["budget_profile"] or "standard")),
         str(row["profile_source_id"]) if row["profile_source_id"] is not None else None,
         int(row["profile_source_revision"]) if row["profile_source_revision"] is not None else None,
     )
@@ -486,7 +482,6 @@ class SqlReviewProfileRepository:
         name: str,
         is_default: bool,
         reviewer_selection: ReviewerSelection,
-        budget_profile: BudgetProfile,
         updated_at: datetime,
     ) -> ReviewProfile:
         """Replace a profile and its default membership in one optimistic transaction."""
@@ -498,7 +493,6 @@ class SqlReviewProfileRepository:
                 name=name,
                 is_default=is_default,
                 reviewer_selection=reviewer_selection,
-                budget_profile=budget_profile,
                 updated_at=updated_at,
             )
             if current.is_default and not updated.is_default:
@@ -547,7 +541,6 @@ class SqlReviewProfileRepository:
                 name=name,
                 is_default=False,
                 reviewer_selection=source.reviewer_selection,
-                budget_profile=source.budget_profile,
                 created_at=created_at,
             )
             await session.execute(insert(review_profiles).values(**_review_profile_values(copied)))
@@ -584,7 +577,6 @@ class SqlReviewProfileRepository:
                 name=current.name,
                 is_default=True,
                 reviewer_selection=current.reviewer_selection,
-                budget_profile=current.budget_profile,
                 updated_at=updated_at,
             )
             await session.execute(
@@ -628,15 +620,12 @@ class SqlReviewPlanStore:
         plan: ReviewPlan,
         *,
         catalog_version: str,
-        budget_json: str,
         capability_fingerprint: str,
     ) -> ReviewPlanRecord:
         """Idempotently freeze a plan, rejecting identity-preserving mutation."""
 
         if len(capability_fingerprint) != 64:
             raise ValueError("Capability fingerprint must be SHA-256")
-        if _json(json.loads(budget_json)) != budget_json:
-            raise ValueError("Review Plan budget JSON must be canonical")
         timestamp = _now()
 
         async def operation(session: AsyncSession) -> None:
@@ -652,7 +641,6 @@ class SqlReviewPlanStore:
                     plan_json=plan.canonical_json(),
                     plan_hash=plan.plan_hash,
                     catalog_version=catalog_version,
-                    budget_json=budget_json,
                     capability_fingerprint=capability_fingerprint,
                     created_at=timestamp,
                 )
@@ -676,7 +664,6 @@ class SqlReviewPlanStore:
         if (
             record.plan != plan
             or record.catalog_version != catalog_version
-            or record.budget_json != budget_json
             or record.capability_fingerprint != capability_fingerprint
         ):
             raise ValueError("Review Plan already exists with different frozen inputs")
@@ -698,13 +685,9 @@ class SqlReviewPlanStore:
         if row is None:
             return None
         plan = ReviewPlan.from_json(str(row["plan_json"]), str(row["plan_hash"]))
-        budget_json = str(row["budget_json"])
-        if _json(json.loads(budget_json)) != budget_json:
-            raise ValueError("persisted Review Plan budget hash input is not canonical")
         return ReviewPlanRecord(
             plan=plan,
             catalog_version=str(row["catalog_version"]),
-            budget_json=budget_json,
             capability_fingerprint=str(row["capability_fingerprint"]),
             created_at=_as_utc(cast(datetime, row["created_at"])),
         )
@@ -1374,7 +1357,6 @@ class SqlReviewStore:
                     status=task.status.value,
                     selected_agent_versions_json=_json(task.selected_agent_versions),
                     selection_request_json=_json(selection_payload),
-                    budget_profile=task.review_profile.budget_profile.value,
                     profile_source_id=task.review_profile.source_profile_id,
                     profile_source_revision=task.review_profile.source_profile_revision,
                     trigger_source=task.trigger_source,
@@ -1559,7 +1541,6 @@ class SqlReviewStore:
                 status=task.status.value,
                 selected_agent_versions_json=_json(task.selected_agent_versions),
                 selection_request_json=_json(selection_payload),
-                budget_profile=task.review_profile.budget_profile.value,
                 profile_source_id=task.review_profile.source_profile_id,
                 profile_source_revision=task.review_profile.source_profile_revision,
                 trigger_source=task.trigger_source,
@@ -1776,7 +1757,6 @@ class SqlReviewStore:
                     status="created",
                     selected_agent_versions_json=source["selected_agent_versions_json"],
                     selection_request_json=source["selection_request_json"],
-                    budget_profile=source["budget_profile"],
                     profile_source_id=source["profile_source_id"],
                     profile_source_revision=source["profile_source_revision"],
                     trigger_source="manual",

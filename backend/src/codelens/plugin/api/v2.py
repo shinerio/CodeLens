@@ -22,12 +22,6 @@ class AdaptiveReviewerSelection:
 type ReviewerSelection = FixedReviewerSelection | AdaptiveReviewerSelection
 
 
-class BudgetProfile(StrEnum):
-    LEAN = "lean"
-    STANDARD = "standard"
-    DEEP = "deep"
-
-
 class SupersedePolicy(StrEnum):
     LATEST_SNAPSHOT = "latest_snapshot"
     PRESERVE_ALL = "preserve_all"
@@ -36,21 +30,18 @@ class SupersedePolicy(StrEnum):
 @dataclass(frozen=True)
 class TriggerReviewPolicy:
     reviewer_selection: ReviewerSelection
-    budget_profile: BudgetProfile
     supersede_policy: SupersedePolicy
     prompt_locale: Literal["en", "zh-CN"]
 
     @classmethod
     def from_config(cls, config: Mapping[str, object]) -> "TriggerReviewPolicy":
         selection = _parse_reviewer_selection(config.get("reviewer_selection"))
-        budget = _required_string(config, "budget_profile")
         supersede = _required_string(config, "supersede_policy")
         locale = _required_string(config, "prompt_locale")
         if locale not in ("en", "zh-CN"):
             raise ValueError("unsupported prompt_locale")
         return cls(
             reviewer_selection=selection,
-            budget_profile=BudgetProfile(budget),
             supersede_policy=SupersedePolicy(supersede),
             prompt_locale=cast(Literal["en", "zh-CN"], locale),
         )
@@ -114,7 +105,6 @@ class ReportSinkPort(Protocol):
 
 __all__ = [
     "AdaptiveReviewerSelection",
-    "BudgetProfile",
     "FindingExportEnvelopeV2",
     "FixedReviewerSelection",
     "ReportSinkPort",

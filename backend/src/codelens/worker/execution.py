@@ -25,7 +25,6 @@ from codelens.findings.application.verify_resolutions import VerificationPolicy
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.findings.infrastructure.resolver_output import ResolverOutputCodec
 from codelens.findings.infrastructure.verifier_output import VerifierOutputCodec
-from codelens.review.application.budget_policy import BudgetPolicyCatalog
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.orchestrator import (
     CheckpointView,
@@ -53,7 +52,7 @@ from codelens.review.domain.ports import (
     UnvalidatedAgentOutput,
 )
 from codelens.review.domain.review_plan import ReviewPlan
-from codelens.review.domain.review_strategy import BudgetProfile, FixedReviewerSelection
+from codelens.review.domain.review_strategy import FixedReviewerSelection
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
     CheckpointRecord,
@@ -119,7 +118,6 @@ class _RejectAdaptivePlanning:
         task_id: str,
         target_paths: tuple[str, ...],
         readiness: Mapping[str, CapabilityReadiness],
-        budget_profile: BudgetProfile,
         risk_summary: ChangeRiskSummary | None,
     ) -> PlannerSelection:
         raise RuntimeError("Fixed Review Plan must not invoke the Planner")
@@ -622,12 +620,10 @@ class WorkerReviewExecutor:
                 (spec.agent.reference, spec) for spec in generated
             )
         catalog = builtin_agent_catalog()
-        budget_policy = BudgetPolicyCatalog.version_one()
-        plan = ReviewPlanCompiler(catalog, budget_policy).compile(
+        plan = ReviewPlanCompiler(catalog).compile(
             task_id=record.task_id,
             selection_mode="fixed",
             reviewer_references=selection.reviewer_versions,
-            budget_profile=record.review_profile.budget_profile,
             planner_selection=None,
             execution_specs=specs_by_reference,
             readiness={
@@ -681,10 +677,9 @@ class WorkerReviewExecutor:
             separators=(",", ":"),
         )
         persisted_plan = await ReviewPlanningService(
-            compiler=ReviewPlanCompiler(catalog, budget_policy),
+            compiler=ReviewPlanCompiler(catalog),
             planner=_RejectAdaptivePlanning(),
             plan_store=review_plan_store,
-            budget_policy=budget_policy,
         ).plan(
             task_id=record.task_id,
             profile=record.review_profile,

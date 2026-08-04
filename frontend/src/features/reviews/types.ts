@@ -28,8 +28,6 @@ export type ScopeRequest =
   | UncommittedScopeRequest
   | FullRepositoryScopeRequest;
 
-export type BudgetProfile = "lean" | "standard" | "deep";
-
 export type ReviewerSelection =
   | { mode: "fixed"; reviewer_versions: string[] }
   | { mode: "adaptive" };
@@ -38,7 +36,6 @@ export type ReviewStrategySnapshot = {
   reviewerSelection:
     | { mode: "fixed"; reviewerVersions: readonly string[] }
     | { mode: "adaptive" };
-  budgetProfile: BudgetProfile;
 };
 
 export type ReviewProfileSourceRequest = {
@@ -50,7 +47,6 @@ export type CreateReviewRequest = {
   repository_path: string;
   scope: ScopeRequest;
   reviewer_selection: ReviewerSelection;
-  budget_profile: BudgetProfile;
   profile_source?: ReviewProfileSourceRequest;
   prompt_locale: "en" | "zh-CN";
 };
@@ -74,7 +70,6 @@ export type ReviewResponse = {
   finding_count: number;
   external_context: Record<string, unknown> | null;
   selection_request: ReviewerSelection;
-  budget_profile: BudgetProfile;
   profile_source: ReviewProfileSourceRequest | null;
   review_plan: ReviewPlanProjection | null;
   coverage: ReviewCoverageProjection;
@@ -99,7 +94,6 @@ export type ReviewPlanProjection = {
   reviewer_references: string[];
   plan_hash: string;
   nodes: ReviewPlanNodeProjection[];
-  budget_profile: BudgetProfile;
   planner_reason: string | null;
 };
 

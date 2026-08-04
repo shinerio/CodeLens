@@ -14,7 +14,6 @@ from codelens.interface.http.dto import (
 )
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewerSelection,
 )
@@ -46,7 +45,6 @@ async def create_review_profile(
         name=request.name,
         is_default=request.is_default,
         reviewer_selection=_selection_from_request(request.reviewer_selection),
-        budget_profile=BudgetProfile(request.budget_profile),
     )
     return ReviewProfileResponse.from_domain(profile)
 
@@ -63,7 +61,6 @@ async def update_review_profile(
         name=request.name,
         is_default=request.is_default,
         reviewer_selection=_selection_from_request(request.reviewer_selection),
-        budget_profile=BudgetProfile(request.budget_profile),
     )
     return ReviewProfileResponse.from_domain(profile)
 

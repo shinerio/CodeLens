@@ -13,7 +13,6 @@ class ReviewerCatalogEntryResponse(StrictDto):
     agent_id: str
     version: int
     dimensions: list[str]
-    cost_class: Literal["balanced"]
     planner_eligible: bool
     capability_readiness: Literal["ready"]
     is_legacy: bool
@@ -29,7 +28,6 @@ async def list_reviewer_catalog() -> list[ReviewerCatalogEntryResponse]:
             agent_id=agent.agent_id,
             version=agent.version,
             dimensions=list(agent.dimensions),
-            cost_class="balanced",
             planner_eligible=agent.planner_eligible,
             capability_readiness="ready",
             is_legacy=agent.is_legacy,

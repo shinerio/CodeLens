@@ -200,13 +200,11 @@ it("keeps published findings visible while naming partial reviewer coverage", as
       finding_count: 1,
       external_context: null,
       selection_request: { mode: "adaptive" },
-      budget_profile: "deep",
       profile_source: null,
       review_plan: {
         selection_mode: "adaptive",
         reviewer_references: ["security:v1", "performance:v1"],
         plan_hash: "1".repeat(64),
-        budget_profile: "deep",
         planner_reason: "Risk-sensitive fan-out",
         nodes: [
           { node_id: "planner", node_type: "planner", agent_reference: "planner:v1", depends_on: [], pass_index: 0, shard_id: "all", logical_attempt_group: "planner", task_id: "review_partial" },
@@ -336,7 +334,6 @@ it("shows timeline filters when the persisted review plan arrives", async () => 
           selection_mode: "fixed",
           reviewer_references: ["security:v1", "performance:v1"],
           plan_hash: "1".repeat(64),
-          budget_profile: "deep",
           planner_reason: null,
           nodes: [
             { node_id: "security", node_type: "reviewer", agent_reference: "security:v1", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "security", task_id: "review_plan_refresh" },

@@ -90,7 +90,6 @@ beforeEach(() => {
           name: "Adaptive deep",
           is_default: true,
           reviewer_selection: { mode: "adaptive" },
-          budget_profile: "deep",
           created_at: "2026-08-01T00:00:00Z",
           updated_at: "2026-08-02T00:00:00Z",
         },
@@ -103,7 +102,6 @@ beforeEach(() => {
           agent_id: "security",
           version: 1,
           dimensions: ["security"],
-          cost_class: "balanced",
           planner_eligible: true,
           capability_readiness: "ready",
           is_legacy: false,
@@ -277,7 +275,6 @@ it("copies a Profile into a v2 plugin policy with separate provenance", async ()
           mode: "fixed",
           reviewer_versions: ["security:v1"],
         },
-        budget_profile: "standard",
         supersede_policy: "latest_snapshot",
         prompt_locale: "en",
         debounce_seconds: 10,
@@ -293,7 +290,6 @@ it("copies a Profile into a v2 plugin policy with separate provenance", async ()
   await waitFor(() => expect(configRequest).toBeDefined());
   const body = JSON.parse(String(configRequest?.body));
   expect(body.config.reviewer_selection).toEqual({ mode: "adaptive" });
-  expect(body.config.budget_profile).toBe("deep");
   expect(body.config.profile_source).toBeUndefined();
   expect(body.profile_source).toEqual({
     profile_id: "profile-adaptive",

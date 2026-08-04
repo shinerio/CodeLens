@@ -19,7 +19,6 @@ from codelens.review.domain.ports import (
 )
 from codelens.review.domain.review_plan import ReviewPlanNodeType
 from codelens.review.domain.review_strategy import (
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -124,8 +123,7 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     profile = ReviewProfileSnapshot(
-        FixedReviewerSelection(("correctness:v2", "security:v1")),
-        BudgetProfile.STANDARD,
+        FixedReviewerSelection(("correctness:v2", "security:v1"))
     )
     record = ReviewExecutionRecord(
         task_id="review-fixed",

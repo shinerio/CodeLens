@@ -364,7 +364,6 @@ async def test_restart_preserves_one_saved_reviewer_and_requeues_running_peer(
     plan = ReviewPlan.create(
         task_id="review-restart",
         selection_mode="fixed",
-        budget_profile="standard",
         reviewer_references=("security:v1", "performance:v1"),
         nodes=(*reviewers, resolver, verifier),
         planner_reason=None,

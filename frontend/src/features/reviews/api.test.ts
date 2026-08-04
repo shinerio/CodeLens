@@ -22,20 +22,18 @@ const legacyReview = {
   external_context: null,
 };
 
-it("serializes a fixed deep strategy without legacy selected_agents", () => {
+it("serializes a fixed strategy without legacy selected_agents", () => {
   expect(toCreateReviewRequest({
     repositoryPath: "/repo",
     scope: { type: "uncommitted" },
     strategy: {
       reviewerSelection: { mode: "fixed", reviewerVersions: ["security:v1"] },
-      budgetProfile: "deep",
     },
     promptLocale: "en",
   })).toEqual({
     repository_path: "/repo",
     scope: { type: "uncommitted" },
     reviewer_selection: { mode: "fixed", reviewer_versions: ["security:v1"] },
-    budget_profile: "deep",
     prompt_locale: "en",
   });
 });
@@ -47,7 +45,6 @@ it("normalizes a historical response into an explicit v2 projection", () => {
     reviewer_versions: ["security:v1"],
   });
   expect(parsed.coverage.completed).toEqual(["security:v1"]);
-  expect(parsed.budget_profile).toBe("standard");
 });
 
 it("rejects an incomplete native v2 coverage projection", () => {

@@ -1,7 +1,6 @@
 import type { ReviewerCatalogEntry } from "../catalog/types";
 import { useI18n } from "../../shared/i18n/i18n";
 import type { ReviewStrategySnapshot } from "../reviews/types";
-import { BudgetProfilePicker } from "./BudgetProfilePicker";
 import { ReviewerPicker } from "./ReviewerPicker";
 import { toggleFixedReviewer, updateSelectionMode, type StrategyValidationError } from "./model";
 import "./ReviewStrategyEditor.css";
@@ -42,11 +41,6 @@ export function ReviewStrategyEditor({ value, catalog, isDisabled = false, valid
       ) : (
         <p className="strategy-adaptive-note">{t("strategy.adaptivePending")}</p>
       )}
-      <BudgetProfilePicker
-        isDisabled={isDisabled}
-        value={value.budgetProfile}
-        onChange={(budgetProfile) => onChange({ ...value, budgetProfile })}
-      />
       {validationErrors.length > 0 ? (
         <div className="strategy-errors" role="alert">
           {validationErrors.map((error) => <p key={`${error.code}:${error.reviewerVersion ?? ""}`}>{error.code === "empty_fixed" ? t("strategy.emptyFixed") : t("strategy.unavailable", { reviewer: error.reviewerVersion ?? "Reviewer" })}</p>)}

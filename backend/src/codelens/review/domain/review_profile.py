@@ -3,7 +3,6 @@ from dataclasses import dataclass, replace
 from datetime import datetime
 
 from codelens.review.domain.review_strategy import (
-    BudgetProfile,
     ReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -44,7 +43,6 @@ class ReviewProfile:
     name: str
     is_default: bool
     reviewer_selection: ReviewerSelection
-    budget_profile: BudgetProfile
     created_at: datetime
     updated_at: datetime
 
@@ -68,7 +66,6 @@ class ReviewProfile:
         name: str,
         is_default: bool,
         reviewer_selection: ReviewerSelection,
-        budget_profile: BudgetProfile,
         created_at: datetime,
     ) -> "ReviewProfile":
         """Create revision one while preserving an immutable identity and creation time."""
@@ -79,7 +76,6 @@ class ReviewProfile:
             name=name.strip(),
             is_default=is_default,
             reviewer_selection=reviewer_selection,
-            budget_profile=budget_profile,
             created_at=created_at,
             updated_at=created_at,
         )
@@ -91,7 +87,6 @@ class ReviewProfile:
         name: str,
         is_default: bool,
         reviewer_selection: ReviewerSelection,
-        budget_profile: BudgetProfile,
         updated_at: datetime,
     ) -> "ReviewProfile":
         """Return the next revision or fail before applying a stale write."""
@@ -104,7 +99,6 @@ class ReviewProfile:
             name=name.strip(),
             is_default=is_default,
             reviewer_selection=reviewer_selection,
-            budget_profile=budget_profile,
             updated_at=updated_at,
         )
 
@@ -113,7 +107,6 @@ class ReviewProfile:
 
         return ReviewProfileSnapshot(
             reviewer_selection=self.reviewer_selection,
-            budget_profile=self.budget_profile,
             source_profile_id=self.profile_id,
             source_profile_revision=self.revision,
         )

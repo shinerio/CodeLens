@@ -1,17 +1,8 @@
 import re
 from dataclasses import dataclass, field
-from enum import StrEnum
 from typing import Literal
 
 _REFERENCE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]*:v[1-9][0-9]*$")
-
-
-class BudgetProfile(StrEnum):
-    """Stable resource-budget identifiers accepted by Review strategy contracts."""
-
-    LEAN = "lean"
-    STANDARD = "standard"
-    DEEP = "deep"
 
 
 def _validate_references(references: tuple[str, ...]) -> None:
@@ -53,7 +44,6 @@ class ReviewProfileSnapshot:
     """Freeze one Review strategy and optional all-or-nothing template provenance."""
 
     reviewer_selection: ReviewerSelection
-    budget_profile: BudgetProfile
     source_profile_id: str | None = None
     source_profile_revision: int | None = None
 

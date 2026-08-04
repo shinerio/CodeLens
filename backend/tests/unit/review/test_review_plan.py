@@ -41,7 +41,6 @@ def test_multi_specialist_plan_requires_resolver() -> None:
         ReviewPlan.create(
             task_id=TASK_ID,
             selection_mode="fixed",
-            budget_profile="standard",
             reviewer_references=("correctness:v2", "security:v1"),
             nodes=reviewer_nodes_only(),
             planner_reason=None,
@@ -61,7 +60,6 @@ def test_multi_specialist_plan_requires_one_batched_verifier() -> None:
         ReviewPlan.create(
             task_id=TASK_ID,
             selection_mode="fixed",
-            budget_profile="standard",
             reviewer_references=("correctness:v2", "security:v1"),
             nodes=(*reviewers, resolver),
             planner_reason=None,
@@ -73,7 +71,6 @@ def test_single_reviewer_plan_does_not_require_resolver(reviewer_reference: str)
     plan = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
-        budget_profile="lean",
         reviewer_references=(reviewer_reference,),
         nodes=(_node(reviewer_reference, ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER),),
         planner_reason=None,
@@ -87,7 +84,6 @@ def test_adaptive_plan_requires_a_planner_reason() -> None:
         ReviewPlan.create(
             task_id=TASK_ID,
             selection_mode="adaptive",
-            budget_profile="standard",
             reviewer_references=("general:v1",),
             nodes=(_node("general:v1", ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER),),
             planner_reason=None,
@@ -114,7 +110,6 @@ def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
     first = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
-        budget_profile="deep",
         reviewer_references=("security:v1", "correctness:v2"),
         nodes=(*reviewers, resolver, verifier),
         planner_reason=None,
@@ -122,7 +117,6 @@ def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
     second = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
-        budget_profile="deep",
         reviewer_references=("correctness:v2", "security:v1"),
         nodes=(verifier, resolver, *reversed(reviewers)),
         planner_reason=None,

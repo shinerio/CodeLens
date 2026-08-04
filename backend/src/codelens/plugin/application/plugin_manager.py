@@ -125,10 +125,6 @@ class PluginManager:
                                 "type": "object",
                                 "description": "Fixed or Adaptive reviewer policy",
                             },
-                            "budget_profile": {
-                                "type": "string",
-                                "enum": ["lean", "standard", "deep"],
-                            },
                             "supersede_policy": {
                                 "type": "string",
                                 "enum": ["latest_snapshot", "preserve_all"],
@@ -210,7 +206,6 @@ class PluginManager:
                     "mode": "fixed",
                     "reviewer_versions": ["correctness:v1"],
                 },
-                "budget_profile": "standard",
                 "supersede_policy": "latest_snapshot",
                 "prompt_locale": "en",
                 "debounce_seconds": 10,

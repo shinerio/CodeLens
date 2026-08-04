@@ -272,7 +272,6 @@ it("selects a stage and then one reviewer timeline", () => {
         selection_mode: "fixed",
         reviewer_references: ["security:v1", "performance:v1"],
         plan_hash: "plan-hash",
-        budget_profile: "deep",
         planner_reason: null,
         nodes: [
           {
@@ -419,7 +418,6 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         selection_mode: "fixed",
         reviewer_references: ["security:v1", "performance:v1"],
         plan_hash: "plan-hash",
-        budget_profile: "deep",
         planner_reason: null,
         nodes: [
           { node_id: "security", node_type: "reviewer", agent_reference: "security:v1", depends_on: [], pass_index: 1, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },

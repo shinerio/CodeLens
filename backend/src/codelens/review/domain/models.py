@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import Literal
 
 from codelens.review.domain.review_strategy import (
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -141,7 +140,7 @@ class ReviewTask:
 
         if review_profile is None:
             review_profile = ReviewProfileSnapshot(
-                FixedReviewerSelection(selected_agent_versions), BudgetProfile.STANDARD
+                FixedReviewerSelection(selected_agent_versions)
             )
         initial_agents = cls._initial_agents(review_profile)
         if selected_agent_versions != initial_agents:
@@ -152,7 +151,6 @@ class ReviewTask:
             raise ValueError("a ReviewTask requires at least one frozen target path")
         context = planning_context or {
             "schema_version": 1,
-            "budget_policy": {"profile": review_profile.budget_profile.value, "version": 1},
             "catalog_snapshot": {"version": "legacy", "reviewers": list(initial_agents)},
             "capability_readiness": {},
             "planner_execution_spec": None,

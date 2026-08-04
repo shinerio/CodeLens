@@ -5,7 +5,6 @@ export interface ReviewerCatalogEntry {
   agentId: string;
   version: number;
   dimensions: readonly string[];
-  costClass: "balanced";
   isPlannerEligible: boolean;
   isLegacy: boolean;
   capabilityStatus: ReviewerCapabilityStatus;

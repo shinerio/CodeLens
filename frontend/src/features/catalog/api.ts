@@ -6,7 +6,6 @@ type ReviewerCatalogDto = {
   agent_id: string;
   version: number;
   dimensions: string[];
-  cost_class: "balanced";
   planner_eligible: boolean;
   capability_readiness: "ready";
   is_legacy: boolean;
@@ -19,7 +18,6 @@ export async function listReviewerCatalog(): Promise<ReviewerCatalogEntry[]> {
     agentId: entry.agent_id,
     version: entry.version,
     dimensions: entry.dimensions,
-    costClass: entry.cost_class,
     isPlannerEligible: entry.planner_eligible,
     isLegacy: entry.is_legacy,
     capabilityStatus: entry.capability_readiness,

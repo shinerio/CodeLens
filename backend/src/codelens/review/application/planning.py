@@ -4,7 +4,6 @@ from dataclasses import asdict, dataclass
 from typing import Literal, Protocol
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
-from codelens.review.application.budget_policy import BudgetPolicyCatalog
 from codelens.review.domain.ports import ReviewPlanStorePort
 from codelens.review.domain.review_plan import (
     PlanCapabilityDegradation,
@@ -16,7 +15,6 @@ from codelens.review.domain.review_plan import (
 )
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -148,7 +146,6 @@ class PlannerPort(Protocol):
         task_id: str,
         target_paths: tuple[str, ...],
         readiness: Mapping[str, CapabilityReadiness],
-        budget_profile: BudgetProfile,
         risk_summary: ChangeRiskSummary | None,
     ) -> PlannerSelection: ...
 
@@ -159,7 +156,6 @@ def build_planner_input_payload(
     eligible_reviewer_references: tuple[str, ...],
     readiness: Mapping[str, CapabilityReadiness],
     risk_summary: ChangeRiskSummary,
-    budget_limits: Mapping[str, object],
     reviewer_catalog: tuple[Mapping[str, object], ...],
 ) -> bytes:
     """Add bounded Planner metadata to an existing frozen Agent input envelope."""
@@ -180,7 +176,6 @@ def build_planner_input_payload(
         == "unavailable"
     )
     envelope["role_context"] = {
-        "budget_limits": dict(budget_limits),
         "change_risk_summary": asdict(risk_summary),
         "eligible_reviewer_references": list(eligible_reviewer_references),
         "reviewer_catalog": [dict(item) for item in reviewer_catalog],
@@ -195,10 +190,8 @@ class ReviewPlanCompiler:
     def __init__(
         self,
         catalog: Mapping[str, AgentVersion],
-        budget_policy: BudgetPolicyCatalog,
     ) -> None:
         self._catalog = dict(catalog)
-        self._budget_policy = budget_policy
 
     def compile(
         self,
@@ -206,7 +199,6 @@ class ReviewPlanCompiler:
         task_id: str,
         selection_mode: Literal["fixed", "adaptive"],
         reviewer_references: tuple[str, ...],
-        budget_profile: BudgetProfile,
         planner_selection: PlannerSelection | None,
         execution_specs: Mapping[str, FrozenAgentExecutionSpec],
         readiness: Mapping[str, CapabilityReadiness],
@@ -216,12 +208,6 @@ class ReviewPlanCompiler:
                 reviewer_references, selection_mode, readiness
             )
             is_multi = len(reviewers) > 1
-            self._budget_policy.validate_shape(
-                profile=budget_profile,
-                selection_mode=selection_mode,
-                reviewer_count=len(reviewers),
-                is_multi_specialist=is_multi,
-            )
             required = list(reviewers)
             if selection_mode == "adaptive":
                 required.append("review-planner:v1")
@@ -237,7 +223,6 @@ class ReviewPlanCompiler:
                 task_id=task_id,
                 selection_mode=selection_mode,
                 reviewers=reviewers,
-                budget_profile=budget_profile,
                 planner_selection=planner_selection,
                 readiness=readiness,
             )
@@ -304,7 +289,6 @@ class ReviewPlanCompiler:
         task_id: str,
         selection_mode: Literal["fixed", "adaptive"],
         reviewers: tuple[str, ...],
-        budget_profile: BudgetProfile,
         planner_selection: PlannerSelection | None,
         readiness: Mapping[str, CapabilityReadiness],
     ) -> ReviewPlan:
@@ -358,7 +342,6 @@ class ReviewPlanCompiler:
         return ReviewPlan.create(
             task_id=task_id,
             selection_mode=selection_mode,
-            budget_profile=budget_profile.value,
             reviewer_references=reviewers,
             nodes=tuple(nodes),
             planner_reason=("planner-selection:v1" if planner_selection else None),
@@ -380,12 +363,10 @@ class ReviewPlanningService:
         compiler: ReviewPlanCompiler,
         planner: PlannerPort,
         plan_store: ReviewPlanStorePort,
-        budget_policy: BudgetPolicyCatalog | None = None,
     ) -> None:
         self._compiler = compiler
         self._planner = planner
         self._plan_store = plan_store
-        self._budget_policy = budget_policy or BudgetPolicyCatalog.version_one()
 
     async def plan(
         self,
@@ -409,7 +390,6 @@ class ReviewPlanningService:
                 task_id=task_id,
                 target_paths=target_paths,
                 readiness=readiness,
-                budget_profile=profile.budget_profile,
                 risk_summary=risk_summary,
             )
             references = planner_selection.reviewer_references
@@ -423,25 +403,13 @@ class ReviewPlanningService:
             task_id=task_id,
             selection_mode=mode,
             reviewer_references=references,
-            budget_profile=profile.budget_profile,
             planner_selection=planner_selection,
             execution_specs=execution_specs,
             readiness=readiness,
         )
-        limits = self._budget_policy.limits(profile.budget_profile)
-        budget_json = json.dumps(
-            {
-                "limits": asdict(limits),
-                "profile": profile.budget_profile.value,
-                "version": self._budget_policy.version,
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
         record = await self._plan_store.save(
             plan,
             catalog_version=catalog_version,
-            budget_json=budget_json,
             capability_fingerprint=capability_fingerprint,
         )
         return record.plan

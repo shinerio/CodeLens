@@ -80,7 +80,6 @@ export function NewReviewPage() {
   const [fullTargetRef, setFullTargetRef] = useState("");
   const [strategy, setStrategy] = useState<ReviewStrategySnapshot>({
     reviewerSelection: { mode: "adaptive" },
-    budgetProfile: "standard",
   });
   const [selectedProfileId, setSelectedProfileId] = useState("");
   const [isCustomizingStrategy, setIsCustomizingStrategy] = useState(false);
@@ -219,7 +218,6 @@ export function NewReviewPage() {
         defaultProfile.strategy.reviewerSelection.mode === "adaptive"
           ? { mode: "adaptive" }
           : { mode: "fixed", reviewerVersions: [...defaultProfile.strategy.reviewerSelection.reviewerVersions] },
-      budgetProfile: defaultProfile.strategy.budgetProfile,
     });
   }, [profilesQuery.data]);
 
@@ -589,7 +587,6 @@ export function NewReviewPage() {
                         profile.strategy.reviewerSelection.mode === "adaptive"
                           ? { mode: "adaptive" }
                           : { mode: "fixed", reviewerVersions: [...profile.strategy.reviewerSelection.reviewerVersions] },
-                      budgetProfile: profile.strategy.budgetProfile,
                     });
                     setIsStrategyCustomized(false);
                   }}

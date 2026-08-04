@@ -12,7 +12,6 @@ const catalog = ["general", "security", "performance"].map((agentId) => ({
   agentId,
   version: 1,
   dimensions: [agentId],
-  costClass: "balanced" as const,
   isPlannerEligible: true,
   isLegacy: false,
   capabilityStatus: "ready" as const,
@@ -21,7 +20,6 @@ const catalog = ["general", "security", "performance"].map((agentId) => ({
 function Harness() {
   const [strategy, setStrategy] = useState<ReviewStrategySnapshot>({
     reviewerSelection: { mode: "fixed", reviewerVersions: [] },
-    budgetProfile: "standard",
   });
   return <ReviewStrategyEditor catalog={catalog} value={strategy} onChange={setStrategy} />;
 }
@@ -56,7 +54,6 @@ it("keeps a selected legacy snapshot valid while preventing new selection", () =
       catalog={legacyCatalog}
       value={{
         reviewerSelection: { mode: "fixed", reviewerVersions: ["correctness:v1"] },
-        budgetProfile: "standard",
       }}
       validationErrors={[]}
       onChange={() => undefined}

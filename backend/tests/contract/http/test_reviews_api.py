@@ -91,7 +91,6 @@ def test_v2_adaptive_selection_is_persisted_without_legacy_upgrade(
             "include_workspace_changes": False,
         },
         "reviewer_selection": {"mode": "adaptive"},
-        "budget_profile": "deep",
         "prompt_locale": "en",
     }
 
@@ -105,7 +104,6 @@ def test_v2_adaptive_selection_is_persisted_without_legacy_upgrade(
     assert created.status_code == 202
     assert response.status_code == 200
     assert response.json()["selection_request"] == {"mode": "adaptive"}
-    assert response.json()["budget_profile"] == "deep"
     assert response.json()["selected_agents"] == []
     assert response.json()["review_plan"] is None
 
@@ -142,7 +140,6 @@ def test_review_plan_projection_includes_derived_plan_hash(
         plan = ReviewPlan.create(
             task_id=task_id,
             selection_mode="fixed",
-            budget_profile="standard",
             reviewer_references=("correctness:v1",),
             nodes=(reviewer,),
             planner_reason=None,
@@ -152,7 +149,6 @@ def test_review_plan_projection_includes_derived_plan_hash(
                 app.state.components.review_plan_store.save,
                 plan,
                 catalog_version="test-catalog",
-                budget_json="{}",
                 capability_fingerprint="a" * 64,
             )
         )

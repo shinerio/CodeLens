@@ -25,7 +25,6 @@ def test_fixed_policy_preserves_ordered_exact_versions() -> None:
                 "mode": "fixed",
                 "reviewer_versions": ["security:v1", "correctness:v2"],
             },
-            "budget_profile": "standard",
             "supersede_policy": "latest_snapshot",
             "prompt_locale": "en",
         }
@@ -46,7 +45,6 @@ def test_adaptive_policy_rejects_fixed_reviewers() -> None:
                     "mode": "adaptive",
                     "reviewer_versions": ["security:v1"],
                 },
-                "budget_profile": "deep",
                 "supersede_policy": "preserve_all",
                 "prompt_locale": "en",
             }
@@ -57,7 +55,6 @@ def test_adaptive_policy_is_typed() -> None:
     policy = TriggerReviewPolicy.from_config(
         {
             "reviewer_selection": {"mode": "adaptive"},
-            "budget_profile": "deep",
             "supersede_policy": "preserve_all",
             "prompt_locale": "zh-CN",
         }
@@ -73,7 +70,6 @@ def test_general_must_be_the_only_fixed_reviewer() -> None:
                     "mode": "fixed",
                     "reviewer_versions": ["general:v1", "security:v1"],
                 },
-                "budget_profile": "lean",
                 "supersede_policy": "latest_snapshot",
                 "prompt_locale": "en",
             }

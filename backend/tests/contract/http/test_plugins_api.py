@@ -120,7 +120,6 @@ def test_plugin_config_persists_profile_provenance_beside_policy(tmp_path: Path)
             json={
                 "config": {
                     "reviewer_selection": {"mode": "adaptive"},
-                    "budget_profile": "deep",
                 },
                 "profile_source": {
                     "profile_id": "profile-balanced",

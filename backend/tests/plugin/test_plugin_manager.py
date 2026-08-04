@@ -208,7 +208,6 @@ async def test_existing_builtin_v1_is_migrated_to_current_v2_manifest() -> None:
         "mode": "fixed",
         "reviewer_versions": ["correctness:v1"],
     }
-    assert migrated.trigger_config["budget_profile"] == "standard"
     assert migrated.trigger_config["prompt_locale"] == "zh-CN"
     assert "selected_agents" not in migrated.trigger_config
     assert migrated.config_revision == 5

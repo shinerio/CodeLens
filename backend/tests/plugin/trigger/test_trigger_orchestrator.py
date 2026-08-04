@@ -107,7 +107,6 @@ async def test_builtin_local_plugin_dispatches_post_commit_with_composite_loader
                         "mode": "fixed",
                         "reviewer_versions": ["correctness:v1"],
                     },
-                    "budget_profile": "standard",
                     "supersede_policy": "latest_snapshot",
                     "prompt_locale": "zh-CN",
                 }

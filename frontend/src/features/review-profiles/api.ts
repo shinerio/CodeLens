@@ -8,7 +8,6 @@ type ReviewProfileDto = {
   name: string;
   is_default: boolean;
   reviewer_selection: ReviewerSelection;
-  budget_profile: "lean" | "standard" | "deep";
   created_at: string;
   updated_at: string;
 };
@@ -27,7 +26,6 @@ function fromDto(profile: ReviewProfileDto): ReviewProfile {
               mode: "fixed",
               reviewerVersions: profile.reviewer_selection.reviewer_versions,
             },
-      budgetProfile: profile.budget_profile,
     },
     createdAt: profile.created_at,
     updatedAt: profile.updated_at,
@@ -43,7 +41,6 @@ function toDto(input: SaveReviewProfileInput) {
       selection.mode === "adaptive"
         ? { mode: "adaptive" as const }
         : { mode: "fixed" as const, reviewer_versions: [...selection.reviewerVersions] },
-    budget_profile: input.strategy.budgetProfile,
   };
 }
 

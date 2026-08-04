@@ -11,7 +11,6 @@ def _profile_request(name: str, *, is_default: bool = False) -> dict[str, object
         "name": name,
         "is_default": is_default,
         "reviewer_selection": {"mode": "adaptive"},
-        "budget_profile": "standard",
     }
 
 
@@ -64,7 +63,6 @@ def test_copy_starts_independent_non_default_revision_one(tmp_path: Path) -> Non
                     "mode": "fixed",
                     "reviewer_versions": ["security:v1"],
                 },
-                "budget_profile": "deep",
             },
         )
         profiles = client.get("/api/review-profiles").json()
@@ -77,4 +75,3 @@ def test_copy_starts_independent_non_default_revision_one(tmp_path: Path) -> Non
     assert copy["is_default"] is False
     assert source.status_code == 200
     assert persisted_copy["reviewer_selection"] == {"mode": "adaptive"}
-    assert persisted_copy["budget_profile"] == "standard"

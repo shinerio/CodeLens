@@ -14,7 +14,6 @@ const dto = {
   name: "Security",
   is_default: true,
   reviewer_selection: { mode: "adaptive" },
-  budget_profile: "deep",
   created_at: "2026-08-01T00:00:00Z",
   updated_at: "2026-08-02T00:00:00Z",
 };
@@ -30,7 +29,7 @@ it("maps profile DTOs into camel-case strategy snapshots", async () => {
     expect.objectContaining({
       id: "profile-1",
       isDefault: true,
-      strategy: { reviewerSelection: { mode: "adaptive" }, budgetProfile: "deep" },
+      strategy: { reviewerSelection: { mode: "adaptive" } },
     }),
   ]);
 });
@@ -46,15 +45,15 @@ it("uses revision-aware writes and stable snake-case boundaries", async () => {
   const profile = (await createReviewProfile({
     name: "Security",
     isDefault: true,
-    strategy: { reviewerSelection: { mode: "adaptive" }, budgetProfile: "deep" },
+    strategy: { reviewerSelection: { mode: "adaptive" } },
   }));
   await updateReviewProfile(profile, {
     name: "Security",
     isDefault: true,
-    strategy: { reviewerSelection: { mode: "adaptive" }, budgetProfile: "standard" },
+    strategy: { reviewerSelection: { mode: "adaptive" } },
   });
   const updateBody = JSON.parse(String(fetchMock.mock.calls[1]?.[1]?.body));
-  expect(updateBody).toMatchObject({ revision: 2, budget_profile: "standard" });
+  expect(updateBody).toMatchObject({ revision: 2 });
 });
 
 it("gets one profile and switches the default with its loaded revision", async () => {
