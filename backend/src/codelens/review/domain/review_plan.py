@@ -12,8 +12,7 @@ class ReviewPass(IntEnum):
 
     PLANNER = 0
     REVIEWER = 1
-    RESOLVER = 2
-    VERIFIER = 3
+    VERIFIER = 2
 
 
 class ReviewPlanNodeType(StrEnum):
@@ -21,7 +20,6 @@ class ReviewPlanNodeType(StrEnum):
 
     PLANNER = "planner"
     REVIEWER = "reviewer"
-    RESOLVER = "resolver"
     VERIFIER = "verifier"
 
 
@@ -68,7 +66,6 @@ class CoverageStatus(StrEnum):
 _PASS_BY_NODE_TYPE = {
     ReviewPlanNodeType.PLANNER: ReviewPass.PLANNER,
     ReviewPlanNodeType.REVIEWER: ReviewPass.REVIEWER,
-    ReviewPlanNodeType.RESOLVER: ReviewPass.RESOLVER,
     ReviewPlanNodeType.VERIFIER: ReviewPass.VERIFIER,
 }
 
@@ -331,31 +328,19 @@ class ReviewPlan:
             raise ValueError("Fixed plan cannot contain a Planner node")
         elif any(node.depends_on for node in reviewer_nodes):
             raise ValueError("Fixed Reviewer nodes cannot have dependencies")
-        resolver_count = sum(
-            node.node_type is ReviewPlanNodeType.RESOLVER for node in nodes
-        )
         is_multi_specialist = len(reviewer_references) > 1
-        if is_multi_specialist and resolver_count == 0:
-            raise ValueError("multi-specialist plan requires a resolver")
-        if resolver_count > 1:
-            raise ValueError("Review plan permits at most one resolver")
         verifier_nodes = tuple(
             node for node in nodes if node.node_type is ReviewPlanNodeType.VERIFIER
         )
         if is_multi_specialist:
             if len(verifier_nodes) != 1 or verifier_nodes[0].shard_id != "batch":
                 raise ValueError("multi-specialist plan requires one batched verifier")
-            resolver = next(
-                node for node in nodes if node.node_type is ReviewPlanNodeType.RESOLVER
-            )
-            if resolver.depends_on != tuple(
+            if verifier_nodes[0].depends_on != tuple(
                 sorted(node.node_id for node in reviewer_nodes)
             ):
-                raise ValueError("Resolver must depend on every Reviewer node")
-            if verifier_nodes[0].depends_on != (resolver.node_id,):
-                raise ValueError("batched verifier must depend on the resolver")
-        elif resolver_count or verifier_nodes:
-            raise ValueError("General and single-specialist plans cannot resolve or verify")
+                raise ValueError("batched verifier must depend on every Reviewer node")
+        elif verifier_nodes:
+            raise ValueError("General and single-specialist plans cannot have a verifier")
 
         canonical_reviewers = tuple(sorted(reviewer_references))
         canonical_nodes = tuple(sorted(nodes, key=lambda node: node.node_id))

@@ -186,8 +186,8 @@ class RuntimeToolContext:
             "task_done",
             "submit_review_plan",
             "finalize_plan",
-            "submit_resolution",
-            "submit_verification",
+            "submit_verdict",
+            "finalize_verdicts",
         )
         descriptions = {name: f"Test contract for {name}." for name in names}
         internal = tuple(
@@ -198,8 +198,8 @@ class RuntimeToolContext:
             for name in (
                 "submit_review_plan",
                 "finalize_plan",
-                "submit_resolution",
-                "submit_verification",
+                "submit_verdict",
+                "finalize_verdicts",
             )
         )
         return cls(

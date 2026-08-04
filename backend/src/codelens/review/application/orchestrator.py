@@ -10,8 +10,7 @@ from typing import Literal, Protocol, TypeVar
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFindingBatch
 from codelens.findings.domain.models import FindingBatch
-from codelens.findings.infrastructure.resolver_output import ValidatedResolutionBatch
-from codelens.findings.infrastructure.verifier_output import ValidatedVerificationBatch
+from codelens.findings.infrastructure.verdict_codec import ValidatedVerdictBatch
 from codelens.review.application.dag_scheduler import (
     PersistedDagScheduler,
     reviewer_stage_outcome,
@@ -138,8 +137,7 @@ class _ValidatorPort(Protocol):
     ) -> (
         FindingBatch
         | CandidateFindingBatch
-        | ValidatedResolutionBatch
-        | ValidatedVerificationBatch
+        | ValidatedVerdictBatch
     ): ...
 
 
@@ -187,7 +185,6 @@ class ReviewOrchestrator:
         agent_semaphore: asyncio.Semaphore,
         max_agent_runs_per_review: int,
         prepare_resolution: Callable[[str, PreparedReview], Awaitable[None]] | None = None,
-        verification_required: Callable[[str], Awaitable[bool]] | None = None,
         publish_findings: Callable[[str], Awaitable[None]] | None = None,
         transcript: _TranscriptPort | None = None,
         crash_injector: _CrashInjectorPort | None = None,
@@ -202,7 +199,6 @@ class ReviewOrchestrator:
         self._agent_semaphore = agent_semaphore
         self._review_agent_semaphore = asyncio.Semaphore(max_agent_runs_per_review)
         self._prepare_resolution = prepare_resolution
-        self._verification_required = verification_required
         self._publish_findings = publish_findings
         self._crash_injector = crash_injector
         self._transcript = transcript
@@ -366,59 +362,30 @@ class ReviewOrchestrator:
                 ):
                     await self._workflow.mark_partial_coverage(task_id)
 
-            resolver = next(
+            verifier = next(
                 (
                     node
                     for node in plan.nodes
-                    if node.node_type is ReviewPlanNodeType.RESOLVER
+                    if node.node_type is ReviewPlanNodeType.VERIFIER
                 ),
                 None,
             )
-            if reviewers_terminal and self._prepare_resolution is not None:
-                await self._prepare_resolution(task_id, prepared)
-            if resolver is not None and reviewers_terminal:
-                resolver_status = by_node[resolver.node_id].status
-                if resolver_status in {"failed", "timed_out"}:
-                    await self._skip_pending_nodes(
-                        task_id, plan, by_node, "resolver_failed"
-                    )
-                    await self._workflow.fail(task_id, "resolver_failed")
+            if verifier is not None and reviewers_terminal:
+                if self._prepare_resolution is not None:
+                    await self._prepare_resolution(task_id, prepared)
+                verifier_status = by_node[verifier.node_id].status
+                if verifier_status in {"failed", "timed_out"}:
+                    await self._workflow.mark_partial_coverage(task_id)
+                    if self._publish_findings is not None:
+                        await self._publish_findings(task_id)
+                    await self._finish_persisted_task(task_id, status)
                     return
-                if resolver_status == "succeeded":
-                    verifier = next(
-                        (
-                            node
-                            for node in plan.nodes
-                            if node.node_type is ReviewPlanNodeType.VERIFIER
-                        ),
-                        None,
-                    )
-                    is_verification_required = (
-                        await self._verification_required(task_id)
-                        if self._verification_required is not None
-                        else False
-                    )
-                    if verifier is None or not is_verification_required:
-                        await self._skip_verifier_until_verification_policy(
-                            task_id, plan, by_node
-                        )
-                        if self._publish_findings is not None:
-                            await self._publish_findings(task_id)
-                        await self._finish_persisted_task(task_id, status)
-                        return
-                    verifier_status = by_node[verifier.node_id].status
-                    if verifier_status == "succeeded":
-                        if self._publish_findings is not None:
-                            await self._publish_findings(task_id)
-                        await self._finish_persisted_task(task_id, status)
-                        return
-                    if verifier_status in {"failed", "timed_out"}:
-                        await self._workflow.mark_partial_coverage(task_id)
-                        if self._publish_findings is not None:
-                            await self._publish_findings(task_id)
-                        await self._finish_persisted_task(task_id, status)
-                        return
-            elif resolver is None and reviewers_terminal:
+                if verifier_status == "succeeded":
+                    if self._publish_findings is not None:
+                        await self._publish_findings(task_id)
+                    await self._finish_persisted_task(task_id, status)
+                    return
+            elif verifier is None and reviewers_terminal:
                 if self._publish_findings is not None:
                     await self._publish_findings(task_id)
                 await self._finish_persisted_task(task_id, status)
@@ -430,10 +397,8 @@ class ReviewOrchestrator:
             )
             if not ready:
                 raise RuntimeError("persisted Review DAG has no ready or terminal reduction")
-            if any(node.node_type is ReviewPlanNodeType.RESOLVER for node in ready):
-                status = await self._advance(task_id, status, "reviewing", "resolving")
-            elif any(node.node_type is ReviewPlanNodeType.VERIFIER for node in ready):
-                status = await self._advance(task_id, status, "resolving", "verifying")
+            if any(node.node_type is ReviewPlanNodeType.VERIFIER for node in ready):
+                status = await self._advance(task_id, status, "reviewing", "verifying")
             await asyncio.gather(
                 *(self._execute_plan_node(task_id, prepared, node) for node in ready)
             )
@@ -480,21 +445,6 @@ class ReviewOrchestrator:
         for node in plan.nodes:
             if records[node.node_id].status == "pending":
                 await self._checkpoints.mark_skipped(task_id, node.node_id, reason_code)
-
-    async def _skip_verifier_until_verification_policy(
-        self,
-        task_id: str,
-        plan: ReviewPlan,
-        records: Mapping[str, CheckpointView],
-    ) -> None:
-        for node in plan.nodes:
-            if (
-                node.node_type is ReviewPlanNodeType.VERIFIER
-                and records[node.node_id].status == "pending"
-            ):
-                await self._checkpoints.mark_skipped(
-                    task_id, node.node_id, "verification_not_required"
-                )
 
     async def _finish_persisted_task(self, task_id: str, status: str) -> None:
         target = (
@@ -679,12 +629,8 @@ class ReviewOrchestrator:
                     "invalid_count": str(invalid_count),
                 },
             )
-        if isinstance(validated, ValidatedResolutionBatch):
-            await self._completion.complete_with_resolutions(
-                task_id, node_key, validated.decisions
-            )
-        elif isinstance(validated, ValidatedVerificationBatch):
-            await self._completion.complete_with_verifications(
+        if isinstance(validated, ValidatedVerdictBatch):
+            await self._completion.complete_with_verdicts(
                 task_id, node_key, validated.decisions
             )
         elif isinstance(validated, CandidateFindingBatch):

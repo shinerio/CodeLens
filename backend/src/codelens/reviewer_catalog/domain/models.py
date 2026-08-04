@@ -7,7 +7,6 @@ class AgentRole(StrEnum):
 
     PLANNER = "planner"
     REVIEWER = "reviewer"
-    RESOLVER = "resolver"
     VERIFIER = "verifier"
 
 

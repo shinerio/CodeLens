@@ -8,63 +8,59 @@ from codelens.findings.domain.models import (
     Finding,
     FindingDisposition,
 )
-from codelens.findings.domain.resolution import (
-    ResolutionDecision,
-    ResolutionOutcome,
-    VerificationDecision,
-    VerificationOutcome,
-)
+from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome
 
 
 class FindingPublisher:
-    """Derive final v2 Findings only from resolved Candidate and Verifier audit state."""
+    """Derive final v2 Findings from Candidate and Final Verifier verdict state."""
 
     @staticmethod
     def build(
         *,
         task_id: str,
         candidates: tuple[CandidateFinding, ...],
-        resolutions: tuple[ResolutionDecision, ...],
-        verifications: tuple[VerificationDecision, ...] = (),
+        verdicts: tuple[VerdictDecision, ...],
     ) -> tuple[Finding, ...]:
         by_candidate = {item.candidate_id: item for item in candidates}
-        verification_by_cluster = {item.target_id: item for item in verifications}
         findings: list[Finding] = []
-        for resolution in resolutions:
-            is_publishable = resolution.outcome is ResolutionOutcome.PUBLISH
-            if resolution.outcome is ResolutionOutcome.VERIFY:
-                verification = verification_by_cluster.get(resolution.cluster_id)
-                is_publishable = (
-                    verification is not None
-                    and verification.outcome is VerificationOutcome.CONFIRMED
-                )
-            if not is_publishable or resolution.canonical_candidate_id is None:
+        for verdict in verdicts:
+            if verdict.outcome is not VerdictOutcome.ACCEPT:
                 continue
-            try:
-                canonical = by_candidate[resolution.canonical_candidate_id]
-                sources = tuple(
-                    by_candidate[candidate_id]
-                    for candidate_id in resolution.merged_candidate_ids
-                )
-            except KeyError as error:
-                raise ValueError(
-                    "Resolution publication references an unknown Candidate"
-                ) from error
+            # Use the first cluster to get the canonical candidate
+            if not verdict.cluster_ids:
+                continue
+            first_cluster_id = verdict.cluster_ids[0]
+            # Find a candidate that belongs to this cluster
+            canonical = None
+            for candidate in candidates:
+                if hasattr(candidate, "cluster_id") and candidate.cluster_id == first_cluster_id:
+                    canonical = candidate
+                    break
+            if canonical is None:
+                continue
+            # Collect all candidates from all merged clusters
+            sources = []
+            for cluster_id in verdict.cluster_ids:
+                for candidate in candidates:
+                    if hasattr(candidate, "cluster_id") and candidate.cluster_id == cluster_id:
+                        sources.append(candidate)
+            if not sources:
+                continue
             fingerprint = hashlib.sha256(
                 json.dumps(
                     {
                         "candidate_fingerprints": sorted(
                             item.fingerprint for item in sources
                         ),
-                        "cluster_id": resolution.cluster_id,
-                        "content": resolution.content,
-                        "recommendation": resolution.recommendation,
+                        "cluster_ids": sorted(verdict.cluster_ids),
+                        "content": verdict.content,
+                        "recommendation": verdict.recommendation,
                         "severity": (
-                            resolution.severity.value
-                            if resolution.severity is not None
+                            verdict.severity.value
+                            if verdict.severity is not None
                             else canonical.severity.value
                         ),
-                        "title": resolution.title,
+                        "title": verdict.title,
                     },
                     sort_keys=True,
                     separators=(",", ":"),
@@ -78,9 +74,9 @@ class FindingPublisher:
                     finding_id=finding_id,
                     fingerprint=fingerprint,
                     reviewer_id=canonical.reviewer_reference,
-                    category=canonical.category,
-                    title=resolution.title or canonical.title,
-                    severity=resolution.severity or canonical.severity,
+                    category=verdict.category or canonical.category,
+                    title=verdict.title or canonical.title,
+                    severity=verdict.severity or canonical.severity,
                     disposition=FindingDisposition.BLOCKING,
                     confidence=None,
                     primary_location=canonical.primary_location,
@@ -96,18 +92,30 @@ class FindingPublisher:
                         )
                         for evidence_hash in canonical.evidence_hashes
                     ),
-                    impact=resolution.content or canonical.content,
-                    explanation=resolution.content or canonical.content,
+                    impact=verdict.content or canonical.content,
+                    explanation=verdict.content or canonical.content,
                     reproduction=None,
                     recommendation=(
-                        resolution.recommendation or canonical.recommendation
+                        verdict.recommendation or canonical.recommendation
                     ),
                     rule_sources=(),
-                    primary_dimension=canonical.primary_dimension,
-                    secondary_dimensions=canonical.secondary_dimensions,
-                    evidence_strength=canonical.evidence_strength.value,
-                    impact_certainty=canonical.impact_certainty.value,
-                    reproducibility=canonical.reproducibility.value,
+                    primary_dimension=verdict.primary_dimension or canonical.primary_dimension,
+                    secondary_dimensions=verdict.secondary_dimensions or canonical.secondary_dimensions,
+                    evidence_strength=(
+                        verdict.evidence_strength.value
+                        if verdict.evidence_strength is not None
+                        else canonical.evidence_strength.value
+                    ),
+                    impact_certainty=(
+                        verdict.impact_certainty.value
+                        if verdict.impact_certainty is not None
+                        else canonical.impact_certainty.value
+                    ),
+                    reproducibility=(
+                        verdict.reproducibility.value
+                        if verdict.reproducibility is not None
+                        else canonical.reproducibility.value
+                    ),
                     source_reviewer_references=tuple(
                         sorted({item.reviewer_reference for item in sources})
                     ),

@@ -23,8 +23,8 @@ _REQUIRED_TOOL_NAMES = frozenset(
         "task_done",
         "submit_review_plan",
         "finalize_plan",
-        "submit_resolution",
-        "submit_verification",
+        "submit_verdict",
+        "finalize_verdicts",
     }
 )
 

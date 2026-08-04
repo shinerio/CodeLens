@@ -98,7 +98,7 @@ class PersistedDagScheduler:
         )
         if not dependency_statuses:
             return True
-        if node.node_type is ReviewPlanNodeType.RESOLVER:
+        if node.node_type is ReviewPlanNodeType.VERIFIER:
             return all(
                 status in _TERMINAL_NODE_STATUSES for status in dependency_statuses
             ) and any(status == "succeeded" for status in dependency_statuses)

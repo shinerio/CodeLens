@@ -64,10 +64,14 @@ def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
             _tools(*evidence, ("submit_review_plan", 1), ("finalize_plan", 1)),
         ),
         _profile(
-            "resolver",
-            _tools(("read_file", 1), ("get_diff", 1), ("submit_resolution", 1)),
+            "verifier",
+            _tools(
+                ("read_file", 1),
+                ("get_diff", 1),
+                ("submit_verdict", 1),
+                ("finalize_verdicts", 1),
+            ),
         ),
-        _profile("verifier", _tools(*evidence, ("submit_verification", 1))),
     )
     return {profile.reference: profile for profile in profiles}
 

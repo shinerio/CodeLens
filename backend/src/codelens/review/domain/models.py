@@ -30,7 +30,6 @@ class ReviewStatus(StrEnum):
     PREPARING = "preparing"
     PLANNING = "planning"
     REVIEWING = "reviewing"
-    RESOLVING = "resolving"
     VERIFYING = "verifying"
     VALIDATING = "validating"
     SYNTHESIZING = "synthesizing"
@@ -66,16 +65,15 @@ _ALLOWED_TRANSITIONS = {
     ReviewStatus.PREPARING: {ReviewStatus.PLANNING, ReviewStatus.REVIEWING},
     ReviewStatus.REVIEWING: {
         ReviewStatus.VALIDATING,
-        ReviewStatus.RESOLVING,
-        ReviewStatus.COMPLETED,
-        ReviewStatus.PARTIAL,
-    },
-    ReviewStatus.RESOLVING: {
         ReviewStatus.VERIFYING,
         ReviewStatus.COMPLETED,
         ReviewStatus.PARTIAL,
     },
-    ReviewStatus.VERIFYING: {ReviewStatus.COMPLETED, ReviewStatus.PARTIAL},
+    ReviewStatus.VERIFYING: {
+        ReviewStatus.VALIDATING,
+        ReviewStatus.COMPLETED,
+        ReviewStatus.PARTIAL,
+    },
     ReviewStatus.VALIDATING: {ReviewStatus.SYNTHESIZING},
     ReviewStatus.SYNTHESIZING: {ReviewStatus.COMPLETED, ReviewStatus.PARTIAL},
 }

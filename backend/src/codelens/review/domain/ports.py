@@ -7,11 +7,8 @@ from typing import Literal, Protocol
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFinding, CandidateFindingBatch
 from codelens.findings.domain.models import FindingBatch
-from codelens.findings.domain.resolution import (
-    FindingCluster,
-    ResolutionDecision,
-    VerificationDecision,
-)
+from codelens.findings.domain.resolution import FindingCluster
+from codelens.findings.domain.verdict import VerdictDecision
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.review_plan import ReviewPlan
 from codelens.review.domain.review_profile import ReviewProfile
@@ -506,23 +503,13 @@ class AgentRunCompletionPort(Protocol):
 
         raise NotImplementedError
 
-    async def complete_with_resolutions(
+    async def complete_with_verdicts(
         self,
         task_id: str,
         node_key: str,
-        decisions: tuple[ResolutionDecision, ...],
+        decisions: tuple[VerdictDecision, ...],
     ) -> None:
-        """Atomically persist Resolution decisions and complete their AgentRun."""
-
-        raise NotImplementedError
-
-    async def complete_with_verifications(
-        self,
-        task_id: str,
-        node_key: str,
-        decisions: tuple[VerificationDecision, ...],
-    ) -> None:
-        """Atomically persist Verifier decisions and complete their AgentRun."""
+        """Atomically persist Final Verifier decisions and complete their AgentRun."""
 
         raise NotImplementedError
 

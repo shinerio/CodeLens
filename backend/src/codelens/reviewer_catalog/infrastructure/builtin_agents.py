@@ -163,18 +163,10 @@ def _catalog_entries() -> Iterable[AgentVersion]:
         failure_policy="fail_task",
     )
     yield _internal_agent(
-        agent_id="review-resolver",
-        role=AgentRole.RESOLVER,
-        prompt_key="review-resolver",
-        output_contract_version="resolution:1",
-        capability_profile_ref="resolver:v1",
-        failure_policy="fail_task",
-    )
-    yield _internal_agent(
         agent_id="review-verifier",
         role=AgentRole.VERIFIER,
         prompt_key="review-verifier",
-        output_contract_version="verification:1",
+        output_contract_version="verdict:1",
         capability_profile_ref="verifier:v1",
         failure_policy="partial_task",
     )
