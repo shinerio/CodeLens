@@ -413,7 +413,7 @@ class OpenAIAgentRuntime:
                         phase,
                         "invalid_model_output",
                         "model returned unusable output",
-                        retryable=False,
+                        retryable=True,
                     )
             except BaseException:
                 await client.close()
