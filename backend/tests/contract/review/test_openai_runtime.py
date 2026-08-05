@@ -173,40 +173,40 @@ class PlannerRunner(FakeRunner):
         )
 
 
-class ResolverRunner(FakeRunner):
+class VerifierRunner(FakeRunner):
     @staticmethod
     async def complete_review(starting_agent: Agent[None]) -> None:
-        tool = next(tool for tool in starting_agent.tools if tool.name == "submit_resolution")
+        tool = next(tool for tool in starting_agent.tools if tool.name == "verdict")
         arguments = json.dumps(
             {
-                "submission": {
-                    "schema_version": "1",
-                    "decisions": [
-                        {
-                            "cluster_id": "cluster-a",
-                            "outcome": "suppress",
-                            "canonical_candidate_id": None,
-                            "merged_candidate_ids": [],
-                            "severity": None,
-                            "title": None,
-                            "content": None,
-                            "recommendation": None,
-                            "reason_code": "insufficient-evidence",
-                        }
-                    ],
-                }
+                "cluster_ids": ["cluster_a"],
+                "action": "deny",
             }
         )
         await tool.on_invoke_tool(
             ToolContext(
                 None,
                 usage=Usage(),
-                tool_name="submit_resolution",
-                tool_call_id="fake-submit-resolution",
+                tool_name="verdict",
+                tool_call_id="fake-verdict",
                 tool_arguments=arguments,
                 run_config=RunConfig(),
             ),
             arguments,
+        )
+        finalize_tool = next(
+            tool for tool in starting_agent.tools if tool.name == "finalize_verdicts"
+        )
+        await finalize_tool.on_invoke_tool(
+            ToolContext(
+                None,
+                usage=Usage(),
+                tool_name="finalize_verdicts",
+                tool_call_id="fake-finalize-verdicts",
+                tool_arguments="{}",
+                run_config=RunConfig(),
+            ),
+            "{}",
         )
 
 
@@ -277,8 +277,8 @@ def _planner_spec() -> FrozenAgentExecutionSpec:
     )
 
 
-def _resolver_spec() -> FrozenAgentExecutionSpec:
-    agent = builtin_agent_catalog()["review-resolver:v1"]
+def _verifier_spec() -> FrozenAgentExecutionSpec:
+    agent = builtin_agent_catalog()["review-verifier:v1"]
     return CapabilityResolver.testing().resolve(
         agent=agent,
         prompt_content_hash=hashlib.sha256(agent.prompt_template.encode()).hexdigest(),
@@ -320,34 +320,29 @@ def _planner_runtime_input() -> bytes:
     ).encode()
 
 
-def _resolver_runtime_input() -> bytes:
+def _verifier_runtime_input() -> bytes:
     return json.dumps(
         {
             "repository_instructions": [],
             "review_files": [],
             "role_context": {
-                "resolution_context": {
+                "verdict_context": {
                     "schema_version": "1",
                     "clusters": [
-                        {"cluster_id": "cluster-a", "candidate_ids": ["candidate-a"]}
-                    ],
-                    "candidates": [
                         {
-                            "candidate_id": "candidate-a",
-                            "severity": "high",
+                            "cluster_id": "cluster_a",
+                            "candidate_ids": ["candidate_a"],
+                            "canonical_candidate_id": "candidate_a",
                             "title": "Missing signature check",
+                            "category": "authentication",
+                            "severity": "high",
                             "content": "Unsigned requests are accepted.",
                             "recommendation": "Verify signatures first.",
-                            "category": "authentication",
-                            "evidence_hashes": ["a" * 64],
+                            "primary_dimension": "correctness",
+                            "secondary_dimensions": ["security"],
                             "evidence_strength": "direct",
                             "impact_certainty": "confirmed",
-                            "location": {
-                                "path": "src/webhook.py",
-                                "side": "new",
-                                "start_line": 5,
-                                "end_line": 5,
-                            },
+                            "reproducibility": "deterministic",
                         }
                     ],
                 }
@@ -396,12 +391,12 @@ async def test_planner_runtime_uses_typed_submission_as_its_completion_signal() 
     assert tuple(tool.name for tool in runner.starting_agent.tools)[-1] == "finalize_plan"
 
 
-async def test_resolver_runtime_uses_strict_one_shot_submission() -> None:
-    runner = ResolverRunner(
+async def test_verifier_runtime_uses_verdict_then_finalize_to_complete() -> None:
+    runner = VerifierRunner(
         FakeResult(
             final_output=None,
             raw_responses=(
-                FakeResponse("resp-resolution", "req-resolution", FakeUsage(3, 2), ()),
+                FakeResponse("resp-verdict", "req-verdict", FakeUsage(3, 2), ()),
             ),
         )
     )
@@ -414,24 +409,33 @@ async def test_resolver_runtime_uses_strict_one_shot_submission() -> None:
     )
 
     output = await runtime.invoke(
-        _resolver_spec(), _resolver_runtime_input(), _snapshot(), "en"
+        _verifier_spec(), _verifier_runtime_input(), _snapshot(), "en"
     )
 
-    assert json.loads(output.canonical_bytes)["decisions"] == [
+    payload = json.loads(output.canonical_bytes)
+    assert payload["schema_version"] == "1"
+    assert payload["decisions"] == [
         {
-            "canonical_candidate_id": None,
-            "cluster_id": "cluster-a",
-            "content": None,
-            "merged_candidate_ids": [],
-            "outcome": "suppress",
-            "reason_code": "insufficient-evidence",
-            "recommendation": None,
-            "severity": None,
+            "cluster_ids": ["cluster_a"],
+            "outcome": "deny",
+            "path": None,
+            "side": None,
+            "existing_code": None,
             "title": None,
+            "content": None,
+            "recommendation": None,
+            "category": None,
+            "severity": None,
+            "primary_dimension": None,
+            "secondary_dimensions": None,
+            "evidence_strength": None,
+            "impact_certainty": None,
+            "reproducibility": None,
         }
     ]
     assert runner.starting_agent is not None
-    assert tuple(tool.name for tool in runner.starting_agent.tools)[-1] == "submit_resolution"
+    tool_names = tuple(tool.name for tool in runner.starting_agent.tools)
+    assert tool_names[-3:] == ("verdict", "merge", "finalize_verdicts")
 
 
 async def test_successful_provider_responses_are_not_marked_as_parse_failures() -> None:
@@ -618,13 +622,14 @@ def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_lo
         "read_file",
         "get_diff",
         "comment",
-            "review_file_done",
-            "task_done",
-            "submit_review_plan",
-            "finalize_plan",
-            "submit_resolution",
-            "submit_verification",
-        }
+        "review_file_done",
+        "task_done",
+        "submit_review_plan",
+        "finalize_plan",
+        "verdict",
+        "merge",
+        "finalize_verdicts",
+    }
 
     assert set(loader.get("en").tools) == expected
     assert set(loader.get("zh-CN").tools) == expected

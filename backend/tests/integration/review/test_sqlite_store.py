@@ -25,6 +25,7 @@ from codelens.findings.domain.candidates import (
     ImpactCertainty,
     Reproducibility,
 )
+from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
@@ -35,11 +36,7 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
-from codelens.findings.domain.resolution import (
-    FindingCluster,
-    ResolutionDecision,
-    VerificationDecision,
-)
+from codelens.findings.domain.verdict import VerdictDecision
 from codelens.review.application.review_profiles import (
     CreateReviewProfileHandler,
     DeleteReviewProfileHandler,
@@ -66,10 +63,10 @@ from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
     SqlJobQueue,
     SqlRecentRepositoryStore,
-    SqlResolutionStore,
     SqlReviewPlanStore,
     SqlReviewProfileRepository,
     SqlReviewStore,
+    SqlVerdictStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
@@ -144,15 +141,6 @@ def _multi_plan(task_id: str) -> ReviewPlan:
         )
         for reference in ("correctness:v2", "security:v1")
     )
-    resolver = ReviewPlanNode.create(
-        task_id=task_id,
-        node_type=ReviewPlanNodeType.RESOLVER,
-        agent_reference="review-resolver:v1",
-        pass_index=ReviewPass.RESOLVER,
-        shard_id="root",
-        logical_attempt_group="primary",
-        depends_on=tuple(node.node_id for node in reviewers),
-    )
     verifier = ReviewPlanNode.create(
         task_id=task_id,
         node_type=ReviewPlanNodeType.VERIFIER,
@@ -160,13 +148,13 @@ def _multi_plan(task_id: str) -> ReviewPlan:
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
-        depends_on=(resolver.node_id,),
+        depends_on=tuple(node.node_id for node in reviewers),
     )
     return ReviewPlan.create(
         task_id=task_id,
         selection_mode="fixed",
         reviewer_references=("correctness:v2", "security:v1"),
-        nodes=(*reviewers, resolver, verifier),
+        nodes=(*reviewers, verifier),
         planner_reason=None,
     )
 
@@ -401,7 +389,6 @@ async def test_plan_specs_and_audit_records_survive_restart_without_trusted_bodi
         }
         assert node_metadata >= {
             ("reviewer", "security:v1", "root"),
-            ("resolver", "review-resolver:v1", "root"),
             ("verifier", "review-verifier:v1", "batch"),
         }
         stored_spec = await SqlAgentExecutionSpecStore(reopened).get(
@@ -453,42 +440,66 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
         candidates = await SqlCandidateFindingStore(database).list_for_task(task_id)
         assert candidates == (candidate,)
         assert (await checkpoints.get(task_id, security_node.node_id)).status == "succeeded"
-        cluster = FindingCluster("cluster-a", (candidate.candidate_id,))
-        resolutions = SqlResolutionStore(database)
-        await resolutions.save_clusters(task_id, "snapshot-1", (cluster,))
+        cluster = FindingCluster(
+            cluster_id="cluster-a",
+            candidate_ids=(candidate.candidate_id,),
+            canonical_candidate_id=candidate.candidate_id,
+            title=candidate.title,
+            category=candidate.category,
+            severity=candidate.severity,
+            content=candidate.content,
+            recommendation=candidate.recommendation,
+            primary_dimension=candidate.primary_dimension,
+            secondary_dimensions=candidate.secondary_dimensions,
+            evidence_strength=candidate.evidence_strength,
+            impact_certainty=candidate.impact_certainty,
+            reproducibility=candidate.reproducibility,
+        )
+        verdicts = SqlVerdictStore(database)
+        await verdicts.save_clusters(task_id, "snapshot-1", (cluster,))
         with pytest.raises(ValueError, match="already belongs to another cluster"):
-            await resolutions.save_clusters(
+            await verdicts.save_clusters(
                 task_id,
                 "snapshot-1",
-                (FindingCluster("cluster-b", (candidate.candidate_id,)),),
+                (
+                    FindingCluster(
+                        cluster_id="cluster-b",
+                        candidate_ids=(candidate.candidate_id,),
+                        canonical_candidate_id=candidate.candidate_id,
+                        title=candidate.title,
+                        category=candidate.category,
+                        severity=candidate.severity,
+                        content=candidate.content,
+                        recommendation=candidate.recommendation,
+                        primary_dimension=candidate.primary_dimension,
+                        secondary_dimensions=candidate.secondary_dimensions,
+                        evidence_strength=candidate.evidence_strength,
+                        impact_certainty=candidate.impact_certainty,
+                        reproducibility=candidate.reproducibility,
+                    ),
+                ),
             )
-        decision = ResolutionDecision.publish(
-            cluster=cluster,
-            canonical_candidate_id=candidate.candidate_id,
-            merged_candidate_ids=(candidate.candidate_id,),
+        decision = VerdictDecision.accept(cluster_ids=(cluster.cluster_id,))
+        await verdicts.save_decisions(task_id, (decision,))
+        assert await verdicts.list_clusters(task_id) == (cluster,)
+        assert await verdicts.list_decisions(task_id) == (decision,)
+
+        verifier_node = next(
+            node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER
         )
-        resolver_node = next(
-            node for node in plan.nodes if node.agent_reference == "review-resolver:v1"
-        )
-        await checkpoints.mark_running(task_id, resolver_node.node_id)
+        await checkpoints.mark_running(task_id, verifier_node.node_id)
         await checkpoints.mark_output_saved(
-            task_id, resolver_node.node_id, "artifact-resolution", "b" * 64
+            task_id, verifier_node.node_id, "artifact-verdict", "b" * 64
         )
-        await review_store.complete_with_resolutions(
-            task_id, resolver_node.node_id, (decision,)
+        await review_store.complete_with_verdicts(
+            task_id, verifier_node.node_id, (decision,)
         )
-        assert await resolutions.list_clusters(task_id) == (cluster,)
-        assert await resolutions.list_decisions(task_id) == (decision,)
-        assert (await checkpoints.get(task_id, resolver_node.node_id)).status == "succeeded"
 
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
         assert len([event for event in events if event.event_type == "agent.succeeded"]) == 2
         assert len(
             [event for event in events if event.event_type == "agent_run.completed"]
         ) == 2
-        assert any(
-            event.event_type == "review.resolution_completed" for event in events
-        )
     finally:
         await database.dispose()
 
@@ -518,26 +529,24 @@ async def test_verification_and_publication_replay_are_exactly_once(
         await store.complete_with_candidates(
             task_id, reviewer.node_id, CandidateFindingBatch((candidate,))
         )
-        cluster = FindingCluster("cluster-verify", (candidate.candidate_id,))
-        resolutions = SqlResolutionStore(database)
-        await resolutions.save_clusters(task_id, "snapshot-1", (cluster,))
-        resolution = ResolutionDecision.verify(
-            cluster=cluster,
+        cluster = FindingCluster(
+            cluster_id="cluster-verify",
+            candidate_ids=(candidate.candidate_id,),
             canonical_candidate_id=candidate.candidate_id,
-            merged_candidate_ids=(candidate.candidate_id,),
-            severity=candidate.severity,
             title=candidate.title,
+            category=candidate.category,
+            severity=candidate.severity,
             content=candidate.content,
             recommendation=candidate.recommendation,
+            primary_dimension=candidate.primary_dimension,
+            secondary_dimensions=candidate.secondary_dimensions,
+            evidence_strength=candidate.evidence_strength,
+            impact_certainty=candidate.impact_certainty,
+            reproducibility=candidate.reproducibility,
         )
-        resolver = next(
-            node for node in plan.nodes if node.agent_reference == "review-resolver:v1"
-        )
-        await checkpoints.mark_running(task_id, resolver.node_id)
-        await checkpoints.mark_output_saved(
-            task_id, resolver.node_id, "artifact-resolution", "b" * 64
-        )
-        await store.complete_with_resolutions(task_id, resolver.node_id, (resolution,))
+        verdicts = SqlVerdictStore(database)
+        await verdicts.save_clusters(task_id, "snapshot-1", (cluster,))
+        decision = VerdictDecision.accept(cluster_ids=(cluster.cluster_id,))
         verifier = next(
             node for node in plan.nodes if node.agent_reference == "review-verifier:v1"
         )
@@ -545,33 +554,27 @@ async def test_verification_and_publication_replay_are_exactly_once(
         await checkpoints.mark_output_saved(
             task_id, verifier.node_id, "artifact-verification", "c" * 64
         )
-        verification = VerificationDecision.confirmed(
-            target_id=cluster.cluster_id,
-            batch_target_ids=(cluster.cluster_id,),
-            reason_code="reproduced",
-        )
-        await store.complete_with_verifications(
-            task_id, verifier.node_id, (verification,)
-        )
+        await store.complete_with_verdicts(task_id, verifier.node_id, (decision,))
+
         finding = FindingPublisher.build(
             task_id=task_id,
             candidates=(candidate,),
-            resolutions=(resolution,),
-            verifications=(verification,),
+            verdicts=(decision,),
+            clusters=(cluster,),
         )[0]
 
-        await store.publish_resolved_findings(
-            task_id, (resolution,), ((cluster.cluster_id, finding),)
+        await store.publish_verdict_findings(
+            task_id, (decision,), ((cluster.cluster_id, finding),)
         )
-        await store.publish_resolved_findings(
-            task_id, (resolution,), ((cluster.cluster_id, finding),)
+        await store.publish_verdict_findings(
+            task_id, (decision,), ((cluster.cluster_id, finding),)
         )
 
         assert await store.list_findings(task_id) == (finding,)
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
         assert len([item for item in events if item.event_type == "finding.published"]) == 1
         assert any(
-            item.event_type == "review.verification_completed" for item in events
+            item.event_type == "review.verdict_completed" for item in events
         )
     finally:
         await database.dispose()

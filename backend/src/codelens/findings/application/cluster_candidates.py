@@ -4,7 +4,7 @@ import re
 import unicodedata
 
 from codelens.findings.domain.candidates import CandidateFinding
-from codelens.findings.domain.resolution import FindingCluster
+from codelens.findings.domain.clusters import FindingCluster
 
 
 def _normalized_root_cause(value: str) -> str:
@@ -18,7 +18,7 @@ class CandidateClusterer:
     def cluster(
         self, candidates: tuple[CandidateFinding, ...]
     ) -> tuple[FindingCluster, ...]:
-        groups: dict[str, list[str]] = {}
+        groups: dict[str, list[CandidateFinding]] = {}
         for candidate in candidates:
             key_payload = {
                 "category": _normalized_root_cause(candidate.category),
@@ -34,12 +34,33 @@ class CandidateClusterer:
                 "title": _normalized_root_cause(candidate.title),
             }
             key = json.dumps(key_payload, sort_keys=True, separators=(",", ":"))
-            groups.setdefault(key, []).append(candidate.candidate_id)
+            groups.setdefault(key, []).append(candidate)
         clusters = tuple(
-            FindingCluster(
+            self._build_cluster(
                 "cluster_" + hashlib.sha256(key.encode()).hexdigest(),
-                tuple(sorted(candidate_ids)),
+                tuple(sorted(members, key=lambda item: item.candidate_id)),
             )
-            for key, candidate_ids in groups.items()
+            for key, members in groups.items()
         )
         return tuple(sorted(clusters, key=lambda cluster: cluster.cluster_id))
+
+    @staticmethod
+    def _build_cluster(
+        cluster_id: str, members: tuple[CandidateFinding, ...]
+    ) -> FindingCluster:
+        canonical = members[0]
+        return FindingCluster(
+            cluster_id=cluster_id,
+            candidate_ids=tuple(member.candidate_id for member in members),
+            canonical_candidate_id=canonical.candidate_id,
+            title=canonical.title,
+            category=canonical.category,
+            severity=canonical.severity,
+            content=canonical.content,
+            recommendation=canonical.recommendation,
+            primary_dimension=canonical.primary_dimension,
+            secondary_dimensions=canonical.secondary_dimensions,
+            evidence_strength=canonical.evidence_strength,
+            impact_certainty=canonical.impact_certainty,
+            reproducibility=canonical.reproducibility,
+        )

@@ -1,4 +1,14 @@
-"""Final Verifier tools for the simplified two-stage Review DAG."""
+"""Final Verifier tools for the simplified two-stage Review DAG.
+
+Three tools drive the Final Verifier stage:
+
+- ``verdict``: accept or deny one or more clusters. Accept uses the cluster's
+  canonical candidate fields; deny suppresses the cluster.
+- ``merge``: synthesize a single Finding across one or more clusters. All
+  Finding fields are required so the model owns the merged attributes.
+- ``finalize_verdicts``: validate that every cluster is covered exactly once
+  and produce the final validated verdict batch.
+"""
 
 from typing import Literal
 
@@ -17,9 +27,10 @@ from codelens.review.infrastructure.capability_tools import RoleOutputToolBindin
 class VerdictSubmissionCollector:
     """Accumulate Final Verifier decisions across multiple tool calls.
 
-    The Final Verifier calls submit_verdict multiple times to accumulate
-    accept/deny decisions for clusters. When finished, it calls finalize_verdicts
-    to validate that all clusters are covered and produce the final output.
+    The Final Verifier calls ``verdict`` (accept/deny) and ``merge`` multiple
+    times to accumulate decisions for clusters. When finished, it calls
+    ``finalize_verdicts`` to validate that all clusters are covered exactly
+    once and produce the final output.
     """
 
     def __init__(self, codec: VerdictCodec) -> None:
@@ -40,25 +51,42 @@ class VerdictSubmissionCollector:
             raise RuntimeError("Final Verifier has not finalized decisions")
         return self._finalized
 
-    async def submit(
+    async def verdict(
         self,
         cluster_ids: list[str],
-        outcome: Literal["accept", "deny"],
-        path: str | None = None,
-        side: Literal["old", "new"] | None = None,
-        existing_code: str | None = None,
-        title: str | None = None,
-        content: str | None = None,
-        recommendation: str | None = None,
-        category: str | None = None,
-        severity: Literal["critical", "high", "medium", "low", "info"] | None = None,
-        primary_dimension: str | None = None,
-        secondary_dimensions: list[str] | None = None,
-        evidence_strength: Literal["direct", "inferred", "weak"] | None = None,
-        impact_certainty: Literal["confirmed", "plausible", "unclear"] | None = None,
-        reproducibility: Literal["deterministic", "conditional", "unknown"] | None = None,
+        action: Literal["accept", "deny"],
     ) -> str:
-        """Accumulate one verdict decision."""
+        """Record an accept or deny decision for one or more clusters."""
+        if self._finalized is not None:
+            raise ValueError("Final Verifier has already finalized decisions")
+
+        outcome = VerdictOutcome.ACCEPT if action == "accept" else VerdictOutcome.DENY
+        decision = VerdictDecision(
+            cluster_ids=tuple(cluster_ids),
+            outcome=outcome,
+        )
+        self._decisions.append(decision)
+        verb = "accepted" if action == "accept" else "denied"
+        return f"{len(cluster_ids)} cluster(s) {verb}. Total decisions: {len(self._decisions)}"
+
+    async def merge(
+        self,
+        cluster_ids: list[str],
+        path: str,
+        side: Literal["old", "new"],
+        existing_code: str,
+        title: str,
+        content: str,
+        recommendation: str,
+        category: str,
+        severity: Literal["critical", "high", "medium", "low", "info"],
+        primary_dimension: str,
+        secondary_dimensions: list[str],
+        evidence_strength: Literal["direct", "inferred", "weak"],
+        impact_certainty: Literal["confirmed", "plausible", "unclear"],
+        reproducibility: Literal["deterministic", "conditional", "unknown"],
+    ) -> str:
+        """Merge one or more clusters into a single synthesized Finding."""
         if self._finalized is not None:
             raise ValueError("Final Verifier has already finalized decisions")
 
@@ -69,9 +97,8 @@ class VerdictSubmissionCollector:
         )
         from codelens.findings.domain.models import FindingSeverity
 
-        decision = VerdictDecision(
+        decision = VerdictDecision.merge(
             cluster_ids=tuple(cluster_ids),
-            outcome=VerdictOutcome(outcome),
             path=path,
             side=side,
             existing_code=existing_code,
@@ -79,58 +106,61 @@ class VerdictSubmissionCollector:
             content=content,
             recommendation=recommendation,
             category=category,
-            severity=FindingSeverity(severity) if severity else None,
+            severity=FindingSeverity(severity),
             primary_dimension=primary_dimension,
-            secondary_dimensions=(
-                tuple(secondary_dimensions) if secondary_dimensions else None
-            ),
-            evidence_strength=(
-                EvidenceStrength(evidence_strength) if evidence_strength else None
-            ),
-            impact_certainty=(
-                ImpactCertainty(impact_certainty) if impact_certainty else None
-            ),
-            reproducibility=(
-                Reproducibility(reproducibility) if reproducibility else None
-            ),
+            secondary_dimensions=tuple(secondary_dimensions),
+            evidence_strength=EvidenceStrength(evidence_strength),
+            impact_certainty=ImpactCertainty(impact_certainty),
+            reproducibility=Reproducibility(reproducibility),
         )
         self._decisions.append(decision)
-        return f"Verdict accepted for {len(cluster_ids)} cluster(s). Total: {len(self._decisions)}"
+        count = len(self._decisions)
+        return f"Merged {len(cluster_ids)} cluster(s) into one Finding. Total decisions: {count}"
 
     async def finalize(self) -> str:
         """Validate all accumulated decisions and finalize."""
         if self._finalized is not None:
             raise ValueError("Final Verifier has already finalized decisions")
 
-        # Validate through codec (checks cluster coverage)
         self._finalized = self._codec.decode_decisions(self._decisions)
         return f"Final Verifier completed: {len(self._finalized)} verdict(s)"
 
-    def as_submit_tool(self, description: str) -> Tool:
+    def as_verdict_tool(self, description: str) -> Tool:
         collector = self
 
-        @function_tool(name_override="submit_verdict", description_override=description)
-        async def submit_verdict(
+        @function_tool(name_override="verdict", description_override=description)
+        async def verdict(
             cluster_ids: list[str],
-            outcome: Literal["accept", "deny"],
-            path: str | None = None,
-            side: Literal["old", "new"] | None = None,
-            existing_code: str | None = None,
-            title: str | None = None,
-            content: str | None = None,
-            recommendation: str | None = None,
-            category: str | None = None,
-            severity: Literal["critical", "high", "medium", "low", "info"] | None = None,
-            primary_dimension: str | None = None,
-            secondary_dimensions: list[str] | None = None,
-            evidence_strength: Literal["direct", "inferred", "weak"] | None = None,
-            impact_certainty: Literal["confirmed", "plausible", "unclear"] | None = None,
-            reproducibility: Literal["deterministic", "conditional", "unknown"] | None = None,
+            action: Literal["accept", "deny"],
         ) -> str:
-            """Submit one verdict decision for one or more clusters."""
-            return await collector.submit(
+            """Accept or deny one or more finding clusters."""
+            return await collector.verdict(cluster_ids=cluster_ids, action=action)
+
+        return verdict
+
+    def as_merge_tool(self, description: str) -> Tool:
+        collector = self
+
+        @function_tool(name_override="merge", description_override=description)
+        async def merge(
+            cluster_ids: list[str],
+            path: str,
+            side: Literal["old", "new"],
+            existing_code: str,
+            title: str,
+            content: str,
+            recommendation: str,
+            category: str,
+            severity: Literal["critical", "high", "medium", "low", "info"],
+            primary_dimension: str,
+            secondary_dimensions: list[str],
+            evidence_strength: Literal["direct", "inferred", "weak"],
+            impact_certainty: Literal["confirmed", "plausible", "unclear"],
+            reproducibility: Literal["deterministic", "conditional", "unknown"],
+        ) -> str:
+            """Merge one or more clusters into a single synthesized Finding."""
+            return await collector.merge(
                 cluster_ids=cluster_ids,
-                outcome=outcome,
                 path=path,
                 side=side,
                 existing_code=existing_code,
@@ -146,12 +176,14 @@ class VerdictSubmissionCollector:
                 reproducibility=reproducibility,
             )
 
-        return submit_verdict
+        return merge
 
     def as_finalize_tool(self, description: str) -> Tool:
         collector = self
 
-        @function_tool(name_override="finalize_verdicts", description_override=description)
+        @function_tool(
+            name_override="finalize_verdicts", description_override=description
+        )
         async def finalize_verdicts() -> str:
             """Validate accumulated verdicts and finalize the Final Verifier stage."""
             return await collector.finalize()
@@ -159,12 +191,19 @@ class VerdictSubmissionCollector:
         return finalize_verdicts
 
     def bindings(
-        self, submit_description: str, finalize_description: str
-    ) -> tuple[RoleOutputToolBinding, RoleOutputToolBinding]:
+        self,
+        verdict_description: str,
+        merge_description: str,
+        finalize_description: str,
+    ) -> tuple[RoleOutputToolBinding, RoleOutputToolBinding, RoleOutputToolBinding]:
         return (
             RoleOutputToolBinding(
-                ToolContractReference("submit_verdict", 1),
-                self.as_submit_tool(submit_description),
+                ToolContractReference("verdict", 1),
+                self.as_verdict_tool(verdict_description),
+            ),
+            RoleOutputToolBinding(
+                ToolContractReference("merge", 1),
+                self.as_merge_tool(merge_description),
             ),
             RoleOutputToolBinding(
                 ToolContractReference("finalize_verdicts", 1),

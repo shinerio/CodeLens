@@ -51,7 +51,7 @@ def _ready() -> dict[str, CapabilityReadiness]:
 
 def test_fixed_compiler_builds_host_dag_without_planner() -> None:
     references = ("correctness:v2", "security:v1")
-    specs = _specs(*references, "review-resolver:v1", "review-verifier:v1")
+    specs = _specs(*references, "review-verifier:v1")
 
     plan = _compiler().compile(
         task_id=TASK_ID,
@@ -64,10 +64,11 @@ def test_fixed_compiler_builds_host_dag_without_planner() -> None:
 
     assert plan.reviewer_references == tuple(sorted(references))
     assert not any(node.node_type.value == "planner" for node in plan.nodes)
-    resolver = next(node for node in plan.nodes if node.node_type.value == "resolver")
     verifier = next(node for node in plan.nodes if node.node_type.value == "verifier")
-    assert len(resolver.depends_on) == 2
-    assert verifier.depends_on == (resolver.node_id,)
+    assert verifier.shard_id == "batch"
+    assert verifier.depends_on == tuple(
+        sorted(node.node_id for node in plan.nodes if node.node_type.value == "reviewer")
+    )
 
 
 def test_adaptive_rejects_general_plus_specialists() -> None:
@@ -164,7 +165,6 @@ async def test_existing_plan_prevents_adaptive_planner_reinvocation() -> None:
             "review-planner:v1",
             "security:v1",
             "performance:v1",
-            "review-resolver:v1",
             "review-verifier:v1",
         ),
         readiness=_ready(),
@@ -193,7 +193,6 @@ def test_adaptive_compiler_accepts_two_or_more_specialists_only() -> None:
             "review-planner:v1",
             "security:v1",
             "performance:v1",
-            "review-resolver:v1",
             "review-verifier:v1",
         ),
         readiness=_ready(),
@@ -265,7 +264,6 @@ async def test_adaptive_planner_failure_has_no_host_fallback() -> None:
                 "review-planner:v1",
                 "security:v1",
                 "performance:v1",
-                "review-resolver:v1",
                 "review-verifier:v1",
             ),
             readiness=_ready(),

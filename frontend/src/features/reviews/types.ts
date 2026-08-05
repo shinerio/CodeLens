@@ -73,10 +73,10 @@ export type ReviewResponse = {
   profile_source: ReviewProfileSourceRequest | null;
   review_plan: ReviewPlanProjection | null;
   coverage: ReviewCoverageProjection;
-  resolution_summary: Record<"publish" | "suppress" | "verify", number>;
+  verdict_summary: Record<"accept" | "deny" | "merge", number>;
 };
 
-export type ReviewPlanNodeRole = "planner" | "reviewer" | "resolver" | "verifier";
+export type ReviewPlanNodeRole = "planner" | "reviewer" | "verifier";
 
 export type ReviewPlanNodeProjection = {
   node_id: string;

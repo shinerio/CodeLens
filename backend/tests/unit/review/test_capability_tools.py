@@ -176,10 +176,9 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
             "review-planner:v1",
             ("find_files", "grep", "read_file", "get_diff", "submit_review_plan", "finalize_plan"),
         ),
-        ("review-resolver:v1", ("read_file", "get_diff", "submit_resolution")),
         (
             "review-verifier:v1",
-            ("find_files", "grep", "read_file", "get_diff", "submit_verification"),
+            ("read_file", "get_diff", "verdict", "merge", "finalize_verdicts"),
         ),
     ),
 )
@@ -212,9 +211,9 @@ def test_missing_internal_role_implementation_fails_closed(
 ) -> None:
     production_context = replace(runtime_context, role_output_tools=())
 
-    with pytest.raises(PermanentAgentOutputError, match="submit_resolution:v1"):
+    with pytest.raises(PermanentAgentOutputError, match="verdict:v1"):
         CapabilityToolAssembler().assemble(
-            _resolved_spec("review-resolver:v1"),
+            _resolved_spec("review-verifier:v1"),
             production_context,
         )
 

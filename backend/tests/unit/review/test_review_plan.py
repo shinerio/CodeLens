@@ -37,7 +37,7 @@ def reviewer_nodes_only() -> tuple[ReviewPlanNode, ...]:
 
 
 def test_multi_specialist_plan_requires_resolver() -> None:
-    with pytest.raises(ValueError, match="multi-specialist plan requires a resolver"):
+    with pytest.raises(ValueError, match="multi-specialist plan requires one batched verifier"):
         ReviewPlan.create(
             task_id=TASK_ID,
             selection_mode="fixed",
@@ -50,9 +50,9 @@ def test_multi_specialist_plan_requires_resolver() -> None:
 def test_multi_specialist_plan_requires_one_batched_verifier() -> None:
     reviewers = reviewer_nodes_only()
     resolver = _node(
-        "review-resolver:v1",
-        ReviewPlanNodeType.RESOLVER,
-        ReviewPass.RESOLVER,
+        "review-verifier:v1",
+        ReviewPlanNodeType.VERIFIER,
+        ReviewPass.VERIFIER,
         depends_on=tuple(node.node_id for node in reviewers),
     )
 
@@ -92,12 +92,6 @@ def test_adaptive_plan_requires_a_planner_reason() -> None:
 
 def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
     reviewers = reviewer_nodes_only()
-    resolver = _node(
-        "review-resolver:v1",
-        ReviewPlanNodeType.RESOLVER,
-        ReviewPass.RESOLVER,
-        depends_on=tuple(node.node_id for node in reviewers),
-    )
     verifier = ReviewPlanNode.create(
         task_id=TASK_ID,
         node_type=ReviewPlanNodeType.VERIFIER,
@@ -105,20 +99,20 @@ def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
-        depends_on=(resolver.node_id,),
+        depends_on=tuple(sorted(node.node_id for node in reviewers)),
     )
     first = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
         reviewer_references=("security:v1", "correctness:v2"),
-        nodes=(*reviewers, resolver, verifier),
+        nodes=(*reviewers, verifier),
         planner_reason=None,
     )
     second = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
         reviewer_references=("correctness:v2", "security:v1"),
-        nodes=(verifier, resolver, *reversed(reviewers)),
+        nodes=(verifier, *reversed(reviewers)),
         planner_reason=None,
     )
 

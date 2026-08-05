@@ -295,9 +295,9 @@ it("selects a stage and then one reviewer timeline", () => {
             task_id: "review-1",
           },
           {
-            node_id: "resolver",
-            node_type: "resolver",
-            agent_reference: "review-resolver:v1",
+            node_id: "verifier",
+            node_type: "verifier",
+            agent_reference: "review-verifier:v1",
             depends_on: ["reviewer-security", "reviewer-performance"],
             pass_index: 2,
             shard_id: "default",
@@ -328,11 +328,11 @@ it("selects a stage and then one reviewer timeline", () => {
         {
           sequence: 3,
           kind: "model_output_delta",
-          content: "Resolver timeline event",
+          content: "Verifier timeline event",
           created_at: "2026-07-22T00:00:02Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "review-resolver:v1", message_id: "resolver-output" },
+          metadata: { agent: "review-verifier:v1", message_id: "verifier-output" },
         },
       ]}
     />,
@@ -341,7 +341,7 @@ it("selects a stage and then one reviewer timeline", () => {
   fireEvent.click(screen.getByRole("button", { name: /Reviewers/ }));
   expect(screen.getByText("Security timeline event")).toBeInTheDocument();
   expect(screen.getByText("Performance timeline event")).toBeInTheDocument();
-  expect(screen.queryByText("Resolver timeline event")).not.toBeInTheDocument();
+  expect(screen.queryByText("Verifier timeline event")).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: /Security Reviewer/ }));
   expect(screen.getByText("Security timeline event")).toBeInTheDocument();
@@ -406,12 +406,12 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         tools: [
           { tool_name: "read_file", call_count: 1, result_count: 1 },
           { tool_name: "get_diff", call_count: 1, result_count: 1 },
-          { tool_name: "submit_resolution", call_count: 1, result_count: 1 },
+          { tool_name: "verdict", call_count: 1, result_count: 1 },
         ],
         agents: [
           { agent: "security:v1", model_name: "model", llm_call_count: 2, input_tokens: 80, output_tokens: 20, total_tokens: 100, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
           { agent: "performance:v1", model_name: "model", llm_call_count: 3, input_tokens: 160, output_tokens: 40, total_tokens: 200, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
-          { agent: "review-resolver:v1", model_name: "model", llm_call_count: 4, input_tokens: 240, output_tokens: 60, total_tokens: 300, tool_call_count: 1, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
+          { agent: "review-verifier:v1", model_name: "model", llm_call_count: 4, input_tokens: 240, output_tokens: 60, total_tokens: 300, tool_call_count: 1, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
         ],
       }}
       plan={{
@@ -422,7 +422,7 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         nodes: [
           { node_id: "security", node_type: "reviewer", agent_reference: "security:v1", depends_on: [], pass_index: 1, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
           { node_id: "performance", node_type: "reviewer", agent_reference: "performance:v1", depends_on: [], pass_index: 1, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
-          { node_id: "resolver", node_type: "resolver", agent_reference: "review-resolver:v1", depends_on: ["security", "performance"], pass_index: 2, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
+          { node_id: "verifier", node_type: "verifier", agent_reference: "review-verifier:v1", depends_on: ["security", "performance"], pass_index: 2, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
         ],
       }}
       entries={[
@@ -430,8 +430,8 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         { sequence: 2, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:01Z", redacted: false, truncated: false, metadata: { agent: "security:v1" } },
         { sequence: 3, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:02Z", redacted: false, truncated: false, metadata: { agent: "performance:v1", tool_name: "get_diff", tool_call_id: "performance-tool" } },
         { sequence: 4, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:03Z", redacted: false, truncated: false, metadata: { agent: "performance:v1" } },
-        { sequence: 5, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:04Z", redacted: false, truncated: false, metadata: { agent: "review-resolver:v1", tool_name: "submit_resolution", tool_call_id: "resolver-tool" } },
-        { sequence: 6, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:05Z", redacted: false, truncated: false, metadata: { agent: "review-resolver:v1" } },
+        { sequence: 5, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:04Z", redacted: false, truncated: false, metadata: { agent: "review-verifier:v1", tool_name: "verdict", tool_call_id: "verifier-tool" } },
+        { sequence: 6, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:05Z", redacted: false, truncated: false, metadata: { agent: "review-verifier:v1" } },
       ]}
     />,
   );
@@ -443,7 +443,7 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
   expect(within(report).getByText("300")).toBeInTheDocument();
   expect(within(report).getByText("read_file")).toBeInTheDocument();
   expect(within(report).getByText("get_diff")).toBeInTheDocument();
-  expect(within(report).queryByText("submit_resolution")).not.toBeInTheDocument();
+  expect(within(report).queryByText("verdict")).not.toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: /Security Reviewer/ }));
   const totalTokensMetric = within(report).getByText("Total tokens").closest("div");

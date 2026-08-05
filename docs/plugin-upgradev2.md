@@ -15,7 +15,7 @@ CodeLens `0.2.0` 已实现本文的 v2 契约。历史 v1 插件仍可在兼容�
 | Manifest API 标识 | 没有，缺省视为 v1 | `plugin_api_version: "2"` |
 | Reviewer 配置 | `selected_agents: string[]` | `reviewer_selection` 判别联合 |
 | Reviewer 决策 | 插件传递 Agent 列表 | Fixed 传递列表；Adaptive 不传列表 |
-| 资源边界 | 主要依赖全局配置 | `budget_profile` |
+| 资源边界 | 主要依赖全局配置 | 全局配置（执行限制与工具限制） |
 | Review Profile | 不支持 | 配置页可从 Profile 复制策略；保存后为插件独立快照 |
 | 高频触发 | 插件自行 debounce，核心按 base/head 去重 | 增加 `supersede_policy`，核心按完整策略幂等 |
 | ReviewCreator Port | `selected_agents` 参数 | `TriggerReviewPolicy` 值对象 |
@@ -24,7 +24,7 @@ CodeLens `0.2.0` 已实现本文的 v2 契约。历史 v1 插件仍可在兼容�
 | Finding | 单 Agent 产物 | 仍只导出 Published Finding，不暴露 Candidate/Cluster |
 | Tool/MCP/Skill | 插件不参与 | 仍由 Reviewer Version 的 Capability Profile 决定 |
 
-v2 的核心原则是：插件只决定触发时机、Review Scope 和 Review Selection Policy，不参与 Planner、Agent 工具、MCP、Skill、Resolver 或 Finding 发布决策。
+v2 的核心原则是：插件只决定触发时机、Review Scope 和 Review Selection Policy，不参与 Planner、Agent 工具、MCP、Skill、Verifier 或 Finding 发布决策。
 
 ## 3. 兼容性与发布策略
 
@@ -39,7 +39,7 @@ v2 插件必须：
 
 需要继续支持 CodeLens 0.1.x 时，应保留插件 v1 发布分支或 v1 Release，不要在运行时通过反射猜测 Port 签名。
 
-未声明 `plugin_api_version` 的历史插件按 v1 处理。CodeLens v2 可以在一个兼容窗口内继续加载 v1 插件，并通过防腐层把 `selected_agents` 转换为 Fixed，但 v1 插件不能使用 Adaptive、Budget Profile 或 Supersede Policy。
+未声明 `plugin_api_version` 的历史插件按 v1 处理。CodeLens v2 可以在一个兼容窗口内继续加载 v1 插件，并通过防腐层把 `selected_agents` 转换为 Fixed，但 v1 插件不能使用 Adaptive 或 Supersede Policy。
 
 ### 3.2 Core 前置要求
 
@@ -137,11 +137,6 @@ v2 插件必须：
               }
             ]
           },
-          "budget_profile": {
-            "type": "string",
-            "enum": ["lean", "standard", "deep"],
-            "default": "standard"
-          },
           "supersede_policy": {
             "type": "string",
             "enum": ["latest_snapshot", "preserve_all"],
@@ -160,7 +155,6 @@ v2 插件必须：
         },
         "required": [
           "reviewer_selection",
-          "budget_profile",
           "supersede_policy",
           "prompt_locale",
           "debounce_seconds"
@@ -237,8 +231,7 @@ v2 插件必须：
   "reviewer_selection": {
     "mode": "fixed",
     "reviewer_versions": ["general:v1"]
-  },
-  "budget_profile": "lean"
+  }
 }
 ```
 
@@ -248,7 +241,7 @@ v2 插件必须：
 
 CodeLens v2 的插件配置页可以列出 Review Profile，帮助用户复用已有策略，但 Profile 不是 Trigger 运行时依赖：
 
-1. 用户选择 Profile 时，Core 把其中的 `reviewer_selection` 和 `budget_profile` 复制到插件配置草稿。
+1. 用户选择 Profile 时，Core 把其中的 `reviewer_selection` 复制到插件配置草稿。
 2. 用户可以继续调整草稿；调整不会修改原 Profile。
 3. 保存时，插件配置与 `supersede_policy`、`prompt_locale`、Debounce 和插件自有字段一起原子持久化。
 4. Profile 后续变化不会自动更新插件。只有用户显式选择“从 Profile 重新载入”并再次保存时才更新。
@@ -256,7 +249,7 @@ CodeLens v2 的插件配置页可以列出 Review Profile，帮助用户复用�
 
 Core 可以在插件配置之外保存来源 Profile ID、Revision 和复制时间，用于界面提示。该来源元数据不属于插件 Manifest Schema，不传给插件，不参与 Review 策略指纹，也不能被插件用于改变执行语义。
 
-插件作者仍需在 Manifest 中声明标准 v2 字段。CodeLens 前端识别 `reviewer_selection` 与 `budget_profile` 的公共契约，并用共享 Review Strategy 编辑器渲染；插件自有字段继续由通用 JSON Schema 表单渲染。插件不得提供另一套 Reviewer 选择 UI 或在自有字段中编码隐藏 Reviewer 列表。
+插件作者仍需在 Manifest 中声明标准 v2 字段。CodeLens 前端识别 `reviewer_selection` 的公共契约，并用共享 Review Strategy 编辑器渲染；插件自有字段继续由通用 JSON Schema 表单渲染。插件不得提供另一套 Reviewer 选择 UI 或在自有字段中编码隐藏 Reviewer 列表。
 
 ## 6. v1 配置迁移
 
@@ -278,7 +271,6 @@ reviewer_selection:
 - 删除 `selected_agents`；
 - 不切换到 Adaptive；
 - 不把 `correctness:v1` 自动替换为 `correctness:v2`；
-- 为缺失的 `budget_profile` 添加 `standard`；
 - 为缺失的 `supersede_policy` 添加 `latest_snapshot`；
 - 保留 `prompt_locale`、Debounce、Scope 和插件自有字段；
 - 迁移后使用新 Manifest Schema 和 Review Application 再次校验；
@@ -302,7 +294,6 @@ reviewer_selection:
     "mode": "fixed",
     "reviewer_versions": ["correctness:v1"]
   },
-  "budget_profile": "standard",
   "supersede_policy": "latest_snapshot",
   "prompt_locale": "zh-CN",
   "debounce_seconds": 10
@@ -345,7 +336,6 @@ type ReviewerSelection = FixedReviewerSelection | AdaptiveReviewerSelection
 @dataclass(frozen=True)
 class TriggerReviewPolicy:
     reviewer_selection: ReviewerSelection
-    budget_profile: str
     supersede_policy: Literal["latest_snapshot", "preserve_all"]
     prompt_locale: Literal["en", "zh-CN"]
 
@@ -483,7 +473,6 @@ Core 幂等键至少包含：
 repository + base/head Snapshot
 + reviewer selection policy fingerprint
 + planner/catalog version
-+ budget profile
 + capability/skill policy fingerprint
 ```
 
@@ -559,7 +548,7 @@ Report 插件只接收最终 Published Finding，不接收 CandidateFinding、Fi
 - MCP Server、MCP Tool 或 MCP Resource URI；
 - Skill ID、Skill 内容或 Skill 加载开关；
 - Shell、网络、文件系统或 Secret 权限；
-- Resolver、Verifier 或 Planner Prompt。
+- Verifier 或 Planner Prompt。
 
 Reviewer Version 静态绑定 Capability Profile 和 Skill Policy。插件选择 Reviewer 后，CodeLens Core 冻结其 built-in tools、未来 MCP Binding 和确定性 Skill 激活结果。插件不能通过 `external_context`、配置或事件 Payload 扩大这些权限。
 
@@ -581,7 +570,7 @@ Reviewer Version 静态绑定 Capability Profile 和 Skill Policy。插件选择
 1. 为当前 v1 插件发布最后一个维护版本并保留 Release。
 2. 把插件自身版本提升到 `2.0.0`。
 3. 在 Manifest 增加 `plugin_api_version: "2"` 和正确的 `min_codelens_version`。
-4. 用 `reviewer_selection`、`budget_profile` 和 `supersede_policy` 替换 Trigger Schema 中的 `selected_agents`。
+4. 用 `reviewer_selection` 和 `supersede_policy` 替换 Trigger Schema 中的 `selected_agents`。
 5. 保持插件自有配置字段稳定，为新增字段设置安全 Default。
 6. 把 Trigger 调用改为 `TriggerReviewPolicy.from_config` 和 `ReviewCreatorPort` v2。
 7. 删除插件内部 Reviewer 推断、自动增删或失败回退逻辑。

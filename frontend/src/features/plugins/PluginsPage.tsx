@@ -501,7 +501,6 @@ function TriggerCapabilitySection({
   const COMMON_TRIGGER_FIELDS = new Set([
     "selected_agents",
     "reviewer_selection",
-    "budget_profile",
     "supersede_policy",
     "prompt_locale",
     "debounce_seconds",

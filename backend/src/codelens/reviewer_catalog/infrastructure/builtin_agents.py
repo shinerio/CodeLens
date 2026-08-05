@@ -165,7 +165,7 @@ def _catalog_entries() -> Iterable[AgentVersion]:
     yield _internal_agent(
         agent_id="review-verifier",
         role=AgentRole.VERIFIER,
-        prompt_key="review-verifier",
+        prompt_key="review-verdict",
         output_contract_version="verdict:1",
         capability_profile_ref="verifier:v1",
         failure_policy="partial_task",

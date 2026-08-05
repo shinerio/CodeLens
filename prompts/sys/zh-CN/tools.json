@@ -8,6 +8,7 @@
   "task_done": {"description": "尝试结束整个调查。summary 必填且有长度限制。当仍有 Review 文件未完成时会拒绝：missing_evidence_files 表示尚未成功通过 get_diff 或 read_file 查看；undeclared_files 表示已经查看但尚未通过 review_file_done 记录。继续调查后重新调用 task_done。达到配置的最大打回次数后，工具会接受完成并通过 incomplete_files 返回未完成文件，以便保留已有 Finding 并完成整理。"},
   "submit_review_plan": {"description": "将一批 Reviewer 引用添加到 Plan。可多次调用以累积选择，重复项会被忽略。提供 reviewer 引用列表（例如 [\"security:v1\", \"performance:v1\"]）。每个引用必须是可用且未被禁用的。"},
   "finalize_plan": {"description": "验证累积的 Reviewer 并最终确定 Plan。在所有 submit_review_plan 调用完成后调用。系统会验证累积集合是否完全匹配可用的 reviewer。"},
-  "submit_verdict": {"description": "为一个或多个 finding cluster 提交裁决（接受或拒绝）。除 cluster_ids 和 verdict 外，其他参数均为可选。接受时，可以可选地覆盖任何评论属性（path、side、existing_code、title、content、recommendation、category、severity、primary_dimension、secondary_dimensions、evidence_strength、impact_certainty、reproducibility），以便将多个 cluster 合并为一个 finding。"},
-  "finalize_verdicts": {"description": "验证每个 cluster 都已收到恰好一次裁决，并最终确定裁决集。在所有 submit_verdict 调用完成后调用。系统会验证所有 cluster 是否都被覆盖且仅覆盖一次。"}
+  "verdict": {"description": "接受或拒绝一个或多个 finding cluster。必填参数：cluster_ids（cluster 标识列表）和 action（\"accept\" 或 \"deny\"）。accept 使用 cluster 的 canonical 候选字段发布 finding。deny 将 cluster 作为误报抑制。可多次调用以累积不同 cluster 的决策。"},
+  "merge": {"description": "将一个或多个 cluster 合并为单个合成的 Finding。所有参数必填：cluster_ids、path、side、existing_code、title、content、recommendation、category、severity、primary_dimension、secondary_dimensions、evidence_strength、impact_certainty、reproducibility。当模型需要跨合并候选合成最终 Finding 属性而非原样接受 canonical 字段时使用。"},
+  "finalize_verdicts": {"description": "验证每个 cluster 都已收到恰好一次裁决（accept、deny 或 merge），并最终确定裁决集。在所有 verdict 和 merge 调用完成后调用。系统会验证所有 cluster 是否都被覆盖且仅覆盖一次。"}
 }

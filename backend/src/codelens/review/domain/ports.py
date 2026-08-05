@@ -6,8 +6,8 @@ from typing import Literal, Protocol
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFinding, CandidateFindingBatch
+from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import FindingBatch
-from codelens.findings.domain.resolution import FindingCluster
 from codelens.findings.domain.verdict import VerdictDecision
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.review_plan import ReviewPlan
@@ -304,8 +304,8 @@ class CandidateFindingStorePort(Protocol):
     async def list_for_task(self, task_id: str) -> tuple[CandidateFinding, ...]: ...
 
 
-class ResolutionStorePort(Protocol):
-    """Persist deterministic clusters and their no-invention decisions."""
+class VerdictStorePort(Protocol):
+    """Persist deterministic clusters and Final Verifier decisions."""
 
     async def save_clusters(
         self, task_id: str, snapshot_id: str, clusters: tuple[FindingCluster, ...]
@@ -314,10 +314,10 @@ class ResolutionStorePort(Protocol):
     async def list_clusters(self, task_id: str) -> tuple[FindingCluster, ...]: ...
 
     async def save_decisions(
-        self, task_id: str, decisions: tuple[ResolutionDecision, ...]
+        self, task_id: str, decisions: tuple[VerdictDecision, ...]
     ) -> None: ...
 
-    async def list_decisions(self, task_id: str) -> tuple[ResolutionDecision, ...]: ...
+    async def list_decisions(self, task_id: str) -> tuple[VerdictDecision, ...]: ...
 
 
 class RecentRepositoryStorePort(Protocol):

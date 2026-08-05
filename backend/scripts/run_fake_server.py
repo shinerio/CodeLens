@@ -26,7 +26,6 @@ from codelens.interface.http.routers.reviews import router as reviews_router
 from codelens.interface.http.routers.settings import router as settings_router
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
-    BudgetProfile,
     FixedReviewerSelection,
 )
 from codelens.shared.domain.errors import DomainError
@@ -85,7 +84,6 @@ async def _build_app(settings: Settings) -> FastAPI:
                 name=default_profile.name,
                 is_default=True,
                 reviewer_selection=FixedReviewerSelection(("correctness:v1",)),
-                budget_profile=BudgetProfile.STANDARD,
             )
         scheduler_task = asyncio.create_task(backend.scheduler.run(stop_event))
         try:

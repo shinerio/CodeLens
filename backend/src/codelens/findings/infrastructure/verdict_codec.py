@@ -12,8 +12,8 @@ from codelens.findings.domain.candidates import (
     ImpactCertainty,
     Reproducibility,
 )
+from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import FindingSeverity
-from codelens.findings.domain.resolution import FindingCluster
 from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome
 
 _ShortText = Annotated[
@@ -47,9 +47,10 @@ class VerdictDecisionDto(_StrictModel):
     """Validate one Final Verifier decision over one or more clusters."""
 
     cluster_ids: Annotated[list[_ClusterID], Field(min_length=1, max_length=64)]
-    outcome: Literal["accept", "deny"]
+    outcome: Literal["accept", "deny", "merge"]
 
-    # Optional merge fields (only used when outcome is "accept")
+    # Merge fields: required when outcome is "merge", ignored for accept/deny.
+    # The VerdictDecision domain constructor enforces merge completeness.
     path: _Path | None = None
     side: Literal["old", "new"] | None = None
     existing_code: _LongText | None = None

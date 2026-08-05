@@ -29,17 +29,12 @@ def test_builtin_profiles_expose_only_the_approved_tools() -> None:
         "task_done",
     )
     assert _tool_names("reviewer-comment-v2:v1") == _tool_names("legacy-reviewer:v1")
-    assert _tool_names("resolver:v1") == (
-        "read_file",
-        "get_diff",
-        "submit_resolution",
-    )
     assert _tool_names("verifier:v1") == (
-        "find_files",
-        "grep",
         "read_file",
         "get_diff",
-        "submit_verification",
+        "verdict",
+        "merge",
+        "finalize_verdicts",
     )
 
 
@@ -65,7 +60,6 @@ def test_every_builtin_profile_is_read_only_and_contains_no_forbidden_tool() -> 
         "legacy-reviewer:v1",
         "reviewer-comment-v2:v1",
         "planner:v1",
-        "resolver:v1",
         "verifier:v1",
     }
     assert all(profile.is_read_only for profile in profiles.values())

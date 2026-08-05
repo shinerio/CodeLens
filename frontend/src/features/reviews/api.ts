@@ -9,7 +9,7 @@ type ReviewResponseDto = Omit<
   | "profile_source"
   | "review_plan"
   | "coverage"
-  | "resolution_summary"
+  | "verdict_summary"
 > &
   Partial<
     Pick<
@@ -17,7 +17,7 @@ type ReviewResponseDto = Omit<
       | "selection_request"
       | "profile_source"
       | "review_plan"
-      | "resolution_summary"
+      | "verdict_summary"
     >
   > & {
     coverage?: Partial<ReviewResponse["coverage"]>;
@@ -61,7 +61,7 @@ export function parseReviewResponse(value: ReviewResponseDto): ReviewResponse {
   }
   const reviewPlan = value.review_plan ?? null;
   if (reviewPlan !== null) {
-    const validRoles = new Set(["planner", "reviewer", "resolver", "verifier"]);
+    const validRoles = new Set(["planner", "reviewer", "verifier"]);
     if (reviewPlan.nodes.some((node) => !validRoles.has(node.node_type))) {
       throw new Error("Unknown Review Plan node role");
     }
@@ -85,10 +85,10 @@ export function parseReviewResponse(value: ReviewResponseDto): ReviewResponse {
     profile_source: value.profile_source ?? null,
     review_plan: reviewPlan,
     coverage,
-    resolution_summary: value.resolution_summary ?? {
-      publish: 0,
-      suppress: 0,
-      verify: 0,
+    verdict_summary: value.verdict_summary ?? {
+      accept: 0,
+      deny: 0,
+      merge: 0,
     },
   };
 }

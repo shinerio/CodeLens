@@ -211,7 +211,6 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
     )
     assert {node.node_type for node in prepared.plan.nodes} == {
         ReviewPlanNodeType.REVIEWER,
-        ReviewPlanNodeType.RESOLVER,
         ReviewPlanNodeType.VERIFIER,
     }
     assert set(spec_store.records) == {node.node_id for node in prepared.plan.nodes}

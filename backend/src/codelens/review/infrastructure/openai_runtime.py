@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, fields, is_dataclass, replace
+from dataclasses import fields, is_dataclass, replace
 from typing import Any, Literal, Protocol, cast
 
 import httpx
@@ -45,13 +45,8 @@ from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.application.validate_candidates import CandidateBatchCodec
 from codelens.findings.domain.candidates import CandidateFindingBatch
 from codelens.findings.domain.models import FindingSeverity
-from codelens.findings.domain.resolution import (
-    FindingCluster,
-    ResolutionDecision,
-    VerificationDecision,
-)
-from codelens.findings.infrastructure.resolver_output import ResolverOutputCodec
-from codelens.findings.infrastructure.verifier_output import VerifierOutputCodec
+from codelens.findings.domain.verdict import VerdictDecision
+from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
 from codelens.review.application.settings import (
     ReviewCompletionSettings,
@@ -80,8 +75,7 @@ from codelens.review.infrastructure.capability_tools import (
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
-from codelens.review.infrastructure.resolution_tools import ResolutionSubmissionCollector
-from codelens.review.infrastructure.verification_tools import VerificationSubmissionCollector
+from codelens.review.infrastructure.verdict_tools import VerdictSubmissionCollector
 from codelens.reviewer_catalog.domain.models import AgentRole
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
 from codelens.workspace.domain.models import ReviewSnapshot
@@ -255,8 +249,7 @@ class OpenAIAgentRuntime:
         )
         role_output_tools: tuple[RoleOutputToolBinding, ...] = ()
         planner_codec: PlannerOutputCodec | None = None
-        resolver_codec: ResolverOutputCodec | None = None
-        verifier_codec: VerifierOutputCodec | None = None
+        verdict_codec: VerdictCodec | None = None
         if agent.role is AgentRole.PLANNER:
             planner_codec = _planner_codec(role_context)
             planner_collector = ReviewPlanSubmissionCollector(planner_codec)
@@ -265,16 +258,15 @@ class OpenAIAgentRuntime:
             role_output_tools = planner_collector.bindings(
                 submit_description, finalize_description
             )
-        elif agent.role is AgentRole.RESOLVER:
-            resolver_codec = _resolver_codec(role_context)
-            resolver_collector = ResolutionSubmissionCollector(resolver_codec)
-            resolver_description = prompts.tools["submit_resolution"].description
-            role_output_tools = (resolver_collector.binding(resolver_description),)
         elif agent.role is AgentRole.VERIFIER:
-            verifier_codec = _verifier_codec(role_context)
-            verifier_collector = VerificationSubmissionCollector(verifier_codec)
-            verifier_description = prompts.tools["submit_verification"].description
-            role_output_tools = (verifier_collector.binding(verifier_description),)
+            verdict_codec = _verdict_codec(role_context)
+            verdict_collector = VerdictSubmissionCollector(verdict_codec)
+            verdict_description = prompts.tools["verdict"].description
+            merge_description = prompts.tools["merge"].description
+            finalize_description = prompts.tools["finalize_verdicts"].description
+            role_output_tools = verdict_collector.bindings(
+                verdict_description, merge_description, finalize_description
+            )
         tool_context = RuntimeToolContext(
             snapshot=snapshot,
             git=self._git,
@@ -440,20 +432,13 @@ class OpenAIAgentRuntime:
                 if not isinstance(final_output, PlannerSelection):
                     raise ValueError("Planner output state has the wrong value")
                 canonical_bytes = planner_codec.canonical_bytes(final_output)
-            elif resolver_codec is not None:
+            elif verdict_codec is not None:
                 final_output = tool_context.final_output()
                 if not isinstance(final_output, tuple) or not all(
-                    isinstance(item, ResolutionDecision) for item in final_output
+                    isinstance(item, VerdictDecision) for item in final_output
                 ):
-                    raise ValueError("Resolver output state has the wrong value")
-                canonical_bytes = resolver_codec.canonical_bytes(final_output)
-            elif verifier_codec is not None:
-                final_output = tool_context.final_output()
-                if not isinstance(final_output, tuple) or not all(
-                    isinstance(item, VerificationDecision) for item in final_output
-                ):
-                    raise ValueError("Verifier output state has the wrong value")
-                canonical_bytes = verifier_codec.canonical_bytes(final_output)
+                    raise ValueError("Verdict output state has the wrong value")
+                canonical_bytes = verdict_codec.canonical_bytes(final_output)
             elif agent.output_contract_version == "2":
                 final_output = tool_context.final_output()
                 if not isinstance(final_output, CandidateFindingBatch):
@@ -821,77 +806,51 @@ def _host_run_id(role_context: dict[str, object] | None) -> str | None:
     return value
 
 
-@dataclass(frozen=True)
-class _ResolverCandidate:
-    candidate_id: str
-    severity: FindingSeverity
+def _verdict_codec(role_context: dict[str, object] | None) -> VerdictCodec:
+    """Rebuild Verdict constraints from the frozen cluster projection."""
 
-
-def _resolver_codec(role_context: dict[str, object] | None) -> ResolverOutputCodec:
-    """Rebuild Resolver constraints from the bounded, execution-order-free projection."""
-
-    context = role_context.get("resolution_context") if role_context is not None else None
+    context = role_context.get("verdict_context") if role_context is not None else None
     if not isinstance(context, dict) or set(context) != {
-        "candidates",
         "clusters",
         "schema_version",
     }:
-        raise PermanentAgentOutputError("Resolver role context has an invalid shape")
+        raise PermanentAgentOutputError("Verdict role context has an invalid shape")
     raw_clusters = context["clusters"]
-    raw_candidates = context["candidates"]
-    if context["schema_version"] != "1" or not isinstance(
-        raw_clusters, list
-    ) or not isinstance(raw_candidates, list):
-        raise PermanentAgentOutputError("Resolver role context has an invalid value")
+    if context["schema_version"] != "1" or not isinstance(raw_clusters, list):
+        raise PermanentAgentOutputError("Verdict role context has an invalid value")
     try:
+        from codelens.findings.domain.candidates import (
+            EvidenceStrength,
+            ImpactCertainty,
+            Reproducibility,
+        )
+        from codelens.findings.domain.clusters import FindingCluster
+
         clusters = tuple(
             FindingCluster(
                 cluster_id=item["cluster_id"],
                 candidate_ids=tuple(item["candidate_ids"]),
+                canonical_candidate_id=item["canonical_candidate_id"],
+                title=item["title"],
+                category=item["category"],
+                severity=FindingSeverity(item["severity"]),
+                content=item["content"],
+                recommendation=item["recommendation"],
+                primary_dimension=item["primary_dimension"],
+                secondary_dimensions=tuple(item["secondary_dimensions"]),
+                evidence_strength=EvidenceStrength(item["evidence_strength"]),
+                impact_certainty=ImpactCertainty(item["impact_certainty"]),
+                reproducibility=Reproducibility(item["reproducibility"]),
             )
             for item in raw_clusters
             if isinstance(item, dict)
         )
-        candidates = tuple(
-            _ResolverCandidate(
-                candidate_id=item["candidate_id"],
-                severity=FindingSeverity(item["severity"]),
-            )
-            for item in raw_candidates
-            if isinstance(item, dict)
-        )
-        if len(clusters) != len(raw_clusters) or len(candidates) != len(raw_candidates):
-            raise ValueError("Resolver projection contains non-object values")
-        return ResolverOutputCodec(clusters, candidates)
+        if len(clusters) != len(raw_clusters):
+            raise ValueError("Verdict projection contains non-object values")
+        return VerdictCodec(clusters=clusters)
     except (KeyError, TypeError, ValueError) as error:
         raise PermanentAgentOutputError(
-            "Resolver role context has an invalid value"
-        ) from error
-
-
-def _verifier_codec(role_context: dict[str, object] | None) -> VerifierOutputCodec:
-    context = (
-        role_context.get("verification_context") if role_context is not None else None
-    )
-    if not isinstance(context, dict) or set(context) != {
-        "cluster_ids",
-        "decisions",
-        "schema_version",
-    }:
-        raise PermanentAgentOutputError("Verifier role context has an invalid shape")
-    cluster_ids = context["cluster_ids"]
-    if (
-        context["schema_version"] != "1"
-        or not isinstance(cluster_ids, list)
-        or not all(isinstance(item, str) for item in cluster_ids)
-        or not isinstance(context["decisions"], list)
-    ):
-        raise PermanentAgentOutputError("Verifier role context has an invalid value")
-    try:
-        return VerifierOutputCodec(tuple(cluster_ids))
-    except ValueError as error:
-        raise PermanentAgentOutputError(
-            "Verifier role context has an invalid value"
+            "Verdict role context has an invalid value"
         ) from error
 
 

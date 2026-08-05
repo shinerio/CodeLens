@@ -78,10 +78,10 @@ async def _review_response(
             else "planned"
         )
         coverage[target].append(node.agent_reference)
-    decisions = await components.resolution_store.list_decisions(review.task_id)
-    resolution_summary = {"publish": 0, "suppress": 0, "verify": 0}
+    decisions = await components.verdict_store.list_decisions(review.task_id)
+    verdict_summary = {"accept": 0, "deny": 0, "merge": 0}
     for decision in decisions:
-        resolution_summary[decision.outcome.value] += 1
+        verdict_summary[decision.outcome.value] += 1
     review_plan = json.loads(plan.canonical_json())
     review_plan["plan_hash"] = plan.plan_hash
     return ReviewResponse.from_domain(
@@ -89,7 +89,7 @@ async def _review_response(
         selected_agents=list(plan.reviewer_references),
         review_plan=review_plan,
         coverage=coverage,
-        resolution_summary=resolution_summary,
+        verdict_summary=verdict_summary,
     )
 
 

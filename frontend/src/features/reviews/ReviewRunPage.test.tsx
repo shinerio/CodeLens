@@ -217,7 +217,7 @@ it("keeps published findings visible while naming partial reviewer coverage", as
         failed: ["performance:v1"],
         omitted: [],
       },
-      resolution_summary: { publish: 1, suppress: 0, verify: 1 },
+      verdict_summary: { accept: 1, deny: 0, merge: 1 },
     });
   });
 

@@ -33,9 +33,7 @@ Preparing → Reviewing → Validating → Synthesizing → Completed
          |            |            |
          +------------+------------+
                       |
-                  [Resolver]
-                      |
-                  [Verifier]
+                  [Verifier]（Final Verifier，verdict 阶段）
                       |
                   Completed
 ```
@@ -53,8 +51,7 @@ CREATED
       → PREPARING             构建执行规格
         → PLANNING            编译 Review Plan（仅 adaptive）
           → REVIEWING         执行 Reviewer 节点
-            → RESOLVING       执行 Resolver 节点（仅多 Reviewer）
-              → VERIFYING     执行 Verifier 节点（仅多 Reviewer）
+            → VERIFYING       执行 Verifier 节点（仅多 Reviewer，verdict 阶段）
             → VALIDATING      验证输出（仅单 Reviewer）
               → SYNTHESIZING  汇总结果（仅单 Reviewer）
 ```
@@ -70,8 +67,7 @@ CREATED
 | `SNAPSHOTTING` | `PREPARING` |
 | `PREPARING` | `PLANNING`（adaptive）、`REVIEWING`（fixed） |
 | `PLANNING` | `REVIEWING` |
-| `REVIEWING` | `VALIDATING`、`RESOLVING`、`COMPLETED`、`PARTIAL` |
-| `RESOLVING` | `VERIFYING`、`COMPLETED`、`PARTIAL` |
+| `REVIEWING` | `VALIDATING`、`VERIFYING`、`COMPLETED`、`PARTIAL` |
 | `VERIFYING` | `COMPLETED`、`PARTIAL` |
 | `VALIDATING` | `SYNTHESIZING` |
 | `SYNTHESIZING` | `COMPLETED`、`PARTIAL` |
@@ -125,21 +121,15 @@ PENDING
 - **并行性**：所有 Reviewer 节点并行执行
 - **输出**：`FindingBatch`（Reviewer v2）或 `CandidateFindingBatch`（legacy v1）
 
-### 5.4 Resolving 阶段（仅多 Reviewer）
+### 5.4 Verdict 阶段（仅多 Reviewer）
 
 - **触发条件**：所有 Reviewer 节点到达终态，且至少一个成功
-- **职责**：Resolver Agent 合并、去重、裁决来自多个 Reviewer 的 Finding
-- **输出**：`ValidatedResolutionBatch`（每个 cluster 的 publish/suppress/verify 决策）
+- **职责**：Final Verifier Agent 接收所有 Reviewer 的 Candidate，宿主已确定性聚类为 `FindingCluster`，Verifier 通过 `verdict`（accept/deny）、`merge`（合成字段）和 `finalize_verdicts`（校验覆盖）三工具对每个 Cluster 做出终审决策
+- **输出**：`ValidatedVerdictBatch`（accept/deny/merge 决策）
 
-### 5.5 Verifying 阶段（仅多 Reviewer）
+### 5.5 Validating + Synthesizing（仅单 Reviewer）
 
-- **触发条件**：Resolver 节点成功
-- **职责**：Verifier Agent 对 Resolver 标记为 `verify` 的 cluster 做最终质量确认
-- **输出**：`ValidatedVerificationBatch`（confirmed/rejected/unresolved 决策）
-
-### 5.6 Validating + Synthesizing（仅单 Reviewer）
-
-- **触发条件**：单 Reviewer 完成且无 Resolver/Verifier
+- **触发条件**：单 Reviewer 完成且无 Verifier
 - **职责**：验证 Finding 格式，汇总为最终结果
 - **输出**：发布到前端
 
@@ -172,29 +162,18 @@ PENDING
 | **输出** | `FindingBatch`（v2）或 `CandidateFindingBatch`（v1 legacy） |
 | **完成信号** | 调用 `task_done` |
 
-### 6.3 Resolver（`review-resolver:v1`）
-
-| 属性 | 值 |
-|------|---|
-| **角色** | `AgentRole.RESOLVER` |
-| **Pass** | 2 |
-| **职责** | 接收所有 Reviewer 的 Finding，将相关 Finding 聚类为 cluster，对每个 cluster 做出 publish（发布）、suppress（抑制）或 verify（需验证）的裁决 |
-| **出现条件** | 仅多 Reviewer 计划 |
-| **依赖** | 所有 Reviewer 节点 |
-| **输出** | `ValidatedResolutionBatch` |
-| **完成信号** | 调用 `submit_resolution` |
-
-### 6.4 Verifier（`review-verifier:v1`）
+### 6.3 Verifier / Final Verifier（`review-verifier:v1`）
 
 | 属性 | 值 |
 |------|---|
 | **角色** | `AgentRole.VERIFIER` |
-| **Pass** | 3 |
-| **职责** | 对 Resolver 标记为 `verify` 的 cluster 做最终质量确认，标记为 confirmed、rejected 或 unresolved |
+| **Pass** | 2 |
+| **职责** | 接收所有 Reviewer 的 Candidate 和宿主已聚类的 `FindingCluster`，通过 `verdict`（accept/deny）、`merge`（合成字段）和 `finalize_verdicts`（校验覆盖）三工具对每个 Cluster 做出终审决策 |
 | **出现条件** | 仅多 Reviewer 计划 |
-| **依赖** | Resolver 节点 |
-| **输出** | `ValidatedVerificationBatch` |
-| **完成信号** | 调用 `submit_verification` |
+| **依赖** | 所有 Reviewer 节点 |
+| **输出** | `ValidatedVerdictBatch` |
+| **完成信号** | 调用 `finalize_verdicts` |
+| **Prompt Key** | `review-verdict` |
 
 ---
 
@@ -202,20 +181,21 @@ PENDING
 
 ### 7.1 按角色分配
 
-| 工具 | 版本 | Planner | Reviewer (v2) | Reviewer (v1) | Resolver | Verifier |
-|------|------|---------|--------------|--------------|----------|----------|
-| `find_files` | 1 | ✓ | ✓ | ✓ | — | ✓ |
-| `grep` | 1 | ✓ | ✓ | ✓ | — | ✓ |
-| `read_file` | 1 | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `get_diff` | 1 | ✓ | ✓ | ✓ | ✓ | ✓ |
-| `comment` | 2 | — | ✓ | — | — | — |
-| `comment` | 1 | — | — | ✓ | — | — |
-| `review_file_done` | 1 | — | ✓ | ✓ | — | — |
-| `task_done` | 1 | — | ✓ | ✓ | — | — |
-| `submit_review_plan` | 1 | ✓ | — | — | — | — |
-| `finalize_plan` | 1 | ✓ | — | — | — | — |
-| `submit_resolution` | 1 | — | — | — | ✓ | — |
-| `submit_verification` | 1 | — | — | — | — | ✓ |
+| 工具 | 版本 | Planner | Reviewer (v2) | Reviewer (v1) | Verifier |
+|------|------|---------|--------------|--------------|----------|
+| `find_files` | 1 | ✓ | ✓ | ✓ | — |
+| `grep` | 1 | ✓ | ✓ | ✓ | — |
+| `read_file` | 1 | ✓ | ✓ | ✓ | ✓ |
+| `get_diff` | 1 | ✓ | ✓ | ✓ | ✓ |
+| `comment` | 2 | — | ✓ | — | — |
+| `comment` | 1 | — | — | ✓ | — |
+| `review_file_done` | 1 | — | ✓ | ✓ | — |
+| `task_done` | 1 | — | ✓ | ✓ | — |
+| `submit_review_plan` | 1 | ✓ | — | — | — |
+| `finalize_plan` | 1 | ✓ | — | — | — |
+| `verdict` | 1 | — | — | — | ✓ |
+| `merge` | 1 | — | — | — | ✓ |
+| `finalize_verdicts` | 1 | — | — | — | ✓ |
 
 ### 7.2 证据工具
 
@@ -237,8 +217,9 @@ PENDING
 | `comment` (v2) | Reviewer | 提交 Finding（引用代码而非行号） | `reviewer_id`, `path`, `existing_code`, `title`, `content`, `severity`, `category`, `evidence_strength` 等 |
 | `review_file_done` | Reviewer | 声明已审查的文件列表 | `reviewed_files: list[str]` |
 | `task_done` | Reviewer | 声明当前 Reviewer 工作结束 | `summary: str` |
-| `submit_resolution` | Resolver | 提交 cluster 裁决（publish/suppress/verify） | `decisions: list[{cluster_id, outcome, ...}]` |
-| `submit_verification` | Verifier | 提交 cluster 验证结果（confirmed/rejected/unresolved） | `decisions: list[{cluster_id, outcome, reason}]` |
+| `verdict` | Verifier | 对 cluster 做出 accept（原样接收）或 deny（拒绝误报）决策 | `cluster_ids: list[str]`, `action: "accept"\|"deny"` |
+| `merge` | Verifier | 将多个 cluster 合并为单个 Finding，所有字段必填 | `cluster_ids: list[str]`, `path`, `side`, `title`, `content`, `recommendation`, `category`, `severity` 等 |
+| `finalize_verdicts` | Verifier | 校验所有 cluster 被 accept/deny/merge 之一覆盖且无重复，完成 verdict 阶段 | 无参数 |
 
 ### 7.4 禁止工具
 
@@ -257,15 +238,13 @@ PENDING
 | **Planner** | 无 | 立即可执行 |
 | **Reviewer**（adaptive） | Planner | Planner 成功后 |
 | **Reviewer**（fixed） | 无 | 立即可执行 |
-| **Resolver** | 所有 Reviewer | 所有 Reviewer 到达终态，且至少一个成功 |
-| **Verifier** | Resolver | Resolver 成功 |
+| **Verifier** | 所有 Reviewer | 所有 Reviewer 到达终态，且至少一个成功 |
 
 ### 8.2 关键约束
 
-- **Resolver 容错**：即使部分 Reviewer 失败，只要至少一个成功，Resolver 仍可执行
-- **Verifier 严格**：必须等 Resolver 成功后才能执行
+- **Verifier 容错**：即使部分 Reviewer 失败，只要至少一个成功，Verifier 仍可执行
 - **无依赖死锁检测**：如果调度器找不到可执行节点且存在 pending 节点，抛出 `RuntimeError`
-- **节点唯一性**：最多一个 Planner、一个 Resolver、一个 Verifier
+- **节点唯一性**：最多一个 Planner、一个 Verifier
 
 ### 8.3 DAG 不变量（`ReviewPlan.create()` 强制执行）
 
@@ -273,35 +252,20 @@ PENDING
 2. `general:v1` 和 `correctness:v1` 必须单独运行
 3. Adaptive 模式必须有且仅有一个 Planner 节点
 4. Fixed 模式不能有 Planner 节点
-5. 多 specialist 计划必须有 Resolver 和 Verifier
-6. Resolver 必须依赖所有 Reviewer 节点
-7. Verifier 必须依赖 Resolver
-8. 所有依赖必须引用已知节点
+5. 多 specialist 计划必须有 Verifier
+6. Verifier 必须依赖所有 Reviewer 节点
+7. 所有依赖必须引用已知节点
 
 ---
 
-## 9. Budget Profile
-
-`BudgetProfile` 控制每个 Review 任务的资源上限（`review/application/budget_policy.py`）：
-
-| Profile | 最大 Reviewer 数 | 最大模型节点数 | 并发度 | 最大 Token | 单节点最大输出 Token |
-|---------|----------------|--------------|-------|-----------|-------------------|
-| **LEAN** | 1 | 2 | 1 | 100,000 | 8,000 |
-| **STANDARD** | 3 | 6 | 3 | 400,000 | 16,000 |
-| **DEEP** | 7 | 10 | 4 | 1,200,000 | 24,000 |
-
-模型节点数 = Reviewer 数 + 1（Planner，仅 adaptive）+ 2（Resolver + Verifier，仅多 Reviewer）。
-
----
-
-## 10. 选择模式
+## 9. 选择模式
 
 ### 10.1 Fixed（固定团队）
 
 用户手动选择 Reviewer 列表，不经过 Planner：
 
 ```
-Preparing → Reviewing → [Resolving → Verifying] → Completed
+Preparing → Reviewing → [Verifying] → Completed
 ```
 
 - 支持所有 public 和 legacy reviewer
@@ -313,7 +277,7 @@ Preparing → Reviewing → [Resolving → Verifying] → Completed
 Planner Agent 根据代码变更风险自动选择 specialist reviewer：
 
 ```
-Preparing → Planning → Reviewing → Resolving → Verifying → Completed
+Preparing → Planning → Reviewing → Verifying → Completed
 ```
 
 - 仅 `planner_eligible=True` 且 `is_public=True` 且 `is_legacy=False` 的 reviewer 可被选择
@@ -328,9 +292,8 @@ Preparing → Planning → Reviewing → Resolving → Verifying → Completed
 | 场景 | 行为 |
 |------|------|
 | 所有 Reviewer 失败 | 任务标记为 `FAILED`（`all_reviewers_failed`） |
-| 部分 Reviewer 失败 | Resolver 仍执行，任务可能标记为 `PARTIAL` |
-| Resolver 失败 | 任务标记为 `FAILED`（`resolver_failed`） |
-| Verifier 失败 | 任务标记为 `PARTIAL`，Finding 仍发布 |
+| 部分 Reviewer 失败 | Verifier 仍执行，任务可能标记为 `PARTIAL` |
+| Verifier 失败 | 任务标记为 `PARTIAL`，已满足直接发布条件的 Finding 仍发布 |
 | 节点超时 | 标记为 `TIMED_OUT`，按依赖规则处理 |
 | 用户取消 | 所有非终态节点标记为 `CANCELED`，任务标记为 `CANCELED` |
 | 进程崩溃重启 | 从持久化 checkpoint 恢复，跳过已完成节点 |

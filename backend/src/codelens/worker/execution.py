@@ -19,9 +19,8 @@ from codelens.capabilities.infrastructure.builtin_profiles import (
     builtin_skill_policies,
 )
 from codelens.findings.application.publish_findings import FindingPublisher
-from codelens.findings.application.resolve_clusters import ResolutionService
+from codelens.findings.application.resolve_clusters import ClusterService
 from codelens.findings.application.validate_candidates import CandidateValidator
-from codelens.findings.application.verify_resolutions import VerificationPolicy
 from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.review.application.context_builder import ContextBuilder
@@ -59,16 +58,14 @@ from codelens.review.infrastructure.repositories import (
     SqlCandidateFindingStore,
     SqlCheckpointStore,
     SqlJobQueue,
-    SqlResolutionStore,
     SqlReviewPlanStore,
     SqlReviewStore,
-    SqlVerificationStore,
+    SqlVerdictStore,
     SqlWorktreeRegistry,
 )
-from codelens.review.infrastructure.resolution_tools import ResolutionValidator
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.review.infrastructure.transcripts import WorkerTranscriptStore
-from codelens.review.infrastructure.verification_tools import VerificationValidator
+from codelens.review.infrastructure.verdict_tools import VerdictValidator
 from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import (
@@ -357,7 +354,6 @@ class WorkerReviewExecutor:
         execution_spec_store: SqlAgentExecutionSpecStore | None = None,
         review_plan_store: SqlReviewPlanStore | None = None,
         candidate_store: SqlCandidateFindingStore | None = None,
-        resolution_store: SqlResolutionStore | None = None,
         verdict_store: SqlVerdictStore | None = None,
     ) -> None:
         self._settings = settings
@@ -394,7 +390,6 @@ class WorkerReviewExecutor:
         self._execution_spec_store = execution_spec_store
         self._review_plan_store = review_plan_store
         self._candidate_store = candidate_store
-        self._resolution_store = resolution_store
         self._verdict_store = verdict_store
         self._verdict_codecs: dict[tuple[str, str], VerdictCodec] = {}
 
@@ -434,7 +429,7 @@ class WorkerReviewExecutor:
                 global_limit=self._settings.max_active_agent_runs,
                 max_active_reviews=self._settings.max_active_reviews,
             ),
-            prepare_resolution=self._prepare_verdict,
+            prepare_verdict=self._prepare_verdict,
             publish_findings=self._publish_findings,
             transcript=self._transcripts,
         )
@@ -590,7 +585,7 @@ class WorkerReviewExecutor:
             raise ValueError("Fixed Review Plan persistence is unavailable")
         required_references = list(selection.reviewer_versions)
         if len(selection.reviewer_versions) > 1:
-            required_references.extend(("review-resolver:v1", "review-verifier:v1"))
+            required_references.extend(("review-verifier:v1",))
         specs_by_reference = {
             spec.agent.reference: spec for spec in stored_specs.values()
         }
@@ -887,13 +882,13 @@ class WorkerReviewExecutor:
     ) -> None:
         """Persist deterministic clusters and prepare Final Verifier input."""
 
-        if self._candidate_store is None:
+        if self._candidate_store is None or self._verdict_store is None:
             return
         plan = prepared.plan
         if plan is None:
             return
         candidates = await self._candidate_store.list_for_task(task_id)
-        service = ResolutionService(self._resolution_store)
+        service = ClusterService(self._verdict_store)
         clusters = await service.prepare(
             task_id=task_id,
             snapshot_id=prepared.snapshot.snapshot_id,
@@ -917,9 +912,14 @@ class WorkerReviewExecutor:
                     "candidate_ids": list(cluster.candidate_ids),
                     "title": cluster.title,
                     "category": cluster.category,
-                    "severity": cluster.severity.value if cluster.severity else None,
+                    "severity": cluster.severity.value,
                     "content": cluster.content,
                     "recommendation": cluster.recommendation,
+                    "primary_dimension": cluster.primary_dimension,
+                    "secondary_dimensions": list(cluster.secondary_dimensions),
+                    "evidence_strength": cluster.evidence_strength.value,
+                    "impact_certainty": cluster.impact_certainty.value,
+                    "reproducibility": cluster.reproducibility.value,
                 }
                 for cluster in clusters
             ],
@@ -928,13 +928,16 @@ class WorkerReviewExecutor:
         prepared.input_payloads[verifier.node_id] = json.dumps(
             verifier_envelope, sort_keys=True, separators=(",", ":")
         ).encode()
-        self._verdict_codecs[(task_id, verifier.node_id)] = VerdictCodec(clusters)
+        self._verdict_codecs[(task_id, verifier.node_id)] = VerdictCodec(
+            clusters=clusters
+        )
 
     async def _publish_findings(self, task_id: str) -> None:
         if self._candidate_store is None or self._verdict_store is None:
             return
         candidates = await self._candidate_store.list_for_task(task_id)
-        verdicts = await self._verdict_store.list_for_task(task_id)
+        clusters = await self._verdict_store.list_clusters(task_id)
+        verdicts = await self._verdict_store.list_decisions(task_id)
         publications = tuple(
             (verdict.cluster_ids[0], finding)
             for verdict in verdicts
@@ -942,6 +945,7 @@ class WorkerReviewExecutor:
                 task_id=task_id,
                 candidates=candidates,
                 verdicts=(verdict,),
+                clusters=clusters,
             )
         )
         await self._review_store.publish_verdict_findings(

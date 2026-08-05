@@ -55,13 +55,11 @@ def test_catalog_roles_and_planner_visibility_are_frozen() -> None:
         "test-regression",
     )
     assert catalog["review-planner:v1"].role is AgentRole.PLANNER
-    assert catalog["review-resolver:v1"].role is AgentRole.RESOLVER
     assert catalog["review-verifier:v1"].role is AgentRole.VERIFIER
     assert all(
         not catalog[reference].is_public
         for reference in (
             "review-planner:v1",
-            "review-resolver:v1",
             "review-verifier:v1",
         )
     )

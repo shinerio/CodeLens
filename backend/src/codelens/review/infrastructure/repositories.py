@@ -25,6 +25,7 @@ from codelens.findings.domain.candidates import (
     ImpactCertainty,
     Reproducibility,
 )
+from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
@@ -35,13 +36,7 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
-from codelens.findings.domain.resolution import (
-    FindingCluster,
-    ResolutionDecision,
-    ResolutionOutcome,
-    VerificationDecision,
-    VerificationOutcome,
-)
+from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome
 from codelens.review.domain.agent_run import AgentRun, InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import (
@@ -84,7 +79,6 @@ from codelens.review.infrastructure.tables import (
     jobs,
     recent_repositories,
     recent_repository_settings,
-    resolution_decisions,
     review_plans,
     review_profiles,
     review_tasks,
@@ -316,28 +310,42 @@ def _candidate_from_payload(payload: str) -> CandidateFinding:
     )
 
 
-def _resolution_payload(decision: ResolutionDecision) -> str:
+def _verdict_payload(decision: VerdictDecision) -> str:
+    """Canonicalize a Verdict decision for durable, conflict-detected storage."""
+
     return _json(
         {
-            "canonical_candidate_id": decision.canonical_candidate_id,
-            "cluster_id": decision.cluster_id,
-            "merged_candidate_ids": list(decision.merged_candidate_ids),
+            "cluster_ids": list(decision.cluster_ids),
             "outcome": decision.outcome.value,
-            "severity": decision.severity.value if decision.severity is not None else None,
+            "path": decision.path,
+            "side": decision.side,
+            "existing_code": decision.existing_code,
             "title": decision.title,
             "content": decision.content,
             "recommendation": decision.recommendation,
-            "reason_code": decision.reason_code,
-        }
-    )
-
-
-def _verification_payload(decision: VerificationDecision) -> str:
-    return _json(
-        {
-            "cluster_id": decision.target_id,
-            "outcome": decision.outcome.value,
-            "reason_code": decision.reason_code,
+            "category": decision.category,
+            "severity": decision.severity.value if decision.severity is not None else None,
+            "primary_dimension": decision.primary_dimension,
+            "secondary_dimensions": (
+                list(decision.secondary_dimensions)
+                if decision.secondary_dimensions is not None
+                else None
+            ),
+            "evidence_strength": (
+                decision.evidence_strength.value
+                if decision.evidence_strength is not None
+                else None
+            ),
+            "impact_certainty": (
+                decision.impact_certainty.value
+                if decision.impact_certainty is not None
+                else None
+            ),
+            "reproducibility": (
+                decision.reproducibility.value
+                if decision.reproducibility is not None
+                else None
+            ),
         }
     )
 
@@ -939,8 +947,8 @@ class SqlCandidateFindingStore:
             return tuple(_candidate_from_payload(str(payload)) for payload in rows)
 
 
-class SqlResolutionStore:
-    """Persist normalized cluster membership and create-once Resolution decisions."""
+class SqlVerdictStore:
+    """Persist normalized cluster membership and immutable Final Verifier decisions."""
 
     def __init__(self, database: Database) -> None:
         self._database = database
@@ -957,7 +965,22 @@ class SqlResolutionStore:
 
         async def operation(session: AsyncSession) -> None:
             for cluster in clusters:
-                payload = _json({"candidate_ids": list(cluster.candidate_ids)})
+                payload = _json(
+                    {
+                        "candidate_ids": list(cluster.candidate_ids),
+                        "canonical_candidate_id": cluster.canonical_candidate_id,
+                        "title": cluster.title,
+                        "category": cluster.category,
+                        "severity": cluster.severity.value,
+                        "content": cluster.content,
+                        "recommendation": cluster.recommendation,
+                        "primary_dimension": cluster.primary_dimension,
+                        "secondary_dimensions": list(cluster.secondary_dimensions),
+                        "evidence_strength": cluster.evidence_strength.value,
+                        "impact_certainty": cluster.impact_certainty.value,
+                        "reproducibility": cluster.reproducibility.value,
+                    }
+                )
                 await session.execute(
                     sqlite_insert(finding_clusters)
                     .values(
@@ -1039,132 +1062,106 @@ class SqlResolutionStore:
     async def list_clusters(self, task_id: str) -> tuple[FindingCluster, ...]:
         """Rehydrate clusters from normalized membership order."""
 
+        from codelens.findings.domain.candidates import (
+            EvidenceStrength,
+            ImpactCertainty,
+            Reproducibility,
+        )
+
         async with self._database.sessions() as session:
             rows = (
                 await session.execute(
-                    select(finding_clusters.c.cluster_id)
+                    select(
+                        finding_clusters.c.cluster_id,
+                        finding_clusters.c.payload_json,
+                    )
                     .where(finding_clusters.c.task_id == task_id)
                     .order_by(finding_clusters.c.cluster_id)
                 )
-            ).scalars()
+            ).all()
             result: list[FindingCluster] = []
-            for cluster_id in rows:
+            for row in rows:
                 members = (
                     await session.execute(
                         select(finding_cluster_candidates.c.candidate_id)
-                        .where(finding_cluster_candidates.c.cluster_id == cluster_id)
+                        .where(finding_cluster_candidates.c.cluster_id == row.cluster_id)
                         .order_by(finding_cluster_candidates.c.ordinal)
                     )
                 ).scalars()
+                value = json.loads(str(row.payload_json))
                 result.append(
-                    FindingCluster(str(cluster_id), tuple(str(member) for member in members))
+                    FindingCluster(
+                        cluster_id=str(row.cluster_id),
+                        candidate_ids=tuple(str(member) for member in members),
+                        canonical_candidate_id=str(value["canonical_candidate_id"]),
+                        title=str(value["title"]),
+                        category=str(value["category"]),
+                        severity=FindingSeverity(str(value["severity"])),
+                        content=str(value["content"]),
+                        recommendation=str(value["recommendation"]),
+                        primary_dimension=str(value["primary_dimension"]),
+                        secondary_dimensions=tuple(
+                            str(item) for item in value["secondary_dimensions"]
+                        ),
+                        evidence_strength=EvidenceStrength(str(value["evidence_strength"])),
+                        impact_certainty=ImpactCertainty(str(value["impact_certainty"])),
+                        reproducibility=Reproducibility(str(value["reproducibility"])),
+                    )
                 )
             return tuple(result)
 
     async def save_decisions(
         self,
         task_id: str,
-        decisions: tuple[ResolutionDecision, ...],
+        decisions: tuple[VerdictDecision, ...],
     ) -> None:
-        """Persist one immutable decision per cluster for later verification/publication."""
+        """Persist one immutable verdict decision per cluster group."""
 
         timestamp = _now()
 
         async def operation(session: AsyncSession) -> None:
             for decision in decisions:
-                payload = _resolution_payload(decision)
-                decision_id = "decision_" + hashlib.sha256(
-                    f"{task_id}\0{decision.cluster_id}".encode()
+                payload = _verdict_payload(decision)
+                decision_id = "verdict_" + hashlib.sha256(
+                    f"{task_id}\0{','.join(decision.cluster_ids)}".encode()
                 ).hexdigest()
                 await session.execute(
-                    sqlite_insert(resolution_decisions)
+                    sqlite_insert(verification_decisions)
                     .values(
-                        decision_id=decision_id,
+                        verification_decision_id=decision_id,
                         task_id=task_id,
-                        cluster_id=decision.cluster_id,
+                        verifier_run_id="",
                         outcome=decision.outcome.value,
-                        canonical_candidate_id=decision.canonical_candidate_id,
+                        reason_code="verdict",
                         payload_json=payload,
                         created_at=timestamp,
-                        updated_at=timestamp,
                     )
                     .on_conflict_do_nothing(
-                        index_elements=(resolution_decisions.c.decision_id,)
+                        index_elements=(
+                            verification_decisions.c.verification_decision_id,
+                        )
                     )
                 )
                 stored = await session.scalar(
-                    select(resolution_decisions.c.payload_json).where(
-                        resolution_decisions.c.decision_id == decision_id
+                    select(verification_decisions.c.payload_json).where(
+                        verification_decisions.c.verification_decision_id
+                        == decision_id
                     )
                 )
                 if str(stored) != payload:
-                    raise ValueError("Resolution decision conflicts with persisted content")
+                    raise ValueError("Verdict decision conflicts with persisted content")
 
         await self._database.run_transaction(operation)
 
-    async def list_decisions(self, task_id: str) -> tuple[ResolutionDecision, ...]:
-        """Return persisted decisions in stable cluster order."""
+    async def list_decisions(self, task_id: str) -> tuple[VerdictDecision, ...]:
+        """Return persisted verdict decisions in stable order."""
 
-        async with self._database.sessions() as session:
-            rows = (
-                await session.execute(
-                    select(resolution_decisions.c.payload_json)
-                    .where(resolution_decisions.c.task_id == task_id)
-                    .order_by(resolution_decisions.c.cluster_id)
-                )
-            ).scalars()
-            result: list[ResolutionDecision] = []
-            for payload in rows:
-                value = json.loads(str(payload))
-                result.append(
-                    ResolutionDecision(
-                        cluster_id=str(value["cluster_id"]),
-                        outcome=ResolutionOutcome(str(value["outcome"])),
-                        canonical_candidate_id=(
-                            str(value["canonical_candidate_id"])
-                            if value["canonical_candidate_id"] is not None
-                            else None
-                        ),
-                        merged_candidate_ids=tuple(
-                            str(item) for item in value["merged_candidate_ids"]
-                        ),
-                        severity=(
-                            FindingSeverity(str(value["severity"]))
-                            if value.get("severity") is not None
-                            else None
-                        ),
-                        title=(
-                            str(value["title"])
-                            if value.get("title") is not None
-                            else None
-                        ),
-                        content=(
-                            str(value["content"])
-                            if value.get("content") is not None
-                            else None
-                        ),
-                        recommendation=(
-                            str(value["recommendation"])
-                            if value.get("recommendation") is not None
-                            else None
-                        ),
-                        reason_code=(
-                            str(value["reason_code"])
-                            if value.get("reason_code") is not None
-                            else None
-                        ),
-                    )
-                )
-            return tuple(result)
+        from codelens.findings.domain.candidates import (
+            EvidenceStrength,
+            ImpactCertainty,
+            Reproducibility,
+        )
 
-
-class SqlVerificationStore:
-    """Read immutable Verifier decisions in stable Cluster order."""
-
-    def __init__(self, database: Database) -> None:
-        self._database = database
-
-    async def list_for_task(self, task_id: str) -> tuple[VerificationDecision, ...]:
         async with self._database.sessions() as session:
             rows = (
                 await session.execute(
@@ -1173,16 +1170,44 @@ class SqlVerificationStore:
                     .order_by(verification_decisions.c.verification_decision_id)
                 )
             ).scalars()
-            result: list[VerificationDecision] = []
+            result: list[VerdictDecision] = []
             for payload in rows:
                 value = json.loads(str(payload))
                 result.append(
-                    VerificationDecision(
-                        target_id=str(value["cluster_id"]),
-                        outcome=VerificationOutcome(str(value["outcome"])),
-                        reason_code=(
-                            str(value["reason_code"])
-                            if value.get("reason_code") is not None
+                    VerdictDecision(
+                        cluster_ids=tuple(str(item) for item in value["cluster_ids"]),
+                        outcome=VerdictOutcome(str(value["outcome"])),
+                        path=value.get("path"),
+                        side=value.get("side"),
+                        existing_code=value.get("existing_code"),
+                        title=value.get("title"),
+                        content=value.get("content"),
+                        recommendation=value.get("recommendation"),
+                        category=value.get("category"),
+                        severity=(
+                            FindingSeverity(str(value["severity"]))
+                            if value.get("severity") is not None
+                            else None
+                        ),
+                        primary_dimension=value.get("primary_dimension"),
+                        secondary_dimensions=(
+                            tuple(str(item) for item in value["secondary_dimensions"])
+                            if value.get("secondary_dimensions") is not None
+                            else None
+                        ),
+                        evidence_strength=(
+                            EvidenceStrength(str(value["evidence_strength"]))
+                            if value.get("evidence_strength") is not None
+                            else None
+                        ),
+                        impact_certainty=(
+                            ImpactCertainty(str(value["impact_certainty"]))
+                            if value.get("impact_certainty") is not None
+                            else None
+                        ),
+                        reproducibility=(
+                            Reproducibility(str(value["reproducibility"]))
+                            if value.get("reproducibility") is not None
                             else None
                         ),
                     )
@@ -2054,12 +2079,11 @@ class SqlReviewStore:
             "preparing": "snapshotting",
             "planning": "preparing",
             "reviewing": ("preparing", "planning"),
-            "resolving": "reviewing",
-            "verifying": "resolving",
+            "verifying": "reviewing",
             "validating": "reviewing",
             "synthesizing": "validating",
-            "completed": ("reviewing", "resolving", "verifying", "synthesizing"),
-            "partial": ("reviewing", "resolving", "verifying", "synthesizing"),
+            "completed": ("reviewing", "verifying", "synthesizing"),
+            "partial": ("reviewing", "verifying", "synthesizing"),
         }
         expected = predecessors.get(status)
         if expected is None:
@@ -2560,13 +2584,13 @@ class SqlReviewStore:
             result_summary=result_summary,
         )
 
-    async def complete_with_resolutions(
+    async def complete_with_verdicts(
         self,
         task_id: str,
         node_key: str,
-        decisions: tuple[ResolutionDecision, ...],
+        decisions: tuple[VerdictDecision, ...],
     ) -> None:
-        """Atomically persist no-invention decisions and complete the Resolver run."""
+        """Atomically persist Final Verifier decisions and complete the Verifier run."""
 
         timestamp = _now()
 
@@ -2581,151 +2605,21 @@ class SqlReviewStore:
                 return None
             if checkpoint_status not in {"output_saved", "validating"}:
                 raise InvalidAgentRunStateError(
-                    "Resolver AgentRun is not ready for completion"
-                )
-            for decision in decisions:
-                payload = _resolution_payload(decision)
-                decision_id = "decision_" + hashlib.sha256(
-                    f"{task_id}\0{decision.cluster_id}".encode()
-                ).hexdigest()
-                await session.execute(
-                    sqlite_insert(resolution_decisions)
-                    .values(
-                        decision_id=decision_id,
-                        task_id=task_id,
-                        cluster_id=decision.cluster_id,
-                        outcome=decision.outcome.value,
-                        canonical_candidate_id=decision.canonical_candidate_id,
-                        payload_json=payload,
-                        created_at=timestamp,
-                        updated_at=timestamp,
-                    )
-                    .on_conflict_do_nothing(
-                        index_elements=(resolution_decisions.c.decision_id,)
-                    )
-                )
-                stored = await session.scalar(
-                    select(resolution_decisions.c.payload_json).where(
-                        resolution_decisions.c.decision_id == decision_id
-                    )
-                )
-                if str(stored) != payload:
-                    raise ValueError(
-                        "Resolution decision conflicts with persisted content"
-                    )
-            result = cast(
-                CursorResult[Any],
-                await session.execute(
-                    update(dag_checkpoints)
-                    .where(
-                        dag_checkpoints.c.task_id == task_id,
-                        dag_checkpoints.c.node_key == node_key,
-                        dag_checkpoints.c.status.in_(("output_saved", "validating")),
-                    )
-                    .values(
-                        status="succeeded",
-                        result_summary_json=_json(
-                            {"resolution_count": len(decisions)}
-                        ),
-                        updated_at=timestamp,
-                    )
-                ),
-            )
-            if result.rowcount != 1:
-                raise InvalidAgentRunStateError(
-                    "Resolver completion lost its expected state"
-                )
-            event_payload = {
-                "node_key": node_key,
-                "resolution_count": len(decisions),
-            }
-            await session.execute(
-                insert(events).values(
-                    **_event_values(task_id, "agent_run.completed", event_payload)
-                )
-            )
-            await session.execute(
-                insert(events).values(
-                    **_event_values(
-                        task_id,
-                        "review.resolution_completed",
-                        {"resolution_count": len(decisions)},
-                    )
-                )
-            )
-            event_id = await session.scalar(
-                insert(events)
-                .values(**_event_values(task_id, "agent.succeeded", event_payload))
-                .returning(events.c.event_id)
-            )
-            if event_id is None:
-                raise RuntimeError("Resolver completion event was not persisted")
-            return ReviewEvent(
-                event_id=int(event_id),
-                task_id=task_id,
-                event_type="agent.succeeded",
-                payload=event_payload,
-            )
-
-        event = await self._database.run_transaction(operation)
-        if event is not None:
-            await self._publish_events([event])
-
-    async def complete_with_verifications(
-        self,
-        task_id: str,
-        node_key: str,
-        decisions: tuple[VerificationDecision, ...],
-    ) -> None:
-        """Atomically persist bounded Verifier decisions and complete its AgentRun."""
-
-        timestamp = _now()
-
-        async def operation(session: AsyncSession) -> ReviewEvent | None:
-            checkpoint = (
-                (
-                    await session.execute(
-                        select(dag_checkpoints).where(
-                            dag_checkpoints.c.task_id == task_id,
-                            dag_checkpoints.c.node_key == node_key,
-                        )
-                    )
-                )
-                .mappings()
-                .one()
-            )
-            if checkpoint["status"] == "succeeded":
-                return None
-            if checkpoint["status"] not in {"output_saved", "validating"}:
-                raise InvalidAgentRunStateError(
                     "Verifier AgentRun is not ready for completion"
                 )
-            run_id = checkpoint["run_id"]
-            if run_id is None:
-                raise InvalidAgentRunStateError("Verifier AgentRun lacks a stable run ID")
             for decision in decisions:
-                resolution_id = await session.scalar(
-                    select(resolution_decisions.c.decision_id).where(
-                        resolution_decisions.c.task_id == task_id,
-                        resolution_decisions.c.cluster_id == decision.target_id,
-                        resolution_decisions.c.outcome == "verify",
-                    )
-                )
-                if resolution_id is None:
-                    raise ValueError("Verifier referenced a non-verifiable Resolution")
-                payload = _verification_payload(decision)
-                verification_id = "verification_" + hashlib.sha256(
-                    f"{task_id}\0{decision.target_id}".encode()
+                payload = _verdict_payload(decision)
+                decision_id = "verdict_" + hashlib.sha256(
+                    f"{task_id}\0{','.join(decision.cluster_ids)}".encode()
                 ).hexdigest()
                 await session.execute(
                     sqlite_insert(verification_decisions)
                     .values(
-                        verification_decision_id=verification_id,
+                        verification_decision_id=decision_id,
                         task_id=task_id,
-                        resolution_decision_id=str(resolution_id),
-                        verifier_run_id=str(run_id),
+                        verifier_run_id="",
                         outcome=decision.outcome.value,
-                        reason_code=decision.reason_code or "unspecified",
+                        reason_code="verdict",
                         payload_json=payload,
                         created_at=timestamp,
                     )
@@ -2738,21 +2632,13 @@ class SqlReviewStore:
                 stored = await session.scalar(
                     select(verification_decisions.c.payload_json).where(
                         verification_decisions.c.verification_decision_id
-                        == verification_id
+                        == decision_id
                     )
                 )
                 if str(stored) != payload:
                     raise ValueError(
-                        "Verification decision conflicts with persisted content"
+                        "Verdict decision conflicts with persisted content"
                     )
-                await session.execute(
-                    update(resolution_decisions)
-                    .where(resolution_decisions.c.decision_id == resolution_id)
-                    .values(
-                        verification_status=decision.outcome.value,
-                        updated_at=timestamp,
-                    )
-                )
             result = cast(
                 CursorResult[Any],
                 await session.execute(
@@ -2765,7 +2651,7 @@ class SqlReviewStore:
                     .values(
                         status="succeeded",
                         result_summary_json=_json(
-                            {"verification_count": len(decisions)}
+                            {"verdict_count": len(decisions)}
                         ),
                         updated_at=timestamp,
                     )
@@ -2777,7 +2663,7 @@ class SqlReviewStore:
                 )
             event_payload = {
                 "node_key": node_key,
-                "verification_count": len(decisions),
+                "verdict_count": len(decisions),
             }
             await session.execute(
                 insert(events).values(
@@ -2788,8 +2674,8 @@ class SqlReviewStore:
                 insert(events).values(
                     **_event_values(
                         task_id,
-                        "review.verification_completed",
-                        {"verification_count": len(decisions)},
+                        "review.verdict_completed",
+                        {"verdict_count": len(decisions)},
                     )
                 )
             )
@@ -2801,71 +2687,66 @@ class SqlReviewStore:
             if event_id is None:
                 raise RuntimeError("Verifier completion event was not persisted")
             return ReviewEvent(
-                int(event_id), task_id, "agent.succeeded", event_payload
+                event_id=int(event_id),
+                task_id=task_id,
+                event_type="agent.succeeded",
+                payload=event_payload,
             )
 
         event = await self._database.run_transaction(operation)
         if event is not None:
             await self._publish_events([event])
 
-    async def publish_resolved_findings(
+    async def publish_verdict_findings(
         self,
         task_id: str,
-        decisions: tuple[ResolutionDecision, ...],
+        verdicts: tuple[VerdictDecision, ...],
         publications: tuple[tuple[str, Finding], ...],
     ) -> None:
-        """Publish each resolved Finding exactly once and mark every decision outcome."""
+        """Publish ACCEPT/MERGE verdict Findings and mark DENY verdicts suppressed."""
 
         timestamp = _now()
-        publication_by_cluster = dict(publications)
+        finding_by_cluster: dict[str, Finding] = {}
+        for cluster_key, finding in publications:
+            finding_by_cluster[cluster_key] = finding
 
         async def operation(session: AsyncSession) -> list[ReviewEvent]:
             emitted: list[ReviewEvent] = []
-            for decision in decisions:
-                row = (
-                    (
-                        await session.execute(
-                            select(resolution_decisions).where(
-                                resolution_decisions.c.task_id == task_id,
-                                resolution_decisions.c.cluster_id
-                                == decision.cluster_id,
-                            )
-                        )
-                    )
-                    .mappings()
-                    .one()
-                )
-                if row["publication_status"] != "pending":
+            for verdict in verdicts:
+                primary_cluster = verdict.cluster_ids[0]
+                if not verdict.is_publishable:
                     continue
-                finding = publication_by_cluster.get(decision.cluster_id)
+                finding = finding_by_cluster.get(primary_cluster)
                 if finding is None:
-                    verification_status = row["verification_status"]
-                    should_suppress = decision.outcome is ResolutionOutcome.SUPPRESS or (
-                        decision.outcome is ResolutionOutcome.VERIFY
-                        and verification_status in {"rejected", "unresolved"}
-                    )
-                    if should_suppress:
-                        await session.execute(
-                            update(resolution_decisions)
-                            .where(
-                                resolution_decisions.c.decision_id
-                                == row["decision_id"]
-                            )
-                            .values(publication_status="suppressed", updated_at=timestamp)
-                        )
                     continue
                 payload = _finding_payload(finding)
+                # Idempotency: skip event emission when the Finding already
+                # exists from a previous publication attempt. This keeps
+                # replay calls from duplicating finding.published events while
+                # still verifying the persisted payload matches.
+                existing_payload = await session.scalar(
+                    select(findings.c.payload_json).where(
+                        findings.c.task_id == task_id,
+                        findings.c.fingerprint == finding.fingerprint,
+                    )
+                )
+                if existing_payload is not None:
+                    if str(existing_payload) != payload:
+                        raise ValueError(
+                            "Published Finding conflicts with persisted content"
+                        )
+                    continue
                 await session.execute(
                     sqlite_insert(findings)
                     .values(
                         finding_id=finding.finding_id,
                         task_id=task_id,
-                        node_key="publication:v2",
+                        node_key="publication:verdict",
                         fingerprint=finding.fingerprint,
                         payload_json=payload,
                         severity=finding.severity.value,
                         confidence=None,
-                        verification_status=row["verification_status"],
+                        verification_status="confirmed",
                         path=finding.primary_location.path,
                         start_line=finding.primary_location.start_line,
                         created_at=timestamp,
@@ -2882,18 +2763,10 @@ class SqlReviewStore:
                 )
                 if str(stored) != payload:
                     raise ValueError("Published Finding conflicts with persisted content")
-                await session.execute(
-                    update(resolution_decisions)
-                    .where(resolution_decisions.c.decision_id == row["decision_id"])
-                    .values(
-                        publication_status="published",
-                        published_finding_id=finding.finding_id,
-                        updated_at=timestamp,
-                    )
-                )
                 event_payload: dict[str, object] = {
                     "finding_id": finding.finding_id,
-                    "cluster_id": decision.cluster_id,
+                    "cluster_id": primary_cluster,
+                    "verdict": verdict.outcome.value,
                 }
                 event_id = await session.scalar(
                     insert(events)

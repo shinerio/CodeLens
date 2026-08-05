@@ -65,11 +65,10 @@ from codelens.review.infrastructure.repositories import (
     SqlEventOutbox,
     SqlJobQueue,
     SqlRecentRepositoryStore,
-    SqlResolutionStore,
     SqlReviewPlanStore,
     SqlReviewProfileRepository,
     SqlReviewStore,
-    SqlVerificationStore,
+    SqlVerdictStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
@@ -279,8 +278,7 @@ def build_unified_backend(
         execution_spec_store=SqlAgentExecutionSpecStore(database),
         review_plan_store=SqlReviewPlanStore(database),
         candidate_store=SqlCandidateFindingStore(database),
-        resolution_store=SqlResolutionStore(database),
-        verification_store=SqlVerificationStore(database),
+        verdict_store=SqlVerdictStore(database),
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),
@@ -430,7 +428,7 @@ def build_unified_backend(
         review_store=review_store,
         review_plan_store=SqlReviewPlanStore(database),
         checkpoints=SqlCheckpointStore(database),
-        resolution_store=SqlResolutionStore(database),
+        verdict_store=SqlVerdictStore(database),
         input_artifacts=input_artifacts,
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()

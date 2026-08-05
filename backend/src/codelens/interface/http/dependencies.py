@@ -58,10 +58,10 @@ from codelens.review.infrastructure.repositories import (
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlRecentRepositoryStore,
-    SqlResolutionStore,
     SqlReviewPlanStore,
     SqlReviewProfileRepository,
     SqlReviewStore,
+    SqlVerdictStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.transcripts import (
@@ -139,7 +139,7 @@ class HttpComponents:
     review_store: SqlReviewStore
     review_plan_store: SqlReviewPlanStore
     checkpoints: SqlCheckpointStore
-    resolution_store: SqlResolutionStore
+    verdict_store: SqlVerdictStore
     input_artifacts: FilesystemInputArtifactStore
     model_gateways: ModelGatewaySettingsService
     reviewer_prompts: ReviewerPromptSettingsService
@@ -289,7 +289,7 @@ def build_components(settings: Settings) -> HttpComponents:
         review_store=review_store,
         review_plan_store=SqlReviewPlanStore(database),
         checkpoints=SqlCheckpointStore(database),
-        resolution_store=SqlResolutionStore(database),
+        verdict_store=SqlVerdictStore(database),
         input_artifacts=input_artifacts,
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()

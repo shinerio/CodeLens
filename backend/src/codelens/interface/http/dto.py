@@ -474,7 +474,7 @@ class ReviewResponse(StrictDto):
     profile_source: dict[str, object] | None = None
     review_plan: dict[str, object] | None = None
     coverage: dict[str, list[str]]
-    resolution_summary: dict[str, int]
+    verdict_summary: dict[str, int]
 
     @classmethod
     def from_domain(
@@ -484,7 +484,7 @@ class ReviewResponse(StrictDto):
         selected_agents: list[str] | None = None,
         review_plan: dict[str, object] | None = None,
         coverage: dict[str, list[str]] | None = None,
-        resolution_summary: dict[str, int] | None = None,
+        verdict_summary: dict[str, int] | None = None,
     ) -> "ReviewResponse":
         selection = review.review_profile.reviewer_selection
         selection_request: dict[str, object] = (
@@ -525,8 +525,8 @@ class ReviewResponse(StrictDto):
             review_plan=review_plan,
             coverage=coverage
             or {"planned": [], "completed": [], "failed": [], "omitted": []},
-            resolution_summary=resolution_summary
-            or {"publish": 0, "suppress": 0, "verify": 0},
+            verdict_summary=verdict_summary
+            or {"accept": 0, "deny": 0, "merge": 0},
         )
 
 

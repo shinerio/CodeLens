@@ -669,15 +669,6 @@ def _multi_plan() -> ReviewPlan:
         )
         for reference in ("security:v1", "performance:v1")
     )
-    resolver = ReviewPlanNode.create(
-        task_id="review-1",
-        node_type=ReviewPlanNodeType.RESOLVER,
-        agent_reference="review-resolver:v1",
-        pass_index=ReviewPass.RESOLVER,
-        shard_id="root",
-        logical_attempt_group="primary",
-        depends_on=tuple(node.node_id for node in reviewer_nodes),
-    )
     verifier = ReviewPlanNode.create(
         task_id="review-1",
         node_type=ReviewPlanNodeType.VERIFIER,
@@ -685,13 +676,13 @@ def _multi_plan() -> ReviewPlan:
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
-        depends_on=(resolver.node_id,),
+        depends_on=tuple(sorted(node.node_id for node in reviewer_nodes)),
     )
     return ReviewPlan.create(
         task_id="review-1",
         selection_mode="fixed",
         reviewer_references=("security:v1", "performance:v1"),
-        nodes=(*reviewer_nodes, resolver, verifier),
+        nodes=(*reviewer_nodes, verifier),
         planner_reason=None,
     )
 
@@ -701,8 +692,8 @@ async def test_persisted_dag_waits_for_all_reviewers_then_allows_partial_team() 
     reviewers = tuple(
         node for node in plan.nodes if node.node_type is ReviewPlanNodeType.REVIEWER
     )
-    resolver = next(
-        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.RESOLVER
+    verifier = next(
+        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER
     )
     statuses = {node.node_id: "pending" for node in plan.nodes}
     store = _DagCheckpoints(statuses)
@@ -713,7 +704,8 @@ async def test_persisted_dag_waits_for_all_reviewers_then_allows_partial_team() 
     statuses[reviewers[1].node_id] = "running"
     assert await scheduler.next_ready_nodes("review-1") == ()
     statuses[reviewers[1].node_id] = "failed"
-    assert await scheduler.next_ready_nodes("review-1") == (resolver,)
+    assert await scheduler.next_ready_nodes("review-1") == (verifier,)
+
 
 
 def test_reviewer_stage_outcome_is_derived_from_persisted_terminal_records() -> None:
@@ -882,7 +874,7 @@ async def _run_multi_plan(failures: set[str]) -> tuple[
     return workflow, checkpoints, runtime
 
 
-async def test_one_reviewer_failure_allows_resolver_and_keeps_sticky_partial() -> None:
+async def test_one_reviewer_failure_allows_verifier_and_keeps_sticky_partial() -> None:
     workflow, checkpoints, runtime = await _run_multi_plan({"security:v1"})
     plan = _multi_plan()
 
@@ -894,25 +886,26 @@ async def test_one_reviewer_failure_allows_resolver_and_keeps_sticky_partial() -
             if node.agent_reference == "security:v1"
         )
     ].status == "failed"
-    assert "review-resolver:v1" in runtime.calls
+    assert "review-verifier:v1" in runtime.calls
     verifier = next(
         node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER
     )
-    assert checkpoints.records[verifier.node_id].status == "skipped"
+    assert checkpoints.records[verifier.node_id].status == "succeeded"
 
 
-async def test_all_reviewer_failures_fail_task_without_running_resolver() -> None:
+async def test_all_reviewer_failures_fail_task_without_running_verifier() -> None:
     workflow, checkpoints, runtime = await _run_multi_plan(
         {"security:v1", "performance:v1"}
     )
     plan = _multi_plan()
-    resolver = next(
-        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.RESOLVER
+    verifier = next(
+        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER
     )
 
     assert workflow.status == "failed"
-    assert "review-resolver:v1" not in runtime.calls
-    assert checkpoints.records[resolver.node_id].status == "skipped"
+    assert "review-verifier:v1" not in runtime.calls
+    assert checkpoints.records[verifier.node_id].status == "skipped"
+
 
 
 @pytest.mark.parametrize("reference", ("general:v1", "security:v1"))
@@ -1002,15 +995,6 @@ async def test_persisted_reviewer_fanout_obeys_task_level_concurrency() -> None:
         )
         for reference in ("security:v1", "performance:v1", "architecture:v1")
     )
-    resolver = ReviewPlanNode.create(
-        task_id="review-1",
-        node_type=ReviewPlanNodeType.RESOLVER,
-        agent_reference="review-resolver:v1",
-        pass_index=ReviewPass.RESOLVER,
-        shard_id="root",
-        logical_attempt_group="primary",
-        depends_on=tuple(node.node_id for node in reviewer_nodes),
-    )
     verifier = ReviewPlanNode.create(
         task_id="review-1",
         node_type=ReviewPlanNodeType.VERIFIER,
@@ -1018,7 +1002,7 @@ async def test_persisted_reviewer_fanout_obeys_task_level_concurrency() -> None:
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
-        depends_on=(resolver.node_id,),
+        depends_on=tuple(sorted(node.node_id for node in reviewer_nodes)),
     )
     plan = ReviewPlan.create(
         task_id="review-1",
@@ -1026,9 +1010,10 @@ async def test_persisted_reviewer_fanout_obeys_task_level_concurrency() -> None:
         reviewer_references=tuple(
             node.agent_reference for node in reviewer_nodes
         ),
-        nodes=(*reviewer_nodes, resolver, verifier),
+        nodes=(*reviewer_nodes, verifier),
         planner_reason=None,
     )
+
     prepared = _prepared_plan(plan)
     workflow = MemoryWorkflow("preparing")
     checkpoints = _PlanCheckpoints()

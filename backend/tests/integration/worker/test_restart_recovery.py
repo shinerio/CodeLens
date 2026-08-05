@@ -343,15 +343,6 @@ async def test_restart_preserves_one_saved_reviewer_and_requeues_running_peer(
         )
         for reference in ("security:v1", "performance:v1")
     )
-    resolver = ReviewPlanNode.create(
-        task_id="review-restart",
-        node_type=ReviewPlanNodeType.RESOLVER,
-        agent_reference="review-resolver:v1",
-        pass_index=ReviewPass.RESOLVER,
-        shard_id="root",
-        logical_attempt_group="primary",
-        depends_on=tuple(node.node_id for node in reviewers),
-    )
     verifier = ReviewPlanNode.create(
         task_id="review-restart",
         node_type=ReviewPlanNodeType.VERIFIER,
@@ -359,13 +350,13 @@ async def test_restart_preserves_one_saved_reviewer_and_requeues_running_peer(
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
-        depends_on=(resolver.node_id,),
+        depends_on=tuple(sorted(node.node_id for node in reviewers)),
     )
     plan = ReviewPlan.create(
         task_id="review-restart",
         selection_mode="fixed",
         reviewer_references=("security:v1", "performance:v1"),
-        nodes=(*reviewers, resolver, verifier),
+        nodes=(*reviewers, verifier),
         planner_reason=None,
     )
     checkpoints = SqlCheckpointStore(database)

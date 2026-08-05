@@ -68,7 +68,8 @@ def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
             _tools(
                 ("read_file", 1),
                 ("get_diff", 1),
-                ("submit_verdict", 1),
+                ("verdict", 1),
+                ("merge", 1),
                 ("finalize_verdicts", 1),
             ),
         ),

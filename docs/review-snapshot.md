@@ -500,7 +500,7 @@ worktree 删除后，结果页和导出功能应继续完全依赖这些持久�
 
 - Context Builder：只为 Agent 生成有界的目标文件与规则输入；
 - Filesystem Review Tools：按 Manifest 限制可读路径；
-- Reviewer、Planner、Resolver、Verifier runtime：共享同一冻结证据范围；
+- Reviewer、Planner、Verifier runtime：共享同一冻结证据范围；
 - Finding validator：使用 `ChangeIndex` 校验位置与 changed hunk；
 - source preview：从 pinned base/head 和目标路径生成可复现的源码视图；
 - worktree cleanup：只清理通过所有权校验的任务 worktree。

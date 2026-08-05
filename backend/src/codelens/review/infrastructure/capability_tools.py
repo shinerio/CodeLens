@@ -186,7 +186,8 @@ class RuntimeToolContext:
             "task_done",
             "submit_review_plan",
             "finalize_plan",
-            "submit_verdict",
+            "verdict",
+            "merge",
             "finalize_verdicts",
         )
         descriptions = {name: f"Test contract for {name}." for name in names}
@@ -198,7 +199,8 @@ class RuntimeToolContext:
             for name in (
                 "submit_review_plan",
                 "finalize_plan",
-                "submit_verdict",
+                "verdict",
+                "merge",
                 "finalize_verdicts",
             )
         )

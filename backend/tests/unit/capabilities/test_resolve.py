@@ -17,7 +17,7 @@ from codelens.reviewer_catalog.infrastructure.builtin_agents import builtin_agen
 
 
 def test_resolver_uses_only_the_profile_statically_bound_to_the_agent() -> None:
-    agent = builtin_agent_catalog()["review-resolver:v1"]
+    agent = builtin_agent_catalog()["review-verifier:v1"]
 
     spec = CapabilityResolver.testing().resolve(
         agent=agent,
@@ -27,11 +27,13 @@ def test_resolver_uses_only_the_profile_statically_bound_to_the_agent() -> None:
     )
 
     assert spec.agent is agent
-    assert spec.capability_profile.reference == "resolver:v1"
+    assert spec.capability_profile.reference == "verifier:v1"
     assert tuple(tool.name for tool in spec.capability_profile.builtin_tools) == (
         "read_file",
         "get_diff",
-        "submit_resolution",
+        "verdict",
+        "merge",
+        "finalize_verdicts",
     )
 
 

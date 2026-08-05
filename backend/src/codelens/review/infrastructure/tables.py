@@ -322,35 +322,6 @@ finding_cluster_candidates = Table(
     UniqueConstraint("cluster_id", "ordinal", name="uq_cluster_candidate_ordinal"),
 )
 
-resolution_decisions = Table(
-    "resolution_decisions",
-    metadata,
-    Column("decision_id", String(128), primary_key=True),
-    Column(
-        "task_id",
-        String(128),
-        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
-        nullable=False,
-        index=True,
-    ),
-    Column(
-        "cluster_id",
-        String(128),
-        ForeignKey("finding_clusters.cluster_id", ondelete="CASCADE"),
-        nullable=False,
-    ),
-    Column("resolver_run_id", String(128)),
-    Column("outcome", String(32), nullable=False),
-    Column("canonical_candidate_id", String(128), ForeignKey("candidate_findings.candidate_id")),
-    Column("payload_json", Text, nullable=False),
-    Column("verification_status", String(32)),
-    Column("publication_status", String(32), nullable=False, server_default="pending"),
-    Column("published_finding_id", String(128), ForeignKey("findings.finding_id")),
-    Column("created_at", DateTime(timezone=True), nullable=False),
-    Column("updated_at", DateTime(timezone=True), nullable=False),
-    UniqueConstraint("task_id", "cluster_id", name="uq_resolution_decisions_task_cluster"),
-)
-
 verification_decisions = Table(
     "verification_decisions",
     metadata,
@@ -362,14 +333,7 @@ verification_decisions = Table(
         nullable=False,
         index=True,
     ),
-    Column(
-        "resolution_decision_id",
-        String(128),
-        ForeignKey("resolution_decisions.decision_id", ondelete="CASCADE"),
-        nullable=False,
-        unique=True,
-    ),
-    Column("verifier_run_id", String(128), nullable=False),
+    Column("verifier_run_id", String(128)),
     Column("outcome", String(32), nullable=False),
     Column("reason_code", String(128), nullable=False),
     Column("payload_json", Text, nullable=False),

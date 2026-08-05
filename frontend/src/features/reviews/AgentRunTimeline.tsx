@@ -4,7 +4,6 @@ import { useI18n } from "../../shared/i18n/i18n";
 const ROLE_LABELS = {
   planner: "execution.rolePlanner",
   reviewer: "execution.roleReviewer",
-  resolver: "execution.roleResolver",
   verifier: "execution.roleVerifier",
 } as const;
 
