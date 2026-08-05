@@ -690,6 +690,62 @@ def test_review_query_cancel_report_and_sse_resume_contract(
     assert persisted.json()["cancellation_requested"] is True
 
 
+def test_sse_replay_skips_stale_intermediate_terminal_events(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    """When a task has multiple terminal events (e.g. partial→failed→completed
+    after recovery), SSE replay must only send the LAST terminal event so the
+    frontend observes the final status, not a stale intermediate one."""
+
+    _prepared_repository(git_repository)
+    settings = _settings(tmp_path, tmp_path)
+    app = create_app(settings)
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        task_id = created.json()["task_id"]
+
+        event_store = app.state.components.events
+        # Simulate a recovery scenario: partial → failed → completed
+        client.portal.call(
+            event_store.append,
+            task_id,
+            "review.partial",
+            {"status": "partial"},
+        )
+        client.portal.call(
+            event_store.append,
+            task_id,
+            "review.failed",
+            {"status": "failed", "error_code": "review_execution_failed"},
+        )
+        client.portal.call(
+            event_store.append,
+            task_id,
+            "review.completed",
+            {"status": "completed", "finding_count": 2},
+        )
+
+        stream = client.get(f"/api/reviews/{task_id}/events")
+
+    assert stream.status_code == 200
+    assert "event: review.partial" not in stream.text
+    assert "event: review.failed" not in stream.text
+    assert "event: review.completed" in stream.text
+
+
 def test_review_findings_endpoint_returns_empty_then_saved_findings(
     tmp_path: Path,
 ) -> None:

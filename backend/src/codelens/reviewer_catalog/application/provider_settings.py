@@ -41,6 +41,9 @@ class ModelGatewayView:
     max_tool_calls: int
     max_identical_tool_results: int
     tool_timeout_seconds: int
+    max_retries: int
+    retry_backoff_base: float
+    retry_max_delay: float
 
 
 @dataclass(frozen=True)
@@ -87,6 +90,9 @@ class ModelGatewaySettingsService:
         max_tool_calls: int = 300,
         max_identical_tool_results: int = 3,
         tool_timeout_seconds: int = 30,
+        max_retries: int = 10,
+        retry_backoff_base: float = 1.0,
+        retry_max_delay: float = 30.0,
     ) -> ModelGatewayCatalogView:
         """Append a gateway; the first created gateway becomes active automatically."""
 
@@ -107,6 +113,9 @@ class ModelGatewaySettingsService:
                 max_tool_calls=max_tool_calls,
                 max_identical_tool_results=max_identical_tool_results,
                 tool_timeout_seconds=tool_timeout_seconds,
+                max_retries=max_retries,
+                retry_backoff_base=retry_backoff_base,
+                retry_max_delay=retry_max_delay,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id or gateway.gateway_id,
@@ -132,6 +141,9 @@ class ModelGatewaySettingsService:
         max_tool_calls: int = 300,
         max_identical_tool_results: int = 3,
         tool_timeout_seconds: int = 30,
+        max_retries: int = 10,
+        retry_backoff_base: float = 1.0,
+        retry_max_delay: float = 30.0,
     ) -> ModelGatewayCatalogView:
         """Replace gateway metadata while retaining an omitted write-only API key."""
 
@@ -153,6 +165,9 @@ class ModelGatewaySettingsService:
                 max_tool_calls=max_tool_calls,
                 max_identical_tool_results=max_identical_tool_results,
                 tool_timeout_seconds=tool_timeout_seconds,
+                max_retries=max_retries,
+                retry_backoff_base=retry_backoff_base,
+                retry_max_delay=retry_max_delay,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id,
@@ -234,6 +249,9 @@ class ModelGatewaySettingsService:
                     max_tool_calls=gateway.max_tool_calls,
                     max_identical_tool_results=gateway.max_identical_tool_results,
                     tool_timeout_seconds=gateway.tool_timeout_seconds,
+                    max_retries=gateway.max_retries,
+                    retry_backoff_base=gateway.retry_backoff_base,
+                    retry_max_delay=gateway.retry_max_delay,
                 )
                 for gateway in catalog.gateways
             ),

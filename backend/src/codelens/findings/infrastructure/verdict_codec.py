@@ -3,7 +3,7 @@
 import json
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
-from typing import Annotated, Literal
+from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
@@ -191,7 +191,9 @@ class VerdictCodec:
             severity=FindingSeverity(dto.severity) if dto.severity else None,
             primary_dimension=dto.primary_dimension,
             secondary_dimensions=(
-                tuple(dto.secondary_dimensions) if dto.secondary_dimensions else None
+                tuple(dto.secondary_dimensions)
+                if dto.secondary_dimensions is not None
+                else None
             ),
             evidence_strength=(
                 EvidenceStrength(dto.evidence_strength) if dto.evidence_strength else None
@@ -204,7 +206,7 @@ class VerdictCodec:
             ),
         )
 
-    def _to_dto(self, decision: VerdictDecision) -> dict:
+    def _to_dto(self, decision: VerdictDecision) -> dict[str, Any]:
         """Convert a domain VerdictDecision to a JSON-serializable dict."""
         return {
             "cluster_ids": list(decision.cluster_ids),
@@ -219,7 +221,9 @@ class VerdictCodec:
             "severity": decision.severity.value if decision.severity else None,
             "primary_dimension": decision.primary_dimension,
             "secondary_dimensions": (
-                list(decision.secondary_dimensions) if decision.secondary_dimensions else None
+                list(decision.secondary_dimensions)
+                if decision.secondary_dimensions is not None
+                else None
             ),
             "evidence_strength": (
                 decision.evidence_strength.value if decision.evidence_strength else None

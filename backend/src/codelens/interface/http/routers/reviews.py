@@ -365,14 +365,26 @@ async def _event_stream(
 ) -> AsyncIterator[str]:
     queue = await components.event_bus.subscribe(task_id)
     try:
-        # Replay events from database (catch-up phase)
+        # Replay events from database (catch-up phase).
+        # A task may have multiple terminal events in its history (e.g.
+        # review.partial → review.failed → review.completed) when it was
+        # recovered after an initial failure. The SSE replay must only
+        # send the LAST terminal event so the frontend observes the final
+        # status, not a stale intermediate one.
         replay_events = await components.events.list_after(task_id, after_event_id=after_event_id)
+        last_terminal_idx = -1
+        for idx, event in enumerate(replay_events):
+            if event.event_type in _TERMINAL_EVENTS:
+                last_terminal_idx = idx
+
         current_id = after_event_id
-        for event in replay_events:
+        for idx, event in enumerate(replay_events):
             current_id = event.event_id
+            if event.event_type in _TERMINAL_EVENTS and idx != last_terminal_idx:
+                continue
             payload = json.dumps(event.payload, sort_keys=True, separators=(",", ":"))
             yield f"id: {event.event_id}\nevent: {event.event_type}\ndata: {payload}\n\n"
-            if event.event_type in _TERMINAL_EVENTS:
+            if idx == last_terminal_idx:
                 return
 
         # If task is already terminal, we're done

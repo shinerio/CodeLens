@@ -135,6 +135,9 @@ it("creates the first persistent model gateway without retaining its API key", a
     max_tool_calls: 300,
     max_identical_tool_results: 3,
     tool_timeout_seconds: 30,
+    max_retries: 10,
+    retry_backoff_base: 1.0,
+    retry_max_delay: 30.0,
   });
   expect(await screen.findByText("Active gateway")).toBeInTheDocument();
   expect(screen.getByLabelText("API Key")).toHaveValue("");
@@ -228,6 +231,9 @@ it("updates the selected model execution limits from the runtime rail", async ()
     max_tool_calls: 300,
     max_identical_tool_results: 3,
     tool_timeout_seconds: 30,
+    max_retries: 10,
+    retry_backoff_base: 1.0,
+    retry_max_delay: 30.0,
   };
   fetchMock
     .mockResolvedValueOnce(
@@ -302,6 +308,9 @@ it("updates the selected model execution limits from the runtime rail", async ()
     max_tool_calls: 240,
     max_identical_tool_results: 3,
     tool_timeout_seconds: 30,
+    max_retries: 10,
+    retry_backoff_base: 1.0,
+    retry_max_delay: 30.0,
   });
 });
 

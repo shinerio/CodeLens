@@ -39,9 +39,9 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "missing_evidence_files" in chinese.review_workflow
     assert "undeclared_files" in english.review_workflow
     assert "undeclared_files" in chinese.review_workflow
-    assert "Do not include unchanged diff context" in english.tools["comment"].description
+    assert "without diff markers or unchanged context" in english.tools["comment"].description
     assert "side=old" in english.tools["comment"].description
-    assert "不得包含未修改的 diff 上下文行" in chinese.tools["comment"].description
+    assert "不含 diff 标记和未变更上下文" in chinese.tools["comment"].description
     assert "side=old" in chinese.tools["comment"].description
     assert "narrow path or pattern" in english.tools["find_files"].description
     assert "缩小 path 或细化 pattern" in chinese.tools["find_files"].description

@@ -12,6 +12,15 @@ _DEFAULT_MAX_AGENT_TURNS: int = 100
 _DEFAULT_MAX_TOOL_CALLS: int = 300
 _DEFAULT_MAX_IDENTICAL_TOOL_RESULTS: int = 3
 _DEFAULT_TOOL_TIMEOUT_SECONDS: int = 30
+_DEFAULT_MAX_RETRIES: int = 10
+_DEFAULT_RETRY_BACKOFF_BASE: float = 1.0
+_DEFAULT_RETRY_MAX_DELAY: float = 30.0
+_MIN_MAX_RETRIES: int = 0
+_MAX_MAX_RETRIES: int = 10
+_MIN_RETRY_BACKOFF_BASE: float = 0.1
+_MAX_RETRY_BACKOFF_BASE: float = 60.0
+_MIN_RETRY_MAX_DELAY: float = 1.0
+_MAX_RETRY_MAX_DELAY: float = 300.0
 
 
 @dataclass(frozen=True)
@@ -30,6 +39,27 @@ class ModelProviderConfig:
     max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS
     max_identical_tool_results: int = _DEFAULT_MAX_IDENTICAL_TOOL_RESULTS
     tool_timeout_seconds: int = _DEFAULT_TOOL_TIMEOUT_SECONDS
+    max_retries: int = _DEFAULT_MAX_RETRIES
+    retry_backoff_base: float = _DEFAULT_RETRY_BACKOFF_BASE
+    retry_max_delay: float = _DEFAULT_RETRY_MAX_DELAY
+
+    def __post_init__(self) -> None:
+        if (
+            isinstance(self.max_retries, bool)
+            or self.max_retries < _MIN_MAX_RETRIES
+            or self.max_retries > _MAX_MAX_RETRIES
+        ):
+            raise ValueError("max_retries must be between 0 and 10")
+        if (
+            self.retry_backoff_base < _MIN_RETRY_BACKOFF_BASE
+            or self.retry_backoff_base > _MAX_RETRY_BACKOFF_BASE
+        ):
+            raise ValueError("retry_backoff_base must be between 0.1 and 60.0")
+        if (
+            self.retry_max_delay < _MIN_RETRY_MAX_DELAY
+            or self.retry_max_delay > _MAX_RETRY_MAX_DELAY
+        ):
+            raise ValueError("retry_max_delay must be between 1.0 and 300.0")
 
 
 @dataclass(frozen=True)
@@ -50,6 +80,9 @@ class ModelGateway:
     max_tool_calls: int = _DEFAULT_MAX_TOOL_CALLS
     max_identical_tool_results: int = _DEFAULT_MAX_IDENTICAL_TOOL_RESULTS
     tool_timeout_seconds: int = _DEFAULT_TOOL_TIMEOUT_SECONDS
+    max_retries: int = _DEFAULT_MAX_RETRIES
+    retry_backoff_base: float = _DEFAULT_RETRY_BACKOFF_BASE
+    retry_max_delay: float = _DEFAULT_RETRY_MAX_DELAY
 
     @property
     def provider_config(self) -> ModelProviderConfig:
@@ -68,6 +101,9 @@ class ModelGateway:
             max_tool_calls=self.max_tool_calls,
             max_identical_tool_results=self.max_identical_tool_results,
             tool_timeout_seconds=self.tool_timeout_seconds,
+            max_retries=self.max_retries,
+            retry_backoff_base=self.retry_backoff_base,
+            retry_max_delay=self.retry_max_delay,
         )
 
 

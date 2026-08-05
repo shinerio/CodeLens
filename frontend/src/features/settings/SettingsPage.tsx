@@ -62,6 +62,9 @@ const DEFAULT_MAX_AGENT_TURNS = 100;
 const DEFAULT_MAX_TOOL_CALLS = 300;
 const DEFAULT_MAX_IDENTICAL_TOOL_RESULTS = 3;
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 30;
+const DEFAULT_MAX_RETRIES = 10;
+const DEFAULT_RETRY_BACKOFF_BASE = 1.0;
+const DEFAULT_RETRY_MAX_DELAY = 30.0;
 
 export function SettingsPage() {
   const { t } = useI18n();
@@ -82,6 +85,9 @@ export function SettingsPage() {
   const [maxToolCallsDraft, setMaxToolCallsDraft] = useState("300");
   const [maxIdenticalToolResultsDraft, setMaxIdenticalToolResultsDraft] = useState("3");
   const [toolTimeoutSecondsDraft, setToolTimeoutSecondsDraft] = useState("30");
+  const [maxRetriesDraft, setMaxRetriesDraft] = useState("10");
+  const [retryBackoffBaseDraft, setRetryBackoffBaseDraft] = useState("1");
+  const [retryMaxDelayDraft, setRetryMaxDelayDraft] = useState("30");
   const [recentRepositoryLimitDraft, setRecentRepositoryLimitDraft] = useState("10");
   const [rootInstructionLimitDraft, setRootInstructionLimitDraft] = useState("500");
   const [nestedInstructionLimitDraft, setNestedInstructionLimitDraft] = useState("200");
@@ -222,6 +228,13 @@ export function SettingsPage() {
     setToolTimeoutSecondsDraft(
       String(runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS),
     );
+    setMaxRetriesDraft(String(runtimeGateway.max_retries ?? DEFAULT_MAX_RETRIES));
+    setRetryBackoffBaseDraft(
+      String(runtimeGateway.retry_backoff_base ?? DEFAULT_RETRY_BACKOFF_BASE),
+    );
+    setRetryMaxDelayDraft(
+      String(runtimeGateway.retry_max_delay ?? DEFAULT_RETRY_MAX_DELAY),
+    );
   }, [runtimeGateway]);
 
   useEffect(() => {
@@ -274,6 +287,9 @@ export function SettingsPage() {
         max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
         max_identical_tool_results: DEFAULT_MAX_IDENTICAL_TOOL_RESULTS,
         tool_timeout_seconds: DEFAULT_TOOL_TIMEOUT_SECONDS,
+        max_retries: DEFAULT_MAX_RETRIES,
+        retry_backoff_base: DEFAULT_RETRY_BACKOFF_BASE,
+        retry_max_delay: DEFAULT_RETRY_MAX_DELAY,
       };
       if (editingGatewayId === null) {
         return createModelGateway({ ...common, api_key: apiKey });
@@ -295,6 +311,15 @@ export function SettingsPage() {
         tool_timeout_seconds:
           gateways.find((gateway) => gateway.gateway_id === editingGatewayId)
             ?.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS,
+        max_retries:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.max_retries ??
+          DEFAULT_MAX_RETRIES,
+        retry_backoff_base:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.retry_backoff_base ??
+          DEFAULT_RETRY_BACKOFF_BASE,
+        retry_max_delay:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.retry_max_delay ??
+          DEFAULT_RETRY_MAX_DELAY,
         ...(apiKey.trim() === "" ? {} : { api_key: apiKey }),
       });
     },
@@ -368,6 +393,9 @@ export function SettingsPage() {
   const parsedMaxToolCalls = Number(maxToolCallsDraft);
   const parsedMaxIdenticalToolResults = Number(maxIdenticalToolResultsDraft);
   const parsedToolTimeoutSeconds = Number(toolTimeoutSecondsDraft);
+  const parsedMaxRetries = Number(maxRetriesDraft);
+  const parsedRetryBackoffBase = Number(retryBackoffBaseDraft);
+  const parsedRetryMaxDelay = Number(retryMaxDelayDraft);
   const areExecutionLimitsValid =
     Number.isInteger(parsedAgentTimeout) &&
     parsedAgentTimeout >= 60 &&
@@ -383,7 +411,14 @@ export function SettingsPage() {
     parsedMaxIdenticalToolResults <= 20 &&
     Number.isInteger(parsedToolTimeoutSeconds) &&
     parsedToolTimeoutSeconds >= 1 &&
-    parsedToolTimeoutSeconds <= 300;
+    parsedToolTimeoutSeconds <= 300 &&
+    Number.isInteger(parsedMaxRetries) &&
+    parsedMaxRetries >= 0 &&
+    parsedMaxRetries <= 10 &&
+    parsedRetryBackoffBase >= 0.1 &&
+    parsedRetryBackoffBase <= 60 &&
+    parsedRetryMaxDelay >= 1 &&
+    parsedRetryMaxDelay <= 300;
   const areExecutionLimitsUnchanged =
     runtimeGateway !== undefined &&
     parsedAgentTimeout === (runtimeGateway.agent_timeout ?? DEFAULT_AGENT_TIMEOUT) &&
@@ -393,7 +428,11 @@ export function SettingsPage() {
     parsedMaxIdenticalToolResults ===
       (runtimeGateway.max_identical_tool_results ?? DEFAULT_MAX_IDENTICAL_TOOL_RESULTS) &&
     parsedToolTimeoutSeconds ===
-      (runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS);
+      (runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS) &&
+    parsedMaxRetries === (runtimeGateway.max_retries ?? DEFAULT_MAX_RETRIES) &&
+    parsedRetryBackoffBase ===
+      (runtimeGateway.retry_backoff_base ?? DEFAULT_RETRY_BACKOFF_BASE) &&
+    parsedRetryMaxDelay === (runtimeGateway.retry_max_delay ?? DEFAULT_RETRY_MAX_DELAY);
 
   const executionLimitsMutation = useMutation({
     mutationFn: async () => {
@@ -413,6 +452,9 @@ export function SettingsPage() {
         max_tool_calls: parsedMaxToolCalls,
         max_identical_tool_results: parsedMaxIdenticalToolResults,
         tool_timeout_seconds: parsedToolTimeoutSeconds,
+        max_retries: parsedMaxRetries,
+        retry_backoff_base: parsedRetryBackoffBase,
+        retry_max_delay: parsedRetryMaxDelay,
       });
     },
     onSuccess: updateCatalog,
@@ -753,6 +795,48 @@ export function SettingsPage() {
                   value={toolTimeoutSecondsDraft}
                   onChange={(event) => setToolTimeoutSecondsDraft(event.currentTarget.value)}
                 />
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.maxRetries")}</span>
+                <input
+                  aria-label={t("settings.maxRetries")}
+                  disabled={runtimeGateway === undefined}
+                  min={0}
+                  max={10}
+                  step={1}
+                  type="number"
+                  value={maxRetriesDraft}
+                  onChange={(event) => setMaxRetriesDraft(event.currentTarget.value)}
+                />
+                <small>{t("settings.maxRetriesHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.retryBackoffBase")}</span>
+                <input
+                  aria-label={t("settings.retryBackoffBase")}
+                  disabled={runtimeGateway === undefined}
+                  min={0.1}
+                  max={60}
+                  step={0.1}
+                  type="number"
+                  value={retryBackoffBaseDraft}
+                  onChange={(event) => setRetryBackoffBaseDraft(event.currentTarget.value)}
+                />
+                <small>{t("settings.retryBackoffBaseHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.retryMaxDelay")}</span>
+                <input
+                  aria-label={t("settings.retryMaxDelay")}
+                  disabled={runtimeGateway === undefined}
+                  min={1}
+                  max={300}
+                  step={1}
+                  type="number"
+                  value={retryMaxDelayDraft}
+                  onChange={(event) => setRetryMaxDelayDraft(event.currentTarget.value)}
+                />
+                <small>{t("settings.retryMaxDelayHint")}</small>
               </label>
             </div>
             <div className="settings-panel__actions">

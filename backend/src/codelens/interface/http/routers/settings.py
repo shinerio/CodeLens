@@ -70,6 +70,9 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
                 max_tool_calls=gateway.max_tool_calls,
                 max_identical_tool_results=gateway.max_identical_tool_results,
                 tool_timeout_seconds=gateway.tool_timeout_seconds,
+                max_retries=gateway.max_retries,
+                retry_backoff_base=gateway.retry_backoff_base,
+                retry_max_delay=gateway.retry_max_delay,
             )
             for gateway in view.gateways
         ],
@@ -246,6 +249,9 @@ async def create_model_gateway(
             max_tool_calls=request.max_tool_calls,
             max_identical_tool_results=request.max_identical_tool_results,
             tool_timeout_seconds=request.tool_timeout_seconds,
+            max_retries=request.max_retries,
+            retry_backoff_base=request.retry_backoff_base,
+            retry_max_delay=request.retry_max_delay,
         )
     )
 
@@ -274,6 +280,9 @@ async def update_model_gateway(
             max_tool_calls=request.max_tool_calls,
             max_identical_tool_results=request.max_identical_tool_results,
             tool_timeout_seconds=request.tool_timeout_seconds,
+            max_retries=request.max_retries,
+            retry_backoff_base=request.retry_backoff_base,
+            retry_max_delay=request.retry_max_delay,
         )
     )
 
@@ -452,6 +461,9 @@ async def reset_all_settings(
                 max_tool_calls=300,
                 max_identical_tool_results=3,
                 tool_timeout_seconds=30,
+                max_retries=10,
+                retry_backoff_base=1.0,
+                retry_max_delay=30.0,
             )
 
     return ResetAllSettingsResponse(

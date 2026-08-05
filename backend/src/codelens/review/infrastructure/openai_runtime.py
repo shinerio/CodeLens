@@ -284,11 +284,6 @@ class OpenAIAgentRuntime:
         )
         model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)
-        client = AsyncOpenAI(
-            api_key=provider_config.api_key,
-            base_url=provider_config.base_url,
-            http_client=httpx.AsyncClient(trust_env=False),
-        )
         instruction_sections = [prompts.review_policy, repository_instructions]
         if is_reviewer:
             instruction_sections.append(prompts.review_workflow)
@@ -298,113 +293,174 @@ class OpenAIAgentRuntime:
                 *self._skill_instruction_sections(execution_spec),
             )
         )
-        investigation_agent: Agent[None] = Agent(
-            name=f"{agent.agent_id}:v{agent.version}",
-            instructions="\n\n".join(instruction_sections),
-            model=behavior.model_class(
-                model=provider_config.model,
-                openai_client=client,
-            ),
-            model_settings=behavior.model_settings,
-            tools=model_tools,
-            tool_use_behavior=_completion_tool_use_behavior(tool_context),
-        )
         run_config = RunConfig(trace_include_sensitive_data=False)
         investigation: object | None = None
         failure: _AgentFailure | None = None
         phase: Literal["investigation", "unknown"] = "investigation"
-        try:
+        max_retries = provider_config.max_retries
+        retry_backoff_base = provider_config.retry_backoff_base
+        retry_max_delay = provider_config.retry_max_delay
+        skills_emitted = sink is None
+        prompt_emitted = sink is None
+        for attempt in range(max_retries + 1):
+            client = AsyncOpenAI(
+                api_key=provider_config.api_key,
+                base_url=provider_config.base_url,
+                http_client=httpx.AsyncClient(trust_env=False),
+            )
+            investigation_agent: Agent[None] = Agent(
+                name=f"{agent.agent_id}:v{agent.version}",
+                instructions="\n\n".join(instruction_sections),
+                model=behavior.model_class(
+                    model=provider_config.model,
+                    openai_client=client,
+                ),
+                model_settings=behavior.model_settings,
+                tools=model_tools,
+                tool_use_behavior=_completion_tool_use_behavior(tool_context),
+            )
+            attempt_failure: _AgentFailure | None = None
             try:
-                if sink is not None:
-                    for skill in execution_spec.skills:
+                try:
+                    if sink is not None and not skills_emitted:
+                        for skill in execution_spec.skills:
+                            await sink(
+                                AgentRuntimeEvent(
+                                    "skill_loaded",
+                                    skill.skill_id,
+                                    {
+                                        "skill_version": str(skill.version),
+                                        "content_hash": skill.content_hash,
+                                        "activation_reason": skill.activation_reason,
+                                    },
+                                )
+                            )
+                        skills_emitted = True
+                    if sink is not None and not prompt_emitted:
                         await sink(
                             AgentRuntimeEvent(
-                                "skill_loaded",
-                                skill.skill_id,
-                                {
-                                    "skill_version": str(skill.version),
-                                    "content_hash": skill.content_hash,
-                                    "activation_reason": skill.activation_reason,
-                                },
+                                "prompt",
+                                _model_input(
+                                    investigation_agent,
+                                    user_input,
+                                    provider_config.model,
+                                    behavior.model_settings,
+                                ),
+                                {"model_name": provider_config.model},
                             )
                         )
-                    await sink(
-                        AgentRuntimeEvent(
-                            "prompt",
-                            _model_input(
-                                investigation_agent,
-                                user_input,
-                                provider_config.model,
-                                behavior.model_settings,
-                            ),
-                            {"model_name": provider_config.model},
-                        )
+                        prompt_emitted = True
+                    investigation = await self._run_observable(
+                        investigation_agent,
+                        user_input,
+                        provider_config.max_agent_turns,
+                        run_config,
+                        sink,
+                        timeout_seconds=execution_spec.execution_limits.timeout_seconds,
                     )
-                investigation = await self._run_observable(
-                    investigation_agent,
-                    user_input,
-                    provider_config.max_agent_turns,
-                    run_config,
-                    sink,
-                    timeout_seconds=execution_spec.execution_limits.timeout_seconds,
-                )
-                if sink is not None and investigation is not None:
-                    for response_index, response in enumerate(
-                        cast(RunResult, investigation).raw_responses,
-                        start=1,
-                    ):
-                        await sink(
-                            AgentRuntimeEvent(
-                                "model_raw_output",
-                                _json_value(response),
-                                {
-                                    "response_index": str(response_index),
-                                    "parse_failed": "false",
-                                },
+                    if sink is not None and investigation is not None:
+                        for response_index, response in enumerate(
+                            cast(RunResult, investigation).raw_responses,
+                            start=1,
+                        ):
+                            await sink(
+                                AgentRuntimeEvent(
+                                    "model_raw_output",
+                                    _json_value(response),
+                                    {
+                                        "response_index": str(response_index),
+                                        "parse_failed": "false",
+                                    },
+                                )
                             )
-                        )
-            except APIStatusError as provider_error:
-                failure = self._status_failure(provider_error, phase)
-            except APITimeoutError:
-                failure = self._failure(
-                    phase, "provider_timeout", "provider timeout", retryable=True
-                )
-            except TimeoutError:
-                failure = self._failure(
-                    phase, "agent_run_timeout", "agent run timed out", retryable=True
-                )
-            except APIConnectionError:
-                failure = self._failure(
-                    phase, "provider_connection_error", "provider connection error", retryable=True
-                )
-            except RateLimitError:
-                failure = self._failure(
-                    phase, "provider_rate_limited", "provider rate limit", retryable=True
-                )
-            except InternalServerError:
-                failure = self._failure(
-                    phase, "provider_server_error", "provider server error", retryable=True
-                )
-            except MaxTurnsExceeded:
-                failure = AgentMaxTurnsExceededError(
-                    "Code investigation failed: model used all allowed turns.",
-                    phase=phase,
-                    reason_code="max_model_turns_exceeded",
-                )
-            except (ModelBehaviorError, ModelRefusalError, UserError) as model_error:
-                _LOGGER.warning(
-                    "Model produced invalid structured output",
-                    extra={"phase": phase, "error": str(model_error)[:500]},
-                )
-                failure = self._failure(
-                    phase, "invalid_model_output", "model returned unusable output", retryable=False
-                )
-        except BaseException:
+                except APIStatusError as provider_error:
+                    attempt_failure = self._status_failure(provider_error, phase)
+                except APITimeoutError:
+                    attempt_failure = self._failure(
+                        phase, "provider_timeout", "provider timeout", retryable=True
+                    )
+                except TimeoutError:
+                    attempt_failure = self._failure(
+                        phase, "agent_run_timeout", "agent run timed out", retryable=True
+                    )
+                except APIConnectionError:
+                    attempt_failure = self._failure(
+                        phase,
+                        "provider_connection_error",
+                        "provider connection error",
+                        retryable=True,
+                    )
+                except RateLimitError:
+                    attempt_failure = self._failure(
+                        phase, "provider_rate_limited", "provider rate limit", retryable=True
+                    )
+                except InternalServerError:
+                    attempt_failure = self._failure(
+                        phase, "provider_server_error", "provider server error", retryable=True
+                    )
+                except MaxTurnsExceeded:
+                    attempt_failure = AgentMaxTurnsExceededError(
+                        "Code investigation failed: model used all allowed turns.",
+                        phase=phase,
+                        reason_code="max_model_turns_exceeded",
+                    )
+                except (ModelBehaviorError, ModelRefusalError, UserError) as model_error:
+                    _LOGGER.warning(
+                        "Model produced invalid structured output",
+                        extra={"phase": phase, "error": str(model_error)[:500]},
+                    )
+                    attempt_failure = self._failure(
+                        phase,
+                        "invalid_model_output",
+                        "model returned unusable output",
+                        retryable=False,
+                    )
+            except BaseException:
+                await client.close()
+                raise
+
+            if attempt_failure is None:
+                break
+
             await client.close()
-            raise
+
+            is_retryable = (
+                isinstance(attempt_failure, TransientAgentRuntimeError)
+                and attempt_failure.retryable
+            )
+            if not is_retryable or attempt >= max_retries:
+                failure = attempt_failure
+                investigation = None
+                break
+
+            delay = min(retry_backoff_base * (2 ** attempt), retry_max_delay)
+            retry_reason = attempt_failure.reason_code or "unknown"
+            _LOGGER.warning(
+                "Retrying agent invocation after transient error",
+                extra={
+                    "phase": phase,
+                    "retry_attempt": attempt + 1,
+                    "max_retries": max_retries,
+                    "delay_seconds": delay,
+                    "reason_code": retry_reason,
+                },
+            )
+            if sink is not None:
+                await sink(
+                    AgentRuntimeEvent(
+                        "lifecycle",
+                        f"Retrying agent invocation after transient error ({retry_reason})",
+                        {
+                            "retry_attempt": str(attempt + 1),
+                            "max_retries": str(max_retries),
+                            "delay_seconds": str(delay),
+                            "reason_code": retry_reason,
+                        },
+                    )
+                )
+            await asyncio.sleep(delay)
 
         if failure is not None:
-            await client.close()
             raise failure from None
         if investigation is None:
             await client.close()

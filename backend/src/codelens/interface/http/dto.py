@@ -603,6 +603,9 @@ MaxAgentTurns = Annotated[int, Field(ge=1, le=500)]
 MaxToolCalls = Annotated[int, Field(ge=1, le=5000)]
 MaxIdenticalToolResults = Annotated[int, Field(ge=2, le=20)]
 ToolTimeoutSeconds = Annotated[int, Field(ge=1, le=300)]
+MaxRetries = Annotated[int, Field(ge=0, le=10)]
+RetryBackoffBase = Annotated[float, Field(ge=0.1, le=60.0)]
+RetryMaxDelay = Annotated[float, Field(ge=1.0, le=300.0)]
 
 
 class CreateModelGatewayRequest(StrictDto):
@@ -621,6 +624,9 @@ class CreateModelGatewayRequest(StrictDto):
     max_tool_calls: MaxToolCalls = 300
     max_identical_tool_results: MaxIdenticalToolResults = 3
     tool_timeout_seconds: ToolTimeoutSeconds = 30
+    max_retries: MaxRetries = 10
+    retry_backoff_base: RetryBackoffBase = 1.0
+    retry_max_delay: RetryMaxDelay = 30.0
 
     @field_validator("api_key")
     @classmethod
@@ -647,6 +653,9 @@ class UpdateModelGatewayRequest(StrictDto):
     max_tool_calls: MaxToolCalls = 300
     max_identical_tool_results: MaxIdenticalToolResults = 3
     tool_timeout_seconds: ToolTimeoutSeconds = 30
+    max_retries: MaxRetries = 10
+    retry_backoff_base: RetryBackoffBase = 1.0
+    retry_max_delay: RetryMaxDelay = 30.0
 
     @field_validator("api_key")
     @classmethod
@@ -685,6 +694,9 @@ class ModelGatewayResponse(StrictDto):
     max_tool_calls: int
     max_identical_tool_results: int
     tool_timeout_seconds: int
+    max_retries: int
+    retry_backoff_base: float
+    retry_max_delay: float
 
 
 class ModelGatewayCatalogResponse(StrictDto):

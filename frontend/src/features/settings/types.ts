@@ -17,6 +17,9 @@ export type ModelGateway = {
   max_tool_calls: number;
   max_identical_tool_results: number;
   tool_timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_base: number;
+  retry_max_delay: number;
 };
 
 export type ModelGatewayCatalog = {
@@ -61,6 +64,9 @@ export type CreateModelGateway = {
   max_tool_calls: number;
   max_identical_tool_results: number;
   tool_timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_base: number;
+  retry_max_delay: number;
 };
 
 export type UpdateModelGateway = {
@@ -77,6 +83,9 @@ export type UpdateModelGateway = {
   max_tool_calls: number;
   max_identical_tool_results: number;
   tool_timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_base: number;
+  retry_max_delay: number;
 };
 
 export type GatewayTestResult = {
