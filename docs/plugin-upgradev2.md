@@ -35,7 +35,9 @@ v2 插件必须：
 - 把插件自身 SemVer 主版本升级，例如 `1.4.2` 升到 `2.0.0`；
 - 声明 `plugin_api_version: "2"`；
 - 把 `min_codelens_version` 设置为第一个实现插件 API v2 的 CodeLens 版本；
-- 不尝试使用同一份运行时代码同时兼容结构不兼容的 v1/v2 `ReviewCreatorPort`。
+- 不在插件自身的运行时代码中同时适配 v1 与 v2 的 `ReviewCreatorPort` 签名。
+
+CodeLens Core 提供 `v1_adapter.adapt_v1_trigger_policy()` 作为官方 v1→v2 桥接，供 Core 内部在兼容窗口内把遗留 `selected_agents` 转为 `TriggerReviewPolicy`。插件作者不应自行调用该适配器或复制其逻辑。
 
 需要继续支持 CodeLens 0.1.x 时，应保留插件 v1 发布分支或 v1 Release，不要在运行时通过反射猜测 Port 签名。
 
@@ -269,12 +271,15 @@ reviewer_selection:
 
 - 保持顺序和 Reviewer 版本不变；
 - 删除 `selected_agents`；
+- 删除 `review_profile_id`（v2 不再使用 Profile 运行时引用）；
 - 不切换到 Adaptive；
 - 不把 `correctness:v1` 自动替换为 `correctness:v2`；
 - 为缺失的 `supersede_policy` 添加 `latest_snapshot`；
 - 保留 `prompt_locale`、Debounce、Scope 和插件自有字段；
 - 迁移后使用新 Manifest Schema 和 Review Application 再次校验；
 - 失败时保持插件禁用并保留原配置与可读错误，不能部分保存。
+
+注意：Core 内部还有一条 v1 兼容路径 `v1_adapter.adapt_v1_trigger_policy()`，用于在运行时把遗留 `selected_agents` 转为 `TriggerReviewPolicy`。该路径的 `supersede_policy` 默认为 `preserve_all`，与配置迁移的 `latest_snapshot` 不同。配置迁移作用于持久化配置，v1 adapter 作用于未迁移的内存事件路径，两者互不冲突。
 
 示例：
 
@@ -336,14 +341,31 @@ type ReviewerSelection = FixedReviewerSelection | AdaptiveReviewerSelection
 @dataclass(frozen=True)
 class TriggerReviewPolicy:
     reviewer_selection: ReviewerSelection
-    supersede_policy: Literal["latest_snapshot", "preserve_all"]
+    supersede_policy: SupersedePolicy
     prompt_locale: Literal["en", "zh-CN"]
 
     @classmethod
     def from_config(cls, config: Mapping[str, object]) -> "TriggerReviewPolicy": ...
 ```
 
+`SupersedePolicy` 是公共 `StrEnum`，定义在 `codelens.plugin.api.v2`：
+
+```python
+class SupersedePolicy(StrEnum):
+    LATEST_SNAPSHOT = "latest_snapshot"
+    PRESERVE_ALL = "preserve_all"
+```
+
 插件应调用公共 `from_config`，不能复制判别联合、General 互斥或版本兼容校验。
+
+`from_config` 的完整校验规则：
+
+- `reviewer_selection` 必须是对象；`mode` 为 `"fixed"` 时，对象必须恰好包含 `mode` 和 `reviewer_versions` 两个 key；`mode` 为 `"adaptive"` 时，对象必须只包含 `mode` 一个 key。
+- `reviewer_versions` 必须为非空字符串列表，元素不可重复。
+- `general:v1` 必须作为唯一 Reviewer 出现，不能与任何其他 Reviewer 混组。
+- `correctness:v1` 必须作为唯一 Reviewer 出现，不能与 v2 Reviewer 混组。
+- `supersede_policy` 必须为 `"latest_snapshot"` 或 `"preserve_all"`。
+- `prompt_locale` 必须为 `"en"` 或 `"zh-CN"`。
 
 ### 7.2 Port 签名
 
@@ -505,7 +527,7 @@ Report 插件只接收最终 Published Finding，不接收 CandidateFinding、Fi
       "mode": "adaptive"
     },
     "plan_summary": {
-      "strategy": "specialist_team",
+      "strategy": "adaptive",
       "selected_reviewer_versions": [
         "correctness:v2",
         "security:v1"
@@ -532,7 +554,7 @@ Report 插件只接收最终 Published Finding，不接收 CandidateFinding、Fi
 - 不把 Adaptive 请求误显示成“未选择 Reviewer”；
 - 对 `partial` 显示缺失视角，不能把它格式化为完整成功；
 - 不导出内部被抑制、合并或未确认的 Candidate；
-- `failed`、`canceled`、`superseded` 默认不自动导出；
+- Envelope 2.0 的 `review.status` 只有 `"completed"` 和 `"partial"` 两种值；`failed`、`canceled`、`superseded` 的 Review 不会生成 V2 Envelope，也不会进入自动导出流程；
 - `completed` 或 `partial` 且存在 Published Finding 时可以导出；
 - 继续把 `external_context` 视为路由元数据，不记录其中的 Secret。
 
