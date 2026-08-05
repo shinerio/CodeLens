@@ -7,11 +7,7 @@ from typing import Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError
 
-from codelens.findings.domain.candidates import (
-    EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
-)
+from codelens.findings.domain.candidates import EvidenceStrength
 from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import FindingSeverity
 from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome
@@ -60,12 +56,7 @@ class VerdictDecisionDto(_StrictModel):
     category: _ShortText | None = None
     severity: Literal["critical", "high", "medium", "low", "info"] | None = None
     primary_dimension: _ShortText | None = None
-    secondary_dimensions: Annotated[
-        list[_ShortText], Field(max_length=16)
-    ] | None = None
     evidence_strength: Literal["direct", "inferred", "weak"] | None = None
-    impact_certainty: Literal["confirmed", "plausible", "unclear"] | None = None
-    reproducibility: Literal["deterministic", "conditional", "unknown"] | None = None
 
 
 class VerdictSubmissionDto(_StrictModel):
@@ -190,19 +181,8 @@ class VerdictCodec:
             category=dto.category,
             severity=FindingSeverity(dto.severity) if dto.severity else None,
             primary_dimension=dto.primary_dimension,
-            secondary_dimensions=(
-                tuple(dto.secondary_dimensions)
-                if dto.secondary_dimensions is not None
-                else None
-            ),
             evidence_strength=(
                 EvidenceStrength(dto.evidence_strength) if dto.evidence_strength else None
-            ),
-            impact_certainty=(
-                ImpactCertainty(dto.impact_certainty) if dto.impact_certainty else None
-            ),
-            reproducibility=(
-                Reproducibility(dto.reproducibility) if dto.reproducibility else None
             ),
         )
 
@@ -220,18 +200,7 @@ class VerdictCodec:
             "category": decision.category,
             "severity": decision.severity.value if decision.severity else None,
             "primary_dimension": decision.primary_dimension,
-            "secondary_dimensions": (
-                list(decision.secondary_dimensions)
-                if decision.secondary_dimensions is not None
-                else None
-            ),
             "evidence_strength": (
                 decision.evidence_strength.value if decision.evidence_strength else None
-            ),
-            "impact_certainty": (
-                decision.impact_certainty.value if decision.impact_certainty else None
-            ),
-            "reproducibility": (
-                decision.reproducibility.value if decision.reproducibility else None
             ),
         }

@@ -956,7 +956,10 @@
 .review-console__search svg { width: 15px; }
 .review-console__search input { width: 100%; border: 0; outline: 0; background: transparent; color: inherit; padding: 8px 0; font: inherit; }
 .review-console__messages { display: grid; gap: 10px; margin: 0; padding: 0; list-style: none; }
-.review-console__message { border-left: 3px solid #627d23; background: rgba(255,255,255,.05); }
+.review-console__message { border-left: 3px solid #627d23; background: rgba(255,255,255,.05); content-visibility: auto; contain-intrinsic-size: auto 60px; }
+.review-console__load-more { display: flex; justify-content: center; padding: 12px; }
+.review-console__load-more button { padding: 8px 24px; border: 1px solid rgba(127,212,208,.3); border-radius: 6px; background: rgba(127,212,208,.08); color: #7fd4d0; font: 600 .78rem "SFMono-Regular", Consolas, monospace; cursor: pointer; }
+.review-console__load-more button:hover { background: rgba(127,212,208,.16); }
 .review-console__message[hidden] { display: none; }
 .review-console__message--tool { border-left-color: #d9a441; }.review-console__message--system { border-left-color: #6b8490; }
 .review-console__message-head { display: flex; width: 100%; align-items: center; gap: 8px; border: 0; background: transparent; color: inherit; padding: 10px 12px; text-align: left; font: 700 .72rem "SFMono-Regular", Consolas, monospace; letter-spacing: .08em; text-transform: uppercase; }

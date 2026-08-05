@@ -46,12 +46,6 @@ const CATEGORICAL_VALUE_KEYS: Readonly<Record<string, TranslationKey>> = {
   weak: "finding.valueWeak",
   moderate: "finding.valueModerate",
   strong: "finding.valueStrong",
-  speculative: "finding.valueSpeculative",
-  plausible: "finding.valuePlausible",
-  confirmed: "finding.valueConfirmed",
-  unverified: "finding.valueUnverified",
-  reasoned: "finding.valueReasoned",
-  reproduced: "finding.valueReproduced",
   not_required: "finding.valueNotRequired",
   verified: "finding.valueVerified",
   rejected: "finding.valueRejected",
@@ -521,8 +515,6 @@ export function FindingDetail({ finding, source }: { finding: FindingRecord | nu
               <dt>{finding.confidence === null ? t("finding.evidence") : t("finding.confidence")}</dt>
               <dd>{finding.confidence === null ? finding.evidence_strength === null || finding.evidence_strength === undefined ? t("finding.validated") : categoricalLabel(finding.evidence_strength, t) : formatConfidence(finding.confidence)}</dd>
             </div>
-            {finding.reproducibility != null ? <div><dt>{t("finding.reproducibility")}</dt><dd>{categoricalLabel(finding.reproducibility, t)}</dd></div> : null}
-            {finding.impact_certainty != null ? <div><dt>{t("finding.impactCertainty")}</dt><dd>{categoricalLabel(finding.impact_certainty, t)}</dd></div> : null}
             {finding.verification_state != null ? <div><dt>{t("finding.verification")}</dt><dd>{categoricalLabel(finding.verification_state, t)}</dd></div> : null}
           </dl>
           <h3>{finding.title}</h3>

@@ -31,6 +31,9 @@ export function ReviewProcessReport({
     : report.agents;
   const totals = isFiltered ? summarizeAgents(agents) : report;
   const tools = isFiltered ? summarizeTools(entries, selectedAgents) : report.tools;
+  const findingCount = isFiltered
+    ? countCandidates(entries, selectedAgents)
+    : report.finding_count;
 
   return (
     <article
@@ -57,7 +60,7 @@ export function ReviewProcessReport({
         <Metric icon={Coins} label={t("run.inputTokens")} value={number.format(totals.input_tokens)} />
         <Metric icon={Coins} label={t("run.outputTokens")} value={number.format(totals.output_tokens)} />
         <Metric icon={Bot} label={t("run.agentRuns")} value={number.format(agents.length)} />
-        <Metric icon={Wrench} label={t("run.findings")} value={number.format(report.finding_count)} />
+        <Metric icon={Wrench} label={t("run.findings")} value={number.format(findingCount)} />
       </dl>
 
       <div className="process-report__tables">
@@ -172,6 +175,28 @@ function summarizeTools(
   return Array.from(totals.values()).sort((left, right) =>
     right.call_count - left.call_count || left.tool_name.localeCompare(right.tool_name),
   );
+}
+
+/** Count model-output candidates emitted by the selected agents. */
+function countCandidates(
+  entries: readonly TranscriptEntry[],
+  selectedAgents: ReadonlySet<string>,
+): number {
+  let total = 0;
+  for (const entry of entries) {
+    if (entry.kind !== "model_output") continue;
+    const agent = entry.metadata.agent ?? "";
+    if (!selectedAgents.has(agent)) continue;
+    try {
+      const parsed = JSON.parse(entry.content) as unknown;
+      if (typeof parsed === "object" && parsed !== null && Array.isArray((parsed as Record<string, unknown>).candidates)) {
+        total += (parsed as Record<string, unknown[]>).candidates.length;
+      }
+    } catch {
+      // Skip unparseable entries — they don't contribute to the candidate count.
+    }
+  }
+  return total;
 }
 
 function Metric({ icon: Icon, label, value }: { icon: typeof Bot; label: string; value: string }) {

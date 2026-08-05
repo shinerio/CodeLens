@@ -23,7 +23,6 @@ class CandidateClusterer:
             key_payload = {
                 "category": _normalized_root_cause(candidate.category),
                 "evidence_hashes": sorted(candidate.evidence_hashes),
-                "impact_class": candidate.impact_certainty.value,
                 "location": {
                     "end_line": candidate.primary_location.end_line,
                     "path": candidate.primary_location.path,
@@ -59,8 +58,5 @@ class CandidateClusterer:
             content=canonical.content,
             recommendation=canonical.recommendation,
             primary_dimension=canonical.primary_dimension,
-            secondary_dimensions=canonical.secondary_dimensions,
             evidence_strength=canonical.evidence_strength,
-            impact_certainty=canonical.impact_certainty,
-            reproducibility=canonical.reproducibility,
         )

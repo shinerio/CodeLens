@@ -3,7 +3,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, fields
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -22,8 +22,6 @@ from codelens.findings.domain.candidates import (
     CandidateFinding,
     CandidateFindingBatch,
     EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
 )
 from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import (
@@ -265,10 +263,13 @@ def _finding_from_payload(payload: str) -> Finding:
     severity = FindingSeverity(value.pop("severity"))
     disposition = FindingDisposition(value.pop("disposition"))
     change_origin = ChangeOrigin(value.pop("change_origin"))
-    secondary_dimensions = tuple(value.pop("secondary_dimensions", ()))
     source_reviewer_references = tuple(
         value.pop("source_reviewer_references", ())
     )
+    # Drop legacy fields that Finding no longer accepts (e.g. impact_certainty, reproducibility)
+    valid_fields = {f.name for f in fields(Finding)}
+    for key in set(value) - valid_fields:
+        del value[key]
     return Finding(
         **value,
         severity=severity,
@@ -278,7 +279,6 @@ def _finding_from_payload(payload: str) -> Finding:
         related_locations=related,
         evidence=evidence_items,
         rule_sources=rules,
-        secondary_dimensions=secondary_dimensions,
         source_reviewer_references=source_reviewer_references,
     )
 
@@ -293,19 +293,17 @@ def _candidate_from_payload(payload: str) -> CandidateFinding:
     related = tuple(SourceLocation(**item) for item in value.pop("related_locations"))
     severity = FindingSeverity(value.pop("severity"))
     evidence_strength = EvidenceStrength(value.pop("evidence_strength"))
-    impact_certainty = ImpactCertainty(value.pop("impact_certainty"))
-    reproducibility = Reproducibility(value.pop("reproducibility"))
-    secondary_dimensions = tuple(value.pop("secondary_dimensions"))
     evidence_hashes = tuple(value.pop("evidence_hashes"))
+    # Drop legacy fields that CandidateFinding no longer accepts
+    valid_fields = {f.name for f in fields(CandidateFinding)}
+    for key in set(value) - valid_fields:
+        del value[key]
     return CandidateFinding(
         **value,
         severity=severity,
         evidence_strength=evidence_strength,
-        impact_certainty=impact_certainty,
-        reproducibility=reproducibility,
         primary_location=primary,
         related_locations=related,
-        secondary_dimensions=secondary_dimensions,
         evidence_hashes=evidence_hashes,
     )
 
@@ -326,24 +324,9 @@ def _verdict_payload(decision: VerdictDecision) -> str:
             "category": decision.category,
             "severity": decision.severity.value if decision.severity is not None else None,
             "primary_dimension": decision.primary_dimension,
-            "secondary_dimensions": (
-                list(decision.secondary_dimensions)
-                if decision.secondary_dimensions is not None
-                else None
-            ),
             "evidence_strength": (
                 decision.evidence_strength.value
                 if decision.evidence_strength is not None
-                else None
-            ),
-            "impact_certainty": (
-                decision.impact_certainty.value
-                if decision.impact_certainty is not None
-                else None
-            ),
-            "reproducibility": (
-                decision.reproducibility.value
-                if decision.reproducibility is not None
                 else None
             ),
         }
@@ -975,10 +958,7 @@ class SqlVerdictStore:
                         "content": cluster.content,
                         "recommendation": cluster.recommendation,
                         "primary_dimension": cluster.primary_dimension,
-                        "secondary_dimensions": list(cluster.secondary_dimensions),
                         "evidence_strength": cluster.evidence_strength.value,
-                        "impact_certainty": cluster.impact_certainty.value,
-                        "reproducibility": cluster.reproducibility.value,
                     }
                 )
                 await session.execute(
@@ -1062,11 +1042,7 @@ class SqlVerdictStore:
     async def list_clusters(self, task_id: str) -> tuple[FindingCluster, ...]:
         """Rehydrate clusters from normalized membership order."""
 
-        from codelens.findings.domain.candidates import (
-            EvidenceStrength,
-            ImpactCertainty,
-            Reproducibility,
-        )
+        from codelens.findings.domain.candidates import EvidenceStrength
 
         async with self._database.sessions() as session:
             rows = (
@@ -1100,12 +1076,7 @@ class SqlVerdictStore:
                         content=str(value["content"]),
                         recommendation=str(value["recommendation"]),
                         primary_dimension=str(value["primary_dimension"]),
-                        secondary_dimensions=tuple(
-                            str(item) for item in value["secondary_dimensions"]
-                        ),
                         evidence_strength=EvidenceStrength(str(value["evidence_strength"])),
-                        impact_certainty=ImpactCertainty(str(value["impact_certainty"])),
-                        reproducibility=Reproducibility(str(value["reproducibility"])),
                     )
                 )
             return tuple(result)
@@ -1156,11 +1127,7 @@ class SqlVerdictStore:
     async def list_decisions(self, task_id: str) -> tuple[VerdictDecision, ...]:
         """Return persisted verdict decisions in stable order."""
 
-        from codelens.findings.domain.candidates import (
-            EvidenceStrength,
-            ImpactCertainty,
-            Reproducibility,
-        )
+        from codelens.findings.domain.candidates import EvidenceStrength
 
         async with self._database.sessions() as session:
             rows = (
@@ -1190,24 +1157,9 @@ class SqlVerdictStore:
                             else None
                         ),
                         primary_dimension=value.get("primary_dimension"),
-                        secondary_dimensions=(
-                            tuple(str(item) for item in value["secondary_dimensions"])
-                            if value.get("secondary_dimensions") is not None
-                            else None
-                        ),
                         evidence_strength=(
                             EvidenceStrength(str(value["evidence_strength"]))
                             if value.get("evidence_strength") is not None
-                            else None
-                        ),
-                        impact_certainty=(
-                            ImpactCertainty(str(value["impact_certainty"]))
-                            if value.get("impact_certainty") is not None
-                            else None
-                        ),
-                        reproducibility=(
-                            Reproducibility(str(value["reproducibility"]))
-                            if value.get("reproducibility") is not None
                             else None
                         ),
                     )

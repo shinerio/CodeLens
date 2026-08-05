@@ -163,8 +163,6 @@ it("keeps published findings visible while naming partial reviewer coverage", as
         disposition: "blocking",
         confidence: null,
         evidence_strength: "strong",
-        impact_certainty: "confirmed",
-        reproducibility: "reasoned",
         verification_state: "unresolved",
         primary_location: { path: "src/auth.ts", start_line: 8, end_line: 8, side: "new", excerpt_hash: "f".repeat(64), is_deleted: false },
         related_locations: [],

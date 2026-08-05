@@ -13,22 +13,6 @@ class EvidenceStrength(StrEnum):
     WEAK = "weak"
 
 
-class ImpactCertainty(StrEnum):
-    """Classify how conclusively the candidate's stated impact follows."""
-
-    CONFIRMED = "confirmed"
-    PLAUSIBLE = "plausible"
-    UNCLEAR = "unclear"
-
-
-class Reproducibility(StrEnum):
-    """Classify whether the candidate has a deterministic trigger."""
-
-    DETERMINISTIC = "deterministic"
-    CONDITIONAL = "conditional"
-    UNKNOWN = "unknown"
-
-
 @dataclass(frozen=True)
 class CandidateFinding:
     """Hold one Snapshot-resolved Comment v2 candidate before publication.
@@ -47,10 +31,7 @@ class CandidateFinding:
     title: str
     severity: FindingSeverity
     primary_dimension: str
-    secondary_dimensions: tuple[str, ...]
     evidence_strength: EvidenceStrength
-    impact_certainty: ImpactCertainty
-    reproducibility: Reproducibility
     primary_location: SourceLocation
     related_locations: tuple[SourceLocation, ...]
     changed_hunk_id: str

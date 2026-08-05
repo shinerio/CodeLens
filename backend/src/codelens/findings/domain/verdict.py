@@ -15,11 +15,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
-from codelens.findings.domain.candidates import (
-    EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
-)
+from codelens.findings.domain.candidates import EvidenceStrength
 from codelens.findings.domain.models import FindingSeverity
 
 
@@ -55,10 +51,7 @@ class VerdictDecision:
     category: str | None = None
     severity: FindingSeverity | None = None
     primary_dimension: str | None = None
-    secondary_dimensions: tuple[str, ...] | None = None
     evidence_strength: EvidenceStrength | None = None
-    impact_certainty: ImpactCertainty | None = None
-    reproducibility: Reproducibility | None = None
 
     def __post_init__(self) -> None:
         if not self.cluster_ids:
@@ -83,10 +76,7 @@ class VerdictDecision:
             "category",
             "severity",
             "primary_dimension",
-            "secondary_dimensions",
             "evidence_strength",
-            "impact_certainty",
-            "reproducibility",
         )
         return tuple(name for name in names if getattr(self, name) is None)
 
@@ -119,10 +109,7 @@ class VerdictDecision:
         category: str,
         severity: FindingSeverity,
         primary_dimension: str,
-        secondary_dimensions: tuple[str, ...],
         evidence_strength: EvidenceStrength,
-        impact_certainty: ImpactCertainty,
-        reproducibility: Reproducibility,
     ) -> "VerdictDecision":
         """Merge one or more clusters into a single Finding.
 
@@ -141,8 +128,5 @@ class VerdictDecision:
             category=category,
             severity=severity,
             primary_dimension=primary_dimension,
-            secondary_dimensions=secondary_dimensions,
             evidence_strength=evidence_strength,
-            impact_certainty=impact_certainty,
-            reproducibility=reproducibility,
         )

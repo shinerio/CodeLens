@@ -81,20 +81,13 @@ class VerdictSubmissionCollector:
         category: str,
         severity: Literal["critical", "high", "medium", "low", "info"],
         primary_dimension: str,
-        secondary_dimensions: list[str],
         evidence_strength: Literal["direct", "inferred", "weak"],
-        impact_certainty: Literal["confirmed", "plausible", "unclear"],
-        reproducibility: Literal["deterministic", "conditional", "unknown"],
     ) -> str:
         """Merge one or more clusters into a single synthesized Finding."""
         if self._finalized is not None:
             raise ValueError("Final Verifier has already finalized decisions")
 
-        from codelens.findings.domain.candidates import (
-            EvidenceStrength,
-            ImpactCertainty,
-            Reproducibility,
-        )
+        from codelens.findings.domain.candidates import EvidenceStrength
         from codelens.findings.domain.models import FindingSeverity
 
         decision = VerdictDecision.merge(
@@ -108,10 +101,7 @@ class VerdictSubmissionCollector:
             category=category,
             severity=FindingSeverity(severity),
             primary_dimension=primary_dimension,
-            secondary_dimensions=tuple(secondary_dimensions),
             evidence_strength=EvidenceStrength(evidence_strength),
-            impact_certainty=ImpactCertainty(impact_certainty),
-            reproducibility=Reproducibility(reproducibility),
         )
         self._decisions.append(decision)
         count = len(self._decisions)
@@ -153,10 +143,7 @@ class VerdictSubmissionCollector:
             category: str,
             severity: Literal["critical", "high", "medium", "low", "info"],
             primary_dimension: str,
-            secondary_dimensions: list[str],
             evidence_strength: Literal["direct", "inferred", "weak"],
-            impact_certainty: Literal["confirmed", "plausible", "unclear"],
-            reproducibility: Literal["deterministic", "conditional", "unknown"],
         ) -> str:
             """Merge one or more clusters into a single synthesized Finding."""
             return await collector.merge(
@@ -170,10 +157,7 @@ class VerdictSubmissionCollector:
                 category=category,
                 severity=severity,
                 primary_dimension=primary_dimension,
-                secondary_dimensions=secondary_dimensions,
                 evidence_strength=evidence_strength,
-                impact_certainty=impact_certainty,
-                reproducibility=reproducibility,
             )
 
         return merge

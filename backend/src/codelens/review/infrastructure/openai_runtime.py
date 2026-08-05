@@ -679,11 +679,24 @@ class OpenAIAgentRuntime:
         stream = cast(Any, self._runner).run_streamed(
             agent, input_value, max_turns=max_turns, run_config=run_config
         )
+        # Track call_id -> tool_name so tool_result entries carry the name of the
+        # tool that produced them (the SDK's tool_output item has no name field).
+        tool_names: dict[str, str] = {}
         async with asyncio.timeout(timeout_seconds):
             async for event in stream.stream_events():
                 emitted = _visible_event(event)
-                if emitted is not None:
-                    await sink(emitted)
+                if emitted is None:
+                    continue
+                if emitted.kind == "tool_call":
+                    call_id = emitted.metadata.get("tool_call_id")
+                    name = emitted.metadata.get("tool_name")
+                    if call_id and name:
+                        tool_names[call_id] = name
+                elif emitted.kind == "tool_result":
+                    call_id = emitted.metadata.get("tool_call_id")
+                    if call_id and call_id in tool_names and "tool_name" not in emitted.metadata:
+                        emitted.metadata["tool_name"] = tool_names[call_id]
+                await sink(emitted)
         await sink(AgentRuntimeEvent("model_completed", "", {"agent_name": agent.name}))
         return stream
 
@@ -875,11 +888,7 @@ def _verdict_codec(role_context: dict[str, object] | None) -> VerdictCodec:
     if context["schema_version"] != "1" or not isinstance(raw_clusters, list):
         raise PermanentAgentOutputError("Verdict role context has an invalid value")
     try:
-        from codelens.findings.domain.candidates import (
-            EvidenceStrength,
-            ImpactCertainty,
-            Reproducibility,
-        )
+        from codelens.findings.domain.candidates import EvidenceStrength
         from codelens.findings.domain.clusters import FindingCluster
 
         clusters = tuple(
@@ -893,10 +902,7 @@ def _verdict_codec(role_context: dict[str, object] | None) -> VerdictCodec:
                 content=item["content"],
                 recommendation=item["recommendation"],
                 primary_dimension=item["primary_dimension"],
-                secondary_dimensions=tuple(item["secondary_dimensions"]),
                 evidence_strength=EvidenceStrength(item["evidence_strength"]),
-                impact_certainty=ImpactCertainty(item["impact_certainty"]),
-                reproducibility=Reproducibility(item["reproducibility"]),
             )
             for item in raw_clusters
             if isinstance(item, dict)
@@ -981,15 +987,35 @@ def _completion_tool_use_behavior(
 
 
 def _tool_metadata(value: object, *, include_name: bool = False) -> dict[str, str]:
-    """Extract stable tool identity without exposing SDK item types past this adapter."""
+    """Extract stable tool identity without exposing SDK item types past this adapter.
 
-    raw_item = getattr(value, "raw_item", None)
+    The SDK's ``RunItem`` subclasses expose ``call_id``/``tool_name`` as *properties*
+    that correctly handle dict-backed ``raw_item`` instances (e.g.
+    ``FunctionCallOutput`` which subclasses ``dict``).  ``getattr`` on a dict does
+    not access keys, so we must try the item's own property first, then fall back
+    to the raw item for non-SDK callers.
+    """
+
     metadata: dict[str, str] = {}
-    call_id = getattr(raw_item, "call_id", None)
-    if isinstance(call_id, str) and call_id:
+    call_id = _extract_identity(value, "call_id")
+    if call_id:
         metadata["tool_call_id"] = call_id
     if include_name:
-        name = getattr(raw_item, "name", None)
-        if isinstance(name, str) and name:
+        name = _extract_identity(value, "tool_name") or _extract_identity(value, "name")
+        if name:
             metadata["tool_name"] = name
     return metadata
+
+
+def _extract_identity(value: object, attr: str) -> str | None:
+    """Return a non-empty string for *attr* from a RunItem or its raw_item."""
+
+    prop = getattr(value, attr, None)
+    if isinstance(prop, str) and prop:
+        return prop
+    raw_item = getattr(value, "raw_item", None)
+    if isinstance(raw_item, dict):
+        candidate = raw_item.get(attr)
+    else:
+        candidate = getattr(raw_item, attr, None)
+    return candidate if isinstance(candidate, str) and candidate else None

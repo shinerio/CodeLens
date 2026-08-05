@@ -9,8 +9,6 @@ from codelens.findings.application.resolve_clusters import (
 from codelens.findings.domain.candidates import (
     CandidateFinding,
     EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
 )
 from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import FindingSeverity, SourceLocation
@@ -22,7 +20,6 @@ def candidate(
     category: str = "authentication",
     title: str = "Missing signature check",
     evidence_hashes: tuple[str, ...] = ("a" * 64,),
-    impact_certainty: ImpactCertainty = ImpactCertainty.CONFIRMED,
     path: str = "src/webhook.py",
 ) -> CandidateFinding:
     return CandidateFinding(
@@ -35,10 +32,7 @@ def candidate(
         title=title,
         severity=FindingSeverity.HIGH,
         primary_dimension="security",
-        secondary_dimensions=(),
         evidence_strength=EvidenceStrength.DIRECT,
-        impact_certainty=impact_certainty,
-        reproducibility=Reproducibility.DETERMINISTIC,
         primary_location=SourceLocation(path, 5, 5, "new", "a" * 64, False),
         related_locations=(),
         changed_hunk_id="hunk-1",
@@ -86,10 +80,7 @@ def test_clusterer_groups_candidates_with_identical_evidence() -> None:
     assert cluster.content == first.content
     assert cluster.recommendation == first.recommendation
     assert cluster.primary_dimension == first.primary_dimension
-    assert cluster.secondary_dimensions == first.secondary_dimensions
     assert cluster.evidence_strength == first.evidence_strength
-    assert cluster.impact_certainty == first.impact_certainty
-    assert cluster.reproducibility == first.reproducibility
 
 
 def test_clusterer_splits_when_evidence_differs() -> None:

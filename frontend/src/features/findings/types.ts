@@ -41,8 +41,6 @@ export type FindingRecord = {
   recommendation: string;
   rule_sources: RuleReferenceRecord[];
   evidence_strength?: "weak" | "moderate" | "strong" | null;
-  impact_certainty?: "speculative" | "plausible" | "confirmed" | null;
-  reproducibility?: "unverified" | "reasoned" | "reproduced" | null;
   verification_state?: "not_required" | "verified" | "rejected" | "unresolved" | null;
 };
 

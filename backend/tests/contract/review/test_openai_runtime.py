@@ -339,10 +339,7 @@ def _verifier_runtime_input() -> bytes:
                             "content": "Unsigned requests are accepted.",
                             "recommendation": "Verify signatures first.",
                             "primary_dimension": "correctness",
-                            "secondary_dimensions": ["security"],
                             "evidence_strength": "direct",
-                            "impact_certainty": "confirmed",
-                            "reproducibility": "deterministic",
                         }
                     ],
                 }
@@ -427,10 +424,7 @@ async def test_verifier_runtime_uses_verdict_then_finalize_to_complete() -> None
             "category": None,
             "severity": None,
             "primary_dimension": None,
-            "secondary_dimensions": None,
             "evidence_strength": None,
-            "impact_certainty": None,
-            "reproducibility": None,
         }
     ]
     assert runner.starting_agent is not None
@@ -598,7 +592,7 @@ async def test_uses_active_gateway_execution_limits(
 
 
 async def test_non_streamed_run_uses_active_gateway_timeout() -> None:
-    config = replace(_provider_config(), agent_timeout=0.01)
+    config = replace(_provider_config(), agent_timeout=0.01, max_retries=0)
     runner = SlowRunner(FakeResult(FindingBatchSchema(schema_version="1", findings=()), ()))
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(config),
@@ -750,7 +744,7 @@ async def test_streaming_investigation_closes_client_after_a_non_streaming_run(
 )
 async def test_maps_retryable_provider_failures_without_leaking_details(failure: Exception) -> None:
     runtime = OpenAIAgentRuntime(
-        config_store=StaticProviderConfigStore(_provider_config()),
+        config_store=StaticProviderConfigStore(replace(_provider_config(), max_retries=0)),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
         prompt_loader=_prompt_loader(),

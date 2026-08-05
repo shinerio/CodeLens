@@ -114,10 +114,7 @@ def _submission(**overrides: object) -> CommentV2FindingSchema:
         "category": "authentication",
         "severity": "high",
         "primary_dimension": "security",
-        "secondary_dimensions": ["performance"],
         "evidence_strength": "direct",
-        "impact_certainty": "confirmed",
-        "reproducibility": "deterministic",
         **overrides,
     }
     return CommentV2FindingSchema.model_validate(payload)
@@ -194,7 +191,7 @@ async def test_specialist_primary_dimension_must_match_assignment() -> None:
 
     result = json.loads(
         await collector.submit_many(
-            [_submission(primary_dimension="performance", secondary_dimensions=[])]
+            [_submission(primary_dimension="performance")]
         )
     )
 

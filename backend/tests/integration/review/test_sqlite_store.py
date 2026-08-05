@@ -22,8 +22,6 @@ from codelens.findings.domain.candidates import (
     CandidateFinding,
     CandidateFindingBatch,
     EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
 )
 from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import (
@@ -171,10 +169,7 @@ def _candidate(task_id: str, run_id: str, candidate_id: str) -> CandidateFinding
         title="Authorization is bypassed",
         severity=FindingSeverity.HIGH,
         primary_dimension="security",
-        secondary_dimensions=(),
         evidence_strength=EvidenceStrength.DIRECT,
-        impact_certainty=ImpactCertainty.CONFIRMED,
-        reproducibility=Reproducibility.DETERMINISTIC,
         primary_location=location,
         related_locations=(),
         changed_hunk_id="hunk-1",
@@ -450,10 +445,7 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
             content=candidate.content,
             recommendation=candidate.recommendation,
             primary_dimension=candidate.primary_dimension,
-            secondary_dimensions=candidate.secondary_dimensions,
             evidence_strength=candidate.evidence_strength,
-            impact_certainty=candidate.impact_certainty,
-            reproducibility=candidate.reproducibility,
         )
         verdicts = SqlVerdictStore(database)
         await verdicts.save_clusters(task_id, "snapshot-1", (cluster,))
@@ -472,10 +464,7 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
                         content=candidate.content,
                         recommendation=candidate.recommendation,
                         primary_dimension=candidate.primary_dimension,
-                        secondary_dimensions=candidate.secondary_dimensions,
                         evidence_strength=candidate.evidence_strength,
-                        impact_certainty=candidate.impact_certainty,
-                        reproducibility=candidate.reproducibility,
                     ),
                 ),
             )
@@ -539,10 +528,7 @@ async def test_verification_and_publication_replay_are_exactly_once(
             content=candidate.content,
             recommendation=candidate.recommendation,
             primary_dimension=candidate.primary_dimension,
-            secondary_dimensions=candidate.secondary_dimensions,
             evidence_strength=candidate.evidence_strength,
-            impact_certainty=candidate.impact_certainty,
-            reproducibility=candidate.reproducibility,
         )
         verdicts = SqlVerdictStore(database)
         await verdicts.save_clusters(task_id, "snapshot-1", (cluster,))

@@ -7,8 +7,6 @@ from codelens.findings.domain.candidates import (
     CandidateFinding,
     CandidateFindingBatch,
     EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
 )
 from codelens.findings.domain.models import FindingSeverity, SourceLocation
 from codelens.review.domain.ports import FindingValidationWarning, SnapshotFileReaderPort
@@ -63,19 +61,13 @@ class CandidateBatchCodec:
         related = tuple(SourceLocation(**location) for location in item.pop("related_locations"))
         severity = FindingSeverity(item.pop("severity"))
         evidence_strength = EvidenceStrength(item.pop("evidence_strength"))
-        impact_certainty = ImpactCertainty(item.pop("impact_certainty"))
-        reproducibility = Reproducibility(item.pop("reproducibility"))
-        secondary_dimensions = tuple(item.pop("secondary_dimensions"))
         evidence_hashes = tuple(item.pop("evidence_hashes"))
         return CandidateFinding(
             **item,
             severity=severity,
             evidence_strength=evidence_strength,
-            impact_certainty=impact_certainty,
-            reproducibility=reproducibility,
             primary_location=primary,
             related_locations=related,
-            secondary_dimensions=secondary_dimensions,
             evidence_hashes=evidence_hashes,
         )
 
@@ -162,11 +154,6 @@ class CandidateValidator:
             raise CandidateValidationError("Candidate fingerprint is invalid")
         if candidate.primary_dimension not in self._agent.dimensions:
             raise CandidateValidationError("Candidate primary dimension is invalid")
-        if (
-            len(candidate.secondary_dimensions) != len(set(candidate.secondary_dimensions))
-            or candidate.primary_dimension in candidate.secondary_dimensions
-        ):
-            raise CandidateValidationError("Candidate secondary dimensions are invalid")
         await self._validate_location(candidate.primary_location, candidate.changed_hunk_id)
         for location in candidate.related_locations:
             await self._validate_location(location, None)

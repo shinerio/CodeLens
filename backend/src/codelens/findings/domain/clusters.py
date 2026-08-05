@@ -7,11 +7,7 @@ The Final Verifier judges each cluster as a whole via the verdict/merge tools.
 
 from dataclasses import dataclass
 
-from codelens.findings.domain.candidates import (
-    EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
-)
+from codelens.findings.domain.candidates import EvidenceStrength
 from codelens.findings.domain.models import FindingSeverity
 
 
@@ -35,10 +31,7 @@ class FindingCluster:
     content: str
     recommendation: str
     primary_dimension: str
-    secondary_dimensions: tuple[str, ...]
     evidence_strength: EvidenceStrength
-    impact_certainty: ImpactCertainty
-    reproducibility: Reproducibility
 
     def __post_init__(self) -> None:
         if not self.cluster_id:

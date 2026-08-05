@@ -593,7 +593,7 @@ export function NewReviewPage() {
                 />
                 <ReviewStrategySummary strategy={strategy} />
                 <button className="load-more-button" type="button" onClick={() => setIsCustomizingStrategy((value) => !value)}>
-                  {t(isCustomizingStrategy ? "review.hideCustomization" : "review.changeCustomization")}
+                  {t(isCustomizingStrategy ? "review.hideCustomization" : "review.customize")}
                 </button>
                 {isStrategyCustomized ? <p className="hint">{t("review.strategyCustomized")}</p> : null}
               </div>

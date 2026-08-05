@@ -1,5 +1,5 @@
 import { Brain, ChevronDown, ChevronRight, Search, Wrench } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
@@ -57,6 +57,7 @@ export function ReviewConsole({
   const [visibility, setVisibility] = useState<ConsoleVisibility>(DEFAULT_VISIBILITY);
   const [selectedStage, setSelectedStage] = useState<StageSelection>("all");
   const [selectedReviewer, setSelectedReviewer] = useState("all");
+  const [visibleLimit, setVisibleLimit] = useState(100);
   const nodes = plan?.nodes ?? [];
   const reviewerReferences = Array.from(new Set([
     ...nodes
@@ -109,6 +110,10 @@ export function ReviewConsole({
   );
   const visibleCount = filtered.filter((entry) => !isToolEntry(entry) || visibility.tools).length;
   const parseFailed = messages.some((e) => e.kind === "model_raw_output" && e.metadata?.parse_failed === "true");
+  const visibleEntries = filtered.slice(0, visibleLimit);
+  const hasMore = filtered.length > visibleLimit;
+  // Reset pagination when filters change so users see the most relevant entries first.
+  useEffect(() => { setVisibleLimit(100); }, [query, selectedStage, selectedReviewer, visibility]);
 
   function toggle(messageKey: string) {
     setCollapsed((current) => {
@@ -195,7 +200,7 @@ export function ReviewConsole({
       <button type="button" onClick={() => setCollapsed(new Set())}>Expand all</button>
     </div>
     <ol className="review-console__messages">
-      {filtered.map((entry) => {
+      {visibleEntries.map((entry) => {
         const isCollapsed = collapsed.has(entry.messageKey);
         const isTool = isToolEntry(entry);
         const isReasoning = entry.kind === "model_reasoning_delta";
@@ -213,6 +218,13 @@ export function ReviewConsole({
           {entry.redacted ? <small>Credential redacted</small> : null}
         </li>;
       })}
+      {hasMore ? (
+        <li className="review-console__load-more">
+          <button type="button" onClick={() => setVisibleLimit((limit) => limit + 100)}>
+            {t("logs.showMore", { shown: String(visibleEntries.length), total: String(filtered.length) })}
+          </button>
+        </li>
+      ) : null}
       {visibleCount === 0 ? <li className="event-log__empty">No matching execution output.</li> : null}
     </ol>
   </section>;
@@ -365,13 +377,14 @@ function PromptContent({ content }: { content: string }) {
 
 function ModelOutputContent({ content, parseFailed }: { content: string; parseFailed: boolean }) {
   const output = objectValue(content);
-  const findings = Array.isArray(output?.findings) ? output.findings.filter(isRecord) : [];
+  // v2 API uses 'candidates' field, not 'findings'
+  const findings = Array.isArray(output?.candidates) ? output.candidates.filter(isRecord) : [];
   if (output === null) return <MarkdownContent content={content} />;
   return <div className="review-console__output">
     {parseFailed ? (
       <p className="review-console__output-summary">Review completed but model output parsing failed. Check "Model raw output" above for the model's review opinions.</p>
     ) : (
-      <p className="review-console__output-summary">Final structured result · {findings.length} finding{findings.length === 1 ? "" : "s"}</p>
+      <p className="review-console__output-summary">Final structured result · {findings.length} candidate{findings.length === 1 ? "" : "s"}</p>
     )}
     {findings.map((finding, index) => <article className="review-console__finding" key={`${stringValue(finding.title)}-${index}`}>
       <header><span>{stringValue(finding.severity).toUpperCase() || "UNSPECIFIED"}</span><strong>{stringValue(finding.title) || "Untitled finding"}</strong></header>

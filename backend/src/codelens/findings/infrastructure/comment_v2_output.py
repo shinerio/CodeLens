@@ -1,6 +1,6 @@
 import json
 from dataclasses import dataclass
-from typing import Annotated, Literal, Self
+from typing import Annotated, Literal
 
 from pydantic import (
     BaseModel,
@@ -8,7 +8,6 @@ from pydantic import (
     Field,
     StringConstraints,
     ValidationError,
-    model_validator,
 )
 
 from codelens.review.domain.tool_limits import ToolLimits
@@ -43,18 +42,7 @@ class CommentV2FindingSchema(BaseModel):
     category: _ShortText
     severity: Literal["critical", "high", "medium", "low", "info"]
     primary_dimension: _ShortText
-    secondary_dimensions: tuple[_ShortText, ...] = Field(default=(), max_length=16)
     evidence_strength: Literal["direct", "inferred", "weak"]
-    impact_certainty: Literal["confirmed", "plausible", "unclear"]
-    reproducibility: Literal["deterministic", "conditional", "unknown"]
-
-    @model_validator(mode="after")
-    def validate_dimensions(self) -> Self:
-        if len(self.secondary_dimensions) != len(set(self.secondary_dimensions)):
-            raise ValueError("secondary_dimensions contains duplicate values")
-        if self.primary_dimension in self.secondary_dimensions:
-            raise ValueError("primary_dimension cannot also be secondary")
-        return self
 
 
 class CommentV2BatchSchema(BaseModel):

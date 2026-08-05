@@ -4,8 +4,6 @@ from codelens.findings.application.cluster_candidates import CandidateClusterer
 from codelens.findings.domain.candidates import (
     CandidateFinding,
     EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
 )
 from codelens.findings.domain.models import FindingSeverity, SourceLocation
 
@@ -23,10 +21,7 @@ def candidate(
         title="Stale entry survives invalidation",
         severity=FindingSeverity.HIGH,
         primary_dimension="correctness",
-        secondary_dimensions=(),
         evidence_strength=EvidenceStrength.DIRECT,
-        impact_certainty=ImpactCertainty.CONFIRMED,
-        reproducibility=Reproducibility.DETERMINISTIC,
         primary_location=SourceLocation(path, line, line, "new", "a" * 64, False),
         related_locations=(),
         changed_hunk_id="hunk-1",

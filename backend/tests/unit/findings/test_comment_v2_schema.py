@@ -24,10 +24,7 @@ def valid_comment_v2_payload() -> dict[str, object]:
                 "category": "authentication",
                 "severity": "high",
                 "primary_dimension": "security",
-                "secondary_dimensions": ["performance"],
                 "evidence_strength": "direct",
-                "impact_certainty": "confirmed",
-                "reproducibility": "deterministic",
             }
         ],
     }
@@ -48,12 +45,12 @@ def test_comment_v2_rejects_numeric_confidence() -> None:
         CommentV2BatchSchema.model_validate(payload)
 
 
-def test_comment_v2_rejects_unknown_fields_and_duplicate_dimensions() -> None:
+def test_comment_v2_rejects_unknown_fields() -> None:
     payload = valid_comment_v2_payload()
     findings = cast(list[dict[str, object]], payload["findings"])
-    findings[0]["secondary_dimensions"] = ["performance", "performance"]
+    findings[0]["impact_certainty"] = "confirmed"
 
-    with pytest.raises(ValidationError, match="secondary_dimensions"):
+    with pytest.raises(ValidationError, match="extra"):
         CommentV2BatchSchema.model_validate(payload)
 
 

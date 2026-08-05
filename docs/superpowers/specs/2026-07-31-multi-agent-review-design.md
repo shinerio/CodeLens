@@ -342,18 +342,13 @@ Model submission
   "category": "incorrect-state-transition",
   "severity": "high",
   "primary_dimension": "correctness",
-  "secondary_dimensions": ["reliability"],
-  "evidence_strength": "direct",
-  "impact_certainty": "confirmed",
-  "reproducibility": "deterministic"
+  "evidence_strength": "direct"
 }
 ```
 
 枚举：
 
-- `evidence_strength`：`direct`、`inferred`、`weak`；
-- `impact_certainty`：`confirmed`、`plausible`、`unclear`；
-- `reproducibility`：`deterministic`、`conditional`、`unknown`。
+- `evidence_strength`：`direct`、`inferred`、`weak`。
 
 Reviewer 可以报告跨维度问题，但必须指定主维度。角色边界减少重复，不作为丢弃真实问题的硬过滤器。
 
@@ -702,7 +697,7 @@ Reviewer Catalog 提供独立只读 API，返回版本、职责、类型、成�
 4. Coverage Tab 展示 Planned、Completed、Failed、Omitted 视角。任何 Reviewer、Resolver 或 Verifier 失败都必须说明结果缺口，不能只改变颜色。
 5. Execution 与 Logs Tab 承载诊断信息，避免把主结果页变成 Agent 控制台。
 
-Finding 卡片显示严重级别、类别、位置、建议、发布或验证状态，以及 CodeLens 内部可见的规范主 Reviewer 和合并来源。Comment v2 的 `evidence_strength`、`impact_certainty`、`reproducibility` 使用类别标签表达；新任务不显示或按数字置信度排序。Legacy `correctness:v1` 的数字置信度只保留在历史数据与兼容接口中，不提升为新版结果页的主信息。
+Finding 卡片显示严重级别、类别、位置、建议、发布或验证状态，以及 CodeLens 内部可见的规范主 Reviewer 和合并来源。Comment v2 的 `evidence_strength` 使用类别标签表达；新任务不显示或按数字置信度排序。Legacy `correctness:v1` 的数字置信度只保留在历史数据与兼容接口中，不提升为新版结果页的主信息。
 
 General 或 Fixed Single Specialist 没有 Resolver/Verifier 时，Review Plan 自动压缩未创建的 Pass，而不是显示伪造的 `skipped` 节点。Planning、Running、Partial、Failed、Canceled 和 Superseded 都使用同一结果页骨架，避免任务完成时页面结构跳变。
 

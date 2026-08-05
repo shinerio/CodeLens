@@ -13,8 +13,6 @@ from codelens.findings.domain.candidates import (
     CandidateFinding,
     CandidateFindingBatch,
     EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
 )
 from codelens.findings.domain.models import FindingSeverity, SourceLocation
 from codelens.findings.infrastructure.comment_v2_output import CommentV2FindingSchema
@@ -149,8 +147,6 @@ class ReviewCommentCollectorV2:
         evidence_hashes = (existing_code_hash,)
         axes = {
             "evidence_strength": submission.evidence_strength,
-            "impact_certainty": submission.impact_certainty,
-            "reproducibility": submission.reproducibility,
         }
         fingerprint = _canonical_hash(
             {
@@ -166,7 +162,6 @@ class ReviewCommentCollectorV2:
                 "title": submission.title,
                 "content": submission.content,
                 "primary_dimension": submission.primary_dimension,
-                "secondary_dimensions": submission.secondary_dimensions,
                 "axes": axes,
                 "evidence_hashes": evidence_hashes,
             }
@@ -200,10 +195,7 @@ class ReviewCommentCollectorV2:
                 title=submission.title,
                 severity=FindingSeverity(submission.severity),
                 primary_dimension=submission.primary_dimension,
-                secondary_dimensions=submission.secondary_dimensions,
                 evidence_strength=EvidenceStrength(submission.evidence_strength),
-                impact_certainty=ImpactCertainty(submission.impact_certainty),
-                reproducibility=Reproducibility(submission.reproducibility),
                 primary_location=location,
                 related_locations=(),
                 changed_hunk_id=hunks[0].hunk_id,
@@ -256,7 +248,12 @@ class ReviewCommentCollectorV2:
         return CandidateFindingBatch(tuple(self._candidates))
 
     def as_comment_agent_tool(self, description: str) -> Tool:
-        """Expose only the version-two comment contract through the SDK adapter."""
+        """Expose only the version-two comment contract through the SDK adapter.
+
+        The schema is mutated to inject the reviewer's assigned dimensions and
+        reviewer identifier as enums so the model picks valid values instead of
+        guessing free-form strings.
+        """
 
         CommentBatch = Annotated[
             list[CommentV2FindingSchema],
@@ -267,7 +264,15 @@ class ReviewCommentCollectorV2:
         async def comment_tool(comments: CommentBatch) -> str:
             return await self.submit_many(comments)
 
-        return reject_unknown_arguments(comment_tool)
+        tool = reject_unknown_arguments(comment_tool)
+        expected_reviewer_id = self.reviewer_reference.rpartition(":v")[0]
+        finding_schema = tool.params_json_schema.get("$defs", {}).get(
+            "CommentV2FindingSchema", {}
+        )
+        properties = finding_schema.get("properties", {})
+        properties["primary_dimension"]["enum"] = list(self.reviewer_dimensions)
+        properties["reviewer_id"]["enum"] = [expected_reviewer_id]
+        return tool
 
     async def _resolve_line_numbers(
         self,

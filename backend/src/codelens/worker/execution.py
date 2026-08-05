@@ -916,10 +916,7 @@ class WorkerReviewExecutor:
                     "content": cluster.content,
                     "recommendation": cluster.recommendation,
                     "primary_dimension": cluster.primary_dimension,
-                    "secondary_dimensions": list(cluster.secondary_dimensions),
                     "evidence_strength": cluster.evidence_strength.value,
-                    "impact_certainty": cluster.impact_certainty.value,
-                    "reproducibility": cluster.reproducibility.value,
                 }
                 for cluster in clusters
             ],

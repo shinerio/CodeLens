@@ -14,7 +14,7 @@
 - Reviewer references use the existing public form `<agent_id>:v<integer>`.
 - Fixed and Adaptive are a discriminated union; General and specialists cannot coexist.
 - Budget protocol values are exactly `lean`, `standard`, and `deep`.
-- Comment v2 removes numeric confidence and uses `evidence_strength`, `impact_certainty`, and `reproducibility`.
+- Comment v2 removes numeric confidence and uses `evidence_strength`.
 - This plan does not change `POST /api/reviews`, database schema, Worker orchestration, or visible frontend catalog.
 - New Python code has complete type annotations and public contracts have docstrings explaining invariants and failure behavior.
 
@@ -396,7 +396,7 @@ git commit -m "feat: isolate reviewer prompts by version"
 - Modify: `backend/tests/unit/review/test_validate_findings.py`
 
 **Interfaces:**
-- Produces: `EvidenceStrength`, `ImpactCertainty`, `Reproducibility`, `CandidateFinding`, `CandidateFindingBatch`, `CommentV2OutputCodec`, `ReviewCommentCollectorV2`.
+- Produces: `EvidenceStrength`, `CandidateFinding`, `CandidateFindingBatch`, `CommentV2OutputCodec`, `ReviewCommentCollectorV2`.
 - Preserves: `ReviewCommentCollector` and `AgentOutputCodec("1")` as Comment v1.
 - The v2 collector returns resolved Snapshot locations and never accepts numeric confidence.
 
@@ -424,10 +424,7 @@ def valid_comment_v2_payload() -> dict[str, object]:
             "category": "authentication",
             "severity": "high",
             "primary_dimension": "security",
-            "secondary_dimensions": ["performance"],
             "evidence_strength": "direct",
-            "impact_certainty": "confirmed",
-            "reproducibility": "deterministic",
         }],
     }
 
@@ -464,18 +461,6 @@ class EvidenceStrength(StrEnum):
     WEAK = "weak"
 
 
-class ImpactCertainty(StrEnum):
-    CONFIRMED = "confirmed"
-    PLAUSIBLE = "plausible"
-    UNCLEAR = "unclear"
-
-
-class Reproducibility(StrEnum):
-    DETERMINISTIC = "deterministic"
-    CONDITIONAL = "conditional"
-    UNKNOWN = "unknown"
-
-
 @dataclass(frozen=True)
 class CandidateFinding:
     task_id: str
@@ -487,10 +472,7 @@ class CandidateFinding:
     title: str
     severity: FindingSeverity
     primary_dimension: str
-    secondary_dimensions: tuple[str, ...]
     evidence_strength: EvidenceStrength
-    impact_certainty: ImpactCertainty
-    reproducibility: Reproducibility
     primary_location: SourceLocation
     related_locations: tuple[SourceLocation, ...]
     changed_hunk_id: str

@@ -64,20 +64,14 @@ class FindingPublisher:
                 assert verdict.content is not None
                 assert verdict.recommendation is not None
                 assert verdict.primary_dimension is not None
-                assert verdict.secondary_dimensions is not None
                 assert verdict.evidence_strength is not None
-                assert verdict.impact_certainty is not None
-                assert verdict.reproducibility is not None
                 title = verdict.title
                 category = verdict.category
                 severity = verdict.severity
                 content = verdict.content
                 recommendation = verdict.recommendation
                 primary_dimension = verdict.primary_dimension
-                secondary_dimensions = verdict.secondary_dimensions
                 evidence_strength = verdict.evidence_strength
-                impact_certainty = verdict.impact_certainty
-                reproducibility = verdict.reproducibility
             else:
                 title = primary_cluster.title
                 category = primary_cluster.category
@@ -85,10 +79,7 @@ class FindingPublisher:
                 content = primary_cluster.content
                 recommendation = primary_cluster.recommendation
                 primary_dimension = primary_cluster.primary_dimension
-                secondary_dimensions = primary_cluster.secondary_dimensions
                 evidence_strength = primary_cluster.evidence_strength
-                impact_certainty = primary_cluster.impact_certainty
-                reproducibility = primary_cluster.reproducibility
 
             fingerprint = hashlib.sha256(
                 json.dumps(
@@ -138,10 +129,7 @@ class FindingPublisher:
                     recommendation=recommendation,
                     rule_sources=(),
                     primary_dimension=primary_dimension,
-                    secondary_dimensions=secondary_dimensions,
                     evidence_strength=evidence_strength.value,
-                    impact_certainty=impact_certainty.value,
-                    reproducibility=reproducibility.value,
                     source_reviewer_references=tuple(
                         sorted({item.reviewer_reference for item in sources})
                     ),

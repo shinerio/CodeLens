@@ -126,14 +126,10 @@ it("renders Comment v2 categorical confidence without a percentage", () => {
     ...finding,
     confidence: null,
     evidence_strength: "strong",
-    impact_certainty: "confirmed",
-    reproducibility: "reproduced",
     verification_state: "verified",
   }} source={null} />, { wrapper: TestProviders });
 
   expect(screen.getByText("strong")).toBeInTheDocument();
-  expect(screen.getByText("confirmed")).toBeInTheDocument();
-  expect(screen.getByText("reproduced")).toBeInTheDocument();
   expect(screen.getByText("verified")).toBeInTheDocument();
   expect(screen.queryByText("90%")).not.toBeInTheDocument();
 });

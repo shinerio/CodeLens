@@ -751,8 +751,9 @@
     animation: none;
   }
 }
-.review-profile-snapshot { display: grid; grid-template-columns: minmax(220px, .7fr) minmax(0, 1.3fr) auto; gap: 14px; align-items: end; }
+.review-profile-snapshot { display: grid; grid-template-columns: auto 1fr; gap: 12px; padding: 18px; align-items: center; }
 .review-profile-snapshot .hint { grid-column: 1 / -1; }
+.review-profile-snapshot .profile-picker { display: flex; align-items: center; gap: 8px; }
 .review-save-profile { display: flex; align-items: center; gap: 14px; margin-top: 14px; padding: 12px; border-top: 1px solid #d8ded8; }
 .review-save-profile label { display: flex; align-items: center; gap: 7px; white-space: nowrap; }
 .review-save-profile input[type="text"], .review-save-profile > input { flex: 1; min-width: 260px; padding: 9px; border: 1px solid #adb7b0; }

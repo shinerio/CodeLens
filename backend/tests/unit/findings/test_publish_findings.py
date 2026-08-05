@@ -2,8 +2,6 @@ from codelens.findings.application.publish_findings import FindingPublisher
 from codelens.findings.domain.candidates import (
     CandidateFinding,
     EvidenceStrength,
-    ImpactCertainty,
-    Reproducibility,
 )
 from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.models import FindingSeverity, SourceLocation
@@ -22,10 +20,7 @@ def candidate(candidate_id: str, reviewer: str) -> CandidateFinding:
         title="Missing signature check",
         severity=FindingSeverity.HIGH,
         primary_dimension="security",
-        secondary_dimensions=("correctness",),
         evidence_strength=EvidenceStrength.DIRECT,
-        impact_certainty=ImpactCertainty.CONFIRMED,
-        reproducibility=Reproducibility.DETERMINISTIC,
         primary_location=SourceLocation(
             "src/webhook.py", 5, 5, "new", "a" * 64, False
         ),
@@ -49,10 +44,7 @@ def cluster_for(
     content: str = "Unsigned requests are accepted.",
     recommendation: str = "Verify signatures first.",
     primary_dimension: str = "security",
-    secondary_dimensions: tuple[str, ...] = ("correctness",),
     evidence_strength: EvidenceStrength = EvidenceStrength.DIRECT,
-    impact_certainty: ImpactCertainty = ImpactCertainty.CONFIRMED,
-    reproducibility: Reproducibility = Reproducibility.DETERMINISTIC,
 ) -> FindingCluster:
     """Build a FindingCluster copying canonical fields from the first candidate.
 
@@ -70,10 +62,7 @@ def cluster_for(
         content=content,
         recommendation=recommendation,
         primary_dimension=primary_dimension,
-        secondary_dimensions=secondary_dimensions,
         evidence_strength=evidence_strength,
-        impact_certainty=impact_certainty,
-        reproducibility=reproducibility,
     )
 
 
@@ -100,10 +89,7 @@ def test_accept_verdict_publishes_finding_with_cluster_canonical_fields() -> Non
     assert finding.severity == cluster.severity
     assert finding.recommendation == cluster.recommendation
     assert finding.primary_dimension == cluster.primary_dimension
-    assert finding.secondary_dimensions == cluster.secondary_dimensions
     assert finding.evidence_strength == cluster.evidence_strength.value
-    assert finding.impact_certainty == cluster.impact_certainty.value
-    assert finding.reproducibility == cluster.reproducibility.value
     # Canonical candidate's reviewer/location provenance is preserved.
     canonical = candidate_a
     assert finding.reviewer_id == canonical.reviewer_reference
@@ -135,10 +121,7 @@ def test_merge_verdict_publishes_finding_with_verdict_merge_fields() -> None:
             category="authentication",
             severity=FindingSeverity.CRITICAL,
             primary_dimension="security",
-            secondary_dimensions=("correctness", "compliance"),
             evidence_strength=EvidenceStrength.DIRECT,
-            impact_certainty=ImpactCertainty.CONFIRMED,
-            reproducibility=Reproducibility.DETERMINISTIC,
         ),
     )
 
@@ -158,10 +141,7 @@ def test_merge_verdict_publishes_finding_with_verdict_merge_fields() -> None:
     assert finding.severity == verdict.severity
     assert finding.recommendation == verdict.recommendation
     assert finding.primary_dimension == verdict.primary_dimension
-    assert finding.secondary_dimensions == verdict.secondary_dimensions
     assert finding.evidence_strength == verdict.evidence_strength.value
-    assert finding.impact_certainty == verdict.impact_certainty.value
-    assert finding.reproducibility == verdict.reproducibility.value
     # impact/explanation mirror the merged content.
     assert finding.impact == verdict.content
     assert finding.explanation == verdict.content
@@ -210,10 +190,7 @@ def test_merge_verdict_over_multiple_clusters_unions_reviewer_references() -> No
             category="authentication",
             severity=FindingSeverity.CRITICAL,
             primary_dimension="security",
-            secondary_dimensions=("correctness", "performance"),
             evidence_strength=EvidenceStrength.DIRECT,
-            impact_certainty=ImpactCertainty.CONFIRMED,
-            reproducibility=Reproducibility.CONDITIONAL,
         ),
     )
 
