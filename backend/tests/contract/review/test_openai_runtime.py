@@ -766,22 +766,27 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
 
 
 @pytest.mark.parametrize("result", [ModelBehaviorError("FULL_PROVIDER_PAYLOAD_SECRET")])
-async def test_maps_invalid_investigation_to_a_permanent_failure(result: Exception) -> None:
+async def test_maps_invalid_investigation_to_a_transient_failure(result: Exception) -> None:
+    """ModelBehaviorError is treated as retryable (transient) to handle temporary model issues.
+
+    The test verifies that secrets are not leaked in error messages or tracebacks,
+    even when the model produces invalid output containing sensitive data.
+    """
     runtime = OpenAIAgentRuntime(
-        config_store=StaticProviderConfigStore(_provider_config()),
+        config_store=StaticProviderConfigStore(replace(_provider_config(), max_retries=0)),
         output_codec=AgentOutputCodec("1"),
         git=GitCli(),
         prompt_loader=_prompt_loader(),
         runner=FakeRunner(result),
     )
 
-    with pytest.raises(PermanentAgentOutputError) as captured:
+    with pytest.raises(TransientAgentRuntimeError) as captured:
         await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
 
     assert "FULL_PROVIDER_PAYLOAD_SECRET" not in str(captured.value)
     formatted = "".join(traceback.format_exception(captured.value))
     assert "FULL_PROVIDER_PAYLOAD_SECRET" not in formatted
-    assert captured.value.__context__ is None
+    assert captured.value.retryable is True
 
 
 async def test_missing_provider_configuration_fails_only_when_invoked() -> None:

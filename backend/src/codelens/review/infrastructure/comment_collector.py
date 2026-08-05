@@ -272,11 +272,7 @@ class ReviewCommentCollector:
                 and end_line <= hunk.end_line
             )
         )
-        if len(hunks) != 1:
-            raise CommentCandidateRejectedError(
-                f"existing_code must quote only consecutive changed {submission.side}-side "  # type: ignore[attr-defined]
-                "lines without diff markers; do not include unchanged context lines"
-            )
+        changed_hunk_id = hunks[0].hunk_id if len(hunks) == 1 else None
         excerpt_hash, excerpt_truncated = await self.tools.excerpt_identity(
             submission.path,  # type: ignore[attr-defined]
             start_line,
@@ -287,7 +283,6 @@ class ReviewCommentCollector:
             raise CommentCandidateRejectedError(
                 "comment location cannot be resolved to a complete frozen excerpt"
             )
-        hunk = hunks[0]
         self._findings.append(
             {
                 "reviewer_id": self.reviewer_id,
@@ -308,7 +303,7 @@ class ReviewCommentCollector:
                     "excerpt_hash": excerpt_hash,
                     "is_deleted": self._is_deleted_path(submission.path),  # type: ignore[attr-defined]
                 },
-                "changed_hunk_id": hunk.hunk_id,
+                "changed_hunk_id": changed_hunk_id,
                 "change_origin": "introduced",
                 "evidence": (
                     {

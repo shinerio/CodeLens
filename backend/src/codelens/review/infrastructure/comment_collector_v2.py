@@ -111,7 +111,7 @@ class ReviewCommentCollectorV2:
             submission.existing_code,
             submission.side,
         )
-        hunks = tuple(
+        matching_hunks = tuple(
             hunk
             for hunk in self.snapshot.change_index.hunks
             if hunk.path == submission.path
@@ -119,11 +119,7 @@ class ReviewCommentCollectorV2:
             and start_line >= hunk.start_line
             and end_line <= hunk.end_line
         )
-        if len(hunks) != 1:
-            raise CommentCandidateRejectedError(
-                f"existing_code must quote only consecutive changed {submission.side}-side "
-                "lines without diff markers; do not include unchanged context lines"
-            )
+        changed_hunk_id = matching_hunks[0].hunk_id if len(matching_hunks) == 1 else None
         excerpt_hash, is_truncated = await self.tools.excerpt_identity(
             submission.path,
             start_line,
@@ -198,7 +194,7 @@ class ReviewCommentCollectorV2:
                 evidence_strength=EvidenceStrength(submission.evidence_strength),
                 primary_location=location,
                 related_locations=(),
-                changed_hunk_id=hunks[0].hunk_id,
+                changed_hunk_id=changed_hunk_id,
                 existing_code_hash=existing_code_hash,
                 evidence_hashes=evidence_hashes,
                 content=submission.content,

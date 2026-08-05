@@ -906,7 +906,14 @@ async def test_comment_collector_marks_a_deleted_file_location(tmp_path: Path) -
     }
 
 
-async def test_comment_collector_rejects_location_outside_changed_hunk(tmp_path: Path) -> None:
+async def test_comment_collector_accepts_location_outside_changed_hunk(tmp_path: Path) -> None:
+    """Comments quoting unchanged context lines within a changed file are accepted.
+
+    The hunk containment check was relaxed: as long as the file is in the
+    review scope and existing_code resolves to a line range, the comment is
+    accepted with changed_hunk_id=None when the range falls outside a single
+    --unified=0 hunk.
+    """
     snapshot = await _snapshot(tmp_path)
     collector = ReviewCommentCollector(
         snapshot=snapshot,
@@ -914,21 +921,23 @@ async def test_comment_collector_rejects_location_outside_changed_hunk(tmp_path:
         confidence_floor=0.7,
         tools=FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20),
     )
-    with pytest.raises(ValueError, match="only consecutive changed new-side lines"):
-        await collector.submit(
-            ReviewCommentSubmission(
-                path="src/service.py",
-                side="new",
-                existing_code="def original() -> str:\n",
-                title="Unchanged location",
-                content="This is outside the changed hunk.",
-                recommendation="Do not report this location.",
-                category="correctness",
-                severity="medium",
-                confidence=0.9,
-            )
+    result = await collector.submit(
+        ReviewCommentSubmission(
+            path="src/service.py",
+            side="new",
+            existing_code="def original() -> str:\n",
+            title="Unchanged location",
+            content="This is outside the changed hunk.",
+            recommendation="Do not report this location.",
+            category="correctness",
+            severity="medium",
+            confidence=0.9,
         )
-    assert collector.finding_batch() == {"schema_version": "1", "findings": ()}
+    )
+    assert json.loads(result)["accepted"] is True
+    batch = collector.finding_batch()
+    assert len(batch["findings"]) == 1
+    assert batch["findings"][0]["changed_hunk_id"] is None
 
 
 async def test_comment_collector_accepts_batch_and_completion_declaration(tmp_path: Path) -> None:
