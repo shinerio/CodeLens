@@ -133,14 +133,18 @@ async def list_reviews(
 ) -> list[ReviewResponse]:
     """Return persistent visible Review workspaces in newest-first order."""
 
-    return list(
-        await asyncio.gather(
-            *(
-                _review_response(record, components)
-                for record in await components.list_reviews.handle()
+    results = []
+    for record in await components.list_reviews.handle():
+        try:
+            response = await _review_response(record, components)
+            results.append(response)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Failed to serialize review %s, skipping: %s",
+                record.task_id,
+                exc,
             )
-        )
-    )
+    return results
 
 
 @router.get("/{task_id}", response_model=ReviewResponse)

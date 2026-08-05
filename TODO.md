@@ -3,6 +3,8 @@
 - 支持多个agent并发，每个agent单独从一个角度进行代码review，然后汇总所有review意见，为这些agent生成初始化提示词，并和正确性agent一样，支持修改和重置。另外新增一个通用agent，会从所有角度进行代码review，默认选中这个agent。
 - 上下文过长时，需要压缩。将工具调用和审查对话压缩为：已确认问题、工具结论、已完成任务、待办任务、当前关注点
 - 多工具review结果去重
+- repository_root优化
+- 插件支持没触发trigger的情况下，使能report，report时填写pr或mr信息即可。
 
 ## 后续功能
 
