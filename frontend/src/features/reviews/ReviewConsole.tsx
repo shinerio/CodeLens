@@ -28,6 +28,11 @@ const DEFAULT_VISIBILITY: ConsoleVisibility = {
   rawResponses: false,
 };
 
+/** Initial number of events rendered from each end of the timeline. */
+const INITIAL_VIEW = 10;
+/** Additional events loaded per "load more" click. */
+const LOAD_STEP = 10;
+
 type StageSelection = "all" | ReviewPlanNodeRole;
 
 const STAGE_OPTIONS: ReadonlyArray<{
@@ -57,7 +62,8 @@ export function ReviewConsole({
   const [visibility, setVisibility] = useState<ConsoleVisibility>(DEFAULT_VISIBILITY);
   const [selectedStage, setSelectedStage] = useState<StageSelection>("all");
   const [selectedReviewer, setSelectedReviewer] = useState("all");
-  const [visibleLimit, setVisibleLimit] = useState(100);
+  const [headCount, setHeadCount] = useState(INITIAL_VIEW);
+  const [tailCount, setTailCount] = useState(INITIAL_VIEW);
   const nodes = plan?.nodes ?? [];
   const reviewerReferences = Array.from(new Set([
     ...nodes
@@ -104,16 +110,19 @@ export function ReviewConsole({
       : t(STAGE_OPTIONS.find((stage) => stage.id === selectedStage)?.labelKey ?? "logs.allStages");
   const completedMessages = useMemo(() => completedMessageKeys(entries), [entries]);
   const filtered = messages.filter((entry) =>
-    (isToolEntry(entry) || isVisible(entry, visibility)) &&
+    (isToolEntry(entry) ? visibility.tools : isVisible(entry, visibility)) &&
     entry.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()) &&
     !(entry.kind === "model_output_delta" && !entry.content.trim()),
   );
-  const visibleCount = filtered.filter((entry) => !isToolEntry(entry) || visibility.tools).length;
   const parseFailed = messages.some((e) => e.kind === "model_raw_output" && e.metadata?.parse_failed === "true");
-  const visibleEntries = filtered.slice(0, visibleLimit);
-  const hasMore = filtered.length > visibleLimit;
+  const totalCount = filtered.length;
+  const showAll = headCount + tailCount >= totalCount;
+  const headEntries = showAll ? filtered : filtered.slice(0, headCount);
+  const tailEntries = showAll ? [] : filtered.slice(totalCount - tailCount);
+  const hiddenCount = showAll ? 0 : totalCount - headCount - tailCount;
+  const hasGap = !showAll && hiddenCount > 0;
   // Reset pagination when filters change so users see the most relevant entries first.
-  useEffect(() => { setVisibleLimit(100); }, [query, selectedStage, selectedReviewer, visibility]);
+  useEffect(() => { setHeadCount(INITIAL_VIEW); setTailCount(INITIAL_VIEW); }, [query, selectedStage, selectedReviewer, visibility]);
 
   function toggle(messageKey: string) {
     setCollapsed((current) => {
@@ -121,6 +130,25 @@ export function ReviewConsole({
       if (next.has(messageKey)) next.delete(messageKey); else next.add(messageKey);
       return next;
     });
+  }
+
+  function renderEntry(entry: ConsoleMessage) {
+    const isCollapsed = collapsed.has(entry.messageKey);
+    const isTool = isToolEntry(entry);
+    const isReasoning = entry.kind === "model_reasoning_delta";
+    const isModel = isReasoning || entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_completed" || entry.kind === "model_raw_output";
+    const isFinalizedStream = isDelta(entry)
+      && entry.metadata.message_id !== undefined
+      && completedMessages.has(entry.metadata.message_id);
+    return <li className={`review-console__message review-console__message--${isTool ? "tool" : isModel ? "model" : "system"}`} key={entry.messageKey}>
+      <button className="review-console__message-head" type="button" onClick={() => toggle(entry.messageKey)} aria-expanded={!isCollapsed}>
+        {isCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
+        {isTool ? <Wrench aria-hidden="true" /> : isReasoning ? <Brain aria-hidden="true" /> : <span className="review-console__avatar">{isModel ? "AI" : "SYS"}</span>}
+        <span>{labelFor(entry)}</span><time dateTime={entry.created_at}>#{entry.sequence}</time>
+      </button>
+      {!isCollapsed ? <ConsoleContent entry={entry} locale={locale} isFinalizedStream={isFinalizedStream} parseFailed={parseFailed} /> : null}
+      {entry.redacted ? <small>Credential redacted</small> : null}
+    </li>;
   }
 
   return <section className="review-console" aria-label="Review execution console">
@@ -200,32 +228,20 @@ export function ReviewConsole({
       <button type="button" onClick={() => setCollapsed(new Set())}>Expand all</button>
     </div>
     <ol className="review-console__messages">
-      {visibleEntries.map((entry) => {
-        const isCollapsed = collapsed.has(entry.messageKey);
-        const isTool = isToolEntry(entry);
-        const isReasoning = entry.kind === "model_reasoning_delta";
-        const isModel = isReasoning || entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_completed" || entry.kind === "model_raw_output";
-        const isFinalizedStream = isDelta(entry)
-          && entry.metadata.message_id !== undefined
-          && completedMessages.has(entry.metadata.message_id);
-        return <li className={`review-console__message review-console__message--${isTool ? "tool" : isModel ? "model" : "system"}`} hidden={isTool && !visibility.tools} key={entry.messageKey}>
-          <button className="review-console__message-head" type="button" onClick={() => toggle(entry.messageKey)} aria-expanded={!isCollapsed}>
-            {isCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
-            {isTool ? <Wrench aria-hidden="true" /> : isReasoning ? <Brain aria-hidden="true" /> : <span className="review-console__avatar">{isModel ? "AI" : "SYS"}</span>}
-            <span>{labelFor(entry)}</span><time dateTime={entry.created_at}>#{entry.sequence}</time>
+      {headEntries.map(renderEntry)}
+      {hasGap ? (
+        <li className="review-console__load-more review-console__load-more--gap">
+          <button type="button" onClick={() => setHeadCount((count) => count + LOAD_STEP)}>
+            {t("logs.loadMoreFromStart")}
           </button>
-          {!isCollapsed ? <ConsoleContent entry={entry} locale={locale} isFinalizedStream={isFinalizedStream} parseFailed={parseFailed} /> : null}
-          {entry.redacted ? <small>Credential redacted</small> : null}
-        </li>;
-      })}
-      {hasMore ? (
-        <li className="review-console__load-more">
-          <button type="button" onClick={() => setVisibleLimit((limit) => limit + 100)}>
-            {t("logs.showMore", { shown: String(visibleEntries.length), total: String(filtered.length) })}
+          <span>{t("logs.hiddenEvents", { count: String(hiddenCount) })}</span>
+          <button type="button" onClick={() => setTailCount((count) => count + LOAD_STEP)}>
+            {t("logs.loadMoreFromEnd")}
           </button>
         </li>
       ) : null}
-      {visibleCount === 0 ? <li className="event-log__empty">No matching execution output.</li> : null}
+      {tailEntries.map(renderEntry)}
+      {totalCount === 0 ? <li className="event-log__empty">No matching execution output.</li> : null}
     </ol>
   </section>;
 }

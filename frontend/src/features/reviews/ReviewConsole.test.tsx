@@ -145,13 +145,13 @@ it("hides tool calls and results again when the Tools filter is unchecked", () =
 
   const consoleView = within(container);
   const tools = consoleView.getByRole("checkbox", { name: "Tools" });
-  expect(consoleView.getByText("get_diff").closest("li")).not.toBeVisible();
+  expect(consoleView.queryByText("get_diff")).not.toBeInTheDocument();
   fireEvent.click(tools);
   expect(consoleView.getByText("get_diff")).toBeInTheDocument();
   expect(consoleView.getByText("diff output")).toBeInTheDocument();
   fireEvent.click(tools);
-  expect(consoleView.getByText("get_diff").closest("li")).not.toBeVisible();
-  expect(consoleView.getByText("diff output").closest("li")).not.toBeVisible();
+  expect(consoleView.queryByText("get_diff")).not.toBeInTheDocument();
+  expect(consoleView.queryByText("diff output")).not.toBeInTheDocument();
 
   rerender(
     <ReviewConsole
@@ -187,9 +187,9 @@ it("hides tool calls and results again when the Tools filter is unchecked", () =
     />,
   );
 
-  expect(consoleView.getByText("get_diff").closest("li")).not.toBeVisible();
-  expect(consoleView.getByText("diff output").closest("li")).not.toBeVisible();
-  expect(consoleView.getByText("late tool output").closest("li")).not.toBeVisible();
+  expect(consoleView.queryByText("get_diff")).not.toBeInTheDocument();
+  expect(consoleView.queryByText("diff output")).not.toBeInTheDocument();
+  expect(consoleView.queryByText("late tool output")).not.toBeInTheDocument();
 });
 
 it("hides successful provider responses by default without calling them parsing failures", () => {
@@ -472,4 +472,53 @@ it("coalesces interleaved streaming deltas independently for each reviewer", () 
   expect(screen.getByText("Correctness complete")).toBeInTheDocument();
   expect(screen.getAllByText("AI output")).toHaveLength(2);
   expect(screen.getByText("2 of 2 events")).toBeInTheDocument();
+});
+
+it("shows first 10 and last 10 events with a load-more gap in between", () => {
+  const entries = Array.from({ length: 25 }, (_, i) => ({
+    sequence: i + 1,
+    kind: "model_output_delta" as const,
+    content: `Event ${i + 1}`,
+    created_at: `2026-08-05T00:00:${String(i).padStart(2, "0")}Z`,
+    redacted: false,
+    truncated: false,
+    metadata: { message_id: `message-${i + 1}` },
+  }));
+
+  render(<ReviewConsole entries={entries} />);
+
+  expect(screen.getByText("Event 1")).toBeInTheDocument();
+  expect(screen.getByText("Event 10")).toBeInTheDocument();
+  expect(screen.queryByText("Event 11")).not.toBeInTheDocument();
+  expect(screen.queryByText("Event 15")).not.toBeInTheDocument();
+  expect(screen.getByText("Event 16")).toBeInTheDocument();
+  expect(screen.getByText("Event 25")).toBeInTheDocument();
+  expect(screen.getByText("5 events hidden")).toBeInTheDocument();
+});
+
+it("loads more events from start and end independently", () => {
+  const entries = Array.from({ length: 50 }, (_, i) => ({
+    sequence: i + 1,
+    kind: "model_output_delta" as const,
+    content: `Event ${i + 1}`,
+    created_at: `2026-08-05T00:00:${String(i).padStart(2, "0")}Z`,
+    redacted: false,
+    truncated: false,
+    metadata: { message_id: `message-${i + 1}` },
+  }));
+
+  render(<ReviewConsole entries={entries} />);
+
+  expect(screen.getByText("Event 10")).toBeInTheDocument();
+  expect(screen.queryByText("Event 11")).not.toBeInTheDocument();
+  expect(screen.queryByText("Event 40")).not.toBeInTheDocument();
+  expect(screen.getByText("Event 41")).toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /Load earlier/ }));
+  expect(screen.getByText("Event 20")).toBeInTheDocument();
+  expect(screen.queryByText("Event 21")).not.toBeInTheDocument();
+
+  fireEvent.click(screen.getByRole("button", { name: /Load later/ }));
+  expect(screen.getByText("Event 31")).toBeInTheDocument();
+  expect(screen.queryByText("Event 21")).not.toBeInTheDocument();
 });
