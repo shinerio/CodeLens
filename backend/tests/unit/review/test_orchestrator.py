@@ -559,6 +559,10 @@ async def test_candidate_validation_warnings_complete_the_review_and_reach_trans
         "skipped_count": "2",
         "duplicate_count": "1",
         "invalid_count": "1",
+        "skipped_reasons": (
+            "[duplicate] candidate#1: Finding duplicates an earlier candidate; "
+            "[invalid] candidate#2: Finding references an unknown changed hunk"
+        ),
     }
     assert workflow.status == "completed"
     assert completion.calls == 1

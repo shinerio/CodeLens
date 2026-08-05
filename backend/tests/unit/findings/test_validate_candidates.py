@@ -5,7 +5,6 @@ import pytest
 
 from codelens.findings.application.validate_candidates import (
     CandidateBatchCodec,
-    CandidateValidationError,
     CandidateValidator,
 )
 from codelens.findings.domain.candidates import (
@@ -110,7 +109,7 @@ async def test_candidate_validator_accepts_only_matching_snapshot_and_reviewer()
         ({"reviewer_reference": "performance:v1"}, "reviewer"),
     ),
 )
-async def test_candidate_validator_rejects_invalid_location_evidence_or_identity(
+async def test_candidate_validator_skips_invalid_candidate_and_records_warning(
     mutation: dict[str, object], message: str
 ) -> None:
     validator = CandidateValidator(
@@ -129,5 +128,71 @@ async def test_candidate_validator_rejects_invalid_location_evidence_or_identity
         **mutation,
     )
 
-    with pytest.raises(CandidateValidationError, match=message):
-        await validator.validate(CandidateFindingBatch((value,)))
+    result = await validator.validate(CandidateFindingBatch((value,)))
+
+    assert len(result.candidates) == 0
+    assert len(validator.warnings) == 1
+    assert validator.warnings[0].reason_code == "invalid"
+    assert message in validator.warnings[0].message
+
+
+async def test_candidate_validator_best_effort_keeps_valid_and_skips_invalid() -> None:
+    """A batch with mixed valid/invalid candidates retains only valid ones."""
+    validator = CandidateValidator(
+        task_id="review-1",
+        run_id="run-1",
+        snapshot=_snapshot(),
+        agent=builtin_agent_catalog()["security:v1"],
+    )
+    valid = candidate(
+        "candidate_" + "c" * 64,
+        reviewer="security:v1",
+        path="src/webhook.py",
+        line=5,
+    )
+    invalid = replace(
+        candidate(
+            "candidate_" + "d" * 64,
+            reviewer="security:v1",
+            path="src/webhook.py",
+            line=5,
+        ),
+        evidence_hashes=("z" * 64,),
+    )
+
+    result = await validator.validate(CandidateFindingBatch((valid, invalid)))
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].candidate_id == valid.candidate_id
+    assert len(validator.warnings) == 1
+    assert validator.warnings[0].reason_code == "invalid"
+    assert "evidence" in validator.warnings[0].message
+
+
+async def test_candidate_validator_deduplicates_by_fingerprint() -> None:
+    """Candidates with the same fingerprint are deduplicated with a warning."""
+    validator = CandidateValidator(
+        task_id="review-1",
+        run_id="run-1",
+        snapshot=_snapshot(),
+        agent=builtin_agent_catalog()["security:v1"],
+    )
+    first = candidate(
+        "candidate_" + "c" * 64,
+        reviewer="security:v1",
+        path="src/webhook.py",
+        line=5,
+    )
+    second = candidate(
+        "candidate_" + "d" * 64,
+        reviewer="security:v1",
+        path="src/webhook.py",
+        line=5,
+    )
+
+    result = await validator.validate(CandidateFindingBatch((first, second)))
+
+    assert len(result.candidates) == 1
+    assert result.candidates[0].candidate_id == first.candidate_id
+    assert len(validator.warnings) == 1
+    assert validator.warnings[0].reason_code == "duplicate"

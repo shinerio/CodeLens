@@ -101,24 +101,51 @@ class CandidateValidator:
         self._agent = agent
         self._excerpt_reader = excerpt_reader
         self._codec = codec or CandidateBatchCodec()
+        self._warnings: tuple[FindingValidationWarning, ...] = ()
 
     @property
     def warnings(self) -> tuple[FindingValidationWarning, ...]:
-        """Candidate v2 validation is fail-closed and emits no partial warnings."""
+        """Return bounded diagnostics for candidates skipped by the latest validation."""
 
-        return ()
+        return self._warnings
 
     async def validate(
         self, batch: bytes | CandidateFindingBatch
     ) -> CandidateFindingBatch:
-        """Fail closed if any Candidate identity, dimension, or evidence is invalid."""
+        """Best-effort validation: skip invalid candidates, keep valid ones.
+
+        Schema-level errors (bad batch shape/version) still abort the entire
+        batch. Individual candidate errors (bad identity, location, evidence)
+        are recorded as warnings and the candidate is skipped.
+        """
 
         decoded = self._codec.decode(batch) if isinstance(batch, bytes) else batch
         if decoded.schema_version != "2":
             raise CandidateValidationError("Candidate schema version is invalid")
-        for candidate in decoded.candidates:
-            await self._validate_candidate(candidate)
-        return decoded
+        valid: list[CandidateFinding] = []
+        warnings: list[FindingValidationWarning] = []
+        seen_fingerprints: set[str] = set()
+        for index, candidate in enumerate(decoded.candidates):
+            try:
+                await self._validate_candidate(candidate)
+            except (CandidateValidationError, ValueError) as error:
+                warnings.append(
+                    FindingValidationWarning(index, "invalid", str(error))
+                )
+                continue
+            if candidate.fingerprint in seen_fingerprints:
+                warnings.append(
+                    FindingValidationWarning(
+                        index,
+                        "duplicate",
+                        "Candidate duplicates an earlier validated candidate",
+                    )
+                )
+                continue
+            seen_fingerprints.add(candidate.fingerprint)
+            valid.append(candidate)
+        self._warnings = tuple(warnings)
+        return CandidateFindingBatch(tuple(valid))
 
     async def _validate_candidate(self, candidate: CandidateFinding) -> None:
         if (

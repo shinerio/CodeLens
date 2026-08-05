@@ -432,6 +432,7 @@ class ReviewOrchestrator:
                 {
                     "agent": node.agent_reference,
                     "error_type": type(error).__name__,
+                    "error_message": str(error),
                 },
             )
 
@@ -613,6 +614,10 @@ class ReviewOrchestrator:
                 warning.reason_code == "duplicate" for warning in validator.warnings
             )
             invalid_count = len(validator.warnings) - duplicate_count
+            skipped_reasons = "; ".join(
+                f"[{warning.reason_code}] candidate#{warning.candidate_index}: {warning.message}"
+                for warning in validator.warnings
+            )
             await self._record(
                 task_id,
                 "lifecycle",
@@ -627,6 +632,7 @@ class ReviewOrchestrator:
                     "skipped_count": str(len(validator.warnings)),
                     "duplicate_count": str(duplicate_count),
                     "invalid_count": str(invalid_count),
+                    "skipped_reasons": skipped_reasons,
                 },
             )
         if isinstance(validated, ValidatedVerdictBatch):
