@@ -53,4 +53,3 @@ class CandidateFindingBatch:
         identities = tuple(candidate.candidate_id for candidate in self.candidates)
         if len(identities) != len(set(identities)):
             raise ValueError("CandidateFindingBatch contains duplicate candidate IDs")
-

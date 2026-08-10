@@ -13,6 +13,7 @@ from codelens.review.domain.review_strategy import (
 )
 from codelens.shared.domain.errors import DomainError
 from codelens.workspace.domain.models import ReviewScope, ReviewTarget
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
 
 class InvalidReviewStateError(DomainError):
@@ -90,11 +91,13 @@ class ReviewTask:
     scope: ReviewScope
     target: ReviewTarget
     repository_path: Path
-    target_paths: tuple[str, ...]
+    candidate_paths: tuple[str, ...]
     selected_agent_versions: tuple[str, ...]
     review_profile: ReviewProfileSnapshot
     planning_context_json: str
     planning_context_hash: str
+    file_exclusion_policy_json: str
+    file_exclusion_policy_hash: str
     prompt_locale: str
     created_at: datetime
     trigger_source: Literal["manual", "plugin"] = "manual"
@@ -121,7 +124,7 @@ class ReviewTask:
         scope: ReviewScope,
         target: ReviewTarget,
         repository_path: Path,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
         selected_agent_versions: tuple[str, ...],
         review_profile: ReviewProfileSnapshot | None = None,
         planning_context: Mapping[str, object] | None = None,
@@ -133,23 +136,22 @@ class ReviewTask:
         overlay_artifact_ref: str | None = None,
         prompt_locale: str = "en",
         external_context: dict | None = None,
+        file_exclusion_policy: ReviewFileExclusionPolicy | None = None,
     ) -> "ReviewTask":
         """Create a task with a frozen strategy and an unplanned Adaptive actual team."""
 
         if review_profile is None:
-            review_profile = ReviewProfileSnapshot(
-                FixedReviewerSelection(selected_agent_versions)
-            )
+            review_profile = ReviewProfileSnapshot(FixedReviewerSelection(selected_agent_versions))
         initial_agents = cls._initial_agents(review_profile)
         if selected_agent_versions != initial_agents:
             selected_agent_versions = initial_agents
         if created_at.tzinfo is None:
             raise ValueError("ReviewTask timestamps must be timezone-aware")
-        if not target_paths:
-            raise ValueError("a ReviewTask requires at least one frozen target path")
+        if not candidate_paths:
+            raise ValueError("a ReviewTask requires at least one candidate path")
         context = planning_context or {
-            "schema_version": 1,
-            "catalog_snapshot": {"version": "legacy", "reviewers": list(initial_agents)},
+            "schema_version": 2,
+            "catalog_snapshot": {"version": "2", "reviewers": list(initial_agents)},
             "capability_readiness": {},
             "planner_execution_spec": None,
             "eligible_reviewer_execution_specs": [],
@@ -158,6 +160,7 @@ class ReviewTask:
         context_json = json.dumps(
             context, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
+        policy = file_exclusion_policy or ReviewFileExclusionPolicy()
         return cls(
             task_id=task_id,
             repository_id=repository_id,
@@ -166,11 +169,13 @@ class ReviewTask:
             scope=scope,
             target=target,
             repository_path=repository_path.expanduser().resolve(),
-            target_paths=target_paths,
+            candidate_paths=candidate_paths,
             selected_agent_versions=selected_agent_versions,
             review_profile=review_profile,
             planning_context_json=context_json,
             planning_context_hash=hashlib.sha256(context_json.encode()).hexdigest(),
+            file_exclusion_policy_json=policy.canonical_json(),
+            file_exclusion_policy_hash=policy.policy_hash,
             trigger_source=trigger_source,
             supersede_policy=supersede_policy,
             idempotency_key=idempotency_key,

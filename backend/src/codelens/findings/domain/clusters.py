@@ -41,6 +41,4 @@ class FindingCluster:
         if len(self.candidate_ids) != len(set(self.candidate_ids)):
             raise ValueError("Finding cluster contains duplicate candidates")
         if self.canonical_candidate_id not in self.candidate_ids:
-            raise ValueError(
-                "Finding cluster canonical candidate must be a member of the cluster"
-            )
+            raise ValueError("Finding cluster canonical candidate must be a member of the cluster")

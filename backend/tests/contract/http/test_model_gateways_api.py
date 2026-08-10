@@ -97,9 +97,7 @@ def test_multiple_model_gateways_are_redacted_switchable_and_persistent(
     assert len(persisted.json()["gateways"]) == 2
     assert deleted.status_code == 200, deleted.text
     assert deleted.json()["active_gateway_id"] == primary_id
-    assert [gateway["name"] for gateway in deleted.json()["gateways"]] == [
-        "Primary renamed"
-    ]
+    assert [gateway["name"] for gateway in deleted.json()["gateways"]] == ["Primary renamed"]
 
 
 def test_model_gateway_update_rejects_unknown_gateway_without_leaking_key(
@@ -175,9 +173,7 @@ def _free_tcp_port() -> int:
 
 
 def test_gateway_connectivity_succeeds_for_reachable_host(tmp_path: Path) -> None:
-    async def _noop_handler(
-        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _noop_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         writer.close()
 
     async def _serve() -> tuple[asyncio.base_events.Server, int]:

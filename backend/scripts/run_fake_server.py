@@ -64,7 +64,6 @@ async def _build_app(settings: Settings) -> FastAPI:
         settings,
         runtime=FixtureRuntime(
             load_simple_branch_comments(),
-            repeat_first_comment=True,
         ),
     )
     components = backend.components
@@ -83,7 +82,7 @@ async def _build_app(settings: Settings) -> FastAPI:
                 expected_revision=default_profile.revision,
                 name=default_profile.name,
                 is_default=True,
-                reviewer_selection=FixedReviewerSelection(("correctness:v1",)),
+                reviewer_selection=FixedReviewerSelection(("correctness:v2",)),
             )
         scheduler_task = asyncio.create_task(backend.scheduler.run(stop_event))
         try:

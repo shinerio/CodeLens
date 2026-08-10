@@ -18,7 +18,7 @@ from codelens.plugin.domain.ports import (
     ReviewCreatorPort,
     TriggerSinkPort,
 )
-from codelens.plugin.domain.versioning import PluginApiVersion, ensure_plugin_compatible
+from codelens.plugin.domain.versioning import ensure_plugin_compatible
 from codelens.plugin.trigger.local_hook.local_hook_trigger import (
     LocalHookTriggerAdapter,
 )
@@ -125,9 +125,7 @@ class CompositePluginLoader:
 
         report_cap = manifest.report
         if report_cap is None:
-            raise PluginLoadError(
-                f"plugin {manifest.plugin_id} does not declare report capability"
-            )
+            raise PluginLoadError(f"plugin {manifest.plugin_id} does not declare report capability")
 
         instance = self._load_external_report(report_cap.entry_point, install_path, plugin_id)
         self._report_instances[plugin_id] = instance
@@ -158,25 +156,19 @@ class CompositePluginLoader:
             )
         module_name, class_name = entry_point.split(":", 1)
         if not module_name or not class_name:
-            raise PluginLoadError(
-                f"plugin {plugin_id} entry_point has empty module or class"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} entry_point has empty module or class")
 
         module_file = install_path / module_name
         if not module_file.exists() and not module_file.with_suffix(".py").exists():
             resolved = module_file if module_file.exists() else module_file.with_suffix(".py")
-            raise PluginLoadError(
-                f"plugin {plugin_id} module file not found: {resolved}"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} module file not found: {resolved}")
         if not module_file.suffix:
             module_file = module_file.with_suffix(".py")
 
         cache_key = self._module_cache_key(plugin_id)
         spec = importlib.util.spec_from_file_location(cache_key, module_file)
         if spec is None or spec.loader is None:
-            raise PluginLoadError(
-                f"plugin {plugin_id} module spec could not be created"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} module spec could not be created")
         module = importlib.util.module_from_spec(spec)
         sys.modules[cache_key] = module
 
@@ -191,16 +183,12 @@ class CompositePluginLoader:
             exec(compile(source, str(module_file), "exec"), module.__dict__)
         except Exception as error:
             sys.modules.pop(cache_key, None)
-            raise PluginLoadError(
-                f"plugin {plugin_id} module failed to load: {error}"
-            ) from error
+            raise PluginLoadError(f"plugin {plugin_id} module failed to load: {error}") from error
 
         trigger_class = getattr(module, class_name, None)
         if trigger_class is None:
             sys.modules.pop(cache_key, None)
-            raise PluginLoadError(
-                f"plugin {plugin_id} class '{class_name}' not found in module"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} class '{class_name}' not found in module")
         try:
             instance = trigger_class(review_creator)
         except Exception as error:
@@ -211,9 +199,7 @@ class CompositePluginLoader:
 
         if not hasattr(instance, "trigger_id") or not hasattr(instance, "handle_event"):
             sys.modules.pop(cache_key, None)
-            raise PluginLoadError(
-                f"plugin {plugin_id} trigger does not implement TriggerSinkPort"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} trigger does not implement TriggerSinkPort")
         return instance
 
     def _load_external_report(
@@ -229,25 +215,19 @@ class CompositePluginLoader:
             )
         module_name, class_name = entry_point.split(":", 1)
         if not module_name or not class_name:
-            raise PluginLoadError(
-                f"plugin {plugin_id} entry_point has empty module or class"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} entry_point has empty module or class")
 
         module_file = install_path / module_name
         if not module_file.exists() and not module_file.with_suffix(".py").exists():
             resolved = module_file if module_file.exists() else module_file.with_suffix(".py")
-            raise PluginLoadError(
-                f"plugin {plugin_id} module file not found: {resolved}"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} module file not found: {resolved}")
         if not module_file.suffix:
             module_file = module_file.with_suffix(".py")
 
         cache_key = self._module_cache_key(plugin_id)
         spec = importlib.util.spec_from_file_location(cache_key, module_file)
         if spec is None or spec.loader is None:
-            raise PluginLoadError(
-                f"plugin {plugin_id} module spec could not be created"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} module spec could not be created")
         module = importlib.util.module_from_spec(spec)
         sys.modules[cache_key] = module
 
@@ -262,16 +242,12 @@ class CompositePluginLoader:
             exec(compile(source, str(module_file), "exec"), module.__dict__)
         except Exception as error:
             sys.modules.pop(cache_key, None)
-            raise PluginLoadError(
-                f"plugin {plugin_id} module failed to load: {error}"
-            ) from error
+            raise PluginLoadError(f"plugin {plugin_id} module failed to load: {error}") from error
 
         sink_class = getattr(module, class_name, None)
         if sink_class is None:
             sys.modules.pop(cache_key, None)
-            raise PluginLoadError(
-                f"plugin {plugin_id} class '{class_name}' not found in module"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} class '{class_name}' not found in module")
         try:
             sink = sink_class()
         except Exception as error:
@@ -282,9 +258,7 @@ class CompositePluginLoader:
 
         if not hasattr(sink, "sink_id") or not hasattr(sink, "export"):
             sys.modules.pop(cache_key, None)
-            raise PluginLoadError(
-                f"plugin {plugin_id} sink does not implement ReportSinkPort"
-            )
+            raise PluginLoadError(f"plugin {plugin_id} sink does not implement ReportSinkPort")
         return sink
 
     def _module_cache_key(self, plugin_id: str) -> str:
@@ -297,12 +271,11 @@ class CompositePluginLoader:
 
         try:
             plugin_version = Version(manifest.version)
-            if manifest.plugin_api_version is PluginApiVersion.V2:
-                if manifest.min_codelens_version is None or plugin_version.major < 2:
-                    raise PluginLoadError("plugin declares an invalid v2 compatibility range")
+            if manifest.min_codelens_version is None or plugin_version.major < 2:
+                raise PluginLoadError("plugin declares an invalid v2 compatibility range")
             ensure_plugin_compatible(
                 plugin_api_version=manifest.plugin_api_version,
-                minimum_codelens_version=Version(manifest.min_codelens_version or "0"),
+                minimum_codelens_version=Version(manifest.min_codelens_version),
                 current_codelens_version=Version(codelens.__version__),
             )
         except (InvalidVersion, ValueError) as error:

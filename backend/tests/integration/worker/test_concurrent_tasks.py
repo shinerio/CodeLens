@@ -5,11 +5,12 @@ from pathlib import Path
 
 from codelens.bootstrap.settings import Settings
 from codelens.bootstrap.unified import build_unified_backend
-from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
+from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import UnvalidatedAgentOutput
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.repositories import SqlReviewStore, SqlWorktreeRegistry
+from codelens.reviewer_catalog.domain.models import AgentRole
 from codelens.worker.scheduler import (
     ReviewScheduler,
     WorkerSemaphores,
@@ -46,15 +47,15 @@ class Singleton:
 
 
 def test_fair_share_keeps_one_global_agent_slot_for_another_task() -> None:
-    assert fair_per_review_agent_limit(
-        configured_limit=4, global_limit=4, max_active_reviews=2
-    ) == 3
-    assert fair_per_review_agent_limit(
-        configured_limit=4, global_limit=8, max_active_reviews=4
-    ) == 4
-    assert fair_per_review_agent_limit(
-        configured_limit=4, global_limit=4, max_active_reviews=1
-    ) == 4
+    assert (
+        fair_per_review_agent_limit(configured_limit=4, global_limit=4, max_active_reviews=2) == 3
+    )
+    assert (
+        fair_per_review_agent_limit(configured_limit=4, global_limit=8, max_active_reviews=4) == 4
+    )
+    assert (
+        fair_per_review_agent_limit(configured_limit=4, global_limit=4, max_active_reviews=1) == 4
+    )
 
 
 async def test_scheduler_runs_distinct_tasks_concurrently_and_releases_after_close() -> None:
@@ -153,11 +154,10 @@ class GatedRuntime:
         self.active = 0
         self.maximum = 0
         self.calls = 0
-        self._codec = AgentOutputCodec("1")
 
     async def invoke(
         self,
-        _agent: object,
+        execution_spec: FrozenAgentExecutionSpec,
         _payload: bytes,
         snapshot: ReviewSnapshot,
         _prompt_locale: str,
@@ -169,42 +169,13 @@ class GatedRuntime:
             self.entered.set()
         try:
             await self.release.wait()
-            hunk = snapshot.change_index.hunks[0]
-            payload = {
-                "schema_version": "1",
-                "findings": [
-                    {
-                        "reviewer_id": "correctness",
-                        "category": "correctness",
-                        "title": "Fixture change needs review",
-                        "severity": "high",
-                        "disposition": "blocking",
-                        "confidence": 0.9,
-                        "primary_location": {
-                            "path": hunk.path,
-                            "start_line": hunk.start_line,
-                            "end_line": hunk.end_line,
-                            "side": hunk.side,
-                            "excerpt_hash": hunk.excerpt_hash,
-                        },
-                        "changed_hunk_id": hunk.hunk_id,
-                        "change_origin": "introduced",
-                        "evidence": [
-                            {
-                                "kind": "excerpt",
-                                "description": "The fixture change is within this hunk.",
-                                "excerpt_hash": hunk.excerpt_hash,
-                            }
-                        ],
-                        "impact": "The changed behavior requires inspection.",
-                        "explanation": "This deterministic finding verifies durable output.",
-                        "recommendation": "Review the changed branch behavior.",
-                    }
-                ],
-            }
-            return UnvalidatedAgentOutput(
-                self._codec.encode(payload), (), "fake", 0, 0, ()
+            del snapshot
+            payload = (
+                b'{"decisions":[],"schema_version":"2"}'
+                if execution_spec.agent.role is AgentRole.VERIFIER
+                else b'{"candidates":[],"schema_version":"2"}'
             )
+            return UnvalidatedAgentOutput(payload, (), "fake", 0, 0, ())
         finally:
             self.active -= 1
 
@@ -252,10 +223,10 @@ async def test_two_refs_in_one_real_repository_review_in_distinct_worktrees(
                 repository_realpath_hash=metadata.repository_realpath_hash,
                 git_common_dir_hash=metadata.git_common_dir_hash,
                 repository_path=git_repository,
-                target_paths=(source_path,),
+                candidate_paths=(source_path,),
                 scope=BranchScope(base_ref="main", target_ref=branch),
                 target=ReviewTarget(base_oid, head_oid, None),
-                selected_agent_versions=("correctness:v1",),
+                selected_agent_versions=("correctness:v2",),
                 created_at=datetime.now(UTC),
             )
         )
@@ -284,11 +255,9 @@ async def test_two_refs_in_one_real_repository_review_in_distinct_worktrees(
                 break
             await asyncio.sleep(0.01)
         assert statuses == ["completed", "completed"]
-        for index, (_, source_path, _) in enumerate(heads, start=1):
+        for index in (1, 2):
             findings = await backend.components.review_store.list_findings(f"review-{index}")
-            assert len(findings) == 1
-            assert findings[0].title == "Fixture change needs review"
-            assert findings[0].primary_location.path == source_path
+            assert findings == ()
         for _attempt in range(100):
             if not await worktree_registry.list_all():
                 break

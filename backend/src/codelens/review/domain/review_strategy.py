@@ -2,7 +2,7 @@ import re
 from dataclasses import dataclass, field
 from typing import Literal
 
-_REFERENCE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]*:v[1-9][0-9]*$")
+_REFERENCE_PATTERN = re.compile(r"^[a-z][a-z0-9_.-]*:v2$")
 
 
 def _validate_references(references: tuple[str, ...]) -> None:
@@ -12,10 +12,8 @@ def _validate_references(references: tuple[str, ...]) -> None:
         raise ValueError("Fixed reviewer selection contains duplicate reviewers")
     if any(_REFERENCE_PATTERN.fullmatch(reference) is None for reference in references):
         raise ValueError("Fixed reviewer selection contains an invalid reference")
-    if "general:v1" in references and references != ("general:v1",):
+    if "general:v2" in references and references != ("general:v2",):
         raise ValueError("General reviewer must run alone")
-    if "correctness:v1" in references and references != ("correctness:v1",):
-        raise ValueError("correctness:v1 is legacy single-reviewer only")
 
 
 @dataclass(frozen=True)
@@ -52,4 +50,3 @@ class ReviewProfileSnapshot:
             raise ValueError("source profile identity is incomplete")
         if self.source_profile_revision is not None and self.source_profile_revision < 1:
             raise ValueError("source profile revision must be positive")
-

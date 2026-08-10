@@ -133,7 +133,7 @@ class CreateTriggeredReviewHandler:
                 scope=command.scope,
                 target=captured.target,
                 repository_path=command.repository.path,
-                target_paths=plan.target_paths,
+                candidate_paths=plan.candidate_paths,
                 selected_agent_versions=selection.reviewer_versions
                 if isinstance(selection, FixedReviewerSelection)
                 else (),

@@ -12,7 +12,7 @@ class _StrictModel(BaseModel):
 
 
 class PlannerSelectionDto(_StrictModel):
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     reviewer_references: Annotated[list[str], Field(min_length=1, max_length=32)]
 
 
@@ -52,9 +52,7 @@ class PlannerOutputCodec:
             raise ValueError(f"Planner selected unknown Reviewers: {sorted(unknown)}")
         unavailable = set(references) & self._unavailable
         if unavailable:
-            raise ValueError(
-                f"Planner selected unavailable Reviewers: {sorted(unavailable)}"
-            )
+            raise ValueError(f"Planner selected unavailable Reviewers: {sorted(unavailable)}")
         return references
 
     def decode_final(self, accumulated: frozenset[str]) -> PlannerSelection:
@@ -69,12 +67,12 @@ class PlannerOutputCodec:
                 parts.append(f"extra: {sorted(extra)}")
             raise ValueError(f"Planner selection incomplete: {', '.join(parts)}")
         return PlannerSelection(
-            schema_version="1",
+            schema_version="2",
             reviewer_references=tuple(sorted(accumulated)),
         )
 
     def decode(self, payload: object) -> PlannerSelection:
-        """Validate a complete one-shot selection (legacy single-call path)."""
+        """Validate a complete one-shot v2 selection."""
         value = self._parse_dto(payload)
         references = tuple(value.reviewer_references)
         if len(references) != len(set(references)):
@@ -84,7 +82,7 @@ class PlannerOutputCodec:
         if any(reference in self._unavailable for reference in references):
             raise ValueError("Planner selected an unavailable Reviewer")
         return PlannerSelection(
-            schema_version="1",
+            schema_version="2",
             reviewer_references=references,
         )
 

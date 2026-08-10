@@ -475,7 +475,8 @@
   color: var(--settings-accent);
 }
 
-.settings-field input {
+.settings-field input,
+.settings-field textarea {
   width: 100%;
   min-width: 0;
   padding: 12px 13px;
@@ -487,9 +488,22 @@
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
-.settings-field input:focus {
+.settings-field textarea {
+  resize: vertical;
+  overflow-wrap: anywhere;
+  font-family: "SFMono-Regular", Consolas, "Liberation Mono", monospace;
+  line-height: 1.45;
+}
+
+.settings-field input:focus,
+.settings-field textarea:focus {
   border-color: var(--settings-accent);
   box-shadow: 0 0 0 4px rgb(109 132 41 / 14%);
+}
+
+.settings-field--checkbox input {
+  width: auto;
+  margin-right: 8px;
 }
 
 .settings-field--secret input {

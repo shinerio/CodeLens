@@ -33,6 +33,7 @@ from codelens.workspace.domain.models import (
     SnapshotManifest,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
 def _resolved_spec(agent_reference: str) -> FrozenAgentExecutionSpec:
@@ -41,10 +42,10 @@ def _resolved_spec(agent_reference: str) -> FrozenAgentExecutionSpec:
     return FrozenAgentExecutionSpec.create(
         agent=agent,
         capability_profile=profile,
-        skill_policy=SkillPolicyReference("none", 1),
+        skill_policy=SkillPolicyReference("none", 2),
         prompt_content_hash="a" * 64,
         skills=(),
-        execution_limits=AgentExecutionLimits.legacy_default(),
+        execution_limits=AgentExecutionLimits.default(),
     )
 
 
@@ -69,14 +70,12 @@ def review_snapshot(tmp_path: Path) -> ReviewSnapshot:
         ReviewTarget("a" * 40, "b" * 40, None),
         RepositoryFingerprint("b" * 40, "d" * 64, "e" * 64),
         SnapshotManifest(
-            (path,),
-            (),
-            (),
+            ReviewFileScope.include_all((path,)),
             entries=(SnapshotEntry(path, "file", 0o644, len(source), source_hash, None, "target"),),
         ),
         ChangeIndex(
             (ChangedHunk("hunk-1", path, 1, 1, "new", source_hash),),
-            (ReviewFileChange(path, "modified"),),
+            (ReviewFileChange(path, "added"),),
         ),
     )
 
@@ -100,33 +99,31 @@ def _tool_names(
     return tuple(tool.name for tool in tools)
 
 
-def test_legacy_reviewer_assembles_comment_v1_only(
+def test_reviewer_assembles_only_canonical_v2_tools(
     runtime_context: RuntimeToolContext,
 ) -> None:
-    assert _tool_names("correctness:v1", runtime_context) == (
+    assert _tool_names("correctness:v2", runtime_context) == (
         "find_files",
         "grep",
         "read_file",
         "get_diff",
         "comment",
-        "review_file_done",
         "task_done",
     )
-    assert runtime_context.collector_contract_version == "1"
+    assert runtime_context.collector_contract_version == "2"
     assert runtime_context.is_completed is False
-    assert runtime_context.final_output() == {"schema_version": "1", "findings": ()}
+    assert runtime_context.final_output() == CandidateFindingBatch(())
 
 
 def test_comment_v2_reviewer_preserves_order_and_selects_v2_collector(
     runtime_context: RuntimeToolContext,
 ) -> None:
-    assert _tool_names("security:v1", runtime_context) == (
+    assert _tool_names("security:v2", runtime_context) == (
         "find_files",
         "grep",
         "read_file",
         "get_diff",
         "comment",
-        "review_file_done",
         "task_done",
     )
     assert runtime_context.collector_contract_version == "2"
@@ -141,7 +138,7 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
     runtime_context: RuntimeToolContext,
 ) -> None:
     tools = CapabilityToolAssembler().assemble(
-        _resolved_spec("security:v1"),
+        _resolved_spec("security:v2"),
         runtime_context,
     )
 
@@ -160,8 +157,7 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
             payload,
         )
 
-    await invoke("read_file", {"path": "src/value.py", "version": "current"})
-    await invoke("review_file_done", {"reviewed_files": ["src/value.py"]})
+    await invoke("get_diff", {"path": "src/value.py"})
     await invoke("task_done", {"summary": "Reviewed the complete frozen scope."})
 
     assert runtime_context.is_completed is True
@@ -173,11 +169,11 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
     ("agent_reference", "expected"),
     (
         (
-            "review-planner:v1",
+            "review-planner:v2",
             ("find_files", "grep", "read_file", "get_diff", "submit_review_plan", "finalize_plan"),
         ),
         (
-            "review-verifier:v1",
+            "review-verifier:v2",
             ("read_file", "get_diff", "verdict", "merge", "finalize_verdicts"),
         ),
     ),
@@ -195,7 +191,7 @@ def test_internal_roles_receive_only_their_frozen_tool_matrix(
 def test_unknown_contract_version_fails_before_any_tool_is_returned(
     runtime_context: RuntimeToolContext,
 ) -> None:
-    spec = _resolved_spec("correctness:v1")
+    spec = _resolved_spec("correctness:v2")
     profile = replace(
         spec.capability_profile,
         builtin_tools=(ToolContractReference("comment", 99),),
@@ -211,18 +207,8 @@ def test_missing_internal_role_implementation_fails_closed(
 ) -> None:
     production_context = replace(runtime_context, role_output_tools=())
 
-    with pytest.raises(PermanentAgentOutputError, match="verdict:v1"):
+    with pytest.raises(PermanentAgentOutputError, match="verdict:v2"):
         CapabilityToolAssembler().assemble(
-            _resolved_spec("review-verifier:v1"),
+            _resolved_spec("review-verifier:v2"),
             production_context,
         )
-
-
-def test_legacy_comment_without_confidence_floor_fails_closed(
-    runtime_context: RuntimeToolContext,
-) -> None:
-    spec = _resolved_spec("correctness:v1")
-    invalid_spec = replace(spec, agent=replace(spec.agent, confidence_floor=None))
-
-    with pytest.raises(PermanentAgentOutputError, match="confidence floor"):
-        CapabilityToolAssembler().assemble(invalid_spec, runtime_context)

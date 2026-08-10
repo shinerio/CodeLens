@@ -31,7 +31,7 @@ def _specs(*references: str) -> dict[str, FrozenAgentExecutionSpec]:
             agent=catalog[reference],
             prompt_content_hash="a" * 64,
             facts=SkillActivationFacts.empty(),
-            execution_limits=AgentExecutionLimits.legacy_default(),
+            execution_limits=AgentExecutionLimits.default(),
         )
         for reference in references
     }
@@ -50,8 +50,8 @@ def _ready() -> dict[str, CapabilityReadiness]:
 
 
 def test_fixed_compiler_builds_host_dag_without_planner() -> None:
-    references = ("correctness:v2", "security:v1")
-    specs = _specs(*references, "review-verifier:v1")
+    references = ("correctness:v2", "security:v2")
+    specs = _specs(*references, "review-verifier:v2")
 
     plan = _compiler().compile(
         task_id=TASK_ID,
@@ -73,8 +73,8 @@ def test_fixed_compiler_builds_host_dag_without_planner() -> None:
 
 def test_adaptive_rejects_general_plus_specialists() -> None:
     selection = PlannerSelection(
-        schema_version="1",
-        reviewer_references=("general:v1", "security:v1"),
+        schema_version="2",
+        reviewer_references=("general:v2", "security:v2"),
     )
 
     with pytest.raises(InvalidReviewPlanError, match="not Planner eligible"):
@@ -83,9 +83,7 @@ def test_adaptive_rejects_general_plus_specialists() -> None:
             selection_mode="adaptive",
             reviewer_references=selection.reviewer_references,
             planner_selection=selection,
-            execution_specs=_specs(
-                "review-planner:v1", "general:v1", "security:v1"
-            ),
+            execution_specs=_specs("review-planner:v2", "general:v2", "security:v2"),
             readiness=_ready(),
         )
 
@@ -121,23 +119,17 @@ class _Planner:
 
 
 async def test_fixed_service_never_invokes_planner_and_persists_before_return() -> None:
-    planner = _Planner(
-        PlannerSelection("1", ("general:v1",))
-    )
+    planner = _Planner(PlannerSelection("2", ("general:v2",)))
     store = _PlanStore()
-    service = ReviewPlanningService(
-        compiler=_compiler(), planner=planner, plan_store=store
-    )
+    service = ReviewPlanningService(compiler=_compiler(), planner=planner, plan_store=store)
 
     plan = await service.plan(
         task_id=TASK_ID,
-        profile=ReviewProfileSnapshot(
-            FixedReviewerSelection(("security:v1",))
-        ),
-        execution_specs=_specs("security:v1"),
+        profile=ReviewProfileSnapshot(FixedReviewerSelection(("security:v2",))),
+        execution_specs=_specs("security:v2", "review-verifier:v2"),
         readiness=_ready(),
-        target_paths=("src/app.py",),
-        catalog_version="builtin-v1",
+        candidate_paths=("src/app.py",),
+        catalog_version="builtin-v2",
         capability_fingerprint="c" * 64,
     )
 
@@ -149,27 +141,23 @@ async def test_existing_plan_prevents_adaptive_planner_reinvocation() -> None:
     store = _PlanStore()
     first_planner = _Planner(
         PlannerSelection(
-            "1",
-            ("security:v1", "performance:v1"),
+            "2",
+            ("security:v2", "performance:v2"),
         )
     )
-    service = ReviewPlanningService(
-        compiler=_compiler(), planner=first_planner, plan_store=store
-    )
+    service = ReviewPlanningService(compiler=_compiler(), planner=first_planner, plan_store=store)
     inputs = dict(
         task_id=TASK_ID,
-        profile=ReviewProfileSnapshot(
-            AdaptiveReviewerSelection()
-        ),
+        profile=ReviewProfileSnapshot(AdaptiveReviewerSelection()),
         execution_specs=_specs(
-            "review-planner:v1",
-            "security:v1",
-            "performance:v1",
-            "review-verifier:v1",
+            "review-planner:v2",
+            "security:v2",
+            "performance:v2",
+            "review-verifier:v2",
         ),
         readiness=_ready(),
-        target_paths=("src/app.py",),
-        catalog_version="builtin-v1",
+        candidate_paths=("src/app.py",),
+        catalog_version="builtin-v2",
         capability_fingerprint="d" * 64,
     )
     first = await service.plan(**inputs)
@@ -181,8 +169,8 @@ async def test_existing_plan_prevents_adaptive_planner_reinvocation() -> None:
 
 def test_adaptive_compiler_accepts_two_or_more_specialists_only() -> None:
     specialist_selection = PlannerSelection(
-        "1",
-        ("security:v1", "performance:v1"),
+        "2",
+        ("security:v2", "performance:v2"),
     )
     specialists = _compiler().compile(
         task_id=TASK_ID,
@@ -190,52 +178,52 @@ def test_adaptive_compiler_accepts_two_or_more_specialists_only() -> None:
         reviewer_references=specialist_selection.reviewer_references,
         planner_selection=specialist_selection,
         execution_specs=_specs(
-            "review-planner:v1",
-            "security:v1",
-            "performance:v1",
-            "review-verifier:v1",
+            "review-planner:v2",
+            "security:v2",
+            "performance:v2",
+            "review-verifier:v2",
         ),
         readiness=_ready(),
     )
-    assert specialists.reviewer_references == ("performance:v1", "security:v1")
+    assert specialists.reviewer_references == ("performance:v2", "security:v2")
 
     one_specialist = PlannerSelection(
-        "1",
-        ("security:v1",),
+        "2",
+        ("security:v2",),
     )
     with pytest.raises(InvalidReviewPlanError, match="at least two"):
         _compiler().compile(
             task_id=TASK_ID,
             selection_mode="adaptive",
-            reviewer_references=("security:v1",),
+            reviewer_references=("security:v2",),
             planner_selection=one_specialist,
-            execution_specs=_specs("review-planner:v1", "security:v1"),
+            execution_specs=_specs("review-planner:v2", "security:v2"),
             readiness=_ready(),
         )
 
 
 def test_fixed_rejects_unavailable_reviewer_and_records_optional_degradation() -> None:
     readiness = _ready()
-    readiness["security:v1"] = CapabilityReadiness("unavailable", ("mcp-required",))
+    readiness["security:v2"] = CapabilityReadiness("unavailable", ("mcp-required",))
     with pytest.raises(InvalidReviewPlanError, match="unavailable"):
         _compiler().compile(
             task_id=TASK_ID,
             selection_mode="fixed",
-            reviewer_references=("security:v1",),
+            reviewer_references=("security:v2",),
             planner_selection=None,
-            execution_specs=_specs("security:v1"),
+            execution_specs=_specs("security:v2", "review-verifier:v2"),
             readiness=readiness,
         )
 
-    readiness["security:v1"] = CapabilityReadiness(
+    readiness["security:v2"] = CapabilityReadiness(
         "degraded", ("optional-mcp-unavailable", "optional-skill-unavailable")
     )
     plan = _compiler().compile(
         task_id=TASK_ID,
         selection_mode="fixed",
-        reviewer_references=("security:v1",),
+        reviewer_references=("security:v2",),
         planner_selection=None,
-        execution_specs=_specs("security:v1"),
+        execution_specs=_specs("security:v2", "review-verifier:v2"),
         readiness=readiness,
     )
     assert plan.capability_degradations[0].reason_codes == (
@@ -257,17 +245,15 @@ async def test_adaptive_planner_failure_has_no_host_fallback() -> None:
     with pytest.raises(RuntimeError, match="planner failed"):
         await service.plan(
             task_id=TASK_ID,
-            profile=ReviewProfileSnapshot(
-                AdaptiveReviewerSelection()
-            ),
+            profile=ReviewProfileSnapshot(AdaptiveReviewerSelection()),
             execution_specs=_specs(
-                "review-planner:v1",
-                "security:v1",
-                "performance:v1",
-                "review-verifier:v1",
+                "review-planner:v2",
+                "security:v2",
+                "performance:v2",
+                "review-verifier:v2",
             ),
             readiness=_ready(),
-            target_paths=("src/app.py",),
+            candidate_paths=("src/app.py",),
             catalog_version="builtin-v1",
             capability_fingerprint="e" * 64,
         )

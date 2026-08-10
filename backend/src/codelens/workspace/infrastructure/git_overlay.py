@@ -36,9 +36,9 @@ def _normalize_path(path: str) -> str:
     return candidate.as_posix()
 
 
-def _control_paths(target_paths: tuple[str, ...]) -> tuple[str, ...]:
+def _control_paths(candidate_paths: tuple[str, ...]) -> tuple[str, ...]:
     candidates = {"AGENTS.md", "REVIEW.md"}
-    for target_path in target_paths:
+    for target_path in candidate_paths:
         target = PurePosixPath(_normalize_path(target_path))
         current = PurePosixPath()
         for part in target.parent.parts:
@@ -96,7 +96,7 @@ def _read_entries(
 
 def _canonical_payload(tracked_patch: bytes, entries: list[_OverlayEntry]) -> bytes:
     payload: _OverlayPayload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "tracked_patch": base64.b64encode(tracked_patch).decode("ascii"),
         "entries": entries,
     }
@@ -134,21 +134,21 @@ class GitReviewInputCaptureAdapter:
     async def fingerprint(
         self,
         repository: Path,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
     ) -> RepositoryFingerprint:
         """Hash HEAD, staged diff, and the complete canonical overlay view."""
 
         head = await self._git.run(repository, "rev-parse", "HEAD")
         head_oid = head.stdout.decode("ascii", errors="strict").strip()
         staged = await self._git.run(repository, "diff", "--binary", "--cached", "HEAD", "--")
-        payload = await self.capture_overlay(repository, target_paths)
+        payload = await self.capture_overlay(repository, candidate_paths)
         return RepositoryFingerprint(
             head_sha=head_oid,
             index_hash=hashlib.sha256(staged.stdout).hexdigest(),
             worktree_hash=hashlib.sha256(payload).hexdigest(),
         )
 
-    async def capture_overlay(self, repository: Path, target_paths: tuple[str, ...]) -> bytes:
+    async def capture_overlay(self, repository: Path, candidate_paths: tuple[str, ...]) -> bytes:
         """Serialize the tracked diff, allowed untracked files, and ignored control inputs."""
 
         tracked = await self._git.run(repository, "diff", "--binary", "HEAD", "--")
@@ -168,7 +168,7 @@ class GitReviewInputCaptureAdapter:
             _read_entries,
             repository,
             paths,
-            _control_paths(target_paths),
+            _control_paths(candidate_paths),
         )
         return _canonical_payload(tracked.stdout, entries)
 
@@ -183,7 +183,7 @@ class GitOverlayMaterializer:
         """Apply tracked binary diff then materialize verified untracked/control entries."""
 
         decoded = json.loads(payload)
-        if not isinstance(decoded, dict) or decoded.get("schema_version") != 1:
+        if not isinstance(decoded, dict) or decoded.get("schema_version") != 2:
             raise ValueError("unsupported overlay Artifact schema")
         tracked_patch = base64.b64decode(decoded.get("tracked_patch", ""), validate=True)
         entries = decoded.get("entries")

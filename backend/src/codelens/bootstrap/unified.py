@@ -9,7 +9,6 @@ import uvicorn
 
 from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.settings import Settings
-from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.instruction_policy.application.resolver import InstructionResolver
 from codelens.instruction_policy.application.settings import InstructionSettingsService
 from codelens.instruction_policy.infrastructure.file_settings import (
@@ -92,11 +91,17 @@ from codelens.worker.execution import SqlJobQueuePortAdapter, WorkerReviewExecut
 from codelens.worker.scheduler import ReviewScheduler, WorkerSemaphores
 from codelens.worker.singleton import platform_worker_singleton
 from codelens.workspace.application.create_snapshot import SnapshotService
+from codelens.workspace.application.file_exclusion_settings import (
+    FileExclusionSettingsService,
+)
 from codelens.workspace.application.worktree_lifecycle import (
     ReviewWorktreeLifecycle,
     ReviewWorktreeRecoveryService,
 )
 from codelens.workspace.infrastructure.change_index import GitChangeIndexBuilder
+from codelens.workspace.infrastructure.file_exclusion_settings import (
+    FilesystemFileExclusionPolicyStore,
+)
 from codelens.workspace.infrastructure.filesystem_snapshot import FilesystemSnapshotBuilder
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.git_ignore import GitIgnoreResolver
@@ -194,10 +199,14 @@ def build_unified_backend(
         FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
     )
     tool_limits_service = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
+    file_exclusion_settings = FileExclusionSettingsService(
+        FilesystemFileExclusionPolicyStore(settings.data_dir)
+    )
 
     # Create repository inspector early so it can be shared with Worker
     from codelens.workspace.application.inspect_repository import RepositoryInspector
     from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
+
     repository_inspector = RepositoryInspector(
         GitRepositoryMetadataAdapter(git),
         settings.repository_roots,
@@ -233,14 +242,13 @@ def build_unified_backend(
             line_limits_provider=instruction_line_limits,
         ),
         structured_skip=StructuredSkipMatcher(),
+        scope_store=review_store,
     )
     snapshot_reader = FilesystemSnapshotReader(git)
-    codec = AgentOutputCodec("1")
     system_prompts = I18nPromptLoader.load(settings.prompt_dir)
     provider_config_store = FilesystemModelProviderConfigAdapter(settings.data_dir)
     provider_runtime = runtime or OpenAIAgentRuntime(
         provider_config_store,
-        codec,
         git,
         system_prompts,
         completion_settings=review_completion_settings,
@@ -266,7 +274,6 @@ def build_unified_backend(
             settings.data_dir / "artifacts" / "outputs",
         ),
         checkpoints=SqlCheckpointStore(database),
-        codec=codec,
         semaphores=semaphores,
         transcripts=worker_transcripts,
         reviewer_prompts=ReviewerPromptSettingsService(
@@ -340,9 +347,7 @@ def build_unified_backend(
     plugin_store = FilesystemPluginStore(settings.data_dir)
     plugin_installer = GitPluginInstaller(git, plugins_dir)
     plugin_loader = CompositePluginLoader()
-    plugin_manager = PluginManager(
-        plugin_store, plugin_installer, plugins_dir, plugin_loader
-    )
+    plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir, plugin_loader)
     export_history = SqliteExportHistoryStore(settings.data_dir / "codelens.sqlite3")
     export_orchestrator = ExportOrchestrator(
         review_store,
@@ -374,14 +379,16 @@ def build_unified_backend(
     )
     review_creator_adapter = ReviewCreatorAdapter(
         CreateReviewHandler(
-            planner, capture, review_store, input_artifacts,
-            idempotency_settings=trigger_idempotency_settings
+            planner,
+            capture,
+            review_store,
+            input_artifacts,
+            idempotency_settings=trigger_idempotency_settings,
+            file_exclusion_settings=file_exclusion_settings,
         ),
         repository_inspector,
     )
-    trigger_orchestrator = TriggerOrchestrator(
-        plugin_store, review_creator_adapter, plugin_loader
-    )
+    trigger_orchestrator = TriggerOrchestrator(plugin_store, review_creator_adapter, plugin_loader)
     trigger_hooks = TriggerHookService(
         plugin_manager,
         hook_installer,
@@ -398,7 +405,13 @@ def build_unified_backend(
             GitRepositoryCatalogAdapter(git),
         ),
         directory_browser=BrowseDirectoriesService(LocalFilesystemBrowserAdapter()),
-        create_review=CreateReviewHandler(planner, capture, review_store, input_artifacts),
+        create_review=CreateReviewHandler(
+            planner,
+            capture,
+            review_store,
+            input_artifacts,
+            file_exclusion_settings=file_exclusion_settings,
+        ),
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
         list_recent_repositories=ListRecentRepositoriesHandler(recent_repository_store),
@@ -446,6 +459,7 @@ def build_unified_backend(
         hook_installer=hook_installer,
         trigger_hooks=trigger_hooks,
         tool_limits=tool_limits,
+        file_exclusion_settings=file_exclusion_settings,
     )
 
     return UnifiedBackend(

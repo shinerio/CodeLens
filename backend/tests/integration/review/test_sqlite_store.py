@@ -1,13 +1,10 @@
 import asyncio
 import hashlib
-import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
 
 import pytest
-from alembic import command
-from alembic.config import Config
 from sqlalchemy.exc import IntegrityError
 
 from codelens.capabilities.application.resolve import CapabilityResolver
@@ -28,7 +25,6 @@ from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
     Finding,
-    FindingBatch,
     FindingDisposition,
     FindingSeverity,
     RuleReference,
@@ -89,10 +85,10 @@ def _task(
         repository_realpath_hash="c" * 64,
         git_common_dir_hash="d" * 64,
         repository_path=repository_path,
-        target_paths=("src/state.py",),
+        candidate_paths=("src/state.py",),
         scope=BranchScope(base_ref="main", target_ref=f"feature-{head}"),
         target=ReviewTarget("a" * 40, head * 40, None),
-        selected_agent_versions=("correctness:v1",),
+        selected_agent_versions=("correctness:v2",),
         review_profile=review_profile,
         trigger_source="plugin" if idempotency_key else "manual",
         supersede_policy=supersede_policy if idempotency_key else None,
@@ -137,12 +133,12 @@ def _multi_plan(task_id: str) -> ReviewPlan:
             logical_attempt_group="primary",
             depends_on=(),
         )
-        for reference in ("correctness:v2", "security:v1")
+        for reference in ("correctness:v2", "security:v2")
     )
     verifier = ReviewPlanNode.create(
         task_id=task_id,
         node_type=ReviewPlanNodeType.VERIFIER,
-        agent_reference="review-verifier:v1",
+        agent_reference="review-verifier:v2",
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
@@ -151,7 +147,7 @@ def _multi_plan(task_id: str) -> ReviewPlan:
     return ReviewPlan.create(
         task_id=task_id,
         selection_mode="fixed",
-        reviewer_references=("correctness:v2", "security:v1"),
+        reviewer_references=("correctness:v2", "security:v2"),
         nodes=(*reviewers, verifier),
         planner_reason=None,
     )
@@ -164,7 +160,7 @@ def _candidate(task_id: str, run_id: str, candidate_id: str) -> CandidateFinding
         candidate_id=candidate_id,
         run_id=run_id,
         snapshot_id="snapshot-1",
-        reviewer_reference="security:v1",
+        reviewer_reference="security:v2",
         category="authorization",
         title="Authorization is bypassed",
         severity=FindingSeverity.HIGH,
@@ -187,115 +183,6 @@ async def _database(tmp_path: Path) -> Database:
     return database
 
 
-def _migrate_to(database_path: Path, revision: str) -> None:
-    backend_root = Path(__file__).resolve().parents[3]
-    config = Config(str(backend_root / "alembic.ini"))
-    config.set_main_option("script_location", str(backend_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{database_path}")
-    command.upgrade(config, revision)
-
-
-def _downgrade_upgrade(database_path: Path, revision: str) -> None:
-    backend_root = Path(__file__).resolve().parents[3]
-    config = Config(str(backend_root / "alembic.ini"))
-    config.set_main_option("script_location", str(backend_root / "migrations"))
-    config.set_main_option("sqlalchemy.url", f"sqlite+aiosqlite:///{database_path}")
-    command.downgrade(config, revision)
-    command.upgrade(config, "head")
-
-
-async def test_review_profile_migration_upgrades_previous_head_and_seeds_empty_table(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "upgrade.sqlite3"
-    await asyncio.to_thread(_migrate_to, database_path, "0e0e42b05c24")
-    await asyncio.to_thread(_migrate_to, database_path, "head")
-
-    def read_profiles() -> list[tuple[str, int, str, int, str]]:
-        with sqlite3.connect(database_path) as connection:
-            return connection.execute(
-                """
-                SELECT profile_id, revision, name, is_default,
-                       reviewer_selection_json
-                FROM review_profiles
-                """
-            ).fetchall()
-
-    assert await asyncio.to_thread(read_profiles) == [
-        (
-            "profile-balanced",
-            1,
-            "Balanced Review",
-            1,
-            '{"mode":"adaptive"}',
-        )
-    ]
-
-
-async def test_selection_migration_backfills_legacy_fixed_request(tmp_path: Path) -> None:
-    database_path = tmp_path / "selection-upgrade.sqlite3"
-    await asyncio.to_thread(_migrate_to, database_path, "0005_review_profiles")
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """INSERT INTO review_tasks
-            (task_id,repository_id,repository_realpath_hash,git_common_dir_hash,scope_json,
-             base_oid,head_oid,status,selected_agent_versions_json,prompt_locale,
-             cancellation_requested,created_at,updated_at)
-            VALUES ('legacy','repo','a','b','{"type":"branch"}','c','d','created',
-                    '["security:v1","performance:v1"]','en',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"""
-        )
-    await asyncio.to_thread(_migrate_to, database_path, "head")
-    with sqlite3.connect(database_path) as connection:
-        row = connection.execute(
-            "SELECT selection_request_json,planning_context_json "
-            "FROM review_tasks WHERE task_id='legacy'"
-        ).fetchone()
-    assert row == (
-        '{"mode":"fixed","reviewer_versions":["security:v1","performance:v1"]}',
-        None,
-    )
-
-
-async def test_multi_agent_migration_preserves_legacy_confidence_and_round_trips(
-    tmp_path: Path,
-) -> None:
-    database_path = tmp_path / "multi-agent-upgrade.sqlite3"
-    await asyncio.to_thread(_migrate_to, database_path, "0006_review_selection_requests")
-    with sqlite3.connect(database_path) as connection:
-        connection.execute(
-            """INSERT INTO review_tasks
-            (task_id,repository_id,repository_realpath_hash,git_common_dir_hash,scope_json,
-             base_oid,head_oid,status,selected_agent_versions_json,prompt_locale,
-             cancellation_requested,created_at,updated_at)
-            VALUES ('legacy','repo','a','b','{"type":"branch"}','c','d','created',
-                    '["correctness:v1"]','en',0,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)"""
-        )
-        connection.execute(
-            """INSERT INTO findings
-            (finding_id,task_id,node_key,fingerprint,payload_json,severity,confidence,path,
-             start_line,created_at)
-            VALUES ('finding-legacy','legacy','correctness:v1:0:root','fingerprint',
-                    '{}','high',0.91,'src/state.py',2,CURRENT_TIMESTAMP)"""
-        )
-
-    await asyncio.to_thread(_migrate_to, database_path, "head")
-    with sqlite3.connect(database_path) as connection:
-        confidence = connection.execute(
-            "SELECT confidence FROM findings WHERE finding_id='finding-legacy'"
-        ).fetchone()
-        nullable = next(
-            row[3]
-            for row in connection.execute("PRAGMA table_info(findings)").fetchall()
-            if row[1] == "confidence"
-        )
-    assert confidence == (0.91,)
-    assert nullable == 0
-
-    await asyncio.to_thread(
-        _downgrade_upgrade, database_path, "0006_review_selection_requests"
-    )
-
-
 async def test_plan_specs_and_audit_records_survive_restart_without_trusted_bodies(
     tmp_path: Path,
 ) -> None:
@@ -308,18 +195,16 @@ async def test_plan_specs_and_audit_records_survive_restart_without_trusted_bodi
         review_store = SqlReviewStore(database)
         await review_store.create_with_job(_task(task_id))
         artifact_store = FilesystemRunArtifactStore(database, tmp_path / "artifacts")
-        agent = builtin_agent_catalog()["security:v1"]
+        agent = builtin_agent_catalog()["security:v2"]
         prompt_bytes = b"frozen security prompt"
         prompt = await artifact_store.write_output("prompt-security", prompt_bytes)
         spec = CapabilityResolver.testing().resolve(
             agent=agent,
             prompt_content_hash=hashlib.sha256(prompt_bytes).hexdigest(),
             facts=SkillActivationFacts((), ("src/state.py",)),
-            execution_limits=AgentExecutionLimits.legacy_default(),
+            execution_limits=AgentExecutionLimits.default(),
         )
-        security_node = next(
-            node for node in plan.nodes if node.agent_reference == "security:v1"
-        )
+        security_node = next(node for node in plan.nodes if node.agent_reference == "security:v2")
         await SqlReviewPlanStore(database).save(
             plan,
             catalog_version="builtin-v1",
@@ -383,12 +268,10 @@ async def test_plan_specs_and_audit_records_survive_restart_without_trusted_bodi
             (record.node_role, record.agent_version, record.shard_id) for record in records
         }
         assert node_metadata >= {
-            ("reviewer", "security:v1", "root"),
-            ("verifier", "review-verifier:v1", "batch"),
+            ("reviewer", "security:v2", "root"),
+            ("verifier", "review-verifier:v2", "batch"),
         }
-        stored_spec = await SqlAgentExecutionSpecStore(reopened).get(
-            task_id, security_node.node_id
-        )
+        stored_spec = await SqlAgentExecutionSpecStore(reopened).get(task_id, security_node.node_id)
         assert stored_spec is not None
         assert stored_spec.fingerprint == spec.fingerprint
         assert stored_spec.prompt_artifact_hash == prompt.content_hash
@@ -409,9 +292,7 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
         await review_store.create_with_job(_task(task_id))
         checkpoints = SqlCheckpointStore(database)
         await checkpoints.ensure_plan_nodes(plan)
-        security_node = next(
-            node for node in plan.nodes if node.agent_reference == "security:v1"
-        )
+        security_node = next(node for node in plan.nodes if node.agent_reference == "security:v2")
         checkpoint = await checkpoints.get(task_id, security_node.node_id)
         await checkpoints.mark_running(task_id, security_node.node_id)
         await checkpoints.mark_output_saved(
@@ -480,15 +361,11 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
         await checkpoints.mark_output_saved(
             task_id, verifier_node.node_id, "artifact-verdict", "b" * 64
         )
-        await review_store.complete_with_verdicts(
-            task_id, verifier_node.node_id, (decision,)
-        )
+        await review_store.complete_with_verdicts(task_id, verifier_node.node_id, (decision,))
 
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
         assert len([event for event in events if event.event_type == "agent.succeeded"]) == 2
-        assert len(
-            [event for event in events if event.event_type == "agent_run.completed"]
-        ) == 2
+        assert len([event for event in events if event.event_type == "agent_run.completed"]) == 2
     finally:
         await database.dispose()
 
@@ -504,17 +381,13 @@ async def test_verification_and_publication_replay_are_exactly_once(
         await store.create_with_job(_task(task_id))
         checkpoints = SqlCheckpointStore(database)
         await checkpoints.ensure_plan_nodes(plan)
-        reviewer = next(
-            node for node in plan.nodes if node.agent_reference == "security:v1"
-        )
+        reviewer = next(node for node in plan.nodes if node.agent_reference == "security:v2")
         reviewer_checkpoint = await checkpoints.get(task_id, reviewer.node_id)
         await checkpoints.mark_running(task_id, reviewer.node_id)
         await checkpoints.mark_output_saved(
             task_id, reviewer.node_id, "artifact-candidate", "a" * 64
         )
-        candidate = _candidate(
-            task_id, reviewer_checkpoint.run_id or "", "candidate-verify"
-        )
+        candidate = _candidate(task_id, reviewer_checkpoint.run_id or "", "candidate-verify")
         await store.complete_with_candidates(
             task_id, reviewer.node_id, CandidateFindingBatch((candidate,))
         )
@@ -533,9 +406,7 @@ async def test_verification_and_publication_replay_are_exactly_once(
         verdicts = SqlVerdictStore(database)
         await verdicts.save_clusters(task_id, "snapshot-1", (cluster,))
         decision = VerdictDecision.accept(cluster_ids=(cluster.cluster_id,))
-        verifier = next(
-            node for node in plan.nodes if node.agent_reference == "review-verifier:v1"
-        )
+        verifier = next(node for node in plan.nodes if node.agent_reference == "review-verifier:v2")
         await checkpoints.mark_running(task_id, verifier.node_id)
         await checkpoints.mark_output_saved(
             task_id, verifier.node_id, "artifact-verification", "c" * 64
@@ -549,19 +420,13 @@ async def test_verification_and_publication_replay_are_exactly_once(
             clusters=(cluster,),
         )[0]
 
-        await store.publish_verdict_findings(
-            task_id, (decision,), ((cluster.cluster_id, finding),)
-        )
-        await store.publish_verdict_findings(
-            task_id, (decision,), ((cluster.cluster_id, finding),)
-        )
+        await store.publish_verdict_findings(task_id, (decision,), ((cluster.cluster_id, finding),))
+        await store.publish_verdict_findings(task_id, (decision,), ((cluster.cluster_id, finding),))
 
         assert await store.list_findings(task_id) == (finding,)
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
         assert len([item for item in events if item.event_type == "finding.published"]) == 1
-        assert any(
-            item.event_type == "review.verdict_completed" for item in events
-        )
+        assert any(item.event_type == "review.verdict_completed" for item in events)
     finally:
         await database.dispose()
 
@@ -581,12 +446,10 @@ async def test_candidate_completion_rolls_back_candidates_checkpoint_and_event(
         plan = _multi_plan(task_id)
         checkpoints = SqlCheckpointStore(database)
         await checkpoints.ensure_plan_nodes(plan)
-        node = next(item for item in plan.nodes if item.agent_reference == "security:v1")
+        node = next(item for item in plan.nodes if item.agent_reference == "security:v2")
         checkpoint = await checkpoints.get(task_id, node.node_id)
         await checkpoints.mark_running(task_id, node.node_id)
-        await checkpoints.mark_output_saved(
-            task_id, node.node_id, "artifact-rollback", "d" * 64
-        )
+        await checkpoints.mark_output_saved(task_id, node.node_id, "artifact-rollback", "d" * 64)
         candidate = _candidate(task_id, checkpoint.run_id or "", "candidate-rollback")
 
         with pytest.raises(RuntimeError, match="injected candidate"):
@@ -899,7 +762,7 @@ async def test_failed_review_retry_creates_an_independent_queued_task(tmp_path: 
         assert retried.supersede_policy is None
         assert retry_execution is not None
         assert retry_execution.repository_path == original.repository_path.resolve()
-        assert retry_execution.target_paths == original.target_paths
+        assert retry_execution.candidate_paths == original.candidate_paths
         assert (await jobs.get(retried.task_id)).status == "queued"
         retry_events = await events.list_after(retried.task_id, after_event_id=0)
         assert [event.event_type for event in retry_events] == ["review.created"]
@@ -1035,42 +898,42 @@ async def test_restart_requeues_running_nodes_but_keeps_saved_outputs(tmp_path: 
         assert (claimed_job.task_id, claimed_job.status) == ("review-running", "running")
         await store.create_with_job(_task("review-output"))
         await store.create_with_job(_task("review-terminal", head="c"))
-        await checkpoints.ensure("review-running", "correctness:v1:0:root", "primary")
-        await checkpoints.ensure("review-output", "correctness:v1:0:root", "primary")
-        await checkpoints.ensure("review-terminal", "correctness:v1:0:root", "primary")
-        await checkpoints.mark_running("review-running", "correctness:v1:0:root")
-        await checkpoints.mark_running("review-output", "correctness:v1:0:root")
-        await checkpoints.mark_running("review-terminal", "correctness:v1:0:root")
+        await checkpoints.ensure("review-running", "correctness:v2:0:root", "primary")
+        await checkpoints.ensure("review-output", "correctness:v2:0:root", "primary")
+        await checkpoints.ensure("review-terminal", "correctness:v2:0:root", "primary")
+        await checkpoints.mark_running("review-running", "correctness:v2:0:root")
+        await checkpoints.mark_running("review-output", "correctness:v2:0:root")
+        await checkpoints.mark_running("review-terminal", "correctness:v2:0:root")
         await checkpoints.mark_output_saved(
             "review-output",
-            "correctness:v1:0:root",
+            "correctness:v2:0:root",
             "artifact-1",
             "a" * 64,
             "incomplete",
         )
         await checkpoints.mark_output_saved(
             "review-terminal",
-            "correctness:v1:0:root",
+            "correctness:v2:0:root",
             "artifact-2",
             "b" * 64,
         )
-        await store.complete_agent_run(
+        await store.complete_agent_run_with_candidates(
             "review-terminal",
-            "correctness:v1:0:root",
-            FindingBatch("1", ()),
+            "correctness:v2:0:root",
+            CandidateFindingBatch(()),
         )
 
         await store.recover_after_singleton_restart()
 
-        running = await checkpoints.get("review-running", "correctness:v1:0:root")
-        saved = await checkpoints.get("review-output", "correctness:v1:0:root")
+        running = await checkpoints.get("review-running", "correctness:v2:0:root")
+        saved = await checkpoints.get("review-output", "correctness:v2:0:root")
         assert saved.review_completion_status == "incomplete"
-        output = await checkpoints.get("review-output", "correctness:v1:0:root")
-        terminal = await checkpoints.get("review-terminal", "correctness:v1:0:root")
+        output = await checkpoints.get("review-output", "correctness:v2:0:root")
+        terminal = await checkpoints.get("review-terminal", "correctness:v2:0:root")
         assert (await jobs.get("review-running")).status == "queued"
         assert running.status == "pending"
-        assert running.run_id is None
-        assert running.node_role is None
+        assert running.run_id is not None
+        assert running.node_role == "reviewer"
         assert running.capability_fingerprint is None
         assert output.status == "output_saved"
         assert terminal.status == "succeeded"
@@ -1086,14 +949,14 @@ async def test_output_artifact_survives_reopen_and_fails_closed_on_hash_mismatch
     await database.migrate()
     artifact_root = tmp_path / "artifacts"
     artifact_store = FilesystemRunArtifactStore(database, artifact_root)
-    artifact = await artifact_store.write_output("run-1", b'{"schema_version":"1"}')
+    artifact = await artifact_store.write_output("run-1", b'{"schema_version":"2"}')
     await database.dispose()
 
     reopened = Database(database_url)
     try:
         reopened_store = FilesystemRunArtifactStore(reopened, artifact_root)
         assert await reopened_store.read_output(artifact.reference, artifact.content_hash) == (
-            b'{"schema_version":"1"}'
+            b'{"schema_version":"2"}'
         )
         artifact_files = await asyncio.to_thread(
             lambda: tuple(path for path in artifact_root.iterdir() if path.is_file())
@@ -1105,10 +968,11 @@ async def test_output_artifact_survives_reopen_and_fails_closed_on_hash_mismatch
         await reopened.dispose()
 
 
-async def test_finding_success_boundary_is_atomic(tmp_path: Path) -> None:
+async def test_candidate_success_boundary_is_atomic(tmp_path: Path) -> None:
     database = await _database(tmp_path)
     try:
         store = SqlReviewStore(database)
+        candidate_store = SqlCandidateFindingStore(database)
         checkpoints = SqlCheckpointStore(database)
         events = SqlEventOutbox(database)
         await store.create_with_job(_task("review-success"))
@@ -1121,16 +985,18 @@ async def test_finding_success_boundary_is_atomic(tmp_path: Path) -> None:
             "a" * 64,
         )
 
-        await store.complete_agent_run(
+        run_id = (await checkpoints.get("review-success", "node-success")).run_id
+        assert run_id is not None
+        candidate = _candidate("review-success", run_id, "candidate-1")
+        await store.complete_agent_run_with_candidates(
             "review-success",
             "node-success",
-            FindingBatch("1", (_finding("finding-1"),)),
+            CandidateFindingBatch((candidate,)),
         )
 
         assert (await checkpoints.get("review-success", "node-success")).status == "succeeded"
-        assert [item.finding_id for item in await store.list_findings("review-success")] == [
-            "finding-1"
-        ]
+        stored_candidates = await candidate_store.list_for_task("review-success")
+        assert [item.candidate_id for item in stored_candidates] == ["candidate-1"]
         assert any(
             event.event_type == "agent.succeeded"
             for event in await events.list_after("review-success", after_event_id=0)
@@ -1144,18 +1010,18 @@ async def test_finding_success_boundary_is_atomic(tmp_path: Path) -> None:
             "artifact-rollback",
             "b" * 64,
         )
-        duplicate = _finding("finding-duplicate")
-        with pytest.raises(IntegrityError):
-            await store.complete_agent_run(
+        rollback_run_id = (await checkpoints.get("review-success", "node-rollback")).run_id
+        assert rollback_run_id is not None
+        conflicting = _candidate("review-success", rollback_run_id, "candidate-1")
+        with pytest.raises(ValueError, match="identity conflicts"):
+            await store.complete_agent_run_with_candidates(
                 "review-success",
                 "node-rollback",
-                FindingBatch("1", (duplicate, duplicate)),
+                CandidateFindingBatch((conflicting,)),
             )
 
         assert (await checkpoints.get("review-success", "node-rollback")).status == "output_saved"
-        assert "finding-duplicate" not in {
-            item.finding_id for item in await store.list_findings("review-success")
-        }
+        assert len(await candidate_store.list_for_task("review-success")) == 1
         rollback_events = await events.list_after("review-success", after_event_id=0)
         assert not any(
             event.event_type == "agent.succeeded"

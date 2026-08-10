@@ -27,8 +27,12 @@ class Store:
             target_ref="feature",
             overlay_hash=None,
             overlay_artifact_ref=None,
-            target_paths=("src/example.py",),
-            selected_agent_versions=("correctness:v1",),
+            candidate_paths=("src/example.py",),
+            file_exclusion_policy_json=('{"exclude_binary":true,"path_regexes":[],"suffixes":[]}'),
+            file_exclusion_policy_hash=(
+                "f135f14995e69bb776fd5c18af7fa0d19e45f867501b3274e9cb38cfbc7676c3"
+            ),
+            selected_agent_versions=("correctness:v2",),
             prompt_locale="en",
             status="completed",
             cancellation_requested=False,

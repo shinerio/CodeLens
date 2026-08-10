@@ -10,8 +10,8 @@ from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCo
 
 def _payload() -> dict[str, object]:
     return {
-        "schema_version": "1",
-        "reviewer_references": ["security:v1", "performance:v1"],
+        "schema_version": "2",
+        "reviewer_references": ["security:v2", "performance:v2"],
     }
 
 
@@ -21,13 +21,13 @@ def _dto() -> PlannerSelectionDto:
 
 def test_planner_output_requires_exact_eligible_set() -> None:
     codec = PlannerOutputCodec(
-        eligible_reviewer_references=("security:v1", "performance:v1"),
+        eligible_reviewer_references=("security:v2", "performance:v2"),
         unavailable_reviewer_references=(),
     )
 
     selection = codec.decode(_payload())
 
-    assert selection.reviewer_references == ("security:v1", "performance:v1")
+    assert selection.reviewer_references == ("security:v2", "performance:v2")
 
 
 @pytest.mark.parametrize(
@@ -39,7 +39,7 @@ def test_planner_output_requires_exact_eligible_set() -> None:
 )
 def test_planner_output_rejects_extra_missing_or_untrusted_values(mutate: object) -> None:
     codec = PlannerOutputCodec(
-        eligible_reviewer_references=("security:v1", "performance:v1"),
+        eligible_reviewer_references=("security:v2", "performance:v2"),
         unavailable_reviewer_references=(),
     )
     payload = _payload()
@@ -51,8 +51,8 @@ def test_planner_output_rejects_extra_missing_or_untrusted_values(mutate: object
 
 def test_planner_output_rejects_selecting_unavailable_reviewer() -> None:
     codec = PlannerOutputCodec(
-        eligible_reviewer_references=("security:v1", "performance:v1"),
-        unavailable_reviewer_references=("security:v1",),
+        eligible_reviewer_references=("security:v2", "performance:v2"),
+        unavailable_reviewer_references=("security:v2",),
     )
 
     with pytest.raises(ValueError, match="unavailable"):
@@ -61,7 +61,7 @@ def test_planner_output_rejects_selecting_unavailable_reviewer() -> None:
 
 async def test_planner_submission_accumulates_batches_and_finalizes() -> None:
     codec = PlannerOutputCodec(
-        eligible_reviewer_references=("security:v1", "performance:v1"),
+        eligible_reviewer_references=("security:v2", "performance:v2"),
         unavailable_reviewer_references=(),
     )
     collector = ReviewPlanSubmissionCollector(codec)
@@ -75,7 +75,7 @@ async def test_planner_submission_accumulates_batches_and_finalizes() -> None:
     finalize_result = await collector.finalize()
     assert finalize_result == "Review Plan finalized."
     selection = collector.selection
-    assert set(selection.reviewer_references) == {"security:v1", "performance:v1"}
+    assert set(selection.reviewer_references) == {"security:v2", "performance:v2"}
 
     # Cannot submit after finalize
     with pytest.raises(ValueError, match="already finalized"):

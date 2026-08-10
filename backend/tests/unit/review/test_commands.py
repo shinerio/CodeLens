@@ -36,14 +36,14 @@ class StableCaptureSource:
     async def fingerprint(
         self,
         _repository: Path,
-        _target_paths: tuple[str, ...],
+        _candidate_paths: tuple[str, ...],
     ) -> RepositoryFingerprint:
         return RepositoryFingerprint("b" * 40, "c" * 64, "d" * 64)
 
     async def capture_overlay(
         self,
         _repository: Path,
-        _target_paths: tuple[str, ...],
+        _candidate_paths: tuple[str, ...],
     ) -> bytes:
         return b"captured"
 
@@ -55,7 +55,7 @@ class MutatingCaptureSource(StableCaptureSource):
     async def fingerprint(
         self,
         _repository: Path,
-        _target_paths: tuple[str, ...],
+        _candidate_paths: tuple[str, ...],
     ) -> RepositoryFingerprint:
         self._version += 1
         return RepositoryFingerprint("b" * 40, "c" * 64, f"{self._version:064x}")
@@ -143,9 +143,7 @@ def _command(tmp_path: Path) -> CreateReviewCommand:
     return CreateReviewCommand(
         repository=repository,
         scope=BranchScope("main", "HEAD", True),
-        review_profile=ReviewProfileSnapshot(
-            FixedReviewerSelection(("correctness:v1",))
-        ),
+        review_profile=ReviewProfileSnapshot(FixedReviewerSelection(("correctness:v2",))),
     )
 
 

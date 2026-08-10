@@ -25,8 +25,6 @@ class FilesystemReviewerPromptStore:
     def _load_override_sync(self, reference: str, locale: PromptLocale) -> str | None:
         payload = self._read()
         value = payload.get(reference, {}).get(locale)
-        if value is None and reference == "correctness:v1":
-            value = payload.get("correctness", {}).get(locale)
         return value if isinstance(value, str) else None
 
     def _update_sync(self, reference: str, locale: PromptLocale, prompt: str | None) -> None:
@@ -38,12 +36,6 @@ class FilesystemReviewerPromptStore:
                 payload.pop(reference, None)
         else:
             agent[locale] = prompt
-        if reference == "correctness:v1":
-            legacy = payload.get("correctness")
-            if legacy is not None:
-                legacy.pop(locale, None)
-                if not legacy:
-                    payload.pop("correctness", None)
         self._path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, name = tempfile.mkstemp(
             dir=self._path.parent, prefix=".reviewer-prompts-", suffix=".tmp"

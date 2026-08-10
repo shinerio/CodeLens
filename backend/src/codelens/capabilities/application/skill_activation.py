@@ -57,9 +57,7 @@ class SkillActivationResolver:
                     activation_reason=", ".join(reasons),
                 )
             )
-        return tuple(
-            sorted(activations, key=lambda item: (item.skill_id, item.version))
-        )
+        return tuple(sorted(activations, key=lambda item: (item.skill_id, item.version)))
 
     @staticmethod
     def _available_tools(profile: CapabilityProfile) -> frozenset[ToolContractReference]:
@@ -76,10 +74,7 @@ class SkillActivationResolver:
         paths = sorted(
             path
             for path in set(facts.changed_paths)
-            if any(
-                fnmatchcase(path, pattern)
-                for pattern in manifest.activation_path_patterns
-            )
+            if any(fnmatchcase(path, pattern) for pattern in manifest.activation_path_patterns)
         )
         if manifest.activation_languages and not languages:
             return ()

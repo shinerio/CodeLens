@@ -25,7 +25,6 @@ def test_tool_limits_returns_defaults_initially(tmp_path: Path) -> None:
     assert data["max_pattern_chars"] == 512
     assert data["regex_timeout_seconds"] == 30.0
     assert data["comment_batch_size"] == 20
-    assert data["reviewed_files_batch"] == 2000
     assert data["short_text_max"] == 240
     assert data["long_text_max"] == 8000
     assert data["task_summary_max"] == 8000
@@ -46,7 +45,6 @@ def test_tool_limits_update_and_persist(tmp_path: Path) -> None:
                 "max_pattern_chars": 1024,
                 "regex_timeout_seconds": 60.0,
                 "comment_batch_size": 50,
-                "reviewed_files_batch": 5000,
                 "short_text_max": 480,
                 "long_text_max": 16000,
                 "task_summary_max": 16000,

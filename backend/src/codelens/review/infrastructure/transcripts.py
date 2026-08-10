@@ -198,7 +198,9 @@ class WorkerTranscriptStore:
         await self.append_many(task_id, ((kind, content, metadata),))
 
     async def append_many(
-        self, task_id: str, entries: Sequence[tuple[TranscriptKind, str, Mapping[str, str] | None]],
+        self,
+        task_id: str,
+        entries: Sequence[tuple[TranscriptKind, str, Mapping[str, str] | None]],
     ) -> None:
         lock = self._locks.setdefault(task_id, asyncio.Lock())
         async with lock:

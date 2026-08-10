@@ -7,7 +7,6 @@ from typing import Literal, Protocol
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFinding, CandidateFindingBatch
 from codelens.findings.domain.clusters import FindingCluster
-from codelens.findings.domain.models import FindingBatch
 from codelens.findings.domain.verdict import VerdictDecision
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.review_plan import ReviewPlan
@@ -206,15 +205,15 @@ class ReviewExecutionRecord:
     target_ref: str | None
     overlay_hash: str | None
     overlay_artifact_ref: str | None
-    target_paths: tuple[str, ...]
+    candidate_paths: tuple[str, ...]
+    file_exclusion_policy_json: str
+    file_exclusion_policy_hash: str
     selected_agent_versions: tuple[str, ...]
     prompt_locale: str
     status: str
     cancellation_requested: bool
     review_profile: ReviewProfileSnapshot = field(
-        default_factory=lambda: ReviewProfileSnapshot(
-            FixedReviewerSelection(("correctness:v1",))
-        )
+        default_factory=lambda: ReviewProfileSnapshot(FixedReviewerSelection(("correctness:v2",)))
     )
     planning_context_json: str | None = None
     planning_context_hash: str | None = None
@@ -291,9 +290,7 @@ class AgentExecutionSpecStorePort(Protocol):
         skill_artifacts: tuple[ArtifactIdentity, ...],
     ) -> AgentExecutionSpecRecord: ...
 
-    async def get(
-        self, task_id: str, logical_node_id: str
-    ) -> AgentExecutionSpecRecord | None: ...
+    async def get(self, task_id: str, logical_node_id: str) -> AgentExecutionSpecRecord | None: ...
 
     async def list_for_task(self, task_id: str) -> tuple[AgentExecutionSpecRecord, ...]: ...
 
@@ -425,21 +422,6 @@ class AgentRuntimePort(Protocol):
         raise NotImplementedError
 
 
-class AgentOutputCodecPort(Protocol):
-    """Expose a versioned cross-context model output contract to a runtime adapter."""
-
-    @property
-    def schema_version(self) -> str:
-        """Return the immutable output contract version accepted by this codec."""
-
-        raise NotImplementedError
-
-    def encode(self, final_output: object) -> bytes:
-        """Revalidate untrusted output and return canonical checkpoint bytes."""
-
-        raise NotImplementedError
-
-
 class RunArtifactPort(Protocol):
     """Persist and hash-verify unvalidated Agent output before schema validation."""
 
@@ -450,21 +432,6 @@ class RunArtifactPort(Protocol):
 
     async def read_output(self, reference: str, expected_hash: str) -> bytes:
         """Load output bytes only when the opaque reference and hash are valid."""
-
-        raise NotImplementedError
-
-
-class FindingBatchValidationPort(Protocol):
-    """Convert untrusted canonical output into trusted domain Findings."""
-
-    @property
-    def warnings(self) -> tuple["FindingValidationWarning", ...]:
-        """Describe candidate-level rejections without exposing model content."""
-
-        raise NotImplementedError
-
-    async def validate(self, payload: bytes) -> FindingBatch:
-        """Apply schema, path, line, hunk, and evidence validation."""
 
         raise NotImplementedError
 
@@ -480,16 +447,6 @@ class FindingValidationWarning:
 
 class AgentRunCompletionPort(Protocol):
     """Atomically persist trusted Findings, node success, and an outbox event."""
-
-    async def complete_with_findings(
-        self,
-        task_id: str,
-        node_key: str,
-        findings: FindingBatch,
-    ) -> None:
-        """Complete only an OUTPUT_SAVED or VALIDATING run in one transaction."""
-
-        raise NotImplementedError
 
     async def complete_with_candidates(
         self,

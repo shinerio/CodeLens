@@ -14,13 +14,10 @@ from codelens.plugin.domain.ports import (
     PluginStorePort,
     ReportSinkPort,
 )
-from codelens.plugin.domain.versioning import PluginApiVersion
 from codelens.plugin.report.local_file_export.sink import LocalFileExportSink
 from codelens.review.application.export_findings import (
     ExportFindingsHandler,
     FindingExportEnvelope,
-    FindingExportEnvelopeV1,
-    to_v1_export_envelope,
 )
 from codelens.review.domain.ports import ReviewExecutionRecord, ReviewPlanRecord, ReviewRecord
 
@@ -186,10 +183,7 @@ class ExportOrchestrator:
         """
         # Query all plugins with enabled report capability and auto-export
         all_plugins = await self._plugin_store.list_plugins()
-        auto_export_plugins = [
-            p for p in all_plugins
-            if p.report_enabled and p.report_auto_export
-        ]
+        auto_export_plugins = [p for p in all_plugins if p.report_enabled and p.report_auto_export]
 
         if not auto_export_plugins:
             _LOGGER.debug("No auto-export plugins enabled")
@@ -296,11 +290,8 @@ class ExportOrchestrator:
             )
 
         try:
-            sink_envelope: FindingExportEnvelope | FindingExportEnvelopeV1 = envelope
-            if plugin_record.manifest.plugin_api_version is PluginApiVersion.V1:
-                sink_envelope = to_v1_export_envelope(envelope)
             raw_result = await sink.export(
-                envelope=sink_envelope,
+                envelope=envelope,
                 config=plugin_record.report_config,
                 repository_path=execution.repository_path,
             )
@@ -380,9 +371,7 @@ class ExportOrchestrator:
             return self._builtin_sink
 
         if not plugin_record.install_path:
-            raise ValueError(
-                f"External plugin '{plugin_record.plugin_id}' has no install_path"
-            )
+            raise ValueError(f"External plugin '{plugin_record.plugin_id}' has no install_path")
 
         return self._plugin_loader.load_sink(
             plugin_record.manifest,

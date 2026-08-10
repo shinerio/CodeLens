@@ -102,8 +102,10 @@ class FilesystemPluginStore:
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 descriptor = -1
                 json.dump(
-                    payload, stream,
-                    ensure_ascii=False, sort_keys=True,
+                    payload,
+                    stream,
+                    ensure_ascii=False,
+                    sort_keys=True,
                     separators=(",", ":"),
                 )
                 stream.flush()
@@ -209,9 +211,7 @@ def _deserialize_record(data: dict) -> PluginRecord | None:
             min_codelens_version=manifest_data.get("min_codelens_version"),
             name_i18n=manifest_data.get("name_i18n", {}),
             description_i18n=manifest_data.get("description_i18n", {}),
-            plugin_api_version=PluginApiVersion(
-                str(manifest_data.get("plugin_api_version", "1"))
-            ),
+            plugin_api_version=PluginApiVersion(str(manifest_data.get("plugin_api_version", "1"))),
         )
 
         raw_profile_source = data.get("profile_source")

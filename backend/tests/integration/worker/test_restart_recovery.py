@@ -13,7 +13,7 @@ from codelens.capabilities.domain.models import (
     FrozenAgentExecutionSpec,
 )
 from codelens.capabilities.domain.skills import SkillActivationFacts
-from codelens.findings.domain.models import FindingBatch
+from codelens.findings.domain.candidates import CandidateFindingBatch
 from codelens.review.application.orchestrator import PreparedReview, ReviewOrchestrator
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import UnvalidatedAgentOutput
@@ -46,6 +46,7 @@ from codelens.workspace.domain.models import (
     SnapshotManifest,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
 class Runtime:
@@ -61,15 +62,15 @@ class Runtime:
     ) -> UnvalidatedAgentOutput:
         self.calls += 1
         return UnvalidatedAgentOutput(
-            b'{"schema_version":"1","findings":[]}', (), "fake", 0, 0, ()
+            b'{"schema_version":"2","candidates":[]}', (), "fake", 0, 0, ()
         )
 
 
 class Validator:
     warnings: tuple[object, ...] = ()
 
-    async def validate(self, _payload: bytes) -> FindingBatch:
-        return FindingBatch("1", ())
+    async def validate(self, _payload: bytes) -> CandidateFindingBatch:
+        return CandidateFindingBatch(())
 
 
 class Crash:
@@ -90,24 +91,22 @@ def _task(tmp_path: Path) -> ReviewTask:
         repository_realpath_hash="c" * 64,
         git_common_dir_hash="d" * 64,
         repository_path=tmp_path,
-        target_paths=("src/state.py",),
+        candidate_paths=("src/state.py",),
         scope=BranchScope(base_ref="main", target_ref="feature"),
         target=ReviewTarget("a" * 40, "b" * 40, None),
-        selected_agent_versions=("correctness:v1",),
+        selected_agent_versions=("correctness:v2",),
         created_at=datetime(2026, 7, 17, tzinfo=UTC),
     )
 
 
 def _prepared(tmp_path: Path) -> PreparedReview:
-    worktree = TaskWorktree(
-        "worktree-1", "review-restart", "d" * 64, tmp_path, "b" * 40, "e" * 64
-    )
+    worktree = TaskWorktree("worktree-1", "review-restart", "d" * 64, tmp_path, "b" * 40, "e" * 64)
     snapshot = ReviewSnapshot(
         "snapshot-1",
         worktree,
         ReviewTarget("a" * 40, "b" * 40, None),
         RepositoryFingerprint("b" * 40, "f" * 64, "1" * 64),
-        SnapshotManifest((), (), ()),
+        SnapshotManifest(ReviewFileScope.include_all(("src/state.py",))),
         ChangeIndex(()),
     )
     agent = correctness_agent()
@@ -115,9 +114,9 @@ def _prepared(tmp_path: Path) -> PreparedReview:
         agent=agent,
         prompt_content_hash=hashlib.sha256(agent.prompt_template.encode("utf-8")).hexdigest(),
         facts=SkillActivationFacts.empty(),
-        execution_limits=AgentExecutionLimits.legacy_default(),
+        execution_limits=AgentExecutionLimits.default(),
     )
-    return PreparedReview(snapshot, (spec,), {"correctness:v1": b"{}"}, "en")
+    return PreparedReview(snapshot, (spec,), {"correctness:v2": b"{}"}, "en")
 
 
 def _orchestrator(
@@ -154,7 +153,7 @@ def _orchestrator(
         ("after_model_return", 2),
         ("after_artifact_write", 2),
         ("after_output_saved", 1),
-        ("after_finding_completion", 1),
+        ("after_candidate_completion", 1),
     ),
 )
 async def test_reopen_reuses_only_durable_output_and_terminal_event_is_singleton(
@@ -194,25 +193,23 @@ async def test_reopen_reuses_only_durable_output_and_terminal_event_is_singleton
         await reopened.dispose()
 
 
-async def test_crash_inside_finding_transaction_rolls_back_then_reuses_output(
+async def test_crash_inside_candidate_transaction_rolls_back_then_reuses_output(
     tmp_path: Path,
 ) -> None:
     url = f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}"
     runtime = Runtime()
-    crash = Crash("after_finding_insert_attempt")
+    crash = Crash("after_candidate_insert_attempt")
     database = Database(url)
     await database.migrate()
     crashing_store = SqlReviewStore(database, completion_hook=crash.hit)
     await crashing_store.create_with_job(_task(tmp_path))
     assert await SqlJobQueue(database).next_queued() is not None
 
-    with pytest.raises(RuntimeError, match="crash:after_finding_insert_attempt"):
-        await _orchestrator(
-            database, tmp_path, runtime, None, store=crashing_store
-        ).execute("review-restart")
-    checkpoint = await SqlCheckpointStore(database).get(
-        "review-restart", "correctness:v1:0:root"
-    )
+    with pytest.raises(RuntimeError, match="crash:after_candidate_insert_attempt"):
+        await _orchestrator(database, tmp_path, runtime, None, store=crashing_store).execute(
+            "review-restart"
+        )
+    checkpoint = await SqlCheckpointStore(database).get("review-restart", "correctness:v2:0:root")
     assert checkpoint.status == "validating"
     await database.dispose()
 
@@ -247,7 +244,7 @@ async def test_restart_uses_stored_spec_artifact_after_current_configuration_cha
         agent=replace(agent, prompt_template=prompt_bytes.decode()),
         prompt_content_hash=prompt_artifact.content_hash,
         facts=SkillActivationFacts.empty(),
-        execution_limits=AgentExecutionLimits.legacy_default(),
+        execution_limits=AgentExecutionLimits.default(),
     )
     await SqlAgentExecutionSpecStore(database).save(
         task_id="review-restart",
@@ -265,15 +262,16 @@ async def test_restart_uses_stored_spec_artifact_after_current_configuration_cha
 
     reopened = Database(url)
     try:
-        stored = await SqlAgentExecutionSpecStore(reopened).get(
-            "review-restart", "node-reviewer"
-        )
+        stored = await SqlAgentExecutionSpecStore(reopened).get("review-restart", "node-reviewer")
         assert stored is not None
         assert stored.fingerprint == spec.fingerprint
         reopened_artifacts = FilesystemRunArtifactStore(reopened, artifact_root)
-        assert await reopened_artifacts.read_output(
-            stored.prompt_artifact_ref, stored.prompt_artifact_hash
-        ) == prompt_bytes
+        assert (
+            await reopened_artifacts.read_output(
+                stored.prompt_artifact_ref, stored.prompt_artifact_hash
+            )
+            == prompt_bytes
+        )
         hydrated = await load_frozen_execution_specs(
             "review-restart",
             SqlAgentExecutionSpecStore(reopened),
@@ -341,12 +339,12 @@ async def test_restart_preserves_one_saved_reviewer_and_requeues_running_peer(
             logical_attempt_group="primary",
             depends_on=(),
         )
-        for reference in ("security:v1", "performance:v1")
+        for reference in ("security:v2", "performance:v2")
     )
     verifier = ReviewPlanNode.create(
         task_id="review-restart",
         node_type=ReviewPlanNodeType.VERIFIER,
-        agent_reference="review-verifier:v1",
+        agent_reference="review-verifier:v2",
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
@@ -355,7 +353,7 @@ async def test_restart_preserves_one_saved_reviewer_and_requeues_running_peer(
     plan = ReviewPlan.create(
         task_id="review-restart",
         selection_mode="fixed",
-        reviewer_references=("security:v1", "performance:v1"),
+        reviewer_references=("security:v2", "performance:v2"),
         nodes=(*reviewers, verifier),
         planner_reason=None,
     )
@@ -375,8 +373,6 @@ async def test_restart_preserves_one_saved_reviewer_and_requeues_running_peer(
         assert (
             await recovered.get("review-restart", reviewers[0].node_id)
         ).status == "output_saved"
-        assert (
-            await recovered.get("review-restart", reviewers[1].node_id)
-        ).status == "pending"
+        assert (await recovered.get("review-restart", reviewers[1].node_id)).status == "pending"
     finally:
         await reopened.dispose()

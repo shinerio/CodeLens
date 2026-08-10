@@ -17,7 +17,36 @@ vi.mock("@monaco-editor/react", () => ({
 vi.mock("monaco-editor", () => ({}));
 
 function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
+  const normalized =
+    typeof payload === "object" &&
+    payload !== null &&
+    "task_id" in payload &&
+    "scope_type" in payload
+      ? {
+          base_ref: null,
+          target_ref: null,
+          selected_agents: ["correctness:v2"],
+          worktree_status: "pending",
+          repository_id: "repository-1",
+          repository_realpath_hash: "c".repeat(64),
+          git_common_dir_hash: "d".repeat(64),
+          cancellation_requested: false,
+          repository_name: "codelens",
+          created_at: "2026-07-18T12:00:00Z",
+          finding_count: 0,
+          external_context: null,
+          selection_request: {
+            mode: "fixed",
+            reviewer_versions: ["correctness:v2"],
+          },
+          profile_source: null,
+          review_plan: null,
+          coverage: { planned: [], completed: [], failed: [], omitted: [] },
+          verdict_summary: { accept: 0, deny: 0, merge: 0 },
+          ...payload,
+        }
+      : payload;
+  return new Response(JSON.stringify(normalized), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -101,7 +130,7 @@ it("shows the live run and refreshes findings after completion", async () => {
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -187,7 +216,7 @@ it("keeps published findings visible while naming partial reviewer coverage", as
       head_oid: "b".repeat(40),
       base_ref: "main",
       target_ref: "feature",
-      selected_agents: ["security:v1", "performance:v1"],
+      selected_agents: ["security:v2", "performance:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -201,18 +230,18 @@ it("keeps published findings visible while naming partial reviewer coverage", as
       profile_source: null,
       review_plan: {
         selection_mode: "adaptive",
-        reviewer_references: ["security:v1", "performance:v1"],
+        reviewer_references: ["security:v2", "performance:v2"],
         plan_hash: "1".repeat(64),
         planner_reason: "Risk-sensitive fan-out",
         nodes: [
-          { node_id: "planner", node_type: "planner", agent_reference: "planner:v1", depends_on: [], pass_index: 0, shard_id: "all", logical_attempt_group: "planner", task_id: "review_partial" },
-          { node_id: "security", node_type: "reviewer", agent_reference: "security:v1", depends_on: ["planner"], pass_index: 1, shard_id: "all", logical_attempt_group: "security", task_id: "review_partial" },
+          { node_id: "planner", node_type: "planner", agent_reference: "planner:v2", depends_on: [], pass_index: 0, shard_id: "all", logical_attempt_group: "planner", task_id: "review_partial" },
+          { node_id: "security", node_type: "reviewer", agent_reference: "security:v2", depends_on: ["planner"], pass_index: 1, shard_id: "all", logical_attempt_group: "security", task_id: "review_partial" },
         ],
       },
       coverage: {
-        planned: ["security:v1", "performance:v1"],
-        completed: ["security:v1"],
-        failed: ["performance:v1"],
+        planned: ["security:v2", "performance:v2"],
+        completed: ["security:v2"],
+        failed: ["performance:v2"],
         omitted: [],
       },
       verdict_summary: { accept: 1, deny: 0, merge: 1 },
@@ -229,7 +258,7 @@ it("keeps published findings visible while naming partial reviewer coverage", as
 
   expect(await screen.findByRole("tab", { name: /Findings/ })).toHaveAttribute("aria-selected", "true");
   expect(await screen.findByText("Published security finding")).toBeVisible();
-  expect(screen.getByRole("status", { name: "Reviewer coverage" })).toHaveTextContent("performance:v1");
+  expect(screen.getByRole("status", { name: "Reviewer coverage" })).toHaveTextContent("performance:v2");
   expect(screen.getByText("Risk-sensitive fan-out")).toBeVisible();
 });
 
@@ -254,7 +283,7 @@ it("keeps polling an empty transcript after completion until the worker persists
                 created_at: "2026-07-24T00:00:00Z",
                 redacted: false,
                 truncated: false,
-                metadata: { agent: "correctness:v1", message_id: "message-1" },
+                metadata: { agent: "correctness:v2", message_id: "message-1" },
               },
             ],
       );
@@ -266,7 +295,7 @@ it("keeps polling an empty transcript after completion until the worker persists
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -311,7 +340,7 @@ it("shows timeline filters when the persisted review plan arrives", async () => 
         created_at: "2026-08-03T00:00:00Z",
         redacted: false,
         truncated: false,
-        metadata: { agent: "security:v1", message_id: "security-output" },
+        metadata: { agent: "security:v2", message_id: "security-output" },
       }]);
     }
     if (url.endsWith("/api/reviews/review_plan_refresh")) {
@@ -322,7 +351,7 @@ it("shows timeline filters when the persisted review plan arrives", async () => 
         scope_type: "branch",
         base_oid: "a".repeat(40),
         head_oid: "b".repeat(40),
-        selected_agents: reviewRequests > 1 ? ["security:v1", "performance:v1"] : [],
+        selected_agents: reviewRequests > 1 ? ["security:v2", "performance:v2"] : [],
         worktree_status: "pending",
         repository_id: "repository-1",
         repository_realpath_hash: "c".repeat(64),
@@ -330,12 +359,12 @@ it("shows timeline filters when the persisted review plan arrives", async () => 
         cancellation_requested: false,
         review_plan: reviewRequests > 1 ? {
           selection_mode: "fixed",
-          reviewer_references: ["security:v1", "performance:v1"],
+          reviewer_references: ["security:v2", "performance:v2"],
           plan_hash: "1".repeat(64),
           planner_reason: null,
           nodes: [
-            { node_id: "security", node_type: "reviewer", agent_reference: "security:v1", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "security", task_id: "review_plan_refresh" },
-            { node_id: "performance", node_type: "reviewer", agent_reference: "performance:v1", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "performance", task_id: "review_plan_refresh" },
+            { node_id: "security", node_type: "reviewer", agent_reference: "security:v2", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "security", task_id: "review_plan_refresh" },
+            { node_id: "performance", node_type: "reviewer", agent_reference: "performance:v2", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "performance", task_id: "review_plan_refresh" },
           ],
         } : null,
       });
@@ -394,7 +423,7 @@ it("shows the actionable failure reason in the page banner", async () => {
       scope_type: "commit",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -436,7 +465,7 @@ it("shows candidate validation warnings without failing the completed review", a
           redacted: false,
           truncated: false,
           metadata: {
-            agent: "correctness:v1",
+            agent: "correctness:v2",
             warning_code: "finding_validation_partial",
             retained_count: "3",
             skipped_count: "2",
@@ -455,7 +484,7 @@ it("shows candidate validation warnings without failing the completed review", a
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -500,7 +529,7 @@ it("shows files that were not verified before forced successful completion", asy
           redacted: false,
           truncated: false,
           metadata: {
-            agent: "correctness:v1",
+            agent: "correctness:v2",
             warning_code: "review_coverage_incomplete",
             incomplete_file_count: "2",
             incomplete_files: '["src/missed.py","src/unread.py"]',
@@ -514,7 +543,7 @@ it("shows files that were not verified before forced successful completion", asy
           redacted: false,
           truncated: false,
           metadata: {
-            agent: "security:v1",
+            agent: "security:v2",
             warning_code: "review_coverage_incomplete",
             incomplete_file_count: "2",
             incomplete_files: '["src/unread.py","src/security.py"]',
@@ -531,7 +560,7 @@ it("shows files that were not verified before forced successful completion", asy
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -574,7 +603,7 @@ it("shows the process report after a review has completed", async () => {
           created_at: "2026-07-25T00:00:05Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1" },
+          metadata: { agent: "correctness:v2" },
         },
       ]);
     }
@@ -602,7 +631,7 @@ it("shows the process report after a review has completed", async () => {
         ],
         agents: [
           {
-            agent: "correctness:v1",
+            agent: "correctness:v2",
             model_name: "gpt-5.1",
             llm_call_count: 3,
             input_tokens: 120,
@@ -622,7 +651,7 @@ it("shows the process report after a review has completed", async () => {
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -697,7 +726,7 @@ it("places finding navigation above a full-width source comparison", async () =>
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),

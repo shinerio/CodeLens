@@ -55,7 +55,7 @@ async def get_reviewer_prompt(
     agent_id: AgentId,
     locale: Locale,
     components: Annotated[HttpComponents, Depends(get_components)],
-    version: Version = 1,
+    version: Version = 2,
 ) -> ReviewerPromptResponse:
     return _response(
         await _resolve(components.reviewer_prompts.get(_agent(agent_id, version), locale))
@@ -68,13 +68,11 @@ async def update_reviewer_prompt(
     locale: Locale,
     request: UpdateReviewerPromptRequest,
     components: Annotated[HttpComponents, Depends(get_components)],
-    version: Version = 1,
+    version: Version = 2,
 ) -> ReviewerPromptResponse:
     return _response(
         await _resolve(
-            components.reviewer_prompts.update(
-                _agent(agent_id, version), locale, request.prompt
-            )
+            components.reviewer_prompts.update(_agent(agent_id, version), locale, request.prompt)
         )
     )
 
@@ -84,7 +82,7 @@ async def reset_reviewer_prompt(
     agent_id: AgentId,
     locale: Locale,
     components: Annotated[HttpComponents, Depends(get_components)],
-    version: Version = 1,
+    version: Version = 2,
 ) -> ReviewerPromptResponse:
     return _response(
         await _resolve(components.reviewer_prompts.reset(_agent(agent_id, version), locale))

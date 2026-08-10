@@ -1,16 +1,20 @@
+import json
 import subprocess
+from dataclasses import asdict
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from codelens.bootstrap.settings import Settings
 from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
     Finding,
-    FindingBatch,
     FindingDisposition,
     FindingSeverity,
     RuleReference,
@@ -23,7 +27,7 @@ from codelens.review.domain.review_plan import (
     ReviewPlanNode,
     ReviewPlanNodeType,
 )
-from codelens.review.infrastructure.repositories import SqlCheckpointStore
+from codelens.review.infrastructure.tables import findings, verdict_decisions
 from tests.fixtures.git_repository import _run_git
 
 
@@ -55,19 +59,19 @@ def _request(repository: Path, scope: dict[str, object]) -> dict[str, object]:
     return {
         "repository_path": str(repository),
         "scope": scope,
-        "selected_agents": ["correctness:v1"],
+        "reviewer_selection": {
+            "mode": "fixed",
+            "reviewer_versions": ["correctness:v2"],
+        },
     }
 
 
-def test_create_review_rejects_legacy_and_v2_selection_together(
+def test_create_review_rejects_removed_selected_agents_field(
     tmp_path: Path, git_repository: Path
 ) -> None:
     _prepared_repository(git_repository)
     payload = _request(git_repository, {"type": "uncommitted"})
-    payload["reviewer_selection"] = {
-        "mode": "fixed",
-        "reviewer_versions": ["general:v1"],
-    }
+    payload["selected_agents"] = ["correctness:v2"]
 
     with TestClient(
         create_app(_settings(tmp_path, tmp_path)),
@@ -131,17 +135,26 @@ def test_review_plan_projection_includes_derived_plan_hash(
         reviewer = ReviewPlanNode.create(
             task_id=task_id,
             node_type=ReviewPlanNodeType.REVIEWER,
-            agent_reference="correctness:v1",
+            agent_reference="correctness:v2",
             pass_index=ReviewPass.REVIEWER,
             shard_id="root",
             logical_attempt_group="primary",
             depends_on=(),
         )
+        verifier = ReviewPlanNode.create(
+            task_id=task_id,
+            node_type=ReviewPlanNodeType.VERIFIER,
+            agent_reference="review-verifier:v2",
+            pass_index=ReviewPass.VERIFIER,
+            shard_id="batch",
+            logical_attempt_group="primary",
+            depends_on=(reviewer.node_id,),
+        )
         plan = ReviewPlan.create(
             task_id=task_id,
             selection_mode="fixed",
-            reviewer_references=("correctness:v1",),
-            nodes=(reviewer,),
+            reviewer_references=("correctness:v2",),
+            nodes=(reviewer, verifier),
             planner_reason=None,
         )
         client.portal.call(
@@ -209,9 +222,7 @@ def test_recent_repositories_deduplicates_review_paths(
         assert first.status_code == 202
         assert second.status_code == 202
 
-        first_delete = client.request(
-            "DELETE", f"/api/reviews/{first.json()['task_id']}", json={}
-        )
+        first_delete = client.request("DELETE", f"/api/reviews/{first.json()['task_id']}", json={})
         second_delete = client.request(
             "DELETE", f"/api/reviews/{second.json()['task_id']}", json={}
         )
@@ -386,7 +397,7 @@ def test_create_review_pins_all_scope_types(
     assert body["scope_type"] == scope_type
     assert len(body["base_oid"]) == 40
     assert len(body["head_oid"]) == 40
-    assert body["selected_agents"] == ["correctness:v1"]
+    assert body["selected_agents"] == ["correctness:v2"]
     assert body["worktree_status"] == "pending"
     assert "worktree_path" not in body
     assert "artifact_path" not in body
@@ -674,9 +685,7 @@ def test_review_query_cancel_report_and_sse_resume_contract(
     assert canceled.status_code == 202
     assert canceled.json()["cancellation_requested"] is True
     assert canceled_again.status_code == 202
-    assert sum(
-        event.event_type == "review.cancel_requested" for event in initial_events
-    ) == 1
+    assert sum(event.event_type == "review.cancel_requested" for event in initial_events) == 1
     assert report.status_code == 404
     assert report.json()["code"] == "report_not_ready"
     assert stream.status_code == 200
@@ -781,7 +790,6 @@ def test_review_findings_endpoint_returns_empty_then_saved_findings(
         )
         task_id = created.json()["task_id"]
         empty = client.get(f"/api/reviews/{task_id}/findings")
-        checkpoint_store = SqlCheckpointStore(app.state.components.database)
         finding = Finding(
             finding_id="finding_1",
             fingerprint="d" * 64,
@@ -816,23 +824,38 @@ def test_review_findings_endpoint_returns_empty_then_saved_findings(
             recommendation="Review the correct branch target.",
             rule_sources=(RuleReference("rules/review.md", "f" * 64),),
         )
-        batch = FindingBatch("1", (finding,))
-        node_key = "correctness:v1:0:root"
-        client.portal.call(checkpoint_store.ensure, task_id, node_key, "primary")
-        client.portal.call(checkpoint_store.mark_running, task_id, node_key)
-        client.portal.call(
-            checkpoint_store.mark_output_saved,
-            task_id,
-            node_key,
-            "artifact_1",
-            "a" * 64,
-        )
-        client.portal.call(
-            app.state.components.review_store.complete_with_findings,
-            task_id,
-            node_key,
-            batch,
-        )
+
+        async def persist_verdict_finding() -> None:
+            async def operation(session: AsyncSession) -> None:
+                await session.execute(
+                    insert(verdict_decisions).values(
+                        verdict_decision_id="decision-1",
+                        task_id=task_id,
+                        verifier_run_id="verifier-run-1",
+                        outcome="merge",
+                        payload_json="{}",
+                        created_at=datetime.now(UTC),
+                    )
+                )
+                await session.execute(
+                    insert(findings).values(
+                        finding_id=finding.finding_id,
+                        task_id=task_id,
+                        node_key="review-verifier:v2:0:batch",
+                        fingerprint=finding.fingerprint,
+                        payload_json=json.dumps(asdict(finding), default=str),
+                        severity=finding.severity.value,
+                        verdict_decision_id="decision-1",
+                        verification_status="confirmed",
+                        path=finding.primary_location.path,
+                        start_line=finding.primary_location.start_line,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+
+            await app.state.components.database.run_transaction(operation)
+
+        client.portal.call(persist_verdict_finding)
         saved = client.get(f"/api/reviews/{task_id}/findings")
 
     assert empty.status_code == 200
@@ -964,12 +987,12 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
             transcripts.append_many,
             task_id,
             (
-                ("model_started", "", {"agent": "correctness:v1"}),
+                ("model_started", "", {"agent": "correctness:v2"}),
                 (
                     "tool_call",
                     "{}",
                     {
-                        "agent": "correctness:v1",
+                        "agent": "correctness:v2",
                         "tool_name": "read_file",
                         "tool_call_id": "call-1",
                     },
@@ -977,13 +1000,13 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
                 (
                     "tool_result",
                     "{}",
-                    {"agent": "correctness:v1", "tool_call_id": "call-1"},
+                    {"agent": "correctness:v2", "tool_call_id": "call-1"},
                 ),
                 (
                     "model_output",
                     "{}",
                     {
-                        "agent": "correctness:v1",
+                        "agent": "correctness:v2",
                         "model_name": "gpt-5.1",
                         "llm_call_count": "2",
                         "input_tokens": "80",
@@ -1006,7 +1029,5 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
     assert body["llm_call_count"] == 2
     assert body["total_tokens"] == 100
     assert body["tool_call_count"] == 1
-    assert body["tools"] == [
-        {"tool_name": "read_file", "call_count": 1, "result_count": 1}
-    ]
+    assert body["tools"] == [{"tool_name": "read_file", "call_count": 1, "result_count": 1}]
     assert body["usage_is_complete"] is True

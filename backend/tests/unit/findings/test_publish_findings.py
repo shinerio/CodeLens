@@ -8,7 +8,11 @@ from codelens.findings.domain.models import FindingSeverity, SourceLocation
 from codelens.findings.domain.verdict import VerdictDecision
 
 
-def candidate(candidate_id: str, reviewer: str) -> CandidateFinding:
+def candidate(
+    candidate_id: str,
+    reviewer: str,
+    severity: FindingSeverity = FindingSeverity.HIGH,
+) -> CandidateFinding:
     """Build a minimal CandidateFinding for publication tests."""
     return CandidateFinding(
         task_id="review-1",
@@ -18,12 +22,10 @@ def candidate(candidate_id: str, reviewer: str) -> CandidateFinding:
         reviewer_reference=reviewer,
         category="authentication",
         title="Missing signature check",
-        severity=FindingSeverity.HIGH,
+        severity=severity,
         primary_dimension="security",
         evidence_strength=EvidenceStrength.DIRECT,
-        primary_location=SourceLocation(
-            "src/webhook.py", 5, 5, "new", "a" * 64, False
-        ),
+        primary_location=SourceLocation("src/webhook.py", 5, 5, "new", "a" * 64, False),
         related_locations=(),
         changed_hunk_id="hunk-a",
         existing_code_hash="a" * 64,
@@ -68,8 +70,8 @@ def cluster_for(
 
 def test_accept_verdict_publishes_finding_with_cluster_canonical_fields() -> None:
     """ACCEPT verdict publishes one Finding using the cluster's canonical fields."""
-    candidate_a = candidate("candidate-a", "security:v1")
-    candidate_b = candidate("candidate-b", "general:v1")
+    candidate_a = candidate("candidate-a", "security:v2")
+    candidate_b = candidate("candidate-b", "general:v2")
     clusters = (cluster_for("cluster-a", (candidate_a, candidate_b)),)
     verdicts = (VerdictDecision.accept(cluster_ids=("cluster-a",)),)
 
@@ -97,8 +99,8 @@ def test_accept_verdict_publishes_finding_with_cluster_canonical_fields() -> Non
     assert finding.changed_hunk_id == canonical.changed_hunk_id
     # ACCEPT over one cluster unions all member reviewer references.
     assert finding.source_reviewer_references == (
-        "general:v1",
-        "security:v1",
+        "general:v2",
+        "security:v2",
     )
     assert finding.confidence is None
     assert finding.disposition.value == "blocking"
@@ -106,9 +108,15 @@ def test_accept_verdict_publishes_finding_with_cluster_canonical_fields() -> Non
 
 def test_merge_verdict_publishes_finding_with_verdict_merge_fields() -> None:
     """MERGE verdict publishes one Finding using the model-synthesized fields."""
-    candidate_a = candidate("candidate-a", "security:v1")
-    candidate_b = candidate("candidate-b", "general:v1")
-    clusters = (cluster_for("cluster-a", (candidate_a, candidate_b)),)
+    candidate_a = candidate("candidate-a", "security:v2", FindingSeverity.LOW)
+    candidate_b = candidate("candidate-b", "general:v2", FindingSeverity.LOW)
+    clusters = (
+        cluster_for(
+            "cluster-a",
+            (candidate_a, candidate_b),
+            severity=FindingSeverity.LOW,
+        ),
+    )
     verdicts = (
         VerdictDecision.merge(
             cluster_ids=("cluster-a",),
@@ -122,6 +130,8 @@ def test_merge_verdict_publishes_finding_with_verdict_merge_fields() -> None:
             severity=FindingSeverity.CRITICAL,
             primary_dimension="security",
             evidence_strength=EvidenceStrength.DIRECT,
+            primary_location=SourceLocation("src/overridden.py", 8, 9, "old", "d" * 64, False),
+            changed_hunk_id="hunk-overridden",
         ),
     )
 
@@ -139,23 +149,26 @@ def test_merge_verdict_publishes_finding_with_verdict_merge_fields() -> None:
     assert finding.title == verdict.title
     assert finding.category == verdict.category
     assert finding.severity == verdict.severity
+    assert finding.severity is FindingSeverity.CRITICAL
     assert finding.recommendation == verdict.recommendation
     assert finding.primary_dimension == verdict.primary_dimension
     assert finding.evidence_strength == verdict.evidence_strength.value
     # impact/explanation mirror the merged content.
     assert finding.impact == verdict.content
     assert finding.explanation == verdict.content
-    # Reviewer/location provenance still comes from the cluster's canonical candidate.
+    # Reviewer provenance remains host-owned while merge location is fully overridden.
     assert finding.reviewer_id == candidate_a.reviewer_reference
+    assert finding.primary_location == verdict.primary_location
+    assert finding.changed_hunk_id == "hunk-overridden"
     assert finding.source_reviewer_references == (
-        "general:v1",
-        "security:v1",
+        "general:v2",
+        "security:v2",
     )
 
 
 def test_deny_verdict_publishes_no_finding() -> None:
     """DENY verdict suppresses publication; no Finding is emitted."""
-    candidate_a = candidate("candidate-a", "security:v1")
+    candidate_a = candidate("candidate-a", "security:v2")
     clusters = (cluster_for("cluster-a", (candidate_a,)),)
     verdicts = (VerdictDecision.deny(cluster_ids=("cluster-a",)),)
 
@@ -171,9 +184,9 @@ def test_deny_verdict_publishes_no_finding() -> None:
 
 def test_merge_verdict_over_multiple_clusters_unions_reviewer_references() -> None:
     """A MERGE verdict spanning multiple clusters unions all member reviewers."""
-    candidate_a = candidate("candidate-a", "security:v1")
-    candidate_b = candidate("candidate-b", "general:v1")
-    candidate_c = candidate("candidate-c", "perf:v1")
+    candidate_a = candidate("candidate-a", "security:v2")
+    candidate_b = candidate("candidate-b", "general:v2")
+    candidate_c = candidate("candidate-c", "performance:v2")
     clusters = (
         cluster_for("cluster-a", (candidate_a, candidate_b)),
         cluster_for("cluster-b", (candidate_c,)),
@@ -191,6 +204,8 @@ def test_merge_verdict_over_multiple_clusters_unions_reviewer_references() -> No
             severity=FindingSeverity.CRITICAL,
             primary_dimension="security",
             evidence_strength=EvidenceStrength.DIRECT,
+            primary_location=SourceLocation("src/combined.py", 2, 2, "new", "e" * 64, False),
+            changed_hunk_id="hunk-combined",
         ),
     )
 
@@ -205,7 +220,7 @@ def test_merge_verdict_over_multiple_clusters_unions_reviewer_references() -> No
     finding = findings[0]
     # Union of reviewers across all clusters in the verdict, sorted and de-duplicated.
     assert finding.source_reviewer_references == (
-        "general:v1",
-        "perf:v1",
-        "security:v1",
+        "general:v2",
+        "performance:v2",
+        "security:v2",
     )

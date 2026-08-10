@@ -30,9 +30,9 @@ export function toggleFixedReviewer(
     return { ...strategy, reviewerSelection: { mode: "fixed", reviewerVersions: without } };
   }
   const next =
-    reviewerVersion === "general:v1"
+    reviewerVersion === "general:v2"
       ? [reviewerVersion]
-      : [...without.filter((reference) => reference !== "general:v1"), reviewerVersion];
+      : [...without.filter((reference) => reference !== "general:v2"), reviewerVersion];
   const order = new Map(catalog.map((entry, index) => [entry.reference, index]));
   next.sort((left, right) => (order.get(left) ?? Number.MAX_SAFE_INTEGER) - (order.get(right) ?? Number.MAX_SAFE_INTEGER));
   return { ...strategy, reviewerSelection: { mode: "fixed", reviewerVersions: next } };
@@ -55,7 +55,7 @@ export function validateStrategy(
       .filter((entry) => entry.capabilityStatus === "ready")
       .map((entry) => entry.reference),
   );
-  ready.add("correctness:v1");
+  ready.add("correctness:v2");
   return strategy.reviewerSelection.reviewerVersions
     .filter((reference) => !ready.has(reference))
     .map((reviewerVersion) => ({ code: "unavailable_reviewer", reviewerVersion }));

@@ -71,6 +71,4 @@ def test_runtime_log_level_is_persisted_for_other_processes(tmp_path: Path) -> N
     set_runtime_log_level(tmp_path, "debug")
 
     assert get_runtime_log_level(tmp_path) == "debug"
-    assert json.loads((tmp_path / "logging.json").read_text(encoding="utf-8")) == {
-        "level": "debug"
-    }
+    assert json.loads((tmp_path / "logging.json").read_text(encoding="utf-8")) == {"level": "debug"}

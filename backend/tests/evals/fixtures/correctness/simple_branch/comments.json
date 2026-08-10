@@ -1,6 +1,7 @@
 [
   {
     "path": "src/cache.py",
+    "reviewer_id": "correctness",
     "side": "new",
     "existing_code": "return \"shared-user-cache\"",
     "title": "Shared cache key leaks data between users",
@@ -8,10 +9,12 @@
     "recommendation": "Include the user identifier in the cache key.",
     "category": "data-isolation",
     "severity": "critical",
-    "confidence": 0.99
+    "primary_dimension": "correctness",
+    "evidence_strength": "direct"
   },
   {
     "path": "src/permissions.py",
+    "reviewer_id": "correctness",
     "side": "old",
     "existing_code": "return user_role == \"admin\"",
     "title": "Deleting the authorization guard permits every role",
@@ -19,10 +22,12 @@
     "recommendation": "Keep an authorization guard in the target revision.",
     "category": "authorization",
     "severity": "high",
-    "confidence": 0.98
+    "primary_dimension": "correctness",
+    "evidence_strength": "direct"
   },
   {
     "path": "src/state.py",
+    "reviewer_id": "correctness",
     "side": "new",
     "existing_code": "if current_state != \"draft\" and next_state == \"reviewing\":",
     "title": "Inverted transition guard allows invalid states",
@@ -30,6 +35,7 @@
     "recommendation": "Restore the draft-only guard before allowing the reviewing transition.",
     "category": "state-machine",
     "severity": "medium",
-    "confidence": 0.97
+    "primary_dimension": "correctness",
+    "evidence_strength": "direct"
   }
 ]

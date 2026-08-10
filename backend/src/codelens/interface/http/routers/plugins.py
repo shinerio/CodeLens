@@ -321,9 +321,7 @@ async def update_plugin(
 
     _LOGGER.info("Updating plugin: %s", plugin_id)
     try:
-        record = await components.plugin_manager.update_plugin(
-            plugin_id, ref=request.ref
-        )
+        record = await components.plugin_manager.update_plugin(plugin_id, ref=request.ref)
     except PluginInstallError as error:
         raise HttpProblem(400, "plugin_update_failed", str(error)) from error
     _LOGGER.info("Plugin updated: %s to v%s", record.plugin_id, record.manifest.version)
@@ -420,9 +418,7 @@ async def update_trigger_config(
             plugin_id,
             request.config,
             profile_source=(
-                request.profile_source.to_domain()
-                if request.profile_source is not None
-                else None
+                request.profile_source.to_domain() if request.profile_source is not None else None
             ),
             should_replace_profile_source="profile_source" in request.model_fields_set,
         )
@@ -447,9 +443,7 @@ async def update_report_config(
 
     _LOGGER.info("Updating report config for plugin: %s", plugin_id)
     try:
-        record = await components.plugin_manager.update_report_config(
-            plugin_id, request.config
-        )
+        record = await components.plugin_manager.update_report_config(plugin_id, request.config)
     except (PluginCapabilityError, PluginConfigurationError) as error:
         _raise_plugin_problem(error)
     if record is None:

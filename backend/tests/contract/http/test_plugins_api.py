@@ -105,7 +105,7 @@ def test_plugin_response_exposes_copied_v2_policy(tmp_path: Path) -> None:
     assert payload["config_revision"] == 1
     assert payload["config"]["reviewer_selection"] == {
         "mode": "fixed",
-        "reviewer_versions": ["correctness:v1"],
+        "reviewer_versions": ["correctness:v2"],
     }
     assert "selected_agents" not in payload["config"]
     assert payload["profile_source"] is None
@@ -149,7 +149,7 @@ def test_plugin_config_rejects_mixed_adaptive_fields(tmp_path: Path) -> None:
                 "config": {
                     "reviewer_selection": {
                         "mode": "adaptive",
-                        "reviewer_versions": ["security:v1"],
+                        "reviewer_versions": ["security:v2"],
                     }
                 }
             },

@@ -76,10 +76,9 @@ class CapabilityResolver:
         profile: CapabilityProfile,
     ) -> None:
         expected_output_tool = {
-            "1": ("comment", 1),
             "2": ("comment", 2),
-            "review-plan:1": ("submit_review_plan", 1),
-            "verdict:1": ("finalize_verdicts", 1),
+            "review-plan:2": ("submit_review_plan", 2),
+            "verdict:2": ("finalize_verdicts", 2),
         }.get(agent.output_contract_version)
         if expected_output_tool is None:
             raise ValueError("Agent output contract is unavailable")

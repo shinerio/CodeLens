@@ -8,17 +8,39 @@ import { RunListPage } from "./RunListPage";
 
 const fetchMock = vi.fn();
 
+function reviewResponse(overrides: Record<string, unknown>) {
+  return {
+    task_id: "review_1",
+    repository_name: "codelens",
+    created_at: "2026-07-18T12:00:00Z",
+    status: "completed",
+    scope_type: "branch",
+    base_oid: "a".repeat(40),
+    head_oid: "b".repeat(40),
+    base_ref: "main",
+    target_ref: "feature",
+    selected_agents: ["correctness:v2"],
+    worktree_status: "pending",
+    repository_id: "repository-1",
+    repository_realpath_hash: "c".repeat(64),
+    git_common_dir_hash: "d".repeat(64),
+    cancellation_requested: false,
+    finding_count: 0,
+    external_context: null,
+    selection_request: { mode: "fixed", reviewer_versions: ["correctness:v2"] },
+    profile_source: null,
+    review_plan: null,
+    coverage: { planned: [], completed: [], failed: [], omitted: [] },
+    verdict_summary: { accept: 0, deny: 0, merge: 0 },
+    ...overrides,
+  };
+}
+
 beforeEach(() => {
   fetchMock.mockResolvedValue(
     new Response(
       JSON.stringify([
-        {
-          task_id: "review_1",
-          repository_name: "codelens",
-          created_at: "2026-07-18T12:00:00Z",
-          status: "completed",
-          scope_type: "branch",
-        },
+        reviewResponse({}),
       ]),
       { status: 200, headers: { "Content-Type": "application/json" } },
     ),
@@ -75,25 +97,17 @@ it("retries a failed review as a new task and opens its details", async () => {
   fetchMock.mockImplementation(async (_input: RequestInfo | URL, init?: RequestInit) => {
     if (init?.method === "POST") {
       return new Response(
-        JSON.stringify({
+        JSON.stringify(reviewResponse({
           task_id: "review_2",
-          repository_name: "codelens",
           created_at: "2026-07-18T12:05:00Z",
           status: "created",
-          scope_type: "branch",
-        }),
+        })),
         { status: 202, headers: { "Content-Type": "application/json" } },
       );
     }
     return new Response(
       JSON.stringify([
-        {
-          task_id: "review_1",
-          repository_name: "codelens",
-          created_at: "2026-07-18T12:00:00Z",
-          status: "failed",
-          scope_type: "branch",
-        },
+        reviewResponse({ status: "failed" }),
       ]),
       { status: 200, headers: { "Content-Type": "application/json" } },
     );

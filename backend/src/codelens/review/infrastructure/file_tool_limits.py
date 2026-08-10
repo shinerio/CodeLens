@@ -19,7 +19,6 @@ class _ToolLimitsPayload(TypedDict):
     max_pattern_chars: int
     regex_timeout_seconds: float
     comment_batch_size: int
-    reviewed_files_batch: int
     short_text_max: int
     long_text_max: int
     task_summary_max: int
@@ -34,7 +33,6 @@ _INT_FIELDS = (
     "max_path_chars",
     "max_pattern_chars",
     "comment_batch_size",
-    "reviewed_files_batch",
     "short_text_max",
     "long_text_max",
     "task_summary_max",
@@ -88,7 +86,6 @@ class FilesystemToolLimitsStore:
             "max_pattern_chars": limits.max_pattern_chars,
             "regex_timeout_seconds": limits.regex_timeout_seconds,
             "comment_batch_size": limits.comment_batch_size,
-            "reviewed_files_batch": limits.reviewed_files_batch,
             "short_text_max": limits.short_text_max,
             "long_text_max": limits.long_text_max,
             "task_summary_max": limits.task_summary_max,

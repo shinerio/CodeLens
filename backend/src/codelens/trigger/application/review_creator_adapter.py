@@ -107,8 +107,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
                 - For 'commit': base_commit, target_ref
                 - For 'branch': base_ref, target_ref
                 - For 'uncommitted': (no parameters needed)
-            selected_agents: Tuple of agent IDs to use for the review.
-            prompt_locale: Locale for review prompts ('en' or 'zh-CN').
+            review_policy: Frozen v2 reviewer selection and trigger behavior.
             external_context: Platform-specific context for export routing.
 
         Returns:
@@ -136,9 +135,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
                         review_policy.reviewer_selection,
                         PluginAdaptiveReviewerSelection,
                     )
-                    else FixedReviewerSelection(
-                        review_policy.reviewer_selection.reviewer_versions
-                    )
+                    else FixedReviewerSelection(review_policy.reviewer_selection.reviewer_versions)
                 ),
             ),
             trigger_source="plugin",

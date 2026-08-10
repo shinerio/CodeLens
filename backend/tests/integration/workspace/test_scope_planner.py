@@ -78,8 +78,8 @@ async def test_branch_scope_uses_merge_base_and_pins_target_oid(git_repository: 
     assert plan.base_oid == main_oid
     assert plan.head_oid == feature_a_oid
     assert plan.scope_type == "branch"
-    assert plan.target_paths == ("src/feature_a.py",)
-    assert "dirty-only-on-main.py" not in plan.target_paths
+    assert plan.candidate_paths == ("src/feature_a.py",)
+    assert "dirty-only-on-main.py" not in plan.candidate_paths
 
 
 async def test_commit_scope_rejects_non_ancestor_baseline(git_repository: Path) -> None:
@@ -109,7 +109,7 @@ async def test_uncommitted_scope_collects_tracked_and_allowed_untracked_paths(
     assert plan.head_oid == head_oid
     assert plan.scope_type == "uncommitted"
     assert plan.capture_workspace_overlay
-    assert plan.target_paths == (".gitignore", "README.md", "allowed.py")
+    assert plan.candidate_paths == (".gitignore", "README.md", "allowed.py")
 
 
 async def test_full_scope_uses_only_selected_target_tree(git_repository: Path) -> None:
@@ -125,7 +125,7 @@ async def test_full_scope_uses_only_selected_target_tree(git_repository: Path) -
     assert plan.base_oid == feature_a_oid
     assert plan.head_oid == feature_a_oid
     assert plan.scope_type == "full"
-    assert plan.target_paths == ("README.md", "src/feature_a.py")
+    assert plan.candidate_paths == ("README.md", "src/feature_a.py")
     assert not plan.capture_workspace_overlay
 
 

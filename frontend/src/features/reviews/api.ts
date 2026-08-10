@@ -3,25 +3,7 @@ import type { FindingRecord, FindingSourcePreview } from "../findings/types";
 import type { CreateReviewRequest, ReviewResponse } from "./types";
 import type { ReviewStrategySnapshot, ScopeRequest } from "./types";
 
-type ReviewResponseDto = Omit<
-  ReviewResponse,
-  | "selection_request"
-  | "profile_source"
-  | "review_plan"
-  | "coverage"
-  | "verdict_summary"
-> &
-  Partial<
-    Pick<
-      ReviewResponse,
-      | "selection_request"
-      | "profile_source"
-      | "review_plan"
-      | "verdict_summary"
-    >
-  > & {
-    coverage?: Partial<ReviewResponse["coverage"]>;
-  };
+type ReviewResponseDto = ReviewResponse;
 
 export function toCreateReviewRequest(input: {
   repositoryPath: string;
@@ -51,11 +33,7 @@ export function toCreateReviewRequest(input: {
 }
 
 export function parseReviewResponse(value: ReviewResponseDto): ReviewResponse {
-  const isVersionTwoResponse = value.selection_request !== undefined;
-  const selectionRequest = value.selection_request ?? {
-    mode: "fixed" as const,
-    reviewer_versions: value.selected_agents,
-  };
+  const selectionRequest = value.selection_request;
   if (selectionRequest.mode !== "fixed" && selectionRequest.mode !== "adaptive") {
     throw new Error("Unknown reviewer selection mode");
   }
@@ -67,29 +45,23 @@ export function parseReviewResponse(value: ReviewResponseDto): ReviewResponse {
     }
   }
   for (const key of ["planned", "completed", "failed", "omitted"] as const) {
-    if (isVersionTwoResponse && !Array.isArray(value.coverage?.[key])) {
+    if (!Array.isArray(value.coverage[key])) {
       throw new Error(`Missing Review coverage field: ${key}`);
     }
   }
   const coverage = {
-    planned: value.coverage?.planned ?? value.selected_agents,
-    completed:
-      value.coverage?.completed ??
-      (value.status === "completed" ? value.selected_agents : []),
-    failed: value.coverage?.failed ?? [],
-    omitted: value.coverage?.omitted ?? [],
+    planned: value.coverage.planned,
+    completed: value.coverage.completed,
+    failed: value.coverage.failed,
+    omitted: value.coverage.omitted,
   };
   return {
     ...value,
     selection_request: selectionRequest,
-    profile_source: value.profile_source ?? null,
+    profile_source: value.profile_source,
     review_plan: reviewPlan,
     coverage,
-    verdict_summary: value.verdict_summary ?? {
-      accept: 0,
-      deny: 0,
-      merge: 0,
-    },
+    verdict_summary: value.verdict_summary,
   };
 }
 

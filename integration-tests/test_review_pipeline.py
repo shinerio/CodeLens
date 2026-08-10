@@ -10,6 +10,7 @@ from codelens.bootstrap.settings import Settings
 from codelens.bootstrap.unified import build_unified_backend
 from codelens.review.application.commands import CreateReviewCommand
 from codelens.review.application.process_report import ProcessTranscriptEntry, build_process_report
+from codelens.review.domain.review_strategy import FixedReviewerSelection, ReviewProfileSnapshot
 from codelens.testing.correctness_fixture import (
     FixtureRuntime,
     load_simple_branch_comments,
@@ -25,10 +26,7 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
         data_dir=tmp_path / "data",
         repository_roots=(fixture.repository,),
     )
-    runtime = FixtureRuntime(
-        load_simple_branch_comments(),
-        repeat_first_comment=True,
-    )
+    runtime = FixtureRuntime(load_simple_branch_comments())
     backend = build_unified_backend(settings, runtime=runtime)
     stop_event = asyncio.Event()
     scheduler_task: asyncio.Task[None] | None = None
@@ -45,7 +43,9 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
                     target_ref="fixture-change",
                     include_workspace_changes=False,
                 ),
-                selected_agent_versions=("correctness:v1",),
+                review_profile=ReviewProfileSnapshot(
+                    FixedReviewerSelection(("correctness:v2",))
+                ),
             )
         )
 
@@ -60,7 +60,7 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
         assert current.status == "completed"
         reviews = await backend.components.list_reviews.handle()
         assert [item.task_id for item in reviews] == [review.task_id]
-        assert runtime.calls == 1
+        assert runtime.calls == 2
         findings = await backend.components.review_store.list_findings(review.task_id)
         assert {
             (finding.primary_location.path, finding.primary_location.side)
@@ -80,7 +80,7 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
             assert finding.explanation
             assert finding.recommendation
             assert finding.category
-            assert 0.0 <= finding.confidence <= 1.0
+            assert finding.confidence is None
 
         for _attempt in range(100):
             transcript = await backend.components.transcripts.list(review.task_id)
@@ -99,11 +99,11 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
         else:
             raise AssertionError("terminal Review transcript was not persisted")
         submitted_comments = json.loads(comment_call.content)["comments"]
-        assert len(submitted_comments) == 4
-        assert submitted_comments[0] == submitted_comments[-1]
+        assert len(submitted_comments) == 3
         assert all(
             set(comment) == {
                 "path",
+                "reviewer_id",
                 "side",
                 "existing_code",
                 "title",
@@ -111,7 +111,8 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
                 "recommendation",
                 "category",
                 "severity",
-                "confidence",
+                "primary_dimension",
+                "evidence_strength",
             }
             for comment in submitted_comments
         )
@@ -132,13 +133,13 @@ async def test_review_reports_added_deleted_and_modified_defects(tmp_path: Path)
         )
         assert report.usage_is_complete is True
         assert report.llm_call_count == 2
-        assert report.input_tokens == 640
-        assert report.output_tokens == 180
+        assert report.input_tokens == 1280
+        assert report.output_tokens == 360
         assert report.tool_call_count == report.tool_result_count == 2
         assert report.unmatched_tool_result_count == 0
         assert {
             (tool.tool_name, tool.call_count, tool.result_count) for tool in report.tools
-        } == {("comment", 1, 1), ("task_done", 1, 1)}
+        } == {("comment", 1, 1), ("verdict", 1, 1)}
         assert report.finding_count == 3
     finally:
         stop_event.set()

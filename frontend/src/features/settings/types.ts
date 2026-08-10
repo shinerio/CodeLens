@@ -42,6 +42,12 @@ export type InstructionFileSettings = {
   nested_max_lines: number;
 };
 
+export type FileExclusionSettings = {
+  suffixes: string[];
+  path_regexes: string[];
+  exclude_binary: boolean;
+};
+
 export type ReviewCompletionSettings = {
   max_incomplete_review_retries: number;
 };
@@ -104,7 +110,6 @@ export type ToolLimits = {
   max_pattern_chars: number;
   regex_timeout_seconds: number;
   comment_batch_size: number;
-  reviewed_files_batch: number;
   short_text_max: number;
   long_text_max: number;
   task_summary_max: number;
@@ -112,6 +117,7 @@ export type ToolLimits = {
 
 export type ResetAllSettingsResponse = {
   instruction_files: InstructionFileSettings;
+  file_exclusions: FileExclusionSettings;
   review_completion: ReviewCompletionSettings;
   trigger_idempotency: TriggerIdempotencySettings;
   recent_repositories: RecentRepositorySettings;

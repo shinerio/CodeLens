@@ -53,10 +53,11 @@ async def test_builtin_local_plugin_dispatches_post_commit_with_composite_loader
         manifest=PluginManifest(
             plugin_id="local",
             name="Local Development Plugin",
-            version="1.0.0",
+            version="2.0.0",
             description="Local trigger",
             author="CodeLens Team",
             platform="local",
+            min_codelens_version="0.2.0",
             capabilities={
                 "trigger": TriggerCapability(
                     trigger_type="local-hook",
@@ -74,7 +75,11 @@ async def test_builtin_local_plugin_dispatches_post_commit_with_composite_loader
             "repository_paths": [str(repository_path)],
             "events": ["post-commit"],
             "scope_type": "commit",
-            "selected_agents": ["correctness:v1"],
+            "reviewer_selection": {
+                "mode": "fixed",
+                "reviewer_versions": ["correctness:v2"],
+            },
+            "supersede_policy": "latest_snapshot",
             "prompt_locale": "zh-CN",
             "debounce_seconds": 0,
         },
@@ -105,7 +110,7 @@ async def test_builtin_local_plugin_dispatches_post_commit_with_composite_loader
                 {
                     "reviewer_selection": {
                         "mode": "fixed",
-                        "reviewer_versions": ["correctness:v1"],
+                        "reviewer_versions": ["correctness:v2"],
                     },
                     "supersede_policy": "latest_snapshot",
                     "prompt_locale": "zh-CN",

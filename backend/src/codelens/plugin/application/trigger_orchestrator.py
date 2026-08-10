@@ -73,7 +73,8 @@ class TriggerOrchestrator:
 
         # Filter plugins configured for this repository
         matching_plugins = [
-            p for p in enabled_plugins
+            p
+            for p in enabled_plugins
             if str(repository_path) in p.trigger_config.get("repository_paths", [])
         ]
 
@@ -133,8 +134,7 @@ class TriggerOrchestrator:
         # Query all plugins with enabled trigger capability matching the platform
         all_plugins = await self._store.list_plugins()
         matching_plugins = [
-            p for p in all_plugins
-            if p.trigger_enabled and p.manifest.platform == platform
+            p for p in all_plugins if p.trigger_enabled and p.manifest.platform == platform
         ]
 
         if not matching_plugins:
@@ -154,9 +154,7 @@ class TriggerOrchestrator:
         results: list[str | None] = []
         for plugin_record in matching_plugins:
             try:
-                result = await self._invoke_webhook_plugin(
-                    plugin_record, payload, headers
-                )
+                result = await self._invoke_webhook_plugin(plugin_record, payload, headers)
                 results.append(result)
             except Exception:
                 _LOGGER.exception(

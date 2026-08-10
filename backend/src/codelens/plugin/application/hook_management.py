@@ -129,16 +129,10 @@ class TriggerHookService:
             "repository_paths": [str(repository) for repository in repositories],
         }
         events = self._events(current, merged)
-        affected_repositories = tuple(
-            dict.fromkeys((*old_repositories, *repositories))
-        )
+        affected_repositories = tuple(dict.fromkeys((*old_repositories, *repositories)))
         previous = await self._capture_state(affected_repositories)
         desired = {
-            repository: (
-                events
-                if current.trigger_enabled and repository in repositories
-                else ()
-            )
+            repository: (events if current.trigger_enabled and repository in repositories else ())
             for repository in affected_repositories
         }
         try:
@@ -286,9 +280,7 @@ class TriggerHookService:
             for repository, events in desired.items():
                 await self._hook_installer.uninstall_hooks(repository)
                 if events:
-                    await self._hook_installer.install_hooks(
-                        repository, events, self._port
-                    )
+                    await self._hook_installer.install_hooks(repository, events, self._port)
         except (OSError, UnicodeError, ValueError) as error:
             raise HookInstallationError("Git hooks could not be synchronized") from error
 
@@ -300,9 +292,7 @@ class TriggerHookService:
             for repository, events in previous.items():
                 await self._hook_installer.uninstall_hooks(repository)
                 if events:
-                    await self._hook_installer.install_hooks(
-                        repository, events, self._port
-                    )
+                    await self._hook_installer.install_hooks(repository, events, self._port)
         except (OSError, UnicodeError, ValueError) as error:
             raise HookInstallationError(
                 "Git hook synchronization failed and the previous state could not be restored"

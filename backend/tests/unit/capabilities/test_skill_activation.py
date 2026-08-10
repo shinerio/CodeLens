@@ -48,9 +48,7 @@ def test_skill_cannot_require_a_capability_outside_the_profile() -> None:
         SkillActivationResolver().resolve(
             policy=SkillPolicy("reviewer-default", 1, (django,)),
             profile=profile_with_only("read_file"),
-            facts=SkillActivationFacts(
-                languages=("python",), changed_paths=("app/models.py",)
-            ),
+            facts=SkillActivationFacts(languages=("python",), changed_paths=("app/models.py",)),
         )
 
 
@@ -102,9 +100,7 @@ def test_frozen_activation_contains_instruction_text_and_content_identity() -> N
     activations = SkillActivationResolver().resolve(
         policy=SkillPolicy("reviewer-default", 1, (manifest(),)),
         profile=profile_with_only("read_file"),
-        facts=SkillActivationFacts(
-            languages=("python",), changed_paths=("src/worker.py",)
-        ),
+        facts=SkillActivationFacts(languages=("python",), changed_paths=("src/worker.py",)),
     )
 
     activation = activations[0]

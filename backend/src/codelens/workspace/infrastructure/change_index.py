@@ -144,12 +144,12 @@ class GitChangeIndexBuilder:
         self,
         worktree: TaskWorktree,
         base_oid: str,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
         scope_type: ReviewScopeType,
     ) -> ChangeIndex:
         """Index every target's typed file change and new- or old-side ranges."""
 
-        target_set = set(target_paths)
+        target_set = set(candidate_paths)
         if scope_type == "full":
             return await self._build_full_scope(worktree, target_set)
         status_result = await self._git.run(
@@ -234,13 +234,13 @@ class GitChangeIndexBuilder:
     async def _build_full_scope(
         self,
         worktree: TaskWorktree,
-        target_paths: set[str],
+        candidate_paths: set[str],
     ) -> ChangeIndex:
         """Treat the final full-repository Snapshot as added from an empty baseline."""
 
         changes: list[ReviewFileChange] = []
         hunks: list[ChangedHunk] = []
-        for path in sorted(target_paths):
+        for path in sorted(candidate_paths):
             payload = await asyncio.to_thread(_read_payload, worktree.root / path)
             if payload is None:
                 changes.append(ReviewFileChange(path, "deleted"))
@@ -257,7 +257,7 @@ class GitChangeIndexBuilder:
         self,
         worktree: TaskWorktree,
         output: bytes,
-        target_paths: set[str],
+        candidate_paths: set[str],
         base_oid: str,
     ) -> list[ChangedHunk]:
         lines = output.decode("utf-8", errors="replace").splitlines()
@@ -273,7 +273,7 @@ class GitChangeIndexBuilder:
                 new_path = _diff_header_path(line[4:])
             elif line.startswith("@@ "):
                 path = new_path if new_path is not None else old_path
-                if path is None or path not in target_paths:
+                if path is None or path not in candidate_paths:
                     continue
                 match = _HUNK_HEADER.match(line)
                 if match is None:

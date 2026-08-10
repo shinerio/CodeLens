@@ -15,7 +15,6 @@ class ReviewerCatalogEntryResponse(StrictDto):
     dimensions: list[str]
     planner_eligible: bool
     capability_readiness: Literal["ready"]
-    is_legacy: bool
 
 
 @router.get("", response_model=list[ReviewerCatalogEntryResponse])
@@ -30,7 +29,6 @@ async def list_reviewer_catalog() -> list[ReviewerCatalogEntryResponse]:
             dimensions=list(agent.dimensions),
             planner_eligible=agent.planner_eligible,
             capability_readiness="ready",
-            is_legacy=agent.is_legacy,
         )
         for agent in builtin_agent_catalog().values()
         if agent.is_public

@@ -28,49 +28,39 @@ def _profile(
     forbidden = {tool.name for tool in tools} & FORBIDDEN_REVIEW_TOOL_NAMES
     if forbidden:
         raise ValueError("Capability Profile contains a forbidden Review tool")
-    return CapabilityProfile(profile_id, 1, tools, (), True)
+    return CapabilityProfile(profile_id, 2, tools, (), True)
 
 
 def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
     """Return immutable role-specific allowlists for every built-in Agent."""
 
     evidence = (
-        ("find_files", 1),
-        ("grep", 1),
-        ("read_file", 1),
-        ("get_diff", 1),
+        ("find_files", 2),
+        ("grep", 2),
+        ("read_file", 2),
+        ("get_diff", 2),
     )
     profiles = (
         _profile(
-            "legacy-reviewer",
-            _tools(
-                *evidence,
-                ("comment", 1),
-                ("review_file_done", 1),
-                ("task_done", 1),
-            ),
-        ),
-        _profile(
-            "reviewer-comment-v2",
+            "reviewer",
             _tools(
                 *evidence,
                 ("comment", 2),
-                ("review_file_done", 1),
-                ("task_done", 1),
+                ("task_done", 2),
             ),
         ),
         _profile(
             "planner",
-            _tools(*evidence, ("submit_review_plan", 1), ("finalize_plan", 1)),
+            _tools(*evidence, ("submit_review_plan", 2), ("finalize_plan", 2)),
         ),
         _profile(
             "verifier",
             _tools(
-                ("read_file", 1),
-                ("get_diff", 1),
-                ("verdict", 1),
-                ("merge", 1),
-                ("finalize_verdicts", 1),
+                ("read_file", 2),
+                ("get_diff", 2),
+                ("verdict", 2),
+                ("merge", 2),
+                ("finalize_verdicts", 2),
             ),
         ),
     )
@@ -80,5 +70,5 @@ def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
 def builtin_skill_policies() -> dict[str, SkillPolicy]:
     """Return declarative built-in Skill policies; Phase 2 starts with no Skills."""
 
-    policy = SkillPolicy("none", 1, ())
+    policy = SkillPolicy("none", 2, ())
     return {policy.reference: policy}

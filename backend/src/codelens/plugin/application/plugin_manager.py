@@ -17,7 +17,7 @@ from jsonschema.exceptions import SchemaError
 from jsonschema.protocols import Validator
 from jsonschema.validators import validator_for
 
-from codelens.plugin.application.config_migration import migrate_config_to_v2
+from codelens.plugin.api.v2 import TriggerReviewPolicy
 from codelens.plugin.domain.models import (
     PluginCapabilityError,
     PluginConfigurationError,
@@ -83,8 +83,7 @@ class PluginManager:
             name="Local Development Plugin",
             version="2.0.0",
             description=(
-                "Local git hook trigger and file-based report export "
-                "for development workflows"
+                "Local git hook trigger and file-based report export for development workflows"
             ),
             author="CodeLens Team",
             platform="local",
@@ -151,8 +150,7 @@ class PluginManager:
                                 "type": "string",
                                 "default": "CodeLensReview",
                                 "description": (
-                                    "Output directory name relative "
-                                    "to reviewed repo root"
+                                    "Output directory name relative to reviewed repo root"
                                 ),
                             },
                             "formats": {
@@ -167,21 +165,16 @@ class PluginManager:
         )
 
         if existing is not None:
-            migrated_trigger_config = migrate_config_to_v2(
-                manifest_id=existing.plugin_id,
-                source_api_version=existing.manifest.plugin_api_version,
-                config=existing.trigger_config,
-            )
-            if (
-                existing.manifest == manifest
-                and existing.trigger_config == migrated_trigger_config
-            ):
+            try:
+                TriggerReviewPolicy.from_config(existing.trigger_config)
+            except ValueError as error:
+                raise PluginConfigurationError(str(error)) from error
+            if existing.manifest == manifest:
                 return
             await self._store.save_plugin(
                 replace(
                     existing,
                     manifest=manifest,
-                    trigger_config=migrated_trigger_config,
                     config_revision=existing.config_revision + 1,
                 )
             )
@@ -204,7 +197,7 @@ class PluginManager:
                 "target_ref": None,
                 "reviewer_selection": {
                     "mode": "fixed",
-                    "reviewer_versions": ["correctness:v1"],
+                    "reviewer_versions": ["correctness:v2"],
                 },
                 "supersede_policy": "latest_snapshot",
                 "prompt_locale": "en",
@@ -307,9 +300,7 @@ class PluginManager:
             raise PluginInstallError(f"Plugin '{plugin_id}' not found")
 
         if record.is_builtin:
-            raise PluginInstallError(
-                f"Built-in plugin '{plugin_id}' cannot be updated"
-            )
+            raise PluginInstallError(f"Built-in plugin '{plugin_id}' cannot be updated")
 
         if not record.git_url:
             raise PluginInstallError(
@@ -317,9 +308,7 @@ class PluginManager:
             )
 
         if not record.install_path:
-            raise PluginInstallError(
-                f"Plugin '{plugin_id}' has no install path"
-            )
+            raise PluginInstallError(f"Plugin '{plugin_id}' has no install path")
 
         install_path = Path(record.install_path)
         update_ref = ref if ref is not None else record.git_ref
@@ -330,22 +319,14 @@ class PluginManager:
         if has_checkout:
             await asyncio.to_thread(shutil.copytree, install_path, rollback_path)
         try:
-            new_manifest = await self._installer.update(
-                record.git_url, install_path, update_ref
-            )
+            new_manifest = await self._installer.update(record.git_url, install_path, update_ref)
             merged_trigger_config = self._merge_config(
                 record.trigger_config,
                 new_manifest.capabilities.get("trigger"),
             )
-            new_trigger_config = (
-                migrate_config_to_v2(
-                    manifest_id=record.plugin_id,
-                    source_api_version=record.manifest.plugin_api_version,
-                    config=merged_trigger_config,
-                )
-                if new_manifest.plugin_api_version is PluginApiVersion.V2
-                else merged_trigger_config
-            )
+            if record.is_builtin and new_manifest.trigger is not None:
+                TriggerReviewPolicy.from_config(merged_trigger_config)
+            new_trigger_config = merged_trigger_config
             new_report_config = self._merge_config(
                 record.report_config,
                 new_manifest.capabilities.get("report"),
@@ -515,13 +496,9 @@ class PluginManager:
 
         merged = {**record.trigger_config, **config}
         self.validate_trigger_config(record, merged)
-        if record.manifest.plugin_api_version is PluginApiVersion.V2:
+        if record.is_builtin:
             try:
-                migrate_config_to_v2(
-                    manifest_id=record.plugin_id,
-                    source_api_version=PluginApiVersion.V2,
-                    config=merged,
-                )
+                TriggerReviewPolicy.from_config(merged)
             except ValueError as error:
                 raise PluginConfigurationError(str(error)) from error
         updated = replace(
@@ -529,9 +506,7 @@ class PluginManager:
             trigger_config=merged,
             config_revision=record.config_revision + 1,
             profile_source=(
-                profile_source
-                if should_replace_profile_source
-                else record.profile_source
+                profile_source if should_replace_profile_source else record.profile_source
             ),
         )
         await self._store.save_plugin(updated)
@@ -603,9 +578,7 @@ class PluginManager:
             return False
 
         if record.is_builtin:
-            raise PluginInstallError(
-                f"Built-in plugin '{plugin_id}' cannot be uninstalled"
-            )
+            raise PluginInstallError(f"Built-in plugin '{plugin_id}' cannot be uninstalled")
 
         # Remove installation directory
         if record.install_path:
@@ -672,10 +645,7 @@ class PluginManager:
         validation_error = next(validator.iter_errors(config), None)
         if validation_error is None:
             return
-        field = (
-            ".".join(str(part) for part in validation_error.absolute_path)
-            or "configuration"
-        )
+        field = ".".join(str(part) for part in validation_error.absolute_path) or "configuration"
         raise PluginConfigurationError(
             f"Plugin '{plugin_id}' {capability_name} config field '{field}' "
             f"violates schema rule '{validation_error.validator}'"

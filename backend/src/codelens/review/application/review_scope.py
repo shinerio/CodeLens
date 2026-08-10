@@ -55,7 +55,7 @@ def build_review_files(
 
     if max_files <= 0 or max_ranges <= 0:
         raise ReviewScopeLimitError("Review scope limits must be positive")
-    targets = set(snapshot.manifest.target_paths)
+    targets = set(snapshot.manifest.review_paths)
     active_changes = tuple(
         change
         for change in snapshot.change_index.files
@@ -129,7 +129,5 @@ def _is_normalized_relative(path: str) -> bool:
         return False
     candidate = PurePosixPath(path)
     return (
-        not candidate.is_absolute()
-        and ".." not in candidate.parts
-        and candidate.as_posix() == path
+        not candidate.is_absolute() and ".." not in candidate.parts and candidate.as_posix() == path
     )

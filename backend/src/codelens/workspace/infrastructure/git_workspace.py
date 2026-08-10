@@ -95,7 +95,7 @@ class GitWorkspaceAdapter:
             head_oid = await self._resolve_commit(repository, scope.target_ref)
             merge_base = await self._git.run(repository, "merge-base", base_ref_oid, head_oid)
             base_oid = self._validated_oid(merge_base.stdout)
-            target_paths = await self._diff_paths(repository, base_oid, head_oid)
+            candidate_paths = await self._diff_paths(repository, base_oid, head_oid)
             capture_overlay = scope.include_workspace_changes
         elif isinstance(scope, CommitScope):
             base_oid = await self._resolve_commit(repository, scope.base_commit)
@@ -110,17 +110,17 @@ class GitWorkspaceAdapter:
             )
             if ancestor.returncode == 1:
                 raise InvalidRepositoryError("base commit is not an ancestor of target commit")
-            target_paths = await self._diff_paths(repository, base_oid, head_oid)
+            candidate_paths = await self._diff_paths(repository, base_oid, head_oid)
             capture_overlay = scope.include_workspace_changes
         elif isinstance(scope, UncommittedScope):
             base_oid = current_head
             head_oid = current_head
-            target_paths = ()
+            candidate_paths = ()
             capture_overlay = True
         elif isinstance(scope, FullRepositoryScope):
             head_oid = await self._resolve_commit(repository, scope.target_ref)
             base_oid = head_oid
-            target_paths = tuple((await self._tree_entries(repository, head_oid)).keys())
+            candidate_paths = tuple((await self._tree_entries(repository, head_oid)).keys())
             capture_overlay = scope.include_workspace_changes
         else:
             raise TypeError(f"unsupported review scope: {type(scope).__name__}")
@@ -131,13 +131,13 @@ class GitWorkspaceAdapter:
         if capture_overlay:
             overlay_paths = await self._overlay_paths(repository, current_head)
             await asyncio.to_thread(_validate_overlay_symlinks, repository, overlay_paths)
-            target_paths = tuple(sorted({*target_paths, *overlay_paths}))
+            candidate_paths = tuple(sorted({*candidate_paths, *overlay_paths}))
 
-        await self._validate_tree_symlinks(repository, head_oid, target_paths)
+        await self._validate_tree_symlinks(repository, head_oid, candidate_paths)
         return ScopePlan(
             base_oid=base_oid,
             head_oid=head_oid,
-            target_paths=tuple(sorted(dict.fromkeys(target_paths))),
+            candidate_paths=tuple(sorted(dict.fromkeys(candidate_paths))),
             capture_workspace_overlay=capture_overlay,
             scope_type=scope.type,
             warnings=warnings,
@@ -250,10 +250,10 @@ class GitWorkspaceAdapter:
         self,
         repository: Path,
         head_oid: str,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
     ) -> None:
         entries = await self._tree_entries(repository, head_oid)
-        for path in target_paths:
+        for path in candidate_paths:
             entry = entries.get(path)
             if entry is None or entry.mode != "120000":
                 continue

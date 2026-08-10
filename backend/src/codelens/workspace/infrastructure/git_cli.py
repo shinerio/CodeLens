@@ -26,7 +26,7 @@ class GitCli:
         self,
         *,
         timeout_seconds: float = 30.0,
-        max_output_bytes: int = 1024 * 1024,
+        max_output_bytes: int = 2 * 1024 * 1024,
         max_input_bytes: int = 8 * 1024 * 1024,
     ) -> None:
         if timeout_seconds <= 0:

@@ -18,12 +18,7 @@ def repository(git_repository: Path) -> Path:
 @pytest.fixture
 def hook_installer() -> HookInstaller:
     plugin_dir = (
-        Path(__file__).parents[3]
-        / "src"
-        / "codelens"
-        / "plugin"
-        / "trigger"
-        / "local_hook"
+        Path(__file__).parents[3] / "src" / "codelens" / "plugin" / "trigger" / "local_hook"
     )
     return HookInstaller(plugin_dir)
 
@@ -152,9 +147,7 @@ async def test_wrapper_write_failure_leaves_the_original_hook_in_place(
     monkeypatch.setattr(hook_installer, "_write_executable_hook", fail_to_write)
 
     with pytest.raises(OSError, match="simulated wrapper write failure"):
-        await hook_installer.install_hooks(
-            repository, (HookEvent.POST_COMMIT,), 8765
-        )
+        await hook_installer.install_hooks(repository, (HookEvent.POST_COMMIT,), 8765)
 
     assert hook_path.read_text(encoding="utf-8") == original
     assert not (hooks_dir / "post-commit.codelens-user-hook").exists()
@@ -192,30 +185,6 @@ async def test_uninstall_preserves_both_hooks_when_the_wrapper_was_replaced(
 
 
 @pytest.mark.asyncio
-async def test_reinstall_replaces_legacy_injection_without_consuming_user_stdin(
-    repository: Path,
-    hook_installer: HookInstaller,
-) -> None:
-    hook_path = repository / ".git" / "hooks" / "pre-push"
-    legacy_injection = HookInstaller.LEGACY_INJECTION_LINE_TEMPLATE.format(
-        script_name=HookInstaller.STANDALONE_SCRIPT_NAME
-    )
-    hook_path.write_text(
-        f"#!/bin/sh\n{HookInstaller.MARKER_COMMENT}\n{legacy_injection}\ncat >/tmp/user-input\n",
-        encoding="utf-8",
-    )
-    hook_path.chmod(0o700)
-
-    await hook_installer.uninstall_hooks(repository)
-    await hook_installer.install_hooks(repository, (HookEvent.PRE_PUSH,), 8765)
-
-    content = hook_path.read_text(encoding="utf-8")
-    assert legacy_injection not in content
-    assert "mktemp" in content
-    assert "cat >/tmp/user-input" in content
-
-
-@pytest.mark.asyncio
 async def test_status_rejects_a_marker_without_a_working_injection(
     repository: Path,
     hook_installer: HookInstaller,
@@ -242,12 +211,7 @@ async def test_status_rejects_a_corrupted_standalone_script(
     hook_installer: HookInstaller,
 ) -> None:
     await hook_installer.install_hooks(repository, (HookEvent.POST_COMMIT,), 8765)
-    standalone = (
-        repository
-        / ".git"
-        / "hooks"
-        / HookInstaller.STANDALONE_SCRIPT_NAME
-    )
+    standalone = repository / ".git" / "hooks" / HookInstaller.STANDALONE_SCRIPT_NAME
     standalone.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
     standalone.chmod(0o700)
 
@@ -271,21 +235,23 @@ async def test_pre_push_input_reaches_codelens_and_the_existing_user_hook(
     fake_curl = executable_dir / "curl"
     fake_curl.write_text(
         "#!/bin/sh\n"
-        "while [ \"$#\" -gt 0 ]; do\n"
-        "  if [ \"$1\" = \"-d\" ]; then shift; printf '%s' \"$1\" > \"$PAYLOAD_CAPTURE\"; fi\n"
+        'while [ "$#" -gt 0 ]; do\n'
+        '  if [ "$1" = "-d" ]; then shift; printf \'%s\' "$1" > "$PAYLOAD_CAPTURE"; fi\n'
         "  shift\n"
         "done\n",
         encoding="utf-8",
     )
     fake_curl.chmod(0o700)
     hook_path.write_text(
-        "#!/bin/sh\ncat > \"$USER_CAPTURE\"\n",
+        '#!/bin/sh\ncat > "$USER_CAPTURE"\n',
         encoding="utf-8",
     )
     hook_path.chmod(0o700)
     await hook_installer.install_hooks(repository, (HookEvent.PRE_PUSH,), 8765)
-    pushed_ref = "refs/heads/feature 1111111111111111111111111111111111111111 " \
+    pushed_ref = (
+        "refs/heads/feature 1111111111111111111111111111111111111111 "
         "refs/heads/feature 0000000000000000000000000000000000000000\n"
+    )
     environment = {
         **os.environ,
         "PATH": f"{executable_dir}{os.pathsep}{os.environ['PATH']}",
@@ -306,7 +272,5 @@ async def test_pre_push_input_reaches_codelens_and_the_existing_user_hook(
     )
 
     assert completed.returncode == 0, completed.stderr
-    assert '"push_ref":"refs/heads/feature"' in payload_capture.read_text(
-        encoding="utf-8"
-    )
+    assert '"push_ref":"refs/heads/feature"' in payload_capture.read_text(encoding="utf-8")
     assert user_capture.read_text(encoding="utf-8") == pushed_ref

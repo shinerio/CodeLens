@@ -55,7 +55,11 @@ beforeEach(() => {
         scope_type: "commit",
         base_ref: null,
         target_ref: null,
-        selected_agents: ["correctness:v1"],
+        reviewer_selection: {
+          mode: "fixed",
+          reviewer_versions: ["correctness:v2"],
+        },
+        supersede_policy: "latest_snapshot",
         prompt_locale: "en",
         debounce_seconds: 10,
       },
@@ -98,13 +102,12 @@ beforeEach(() => {
     if (url.endsWith("/api/reviewer-catalog")) {
       return jsonResponse([
         {
-          reference: "security:v1",
+          reference: "security:v2",
           agent_id: "security",
           version: 1,
           dimensions: ["security"],
           planner_eligible: true,
           capability_readiness: "ready",
-          is_legacy: false,
         },
       ]);
     }
@@ -273,7 +276,7 @@ it("copies a Profile into a v2 plugin policy with separate provenance", async ()
         scope_type: "commit",
         reviewer_selection: {
           mode: "fixed",
-          reviewer_versions: ["security:v1"],
+          reviewer_versions: ["security:v2"],
         },
         supersede_policy: "latest_snapshot",
         prompt_locale: "en",

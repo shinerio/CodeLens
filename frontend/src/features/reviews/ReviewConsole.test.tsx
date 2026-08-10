@@ -46,7 +46,7 @@ it("renders completed streamed output as Markdown when the final payload is stru
           created_at: "2026-07-22T00:00:00Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1", message_id: "message-1" },
+          metadata: { agent: "correctness:v2", message_id: "message-1" },
         },
         {
           sequence: 2,
@@ -55,7 +55,7 @@ it("renders completed streamed output as Markdown when the final payload is stru
           created_at: "2026-07-22T00:00:01Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1", message_id: "message-1" },
+          metadata: { agent: "correctness:v2", message_id: "message-1" },
         },
       ]}
     />,
@@ -77,7 +77,7 @@ it("renders a completed thinking message as Markdown", () => {
           created_at: "2026-07-22T00:00:00Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1", message_id: "reasoning-1" },
+          metadata: { agent: "correctness:v2", message_id: "reasoning-1" },
         },
         {
           sequence: 2,
@@ -86,7 +86,7 @@ it("renders a completed thinking message as Markdown", () => {
           created_at: "2026-07-22T00:00:01Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1", message_id: "reasoning-1" },
+          metadata: { agent: "correctness:v2", message_id: "reasoning-1" },
         },
       ]}
     />,
@@ -107,7 +107,7 @@ it("renders complete system instructions as Markdown", () => {
           created_at: "2026-07-22T00:00:00Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1" },
+          metadata: { agent: "correctness:v2" },
         },
       ]}
     />,
@@ -247,7 +247,7 @@ it("renders streamed Markdown when agent completion finalizes the message", () =
           created_at: "2026-07-22T00:00:00Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1", message_id: "deepseek-output:0" },
+          metadata: { agent: "correctness:v2", message_id: "deepseek-output:0" },
         },
         {
           sequence: 2,
@@ -256,7 +256,7 @@ it("renders streamed Markdown when agent completion finalizes the message", () =
           created_at: "2026-07-22T00:00:01Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1" },
+          metadata: { agent: "correctness:v2" },
         },
       ]}
     />,
@@ -270,14 +270,14 @@ it("selects a stage and then one reviewer timeline", () => {
     <ReviewConsole
       plan={{
         selection_mode: "fixed",
-        reviewer_references: ["security:v1", "performance:v1"],
+        reviewer_references: ["security:v2", "performance:v2"],
         plan_hash: "plan-hash",
         planner_reason: null,
         nodes: [
           {
             node_id: "reviewer-security",
             node_type: "reviewer",
-            agent_reference: "security:v1",
+            agent_reference: "security:v2",
             depends_on: [],
             pass_index: 1,
             shard_id: "default",
@@ -287,7 +287,7 @@ it("selects a stage and then one reviewer timeline", () => {
           {
             node_id: "reviewer-performance",
             node_type: "reviewer",
-            agent_reference: "performance:v1",
+            agent_reference: "performance:v2",
             depends_on: [],
             pass_index: 1,
             shard_id: "default",
@@ -297,7 +297,7 @@ it("selects a stage and then one reviewer timeline", () => {
           {
             node_id: "verifier",
             node_type: "verifier",
-            agent_reference: "review-verifier:v1",
+            agent_reference: "review-verifier:v2",
             depends_on: ["reviewer-security", "reviewer-performance"],
             pass_index: 2,
             shard_id: "default",
@@ -314,7 +314,7 @@ it("selects a stage and then one reviewer timeline", () => {
           created_at: "2026-07-22T00:00:00Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "security:v1", message_id: "security-output" },
+          metadata: { agent: "security:v2", message_id: "security-output" },
         },
         {
           sequence: 2,
@@ -323,7 +323,7 @@ it("selects a stage and then one reviewer timeline", () => {
           created_at: "2026-07-22T00:00:01Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "performance:v1", message_id: "performance-output" },
+          metadata: { agent: "performance:v2", message_id: "performance-output" },
         },
         {
           sequence: 3,
@@ -332,7 +332,7 @@ it("selects a stage and then one reviewer timeline", () => {
           created_at: "2026-07-22T00:00:02Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "review-verifier:v1", message_id: "verifier-output" },
+          metadata: { agent: "review-verifier:v2", message_id: "verifier-output" },
         },
       ]}
     />,
@@ -368,11 +368,11 @@ it("selects reviewers for a fixed team whose legacy execution has no persisted p
           created_at: "2026-08-03T00:00:01Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "security:v1", message_id: "security-output" },
+          metadata: { agent: "security:v2", message_id: "security-output" },
         },
       ]}
       plan={null}
-      reviewerReferences={["correctness:v2", "security:v1"]}
+      reviewerReferences={["correctness:v2", "security:v2"]}
     />,
   );
 
@@ -409,29 +409,29 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
           { tool_name: "verdict", call_count: 1, result_count: 1 },
         ],
         agents: [
-          { agent: "security:v1", model_name: "model", llm_call_count: 2, input_tokens: 80, output_tokens: 20, total_tokens: 100, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
-          { agent: "performance:v1", model_name: "model", llm_call_count: 3, input_tokens: 160, output_tokens: 40, total_tokens: 200, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
-          { agent: "review-verifier:v1", model_name: "model", llm_call_count: 4, input_tokens: 240, output_tokens: 60, total_tokens: 300, tool_call_count: 1, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
+          { agent: "security:v2", model_name: "model", llm_call_count: 2, input_tokens: 80, output_tokens: 20, total_tokens: 100, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
+          { agent: "performance:v2", model_name: "model", llm_call_count: 3, input_tokens: 160, output_tokens: 40, total_tokens: 200, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
+          { agent: "review-verifier:v2", model_name: "model", llm_call_count: 4, input_tokens: 240, output_tokens: 60, total_tokens: 300, tool_call_count: 1, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
         ],
       }}
       plan={{
         selection_mode: "fixed",
-        reviewer_references: ["security:v1", "performance:v1"],
+        reviewer_references: ["security:v2", "performance:v2"],
         plan_hash: "plan-hash",
         planner_reason: null,
         nodes: [
-          { node_id: "security", node_type: "reviewer", agent_reference: "security:v1", depends_on: [], pass_index: 1, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
-          { node_id: "performance", node_type: "reviewer", agent_reference: "performance:v1", depends_on: [], pass_index: 1, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
-          { node_id: "verifier", node_type: "verifier", agent_reference: "review-verifier:v1", depends_on: ["security", "performance"], pass_index: 2, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
+          { node_id: "security", node_type: "reviewer", agent_reference: "security:v2", depends_on: [], pass_index: 1, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
+          { node_id: "performance", node_type: "reviewer", agent_reference: "performance:v2", depends_on: [], pass_index: 1, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
+          { node_id: "verifier", node_type: "verifier", agent_reference: "review-verifier:v2", depends_on: ["security", "performance"], pass_index: 2, shard_id: "default", logical_attempt_group: "primary", task_id: "review-1" },
         ],
       }}
       entries={[
-        { sequence: 1, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:00Z", redacted: false, truncated: false, metadata: { agent: "security:v1", tool_name: "read_file", tool_call_id: "security-tool" } },
-        { sequence: 2, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:01Z", redacted: false, truncated: false, metadata: { agent: "security:v1" } },
-        { sequence: 3, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:02Z", redacted: false, truncated: false, metadata: { agent: "performance:v1", tool_name: "get_diff", tool_call_id: "performance-tool" } },
-        { sequence: 4, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:03Z", redacted: false, truncated: false, metadata: { agent: "performance:v1" } },
-        { sequence: 5, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:04Z", redacted: false, truncated: false, metadata: { agent: "review-verifier:v1", tool_name: "verdict", tool_call_id: "verifier-tool" } },
-        { sequence: 6, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:05Z", redacted: false, truncated: false, metadata: { agent: "review-verifier:v1" } },
+        { sequence: 1, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:00Z", redacted: false, truncated: false, metadata: { agent: "security:v2", tool_name: "read_file", tool_call_id: "security-tool" } },
+        { sequence: 2, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:01Z", redacted: false, truncated: false, metadata: { agent: "security:v2" } },
+        { sequence: 3, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:02Z", redacted: false, truncated: false, metadata: { agent: "performance:v2", tool_name: "get_diff", tool_call_id: "performance-tool" } },
+        { sequence: 4, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:03Z", redacted: false, truncated: false, metadata: { agent: "performance:v2" } },
+        { sequence: 5, kind: "tool_call", content: "{}", created_at: "2026-08-03T00:00:04Z", redacted: false, truncated: false, metadata: { agent: "review-verifier:v2", tool_name: "verdict", tool_call_id: "verifier-tool" } },
+        { sequence: 6, kind: "tool_result", content: "{}", created_at: "2026-08-03T00:00:05Z", redacted: false, truncated: false, metadata: { agent: "review-verifier:v2" } },
       ]}
     />,
   );
@@ -458,13 +458,13 @@ it("coalesces interleaved streaming deltas independently for each reviewer", () 
   render(
     <ReviewConsole
       entries={[
-        { sequence: 1, kind: "model_output_delta", content: "Security ", created_at: "2026-08-03T00:00:00Z", redacted: false, truncated: false, metadata: { agent: "security:v1", message_id: "provider-message" } },
+        { sequence: 1, kind: "model_output_delta", content: "Security ", created_at: "2026-08-03T00:00:00Z", redacted: false, truncated: false, metadata: { agent: "security:v2", message_id: "provider-message" } },
         { sequence: 2, kind: "model_output_delta", content: "Correctness ", created_at: "2026-08-03T00:00:01Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2", message_id: "provider-message" } },
-        { sequence: 3, kind: "model_output_delta", content: "complete", created_at: "2026-08-03T00:00:02Z", redacted: false, truncated: false, metadata: { agent: "security:v1", message_id: "provider-message" } },
+        { sequence: 3, kind: "model_output_delta", content: "complete", created_at: "2026-08-03T00:00:02Z", redacted: false, truncated: false, metadata: { agent: "security:v2", message_id: "provider-message" } },
         { sequence: 4, kind: "model_output_delta", content: "complete", created_at: "2026-08-03T00:00:03Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2", message_id: "provider-message" } },
       ]}
       plan={null}
-      reviewerReferences={["correctness:v2", "security:v1"]}
+      reviewerReferences={["correctness:v2", "security:v2"]}
     />,
   );
 

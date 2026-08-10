@@ -16,7 +16,7 @@ from enum import StrEnum
 from typing import Literal
 
 from codelens.findings.domain.candidates import EvidenceStrength
-from codelens.findings.domain.models import FindingSeverity
+from codelens.findings.domain.models import FindingSeverity, SourceLocation
 
 
 class VerdictOutcome(StrEnum):
@@ -52,6 +52,8 @@ class VerdictDecision:
     severity: FindingSeverity | None = None
     primary_dimension: str | None = None
     evidence_strength: EvidenceStrength | None = None
+    primary_location: SourceLocation | None = None
+    changed_hunk_id: str | None = None
 
     def __post_init__(self) -> None:
         if not self.cluster_ids:
@@ -61,9 +63,7 @@ class VerdictDecision:
         if self.outcome is VerdictOutcome.MERGE:
             missing = self._missing_merge_fields()
             if missing:
-                raise ValueError(
-                    f"VerdictDecision merge requires all fields; missing: {missing}"
-                )
+                raise ValueError(f"VerdictDecision merge requires all fields; missing: {missing}")
 
     def _missing_merge_fields(self) -> tuple[str, ...]:
         names = (
@@ -77,6 +77,7 @@ class VerdictDecision:
             "severity",
             "primary_dimension",
             "evidence_strength",
+            "primary_location",
         )
         return tuple(name for name in names if getattr(self, name) is None)
 
@@ -110,6 +111,8 @@ class VerdictDecision:
         severity: FindingSeverity,
         primary_dimension: str,
         evidence_strength: EvidenceStrength,
+        primary_location: SourceLocation,
+        changed_hunk_id: str | None,
     ) -> "VerdictDecision":
         """Merge one or more clusters into a single Finding.
 
@@ -129,4 +132,6 @@ class VerdictDecision:
             severity=severity,
             primary_dimension=primary_dimension,
             evidence_strength=evidence_strength,
+            primary_location=primary_location,
+            changed_hunk_id=changed_hunk_id,
         )

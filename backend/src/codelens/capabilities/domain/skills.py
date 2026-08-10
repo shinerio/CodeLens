@@ -40,8 +40,7 @@ class SkillManifest:
         if len(self.activation_languages) != len(set(self.activation_languages)):
             raise ValueError("Skill contains duplicate activation languages")
         if any(
-            _LANGUAGE_PATTERN.fullmatch(language) is None
-            for language in self.activation_languages
+            _LANGUAGE_PATTERN.fullmatch(language) is None for language in self.activation_languages
         ):
             raise ValueError("Skill activation language is invalid")
         if any(not pattern or "\0" in pattern for pattern in self.activation_path_patterns):
@@ -70,9 +69,7 @@ class SkillActivationFacts:
         return cls((), ())
 
     def __post_init__(self) -> None:
-        if any(
-            _LANGUAGE_PATTERN.fullmatch(language) is None for language in self.languages
-        ):
+        if any(_LANGUAGE_PATTERN.fullmatch(language) is None for language in self.languages):
             raise ValueError("Skill activation fact language is invalid")
         if any(
             not path

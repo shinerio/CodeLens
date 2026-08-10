@@ -87,9 +87,15 @@ from codelens.trigger.application.review_creator_adapter import (
 )
 from codelens.workspace.application.browse_directories import BrowseDirectoriesService
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
+from codelens.workspace.application.file_exclusion_settings import (
+    FileExclusionSettingsService,
+)
 from codelens.workspace.application.inspect_repository import RepositoryInspector
 from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.application.repository_catalog import RepositoryCatalogService
+from codelens.workspace.infrastructure.file_exclusion_settings import (
+    FilesystemFileExclusionPolicyStore,
+)
 from codelens.workspace.infrastructure.filesystem_browser import LocalFilesystemBrowserAdapter
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.git_overlay import GitReviewInputCaptureAdapter
@@ -131,6 +137,7 @@ class HttpComponents:
     review_completion_settings: ReviewCompletionSettingsService
     trigger_idempotency_settings: TriggerIdempotencySettingsService
     tool_limits: ToolLimitsService
+    file_exclusion_settings: FileExclusionSettingsService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
     retry_review: RetryReviewHandler
@@ -199,6 +206,9 @@ def build_components(settings: Settings) -> HttpComponents:
         FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
     )
     tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
+    file_exclusion_settings = FileExclusionSettingsService(
+        FilesystemFileExclusionPolicyStore(settings.data_dir)
+    )
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
     plugins_dir = settings.data_dir / "plugins"
@@ -206,9 +216,7 @@ def build_components(settings: Settings) -> HttpComponents:
     plugin_store = FilesystemPluginStore(settings.data_dir)
     plugin_installer = GitPluginInstaller(git, plugins_dir)
     plugin_loader = CompositePluginLoader()
-    plugin_manager = PluginManager(
-        plugin_store, plugin_installer, plugins_dir, plugin_loader
-    )
+    plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir, plugin_loader)
     export_history = SqliteExportHistoryStore(settings.data_dir / "codelens.sqlite3")
     export_orchestrator = ExportOrchestrator(
         review_store,
@@ -234,14 +242,16 @@ def build_components(settings: Settings) -> HttpComponents:
     )
     review_creator_adapter = ReviewCreatorAdapter(
         CreateReviewHandler(
-            planner, capture, review_store, input_artifacts,
-            idempotency_settings=trigger_idempotency_settings
+            planner,
+            capture,
+            review_store,
+            input_artifacts,
+            idempotency_settings=trigger_idempotency_settings,
+            file_exclusion_settings=file_exclusion_settings,
         ),
         repository_inspector,
     )
-    trigger_orchestrator = TriggerOrchestrator(
-        plugin_store, review_creator_adapter, plugin_loader
-    )
+    trigger_orchestrator = TriggerOrchestrator(plugin_store, review_creator_adapter, plugin_loader)
     trigger_hooks = TriggerHookService(
         plugin_manager,
         hook_installer,
@@ -258,7 +268,13 @@ def build_components(settings: Settings) -> HttpComponents:
             GitRepositoryCatalogAdapter(git),
         ),
         directory_browser=BrowseDirectoriesService(LocalFilesystemBrowserAdapter()),
-        create_review=CreateReviewHandler(planner, capture, review_store, input_artifacts),
+        create_review=CreateReviewHandler(
+            planner,
+            capture,
+            review_store,
+            input_artifacts,
+            file_exclusion_settings=file_exclusion_settings,
+        ),
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
         list_recent_repositories=ListRecentRepositoriesHandler(recent_repository_store),
@@ -277,6 +293,7 @@ def build_components(settings: Settings) -> HttpComponents:
         review_completion_settings=review_completion_settings,
         trigger_idempotency_settings=trigger_idempotency_settings,
         tool_limits=tool_limits,
+        file_exclusion_settings=file_exclusion_settings,
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

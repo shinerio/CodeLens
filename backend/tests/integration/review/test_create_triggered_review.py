@@ -38,22 +38,20 @@ class CompleteFreezer:
         self, _profile: ReviewProfileSnapshot, prompt_locale: str
     ) -> dict[str, object]:
         return {
-            "schema_version": 1,
-            "catalog_snapshot": {"version": "catalog:v1"},
-            "capability_readiness": {"policy_fingerprint": "capability:v1"},
-            "planner_execution_spec": {"artifact_id": "prompt:planner:v1"},
+            "schema_version": 2,
+            "catalog_snapshot": {"version": "catalog:v2"},
+            "capability_readiness": {"policy_fingerprint": "capability:v2"},
+            "planner_execution_spec": {"artifact_id": "prompt:planner:v2"},
             "eligible_reviewer_execution_specs": [],
-            "artifact_ids": [f"prompt:planner:v1:{prompt_locale}"],
+            "artifact_ids": [f"prompt:planner:v2:{prompt_locale}"],
         }
 
 
 class LeakingFreezer(CompleteFreezer):
-    async def freeze(
-        self, profile: ReviewProfileSnapshot, prompt_locale: str
-    ) -> dict[str, object]:
+    async def freeze(self, profile: ReviewProfileSnapshot, prompt_locale: str) -> dict[str, object]:
         context = await super().freeze(profile, prompt_locale)
         context["planner_execution_spec"] = {
-            "artifact_id": "prompt:planner:v1",
+            "artifact_id": "prompt:planner:v2",
             "prompt": "trusted prompt bytes must live in the Artifact Store",
         }
         return context
@@ -127,9 +125,7 @@ async def test_trigger_rejects_trusted_prompt_bodies_before_creating_task(
             CreateTriggeredReview(
                 repository=repository,
                 scope=BranchScope("main", "HEAD"),
-                review_profile=ReviewProfileSnapshot(
-                    AdaptiveReviewerSelection()
-                ),
+                review_profile=ReviewProfileSnapshot(AdaptiveReviewerSelection()),
                 prompt_locale="en",
                 supersede_policy="latest_snapshot",
                 external_context=None,

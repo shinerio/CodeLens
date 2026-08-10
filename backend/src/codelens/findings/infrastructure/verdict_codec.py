@@ -9,7 +9,7 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 
 from codelens.findings.domain.candidates import EvidenceStrength
 from codelens.findings.domain.clusters import FindingCluster
-from codelens.findings.domain.models import FindingSeverity
+from codelens.findings.domain.models import FindingSeverity, SourceLocation
 from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome
 
 _ShortText = Annotated[
@@ -39,6 +39,17 @@ class _StrictModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
 
+class ResolvedLocationDto(_StrictModel):
+    """Persist only host-derived merge location coordinates and identity."""
+
+    path: _Path
+    start_line: Annotated[int, Field(ge=1)]
+    end_line: Annotated[int, Field(ge=1)]
+    side: Literal["old", "new"]
+    excerpt_hash: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")]
+    is_deleted: bool
+
+
 class VerdictDecisionDto(_StrictModel):
     """Validate one Final Verifier decision over one or more clusters."""
 
@@ -57,12 +68,14 @@ class VerdictDecisionDto(_StrictModel):
     severity: Literal["critical", "high", "medium", "low", "info"] | None = None
     primary_dimension: _ShortText | None = None
     evidence_strength: Literal["direct", "inferred", "weak"] | None = None
+    primary_location: ResolvedLocationDto | None = None
+    changed_hunk_id: _ShortText | None = None
 
 
 class VerdictSubmissionDto(_StrictModel):
     """Version the strict model-facing Verdict submission envelope."""
 
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     decisions: Annotated[list[VerdictDecisionDto], Field(max_length=64)]
 
 
@@ -81,11 +94,11 @@ class ValidatedVerdictBatch:
 class VerdictCodec:
     """Validate and canonicalize Final Verifier decisions against frozen clusters."""
 
-    schema_version: Literal["1"] = "1"
+    schema_version: Literal["2"] = "2"
     clusters: tuple[FindingCluster, ...] = ()
 
     def __post_init__(self) -> None:
-        if self.schema_version != "1":
+        if self.schema_version != "2":
             raise VerdictCodecError("unsupported Verdict schema version")
         cluster_ids = [c.cluster_id for c in self.clusters]
         if len(cluster_ids) != len(set(cluster_ids)):
@@ -111,13 +124,9 @@ class VerdictCodec:
         for decision in submission.decisions:
             for cluster_id in decision.cluster_ids:
                 if cluster_id not in known_cluster_ids:
-                    raise VerdictCodecError(
-                        f"Verdict references unknown cluster: {cluster_id}"
-                    )
+                    raise VerdictCodecError(f"Verdict references unknown cluster: {cluster_id}")
                 if cluster_id in covered_cluster_ids:
-                    raise VerdictCodecError(
-                        f"Cluster {cluster_id} is covered by multiple verdicts"
-                    )
+                    raise VerdictCodecError(f"Cluster {cluster_id} is covered by multiple verdicts")
                 covered_cluster_ids.add(cluster_id)
 
         if covered_cluster_ids != known_cluster_ids:
@@ -128,9 +137,7 @@ class VerdictCodec:
 
         return tuple(self._to_domain(d) for d in submission.decisions)
 
-    def decode_decisions(
-        self, decisions: Sequence[VerdictDecision]
-    ) -> tuple[VerdictDecision, ...]:
+    def decode_decisions(self, decisions: Sequence[VerdictDecision]) -> tuple[VerdictDecision, ...]:
         """Validate a list of VerdictDecision objects directly (not through DTO).
 
         This is used by the finalize flow where we accumulate domain objects
@@ -142,13 +149,9 @@ class VerdictCodec:
         for decision in decisions:
             for cluster_id in decision.cluster_ids:
                 if cluster_id not in known_cluster_ids:
-                    raise VerdictCodecError(
-                        f"Verdict references unknown cluster: {cluster_id}"
-                    )
+                    raise VerdictCodecError(f"Verdict references unknown cluster: {cluster_id}")
                 if cluster_id in covered_cluster_ids:
-                    raise VerdictCodecError(
-                        f"Cluster {cluster_id} is covered by multiple verdicts"
-                    )
+                    raise VerdictCodecError(f"Cluster {cluster_id} is covered by multiple verdicts")
                 covered_cluster_ids.add(cluster_id)
 
         if covered_cluster_ids != known_cluster_ids:
@@ -158,6 +161,26 @@ class VerdictCodec:
             )
 
         return tuple(decisions)
+
+    def validate_new_cluster_ids(
+        self,
+        cluster_ids: Sequence[str],
+        covered_cluster_ids: set[str],
+    ) -> tuple[str, ...]:
+        """Validate one tool submission before mutating collector state."""
+
+        normalized = tuple(cluster_ids)
+        if not normalized:
+            raise VerdictCodecError("Verdict requires at least one cluster")
+        if len(normalized) != len(set(normalized)):
+            raise VerdictCodecError("Verdict contains duplicate cluster IDs")
+        known_cluster_ids = {cluster.cluster_id for cluster in self.clusters}
+        for cluster_id in normalized:
+            if cluster_id not in known_cluster_ids:
+                raise VerdictCodecError(f"Verdict references unknown cluster: {cluster_id}")
+            if cluster_id in covered_cluster_ids:
+                raise VerdictCodecError(f"Cluster {cluster_id} already has a verdict")
+        return normalized
 
     def canonical_bytes(self, decisions: Sequence[VerdictDecision]) -> bytes:
         """Canonicalize validated Verdict decisions to deterministic JSON."""
@@ -184,6 +207,12 @@ class VerdictCodec:
             evidence_strength=(
                 EvidenceStrength(dto.evidence_strength) if dto.evidence_strength else None
             ),
+            primary_location=(
+                SourceLocation(**dto.primary_location.model_dump())
+                if dto.primary_location is not None
+                else None
+            ),
+            changed_hunk_id=dto.changed_hunk_id,
         )
 
     def _to_dto(self, decision: VerdictDecision) -> dict[str, Any]:
@@ -203,4 +232,17 @@ class VerdictCodec:
             "evidence_strength": (
                 decision.evidence_strength.value if decision.evidence_strength else None
             ),
+            "primary_location": (
+                {
+                    "path": decision.primary_location.path,
+                    "start_line": decision.primary_location.start_line,
+                    "end_line": decision.primary_location.end_line,
+                    "side": decision.primary_location.side,
+                    "excerpt_hash": decision.primary_location.excerpt_hash,
+                    "is_deleted": decision.primary_location.is_deleted,
+                }
+                if decision.primary_location is not None
+                else None
+            ),
+            "changed_hunk_id": decision.changed_hunk_id,
         }

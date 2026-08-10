@@ -29,7 +29,6 @@ class ToolLimitsService:
         max_pattern_chars: int | None = None,
         regex_timeout_seconds: float | None = None,
         comment_batch_size: int | None = None,
-        reviewed_files_batch: int | None = None,
         short_text_max: int | None = None,
         long_text_max: int | None = None,
         task_summary_max: int | None = None,
@@ -56,11 +55,6 @@ class ToolLimitsService:
             ),
             comment_batch_size=(
                 comment_batch_size if comment_batch_size is not None else current.comment_batch_size
-            ),
-            reviewed_files_batch=(
-                reviewed_files_batch
-                if reviewed_files_batch is not None
-                else current.reviewed_files_batch
             ),
             short_text_max=short_text_max if short_text_max is not None else current.short_text_max,
             long_text_max=long_text_max if long_text_max is not None else current.long_text_max,

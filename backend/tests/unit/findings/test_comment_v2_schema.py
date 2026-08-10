@@ -3,9 +3,9 @@ from typing import cast
 import pytest
 from pydantic import ValidationError
 
-from codelens.findings.infrastructure.comment_v2_output import (
-    CommentV2BatchSchema,
-    CommentV2OutputCodec,
+from codelens.findings.infrastructure.comment_output import (
+    CommentBatchSchema,
+    CommentOutputCodec,
 )
 
 
@@ -31,7 +31,7 @@ def valid_comment_v2_payload() -> dict[str, object]:
 
 
 def test_comment_v2_accepts_categorical_evidence_axes() -> None:
-    batch = CommentV2BatchSchema.model_validate(valid_comment_v2_payload())
+    batch = CommentBatchSchema.model_validate(valid_comment_v2_payload())
 
     assert batch.findings[0].evidence_strength == "direct"
 
@@ -42,7 +42,7 @@ def test_comment_v2_rejects_numeric_confidence() -> None:
     findings[0]["confidence"] = 0.9
 
     with pytest.raises(ValidationError, match="confidence"):
-        CommentV2BatchSchema.model_validate(payload)
+        CommentBatchSchema.model_validate(payload)
 
 
 def test_comment_v2_rejects_unknown_fields() -> None:
@@ -51,18 +51,18 @@ def test_comment_v2_rejects_unknown_fields() -> None:
     findings[0]["impact_certainty"] = "confirmed"
 
     with pytest.raises(ValidationError, match="extra"):
-        CommentV2BatchSchema.model_validate(payload)
+        CommentBatchSchema.model_validate(payload)
 
 
 def test_comment_v2_codec_is_canonical_and_version_locked() -> None:
-    codec = CommentV2OutputCodec()
+    codec = CommentOutputCodec()
 
     encoded = codec.encode(valid_comment_v2_payload())
     decoded = codec.decode(encoded)
 
     assert codec.schema_version == "2"
-    assert decoded == CommentV2BatchSchema.model_validate(valid_comment_v2_payload())
+    assert decoded == CommentBatchSchema.model_validate(valid_comment_v2_payload())
     assert encoded == codec.encode(decoded)
 
     with pytest.raises(ValueError, match="unsupported"):
-        CommentV2OutputCodec("1")  # type: ignore[arg-type]
+        CommentOutputCodec("1")  # type: ignore[arg-type]

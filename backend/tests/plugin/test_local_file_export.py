@@ -28,16 +28,16 @@ def _export_envelope() -> FindingExportEnvelope:
             target_ref=None,
             status="completed",
             selection_request=SelectionRequestDto(
-                mode="fixed", reviewer_versions=("correctness:v1",)
+                mode="fixed", reviewer_versions=("correctness:v2",)
             ),
             plan_summary=ReviewPlanSummaryDto(
                 strategy="fixed",
-                selected_reviewer_versions=("correctness:v1",),
+                selected_reviewer_versions=("correctness:v2",),
                 planner_version=None,
                 plan_hash="a" * 64,
             ),
             coverage=ReviewCoverageDto(
-                completed_reviewer_versions=("correctness:v1",),
+                completed_reviewer_versions=("correctness:v2",),
                 failed_reviewer_versions=(),
                 omitted_reviewer_versions=(),
             ),

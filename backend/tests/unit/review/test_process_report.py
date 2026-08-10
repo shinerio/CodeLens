@@ -21,7 +21,7 @@ def _entry(
 
 def test_process_report_aggregates_llm_tokens_agents_and_tools() -> None:
     started_at = datetime(2026, 7, 25, 10, 0, tzinfo=UTC)
-    agent = "correctness:v1"
+    agent = "correctness:v2"
     entries = (
         _entry(1, "model_started", started_at, metadata={"agent": agent}),
         _entry(
@@ -91,12 +91,12 @@ def test_process_report_aggregates_llm_tokens_agents_and_tools() -> None:
 def test_process_report_marks_usage_incomplete_for_legacy_transcripts() -> None:
     created_at = datetime(2026, 7, 25, 10, 0, tzinfo=UTC)
     entries = (
-        _entry(1, "model_started", created_at, metadata={"agent": "correctness:v1"}),
+        _entry(1, "model_started", created_at, metadata={"agent": "correctness:v2"}),
         _entry(
             2,
             "model_output",
             created_at + timedelta(seconds=1),
-            metadata={"agent": "correctness:v1"},
+            metadata={"agent": "correctness:v2"},
         ),
     )
 
@@ -114,13 +114,13 @@ def test_process_report_marks_usage_incomplete_for_legacy_transcripts() -> None:
 def test_host_prefetched_review_scope_has_no_tool_transcript_or_usage() -> None:
     created_at = datetime(2026, 7, 25, 10, 0, tzinfo=UTC)
     entries = (
-        _entry(1, "model_started", created_at, metadata={"agent": "correctness:v1"}),
+        _entry(1, "model_started", created_at, metadata={"agent": "correctness:v2"}),
         _entry(
             2,
             "model_output",
             created_at + timedelta(seconds=1),
             metadata={
-                "agent": "correctness:v1",
+                "agent": "correctness:v2",
                 "model_name": "gpt-5.1",
                 "llm_call_count": "1",
                 "input_tokens": "10",
@@ -132,7 +132,7 @@ def test_host_prefetched_review_scope_has_no_tool_transcript_or_usage() -> None:
             3,
             "model_completed",
             created_at + timedelta(seconds=2),
-            metadata={"agent": "correctness:v1"},
+            metadata={"agent": "correctness:v2"},
         ),
     )
 

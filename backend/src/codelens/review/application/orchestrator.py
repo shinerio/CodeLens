@@ -9,7 +9,6 @@ from typing import Literal, Protocol, TypeVar
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFindingBatch
-from codelens.findings.domain.models import FindingBatch
 from codelens.findings.infrastructure.verdict_codec import ValidatedVerdictBatch
 from codelens.review.application.dag_scheduler import (
     PersistedDagScheduler,
@@ -54,9 +53,7 @@ class PreparedReview:
     input_payloads: dict[str, bytes]
     prompt_locale: str
     plan: ReviewPlan | None = None
-    execution_specs_by_node: dict[str, FrozenAgentExecutionSpec] = field(
-        default_factory=dict
-    )
+    execution_specs_by_node: dict[str, FrozenAgentExecutionSpec] = field(default_factory=dict)
 
 
 class _WorkflowPort(Protocol):
@@ -122,9 +119,7 @@ class _CheckpointPort(Protocol[_CheckpointViewT]):
     async def mark_failed(
         self, task_id: str, node_key: str, error_code: str, *, is_timeout: bool = False
     ) -> None: ...
-    async def mark_skipped(
-        self, task_id: str, node_key: str, reason_code: str
-    ) -> None: ...
+    async def mark_skipped(self, task_id: str, node_key: str, reason_code: str) -> None: ...
     async def cancel_non_terminal(self, task_id: str) -> None: ...
 
 
@@ -132,13 +127,7 @@ class _ValidatorPort(Protocol):
     @property
     def warnings(self) -> tuple[FindingValidationWarning, ...]: ...
 
-    async def validate(
-        self, payload: bytes
-    ) -> (
-        FindingBatch
-        | CandidateFindingBatch
-        | ValidatedVerdictBatch
-    ): ...
+    async def validate(self, payload: bytes) -> CandidateFindingBatch | ValidatedVerdictBatch: ...
 
 
 class _CrashInjectorPort(Protocol):
@@ -318,20 +307,14 @@ class ReviewOrchestrator:
         specs = prepared.execution_specs_by_node
         if set(specs) != {node.node_id for node in plan.nodes}:
             raise ValueError("prepared execution specs do not match the Review Plan")
-        await scheduler.initialize(
-            {node_id: spec.fingerprint for node_id, spec in specs.items()}
-        )
+        await scheduler.initialize({node_id: spec.fingerprint for node_id, spec in specs.items()})
         planner_nodes = tuple(
             node for node in plan.nodes if node.node_type is ReviewPlanNodeType.PLANNER
         )
         if planner_nodes:
-            planner_checkpoint = await self._checkpoints.get(
-                task_id, planner_nodes[0].node_id
-            )
+            planner_checkpoint = await self._checkpoints.get(task_id, planner_nodes[0].node_id)
             if planner_checkpoint.status != "succeeded":
-                raise RuntimeError(
-                    "Adaptive Planner output must be durable before Plan execution"
-                )
+                raise RuntimeError("Adaptive Planner output must be durable before Plan execution")
 
         while True:
             if await self._cancel_if_requested(task_id):
@@ -343,16 +326,13 @@ class ReviewOrchestrator:
             )
             reviewer_records = tuple(by_node[node.node_id] for node in reviewer_nodes)
             reviewers_terminal = all(
-                record.status
-                in {"succeeded", "failed", "timed_out", "canceled", "skipped"}
+                record.status in {"succeeded", "failed", "timed_out", "canceled", "skipped"}
                 for record in reviewer_records
             )
             if reviewers_terminal:
                 outcome = reviewer_stage_outcome(reviewer_records)
                 if outcome == "failed":
-                    await self._skip_pending_nodes(
-                        task_id, plan, by_node, "reviewer_stage_failed"
-                    )
+                    await self._skip_pending_nodes(task_id, plan, by_node, "reviewer_stage_failed")
                     await self._workflow.fail(task_id, "all_reviewers_failed")
                     return
                 if outcome == "partial" or any(
@@ -363,11 +343,7 @@ class ReviewOrchestrator:
                     await self._workflow.mark_partial_coverage(task_id)
 
             verifier = next(
-                (
-                    node
-                    for node in plan.nodes
-                    if node.node_type is ReviewPlanNodeType.VERIFIER
-                ),
+                (node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER),
                 None,
             )
             if verifier is not None and reviewers_terminal:
@@ -408,12 +384,8 @@ class ReviewOrchestrator:
     ) -> None:
         execution_spec = prepared.execution_specs_by_node[node.node_id]
         try:
-            await self._checkpoint_output(
-                task_id, prepared, execution_spec, node_key=node.node_id
-            )
-            await self._validate_output(
-                task_id, prepared, execution_spec, node_key=node.node_id
-            )
+            await self._checkpoint_output(task_id, prepared, execution_spec, node_key=node.node_id)
+            await self._validate_output(task_id, prepared, execution_spec, node_key=node.node_id)
         except asyncio.CancelledError:
             raise
         except Exception as error:
@@ -448,11 +420,7 @@ class ReviewOrchestrator:
                 await self._checkpoints.mark_skipped(task_id, node.node_id, reason_code)
 
     async def _finish_persisted_task(self, task_id: str, status: str) -> None:
-        target = (
-            "partial"
-            if await self._workflow.has_partial_coverage(task_id)
-            else "completed"
-        )
+        target = "partial" if await self._workflow.has_partial_coverage(task_id) else "completed"
         final_status = await self._advance(task_id, status, status, target)
         if final_status in {"completed", "partial"}:
             await self._workflow.complete_job(task_id)
@@ -606,8 +574,6 @@ class ReviewOrchestrator:
             retained_count = (
                 len(validated.candidates)
                 if isinstance(validated, CandidateFindingBatch)
-                else len(validated.findings)
-                if isinstance(validated, FindingBatch)
                 else len(validated.decisions)
             )
             duplicate_count = sum(
@@ -636,9 +602,7 @@ class ReviewOrchestrator:
                 },
             )
         if isinstance(validated, ValidatedVerdictBatch):
-            await self._completion.complete_with_verdicts(
-                task_id, node_key, validated.decisions
-            )
+            await self._completion.complete_with_verdicts(task_id, node_key, validated.decisions)
         elif isinstance(validated, CandidateFindingBatch):
             await self._completion.complete_with_candidates(
                 task_id,
@@ -646,9 +610,7 @@ class ReviewOrchestrator:
                 validated,
                 result_summary={"candidate_count": len(validated.candidates)},
             )
-        else:
-            await self._completion.complete_with_findings(task_id, node_key, validated)
-        await self._hit("after_finding_completion")
+        await self._hit("after_candidate_completion")
 
     async def _task_completion_status(
         self,

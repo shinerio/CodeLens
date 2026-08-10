@@ -13,25 +13,21 @@ def test_catalog_contains_the_approved_public_reviewers() -> None:
 
     assert public == {
         "correctness:v2",
-        "security:v1",
-        "reliability-concurrency:v1",
-        "contract-data:v1",
-        "architecture:v1",
-        "performance:v1",
-        "test-regression:v1",
-        "general:v1",
+        "security:v2",
+        "reliability-concurrency:v2",
+        "contract-data:v2",
+        "architecture:v2",
+        "performance:v2",
+        "test-regression:v2",
+        "general:v2",
     }
 
 
-def test_legacy_correctness_is_not_planner_eligible() -> None:
-    legacy = builtin_agent_catalog()["correctness:v1"]
+def test_catalog_contains_only_v2_agents() -> None:
+    catalog = builtin_agent_catalog()
 
-    assert legacy.is_legacy is True
-    assert legacy.is_public is False
-    assert legacy.planner_eligible is False
-    assert legacy.output_contract_version == "1"
-    assert legacy.confidence_floor == 0.7
-    assert correctness_agent() == legacy
+    assert all(agent.version == 2 for agent in catalog.values())
+    assert correctness_agent() == catalog["correctness:v2"]
 
 
 def test_catalog_roles_and_planner_visibility_are_frozen() -> None:
@@ -39,13 +35,12 @@ def test_catalog_roles_and_planner_visibility_are_frozen() -> None:
     specialists = {
         reference
         for reference, agent in catalog.items()
-        if agent.role is AgentRole.REVIEWER
-        and reference not in {"correctness:v1", "general:v1"}
+        if agent.role is AgentRole.REVIEWER and reference != "general:v2"
     }
 
     assert all(catalog[reference].planner_eligible for reference in specialists)
-    assert catalog["general:v1"].planner_eligible is False
-    assert catalog["general:v1"].dimensions == (
+    assert catalog["general:v2"].planner_eligible is False
+    assert catalog["general:v2"].dimensions == (
         "correctness",
         "security",
         "reliability-concurrency",
@@ -54,13 +49,13 @@ def test_catalog_roles_and_planner_visibility_are_frozen() -> None:
         "performance",
         "test-regression",
     )
-    assert catalog["review-planner:v1"].role is AgentRole.PLANNER
-    assert catalog["review-verifier:v1"].role is AgentRole.VERIFIER
+    assert catalog["review-planner:v2"].role is AgentRole.PLANNER
+    assert catalog["review-verifier:v2"].role is AgentRole.VERIFIER
     assert all(
         not catalog[reference].is_public
         for reference in (
-            "review-planner:v1",
-            "review-verifier:v1",
+            "review-planner:v2",
+            "review-verifier:v2",
         )
     )
 
@@ -72,9 +67,7 @@ def test_catalog_keys_and_prompt_files_match_agent_identity() -> None:
     assert all(reference == agent.reference for reference, agent in catalog.items())
     for agent in catalog.values():
         for locale in ("en", "zh-CN"):
-            prompt = (prompt_root / agent.prompt_key / f"{locale}.md").read_text(
-                encoding="utf-8"
-            )
+            prompt = (prompt_root / agent.prompt_key / f"{locale}.md").read_text(encoding="utf-8")
             assert prompt.strip()
 
 

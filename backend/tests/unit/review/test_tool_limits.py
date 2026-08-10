@@ -15,7 +15,6 @@ from codelens.review.domain.tool_limits import (
     DEFAULT_MAX_SCAN_BYTES,
     DEFAULT_MAX_SOURCE_BYTES,
     DEFAULT_REGEX_TIMEOUT_SECONDS,
-    DEFAULT_REVIEWED_FILES_BATCH,
     DEFAULT_SHORT_TEXT_MAX,
     DEFAULT_TASK_SUMMARY_MAX,
     MAX_COMMENT_BATCH_SIZE,
@@ -28,7 +27,6 @@ from codelens.review.domain.tool_limits import (
     MAX_MAX_SCAN_BYTES,
     MAX_MAX_SOURCE_BYTES,
     MAX_REGEX_TIMEOUT_SECONDS,
-    MAX_REVIEWED_FILES_BATCH,
     MAX_SHORT_TEXT_MAX,
     MAX_TASK_SUMMARY_MAX,
     MIN_COMMENT_BATCH_SIZE,
@@ -41,7 +39,6 @@ from codelens.review.domain.tool_limits import (
     MIN_MAX_SCAN_BYTES,
     MIN_MAX_SOURCE_BYTES,
     MIN_REGEX_TIMEOUT_SECONDS,
-    MIN_REVIEWED_FILES_BATCH,
     MIN_SHORT_TEXT_MAX,
     MIN_TASK_SUMMARY_MAX,
     ToolLimits,
@@ -59,7 +56,6 @@ def test_default_tool_limits_are_within_bounds() -> None:
     assert limits.max_pattern_chars == DEFAULT_MAX_PATTERN_CHARS
     assert limits.regex_timeout_seconds == DEFAULT_REGEX_TIMEOUT_SECONDS
     assert limits.comment_batch_size == DEFAULT_COMMENT_BATCH_SIZE
-    assert limits.reviewed_files_batch == DEFAULT_REVIEWED_FILES_BATCH
     assert limits.short_text_max == DEFAULT_SHORT_TEXT_MAX
     assert limits.long_text_max == DEFAULT_LONG_TEXT_MAX
     assert limits.task_summary_max == DEFAULT_TASK_SUMMARY_MAX
@@ -76,7 +72,6 @@ def test_tool_limits_accept_boundary_values() -> None:
         max_pattern_chars=MIN_MAX_PATTERN_CHARS,
         regex_timeout_seconds=MIN_REGEX_TIMEOUT_SECONDS,
         comment_batch_size=MIN_COMMENT_BATCH_SIZE,
-        reviewed_files_batch=MIN_REVIEWED_FILES_BATCH,
         short_text_max=MIN_SHORT_TEXT_MAX,
         long_text_max=MIN_LONG_TEXT_MAX,
         task_summary_max=MIN_TASK_SUMMARY_MAX,
@@ -93,7 +88,6 @@ def test_tool_limits_accept_boundary_values() -> None:
         max_pattern_chars=MAX_MAX_PATTERN_CHARS,
         regex_timeout_seconds=MAX_REGEX_TIMEOUT_SECONDS,
         comment_batch_size=MAX_COMMENT_BATCH_SIZE,
-        reviewed_files_batch=MAX_REVIEWED_FILES_BATCH,
         short_text_max=MAX_SHORT_TEXT_MAX,
         long_text_max=MAX_LONG_TEXT_MAX,
         task_summary_max=MAX_TASK_SUMMARY_MAX,
@@ -116,7 +110,6 @@ def test_tool_limits_accept_boundary_values() -> None:
         ("regex_timeout_seconds", MAX_REGEX_TIMEOUT_SECONDS + 0.1),
         ("comment_batch_size", MIN_COMMENT_BATCH_SIZE - 1),
         ("comment_batch_size", MAX_COMMENT_BATCH_SIZE + 1),
-        ("reviewed_files_batch", MIN_REVIEWED_FILES_BATCH - 1),
         ("short_text_max", MAX_SHORT_TEXT_MAX + 1),
         ("long_text_max", MIN_LONG_TEXT_MAX - 1),
         ("task_summary_max", MAX_TASK_SUMMARY_MAX + 1),

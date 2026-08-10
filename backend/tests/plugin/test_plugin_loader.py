@@ -11,13 +11,12 @@ def _manifest() -> PluginManifest:
     return PluginManifest(
         plugin_id="external-report",
         name="External report",
-        version="1.0.0",
+        version="2.0.0",
         description="",
         author="test",
         platform="local",
-        capabilities={
-            "report": ReportCapability(entry_point="report_sink:ExternalSink")
-        },
+        capabilities={"report": ReportCapability(entry_point="report_sink:ExternalSink")},
+        min_codelens_version="0.2.0",
     )
 
 

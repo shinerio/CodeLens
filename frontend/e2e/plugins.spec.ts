@@ -30,7 +30,8 @@ const LOCAL_PLUGIN = {
     scope_type: "commit",
     base_ref: null,
     target_ref: null,
-    selected_agents: ["correctness:v1"],
+    reviewer_selection: { mode: "fixed", reviewer_versions: ["correctness:v2"] },
+    supersede_policy: "latest_snapshot",
     prompt_locale: "en",
     debounce_seconds: 10,
   },
@@ -115,7 +116,7 @@ test("keeps a copied v2 profile snapshot until reload is explicit", async ({ pag
     },
     trigger_config: {
       ...LOCAL_PLUGIN.trigger_config,
-      reviewer_selection: { mode: "fixed", reviewer_versions: ["security:v1"] },
+      reviewer_selection: { mode: "fixed", reviewer_versions: ["security:v2"] },
       supersede_policy: "latest_snapshot",
     },
   };
@@ -132,14 +133,13 @@ test("keeps a copied v2 profile snapshot until reload is explicit", async ({ pag
   });
   await page.route("**/api/reviewer-catalog", async (route) => {
     await route.fulfill({ json: [{
-      reference: "security:v1",
+      reference: "security:v2",
       agent_id: "security",
-      version: 1,
+      version: 2,
       dimensions: ["security"],
       cost_class: "balanced",
       planner_eligible: true,
       capability_readiness: "ready",
-      is_legacy: false,
     }] });
   });
   await page.route("**/api/plugins/local/trigger/config", async (route) => {

@@ -17,16 +17,14 @@ it("renders exactly the public backend reviewers and edits each versioned prompt
       dimensions: ["correctness"],
       planner_eligible: true,
       capability_readiness: "ready",
-      is_legacy: false,
     },
     {
-      reference: "security:v1",
+      reference: "security:v2",
       agent_id: "security",
       version: 1,
       dimensions: ["security"],
       planner_eligible: true,
       capability_readiness: "ready",
-      is_legacy: false,
     },
   ];
   vi.stubGlobal("fetch", vi.fn().mockImplementation(
@@ -57,10 +55,10 @@ it("renders exactly the public backend reviewers and edits each versioned prompt
   const cards = await screen.findAllByTestId("reviewer-card");
   expect(cards).toHaveLength(2);
   expect(within(cards[0]).getByText("correctness:v2")).toBeVisible();
-  expect(within(cards[1]).getByText("security:v1")).toBeVisible();
-  expect(screen.queryByText("release-risk:v1")).not.toBeInTheDocument();
+  expect(within(cards[1]).getByText("security:v2")).toBeVisible();
+  expect(screen.queryByText("release-risk:v2")).not.toBeInTheDocument();
 
-  const securityCard = cards.find((card) => within(card).queryByText("security:v1") !== null);
+  const securityCard = cards.find((card) => within(card).queryByText("security:v2") !== null);
   if (securityCard === undefined) throw new Error("Security reviewer card missing");
   await user.click(within(securityCard).getByRole("button", { name: "Edit prompt" }));
   expect(await screen.findByDisplayValue("security prompt")).toBeVisible();

@@ -8,7 +8,6 @@ type ReviewerCatalogDto = {
   dimensions: string[];
   planner_eligible: boolean;
   capability_readiness: "ready";
-  is_legacy: boolean;
 };
 
 export async function listReviewerCatalog(): Promise<ReviewerCatalogEntry[]> {
@@ -19,7 +18,6 @@ export async function listReviewerCatalog(): Promise<ReviewerCatalogEntry[]> {
     version: entry.version,
     dimensions: entry.dimensions,
     isPlannerEligible: entry.planner_eligible,
-    isLegacy: entry.is_legacy,
     capabilityStatus: entry.capability_readiness,
   }));
 }

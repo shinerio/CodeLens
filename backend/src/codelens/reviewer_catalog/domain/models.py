@@ -38,12 +38,11 @@ class AgentVersion:
     content_hash: str
     role: AgentRole = AgentRole.REVIEWER
     prompt_key: str = "correctness"
-    capability_profile_ref: str = "legacy-reviewer:v1"
-    skill_policy_ref: str = "none:v1"
+    capability_profile_ref: str = "reviewer:v2"
+    skill_policy_ref: str = "none:v2"
     dimensions: tuple[str, ...] = ()
     planner_eligible: bool = False
     is_public: bool = False
-    is_legacy: bool = False
 
     @property
     def reference(self) -> str:

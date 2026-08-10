@@ -2,13 +2,12 @@
   "find_files": {"description": "查找一个目录下的可见文件。两个参数都必填：path 是 Git 风格的规范化仓库相对目录，在包括 Windows 的所有系统上都使用 /，仓库根目录使用空字符串；pattern 使用相同路径格式且相对于 path，* 匹配一个路径段，** 匹配任意层级，查找全部后代使用 **。不分页且返回有界结果集；truncated 为 true 时应缩小 path 或细化 pattern 后重试。"},
   "grep": {"description": "在可见的 UTF-8 文本中执行无分页搜索。pattern、path 和 file_pattern 都必填：pattern 是有长度限制的 Python 正则表达式；path 是仓库相对文件或目录，仓库根目录使用空字符串；file_pattern 是相对于 path 且按路径段匹配的 glob，使用 ** 包含全部可见文件。扫描有界文本量并返回有界数量的匹配；truncated 为 true 时应缩小 pattern、path 或细化 file_pattern 后重试。"},
   "read_file": {"description": "读取可见文件。path 和 current|base|head 的 version 必填；从 1 开始且首尾都包含的 start_line/end_line 可以同时省略以执行有界全文读取，否则必须同时提供。读取有界行数。current 是经过验证的冻结内容，可能包含捕获的 overlay；base 和 head 是固定 Git revision。拒绝二进制文件和过大的 Snapshot 源文件，输出有大小限制；truncated 为 true 时应使用更小的明确行范围重试。"},
-  "get_diff": {"description": "读取一个已变更可见 path 经过验证的 base-to-current diff。current 是冻结的 Review 内容，可能包含捕获的工作区 overlay；base 是固定的基线 revision。输出有大小限制。"},
+  "get_diff": {"description": "读取已变更 Review 文件，或某目录下所有已变更 Review 文件经过验证的 base-to-current diff 稳定分页；Review Scope 根目录使用空 path。path 必填，cursor 可选。结果按 path 排序，并受文件数和总内容字节限制。has_more 为 true 时，使用相同 path 原样传回 next_cursor。被截断的文件不算完整查看，不能满足完成覆盖。"},
   "comment": {"description": "提交具体 Finding 的有界批量。side=old 对应删除行（- 标记后），side=new 对应新增行（+ 标记后）。existing_code 必须引用对应侧最小且精确的连续变更行，不含 diff 标记和未变更上下文。每项独立解析；rejected_comments 返回从零开始的索引和原因。只重试被拒绝的索引，已接受项会保留。"},
-  "review_file_done": {"description": "声明一个或多个 Review 文件已经调查完成。reviewed_files 必须包含 review_files 中有界数量的精确路径。只有该路径已经成功通过模型可见的 get_diff 或 read_file 查看后才会记录；否则结果会在 missing_evidence_files 中拒绝该路径。重复路径具备幂等性。"},
-  "task_done": {"description": "尝试结束整个调查。summary 必填且有长度限制。当仍有 Review 文件未完成时会拒绝：missing_evidence_files 表示尚未成功通过 get_diff 或 read_file 查看；undeclared_files 表示已经查看但尚未通过 review_file_done 记录。继续调查后重新调用 task_done。达到配置的最大打回次数后，工具会接受完成并通过 incomplete_files 返回未完成文件，以便保留已有 Finding 并完成整理。"},
-  "submit_review_plan": {"description": "将一批 Reviewer 引用添加到 Plan。可多次调用以累积选择，重复项会被忽略。提供 reviewer 引用列表（例如 [\"security:v1\", \"performance:v1\"]）。每个引用必须是可用且未被禁用的。"},
+  "task_done": {"description": "尝试结束整个调查。summary 必填且有长度限制。当 Review 文件仍在 missing_diff_files 中时会拒绝完成，因为 get_diff 尚未完整返回其 diff。继续读取这些 diff，有分页游标时继续翻页，再重新调用 task_done。达到配置的最大打回次数后，工具会接受完成并通过 incomplete_files 返回未完成文件，以便保留已有 Finding 并完成整理。"},
+  "submit_review_plan": {"description": "将一批 Reviewer 引用添加到 Plan。可多次调用以累积选择，重复项会被忽略。提供 reviewer 引用列表（例如 [\"security:v2\", \"performance:v2\"]）。每个引用必须是可用且未被禁用的。"},
   "finalize_plan": {"description": "验证累积的 Reviewer 并最终确定 Plan。在所有 submit_review_plan 调用完成后调用。系统会验证累积集合是否完全匹配可用的 reviewer。"},
   "verdict": {"description": "接受或拒绝一个或多个 finding cluster。必填参数：cluster_ids（cluster 标识列表）和 action（\"accept\" 或 \"deny\"）。accept 使用 cluster 的 canonical 候选字段发布 finding。deny 将 cluster 作为误报抑制。可多次调用以累积不同 cluster 的决策。"},
-  "merge": {"description": "将一个或多个 cluster 合成为单个 Finding。当模型需要跨合并候选合成最终属性而非原样接受 canonical 字段时使用。"},
+  "merge": {"description": "基于一个或多个已有 cluster 合成一条最终 Finding。cluster_ids 和所有模型可编辑 Comment 字段都必填；提交字段和源码片段会完整覆盖 canonical Candidate 值，包括位置和严重级别，严重级别不受来源 Candidate 上限约束。不能引用未知或已经裁决的 cluster。"},
   "finalize_verdicts": {"description": "验证每个 cluster 都已收到恰好一次裁决（accept、deny 或 merge），并最终确定裁决集。在所有 verdict 和 merge 调用完成后调用。系统会验证所有 cluster 是否都被覆盖且仅覆盖一次。"}
 }

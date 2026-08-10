@@ -11,7 +11,6 @@ DEFAULT_MAX_PATH_CHARS = 1024
 DEFAULT_MAX_PATTERN_CHARS = 512
 DEFAULT_REGEX_TIMEOUT_SECONDS = 30.0
 DEFAULT_COMMENT_BATCH_SIZE = 20
-DEFAULT_REVIEWED_FILES_BATCH = 2000
 DEFAULT_SHORT_TEXT_MAX = 240
 DEFAULT_LONG_TEXT_MAX = 8000
 DEFAULT_TASK_SUMMARY_MAX = 8000
@@ -34,8 +33,6 @@ MIN_REGEX_TIMEOUT_SECONDS = 0.01
 MAX_REGEX_TIMEOUT_SECONDS = 300.0
 MIN_COMMENT_BATCH_SIZE = 1
 MAX_COMMENT_BATCH_SIZE = 100
-MIN_REVIEWED_FILES_BATCH = 1
-MAX_REVIEWED_FILES_BATCH = 10_000
 MIN_SHORT_TEXT_MAX = 1
 MAX_SHORT_TEXT_MAX = 2048
 MIN_LONG_TEXT_MAX = 1
@@ -57,7 +54,6 @@ class ToolLimits:
     max_pattern_chars: int = DEFAULT_MAX_PATTERN_CHARS
     regex_timeout_seconds: float = DEFAULT_REGEX_TIMEOUT_SECONDS
     comment_batch_size: int = DEFAULT_COMMENT_BATCH_SIZE
-    reviewed_files_batch: int = DEFAULT_REVIEWED_FILES_BATCH
     short_text_max: int = DEFAULT_SHORT_TEXT_MAX
     long_text_max: int = DEFAULT_LONG_TEXT_MAX
     task_summary_max: int = DEFAULT_TASK_SUMMARY_MAX
@@ -93,12 +89,6 @@ class ToolLimits:
                 MIN_COMMENT_BATCH_SIZE,
                 MAX_COMMENT_BATCH_SIZE,
             ),
-            (
-                "reviewed_files_batch",
-                self.reviewed_files_batch,
-                MIN_REVIEWED_FILES_BATCH,
-                MAX_REVIEWED_FILES_BATCH,
-            ),
             ("short_text_max", self.short_text_max, MIN_SHORT_TEXT_MAX, MAX_SHORT_TEXT_MAX),
             ("long_text_max", self.long_text_max, MIN_LONG_TEXT_MAX, MAX_LONG_TEXT_MAX),
             (
@@ -110,4 +100,3 @@ class ToolLimits:
         ):
             if isinstance(value, bool) or value < lo or value > hi:
                 raise ValueError(f"{name} must be between {lo} and {hi}")
-

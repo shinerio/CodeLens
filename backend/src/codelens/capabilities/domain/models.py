@@ -160,8 +160,8 @@ class AgentExecutionLimits:
             raise ValueError("Agent execution limits must be positive")
 
     @classmethod
-    def legacy_default(cls) -> "AgentExecutionLimits":
-        """Return the frozen resource envelope used for legacy migration tests."""
+    def default(cls) -> "AgentExecutionLimits":
+        """Return the default frozen resource envelope for one Agent run."""
 
         return cls(20, 120, 120_000, 16_000, 600.0, 1_048_576)
 
@@ -244,7 +244,6 @@ def canonical_execution_payload(
             "content_hash": agent.content_hash,
             "dimensions": list(agent.dimensions),
             "failure_policy": agent.failure_policy,
-            "is_legacy": agent.is_legacy,
             "is_public": agent.is_public,
             "max_turns": agent.max_turns,
             "model_profile_id": agent.model_profile_id,
@@ -327,12 +326,8 @@ def hydrate_execution_spec(
     agent_payload = payload["agent"]
     agent_id, version_text = str(agent_payload["reference"]).rsplit(":v", 1)
     capability_payload = payload["capability_profile"]
-    profile_id, profile_version_text = str(capability_payload["reference"]).rsplit(
-        ":v", 1
-    )
-    skill_policy_id, skill_policy_version_text = str(payload["skill_policy"]).rsplit(
-        ":v", 1
-    )
+    profile_id, profile_version_text = str(capability_payload["reference"]).rsplit(":v", 1)
+    skill_policy_id, skill_policy_version_text = str(payload["skill_policy"]).rsplit(":v", 1)
 
     def tool_reference(value: str) -> ToolContractReference:
         name, tool_version = value.rsplit(":v", 1)
@@ -360,7 +355,6 @@ def hydrate_execution_spec(
         dimensions=tuple(str(item) for item in agent_payload["dimensions"]),
         planner_eligible=bool(agent_payload["planner_eligible"]),
         is_public=bool(agent_payload["is_public"]),
-        is_legacy=bool(agent_payload["is_legacy"]),
     )
     profile = CapabilityProfile(
         profile_id=profile_id,
@@ -387,11 +381,8 @@ def hydrate_execution_spec(
     if len(skill_payloads) != len(skill_instruction_texts):
         raise ValueError("frozen Skill Artifact count does not match execution spec")
     if any(
-        hashlib.sha256(instruction_text.encode("utf-8")).hexdigest()
-        != str(item["content_hash"])
-        for item, instruction_text in zip(
-            skill_payloads, skill_instruction_texts, strict=True
-        )
+        hashlib.sha256(instruction_text.encode("utf-8")).hexdigest() != str(item["content_hash"])
+        for item, instruction_text in zip(skill_payloads, skill_instruction_texts, strict=True)
     ):
         raise ValueError("frozen Skill bytes do not match execution spec")
     skills = tuple(
@@ -402,17 +393,13 @@ def hydrate_execution_spec(
             activation_reason=str(item["activation_reason"]),
             instruction_text=instruction_text,
         )
-        for item, instruction_text in zip(
-            skill_payloads, skill_instruction_texts, strict=True
-        )
+        for item, instruction_text in zip(skill_payloads, skill_instruction_texts, strict=True)
     )
     limits_payload = payload["execution_limits"]
     return FrozenAgentExecutionSpec.create(
         agent=agent,
         capability_profile=profile,
-        skill_policy=SkillPolicyReference(
-            skill_policy_id, int(skill_policy_version_text)
-        ),
+        skill_policy=SkillPolicyReference(skill_policy_id, int(skill_policy_version_text)),
         prompt_content_hash=prompt_content_hash,
         skills=skills,
         execution_limits=AgentExecutionLimits(

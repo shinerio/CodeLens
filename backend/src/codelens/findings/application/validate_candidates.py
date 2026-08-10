@@ -42,9 +42,7 @@ class CandidateBatchCodec:
                 "schema_version",
             }:
                 raise ValueError("Candidate batch shape is invalid")
-            if value["schema_version"] != "2" or not isinstance(
-                value["candidates"], list
-            ):
+            if value["schema_version"] != "2" or not isinstance(value["candidates"], list):
                 raise ValueError("Candidate batch version is invalid")
             return CandidateFindingBatch(
                 tuple(self._candidate(item) for item in value["candidates"])
@@ -101,9 +99,7 @@ class CandidateValidator:
 
         return self._warnings
 
-    async def validate(
-        self, batch: bytes | CandidateFindingBatch
-    ) -> CandidateFindingBatch:
+    async def validate(self, batch: bytes | CandidateFindingBatch) -> CandidateFindingBatch:
         """Best-effort validation: skip invalid candidates, keep valid ones.
 
         Schema-level errors (bad batch shape/version) still abort the entire
@@ -121,9 +117,7 @@ class CandidateValidator:
             try:
                 await self._validate_candidate(candidate)
             except (CandidateValidationError, ValueError) as error:
-                warnings.append(
-                    FindingValidationWarning(index, "invalid", str(error))
-                )
+                warnings.append(FindingValidationWarning(index, "invalid", str(error)))
                 continue
             if candidate.fingerprint in seen_fingerprints:
                 warnings.append(
@@ -174,7 +168,7 @@ class CandidateValidator:
             or path.is_absolute()
             or ".." in path.parts
             or "\\" in location.path
-            or location.path not in self._snapshot.manifest.target_paths
+            or location.path not in self._snapshot.manifest.review_paths
             or location.side not in {"old", "new"}
             or location.start_line < 1
             or location.end_line < location.start_line

@@ -130,7 +130,7 @@ class GitReviewWorktreeManager:
                 ownership_token_hash=token_hash,
             )
             marker = {
-                "schema_version": 1,
+                "schema_version": 2,
                 "worktree_id": worktree.worktree_id,
                 "task_id": task_id,
                 "checkout_path_hash": _sha256_text(str(root)),

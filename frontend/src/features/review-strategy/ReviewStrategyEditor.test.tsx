@@ -8,12 +8,11 @@ import type { ReviewStrategySnapshot } from "../reviews/types";
 import { ReviewStrategyEditor } from "./ReviewStrategyEditor";
 
 const catalog = ["general", "security", "performance"].map((agentId) => ({
-  reference: `${agentId}:v1`,
+  reference: `${agentId}:v2`,
   agentId,
-  version: 1,
+  version: 2,
   dimensions: [agentId],
   isPlannerEligible: true,
-  isLegacy: false,
   capabilityStatus: "ready" as const,
 }));
 
@@ -40,26 +39,4 @@ it("switches to Adaptive without retaining a hidden fixed selection", async () =
   await user.click(screen.getByRole("radio", { name: /Adaptive/i }));
   expect(screen.queryByRole("checkbox", { name: /security/i })).not.toBeInTheDocument();
   expect(screen.getByText(/after the review task/i)).toBeVisible();
-});
-
-it("keeps a selected legacy snapshot valid while preventing new selection", () => {
-  const legacyCatalog = [{
-    ...catalog[0],
-    reference: "correctness:v1",
-    agentId: "correctness",
-    isLegacy: true,
-  }];
-  render(
-    <ReviewStrategyEditor
-      catalog={legacyCatalog}
-      value={{
-        reviewerSelection: { mode: "fixed", reviewerVersions: ["correctness:v1"] },
-      }}
-      validationErrors={[]}
-      onChange={() => undefined}
-    />,
-    { wrapper: TestProviders },
-  );
-  expect(screen.getByRole("checkbox", { name: /correctness/i })).toBeDisabled();
-  expect(screen.getByText("retained snapshot")).toBeVisible();
 });

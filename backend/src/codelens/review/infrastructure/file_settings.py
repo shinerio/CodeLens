@@ -96,9 +96,7 @@ class FilesystemTriggerIdempotencySettingsStore:
             suffix=".tmp",
         )
         temporary = Path(name)
-        payload: _TriggerIdempotencySettingsPayload = {
-            "enabled": settings.enabled
-        }
+        payload: _TriggerIdempotencySettingsPayload = {"enabled": settings.enabled}
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
                 descriptor = -1

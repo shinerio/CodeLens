@@ -65,16 +65,14 @@ def test_repository_catalog_lists_selected_branch_history_and_paginates_commit_s
     assert newest["author"] == "Test User"
     assert newest["message"] == "catalog commit 11"
     assert newest["committed_at"]
-    returned_oids = {
-        commit["oid"] for commit in first.json()["commits"] + second.json()["commits"]
-    }
+    returned_oids = {commit["oid"] for commit in first.json()["commits"] + second.json()["commits"]}
     assert feature_tip not in returned_oids
     assert main_tip not in returned_oids
     assert second.status_code == 200, second.text
     assert len(second.json()["commits"]) >= 3
-    assert {
-        commit["oid"] for commit in first.json()["commits"]
-    }.isdisjoint(commit["oid"] for commit in second.json()["commits"])
+    assert {commit["oid"] for commit in first.json()["commits"]}.isdisjoint(
+        commit["oid"] for commit in second.json()["commits"]
+    )
 
 
 def test_repository_catalog_rejects_a_target_outside_selectable_branches(

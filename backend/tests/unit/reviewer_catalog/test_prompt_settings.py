@@ -22,9 +22,7 @@ class MemoryPromptStore:
     async def load_override(self, agent_id: str, locale: PromptLocale) -> str | None:
         return self.overrides.get((agent_id, locale))
 
-    async def save_override(
-        self, agent_id: str, locale: PromptLocale, prompt: str
-    ) -> None:
+    async def save_override(self, agent_id: str, locale: PromptLocale, prompt: str) -> None:
         self.overrides[(agent_id, locale)] = prompt
 
     async def delete_override(self, agent_id: str, locale: PromptLocale) -> None:
@@ -37,7 +35,7 @@ async def test_loads_agent_specific_prompt_without_a_hardcoded_agent_id(tmp_path
     (prompt_directory / "en.md").write_text("Review security boundaries.", encoding="utf-8")
     service = ReviewerPromptSettingsService(MemoryPromptStore(), tmp_path)
 
-    agent = builtin_agent_catalog()["security:v1"]
+    agent = builtin_agent_catalog()["security:v2"]
     view = await service.get(agent, "en")
 
     assert view.agent_id == "security"
@@ -48,14 +46,14 @@ async def test_rejects_unknown_agent_before_persisting_an_override(tmp_path: Pat
     store = MemoryPromptStore()
     service = ReviewerPromptSettingsService(store, tmp_path)
 
-    agent = builtin_agent_catalog()["security:v1"]
+    agent = builtin_agent_catalog()["security:v2"]
     with pytest.raises(ValueError, match="unavailable"):
         await service.update(agent, "en", "Do something else.")
 
     assert store.overrides == {}
 
 
-async def test_prompt_overrides_are_isolated_by_reviewer_version(tmp_path: Path) -> None:
+async def test_prompt_override_is_loaded_by_canonical_reference(tmp_path: Path) -> None:
     store = FilesystemReviewerPromptStore(tmp_path)
     service = ReviewerPromptSettingsService(store, PROMPT_DIR)
     catalog = builtin_agent_catalog()
@@ -63,10 +61,9 @@ async def test_prompt_overrides_are_isolated_by_reviewer_version(tmp_path: Path)
     await service.update(catalog["correctness:v2"], "en", "v2 custom")
 
     assert (await service.get(catalog["correctness:v2"], "en")).prompt == "v2 custom"
-    assert (await service.get(catalog["correctness:v1"], "en")).prompt != "v2 custom"
 
 
-async def test_legacy_agent_id_override_loads_only_for_correctness_v1(tmp_path: Path) -> None:
+async def test_unversioned_override_is_ignored(tmp_path: Path) -> None:
     (tmp_path / "reviewer-prompts.json").write_text(
         '{"correctness":{"en":"legacy custom"}}', encoding="utf-8"
     )
@@ -74,19 +71,16 @@ async def test_legacy_agent_id_override_loads_only_for_correctness_v1(tmp_path: 
     service = ReviewerPromptSettingsService(store, PROMPT_DIR)
     catalog = builtin_agent_catalog()
 
-    assert (await service.get(catalog["correctness:v1"], "en")).prompt == "legacy custom"
     assert (await service.get(catalog["correctness:v2"], "en")).prompt != "legacy custom"
 
 
-async def test_saving_legacy_override_uses_the_canonical_versioned_key(tmp_path: Path) -> None:
+async def test_saving_override_uses_the_canonical_versioned_key(tmp_path: Path) -> None:
     store = FilesystemReviewerPromptStore(tmp_path)
     service = ReviewerPromptSettingsService(store, PROMPT_DIR)
-    legacy = builtin_agent_catalog()["correctness:v1"]
+    reviewer = builtin_agent_catalog()["correctness:v2"]
 
-    await service.update(legacy, "en", "saved legacy custom")
+    await service.update(reviewer, "en", "saved custom")
 
-    payload = json.loads(
-        (tmp_path / "reviewer-prompts.json").read_text(encoding="utf-8")
-    )
-    assert payload["correctness:v1"]["en"] == "saved legacy custom"
+    payload = json.loads((tmp_path / "reviewer-prompts.json").read_text(encoding="utf-8"))
+    assert payload["correctness:v2"]["en"] == "saved custom"
     assert "correctness" not in payload

@@ -14,28 +14,11 @@ export function ReviewerPicker({
 }) {
   const { t } = useI18n();
   const selectedSet = new Set(selected);
-  const catalogReferences = new Set(catalog.map((entry) => entry.reference));
-  const retainedLegacyEntries: ReviewerCatalogEntry[] = selected
-    .filter((reference) => reference === "correctness:v1" && !catalogReferences.has(reference))
-    .map((reference) => ({
-      reference,
-      agentId: "correctness",
-      version: 1,
-      dimensions: ["correctness"],
-      costClass: "balanced",
-      isPlannerEligible: false,
-      isLegacy: true,
-      capabilityStatus: "ready",
-    }));
-  const entries = [
-    ...catalog.filter((entry) => !entry.isLegacy),
-    ...catalog.filter((entry) => entry.isLegacy && selectedSet.has(entry.reference)),
-    ...retainedLegacyEntries,
-  ];
+  const entries = catalog;
   return (
     <div className="reviewer-picker" role="group" aria-label={t("strategy.reviewers")}>
       {entries.map((entry) => {
-        const isUnavailable = entry.capabilityStatus !== "ready" || entry.isLegacy;
+        const isUnavailable = entry.capabilityStatus !== "ready";
         return (
           <label className={`reviewer-choice${isUnavailable ? " reviewer-choice--unavailable" : ""}`} key={entry.reference}>
             <input

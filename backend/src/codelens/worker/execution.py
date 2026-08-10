@@ -21,7 +21,6 @@ from codelens.capabilities.infrastructure.builtin_profiles import (
 from codelens.findings.application.publish_findings import FindingPublisher
 from codelens.findings.application.resolve_clusters import ClusterService
 from codelens.findings.application.validate_candidates import CandidateValidator
-from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.orchestrator import (
@@ -37,7 +36,6 @@ from codelens.review.application.planning import (
     ReviewPlanningService,
 )
 from codelens.review.application.tool_limits_service import ToolLimitsService
-from codelens.review.application.validate_findings import FindingValidator
 from codelens.review.domain.agent_run import AgentRun, InvalidAgentRunStateError
 from codelens.review.domain.errors import AgentRuntimeError
 from codelens.review.domain.ports import (
@@ -99,6 +97,7 @@ from codelens.workspace.domain.models import (
     ReviewTarget,
 )
 from codelens.workspace.domain.ports import ScopePlan
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
 
@@ -112,7 +111,7 @@ class _RejectAdaptivePlanning:
         self,
         *,
         task_id: str,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
         readiness: Mapping[str, CapabilityReadiness],
         risk_summary: ChangeRiskSummary | None,
     ) -> PlannerSelection:
@@ -141,9 +140,7 @@ async def load_frozen_execution_specs(
             execution_spec = hydrate_execution_spec(
                 record.spec_json,
                 prompt_text=prompt_bytes.decode("utf-8"),
-                skill_instruction_texts=tuple(
-                    payload.decode("utf-8") for payload in skill_bytes
-                ),
+                skill_instruction_texts=tuple(payload.decode("utf-8") for payload in skill_bytes),
             )
         except UnicodeDecodeError as error:
             raise ValueError("frozen execution Artifact is not valid UTF-8") from error
@@ -303,13 +300,9 @@ class SqlCheckpointPortAdapter:
     async def mark_failed(
         self, task_id: str, node_key: str, error_code: str, *, is_timeout: bool = False
     ) -> None:
-        await self._checkpoints.mark_failed(
-            task_id, node_key, error_code, is_timeout=is_timeout
-        )
+        await self._checkpoints.mark_failed(task_id, node_key, error_code, is_timeout=is_timeout)
 
-    async def mark_skipped(
-        self, task_id: str, node_key: str, reason_code: str
-    ) -> None:
+    async def mark_skipped(self, task_id: str, node_key: str, reason_code: str) -> None:
         await self._checkpoints.mark_skipped(task_id, node_key, reason_code)
 
     async def cancel_non_terminal(self, task_id: str) -> None:
@@ -343,7 +336,6 @@ class WorkerReviewExecutor:
         runtime: AgentRuntimePort,
         output_artifacts: FilesystemRunArtifactStore,
         checkpoints: SqlCheckpointStore,
-        codec: AgentOutputCodec,
         semaphores: WorkerSemaphores,
         transcripts: WorkerTranscriptStore,
         reviewer_prompts: ReviewerPromptSettingsService | None = None,
@@ -367,7 +359,6 @@ class WorkerReviewExecutor:
         self._runtime = _ModelLimitedRuntime(runtime, semaphores.model)
         self._output_artifacts = output_artifacts
         self._checkpoints = SqlCheckpointPortAdapter(checkpoints)
-        self._codec = codec
         self._semaphores = semaphores
         self._transcripts = transcripts
         self._reviewer_prompts = reviewer_prompts or ReviewerPromptSettingsService(
@@ -457,13 +448,16 @@ class WorkerReviewExecutor:
         scope_plan = ScopePlan(
             base_oid=record.base_oid,
             head_oid=record.head_oid,
-            target_paths=record.target_paths,
+            candidate_paths=record.candidate_paths,
             capture_workspace_overlay=record.overlay_artifact_ref is not None,
             scope_type=record.scope_type,
+            file_exclusion_policy=ReviewFileExclusionPolicy.from_json(
+                record.file_exclusion_policy_json
+            ),
         )
         instructions = await self._snapshot_service.resolve_instructions(
             worktree,
-            record.target_paths,
+            record.candidate_paths,
         )
         snapshot = await self._snapshot_service.freeze(
             worktree,
@@ -471,6 +465,20 @@ class WorkerReviewExecutor:
             scope_plan,
             instructions,
         )
+        if not snapshot.manifest.review_paths:
+            await self._review_store.record_empty_review_scope(task_id)
+            await self._transcripts.append(
+                task_id,
+                "lifecycle",
+                "Review scope is empty after frozen file exclusions; model execution skipped",
+                metadata={"reason_code": "review_scope_empty"},
+            )
+            return PreparedReview(
+                snapshot=snapshot,
+                execution_specs=(),
+                input_payloads={},
+                prompt_locale=record.prompt_locale,
+            )
         provider_config = await self._provider_config.load()
         if provider_config is None:
             provider_config = ModelProviderConfig(api_key="", model="", base_url="")
@@ -538,8 +546,7 @@ class WorkerReviewExecutor:
             if set(selected_stored_specs) != set(record.selected_agent_versions):
                 raise ValueError("task has an incomplete frozen execution spec set")
             execution_specs = tuple(
-                selected_stored_specs[reference]
-                for reference in record.selected_agent_versions
+                selected_stored_specs[reference] for reference in record.selected_agent_versions
             )
         else:
             execution_specs = await self._execution_specs(
@@ -584,15 +591,10 @@ class WorkerReviewExecutor:
         if execution_spec_store is None or review_plan_store is None:
             raise ValueError("Fixed Review Plan persistence is unavailable")
         required_references = list(selection.reviewer_versions)
-        if len(selection.reviewer_versions) > 1:
-            required_references.extend(("review-verifier:v1",))
-        specs_by_reference = {
-            spec.agent.reference: spec for spec in stored_specs.values()
-        }
+        required_references.append("review-verifier:v2")
+        specs_by_reference = {spec.agent.reference: spec for spec in stored_specs.values()}
         missing_references = tuple(
-            reference
-            for reference in required_references
-            if reference not in specs_by_reference
+            reference for reference in required_references if reference not in specs_by_reference
         )
         if missing_references:
             generated = await self._execution_specs(
@@ -608,9 +610,7 @@ class WorkerReviewExecutor:
                     max_tool_result_bytes=max_tool_result_bytes,
                 ),
             )
-            specs_by_reference.update(
-                (spec.agent.reference, spec) for spec in generated
-            )
+            specs_by_reference.update((spec.agent.reference, spec) for spec in generated)
         catalog = builtin_agent_catalog()
         plan = ReviewPlanCompiler(catalog).compile(
             task_id=record.task_id,
@@ -641,9 +641,7 @@ class WorkerReviewExecutor:
                     f"spec-skill:{record.task_id}:{node_id}:{ordinal}",
                     skill.instruction_text.encode("utf-8"),
                 )
-                skill_artifacts.append(
-                    ArtifactIdentity(artifact.reference, artifact.content_hash)
-                )
+                skill_artifacts.append(ArtifactIdentity(artifact.reference, artifact.content_hash))
             await execution_spec_store.save(
                 task_id=record.task_id,
                 logical_node_id=node_id,
@@ -680,11 +678,9 @@ class WorkerReviewExecutor:
                 reference: CapabilityReadiness("ready", ())
                 for reference in selection.reviewer_versions
             },
-            target_paths=record.target_paths,
+            candidate_paths=record.candidate_paths,
             catalog_version=f"builtin:{hashlib.sha256(catalog_payload.encode()).hexdigest()}",
-            capability_fingerprint=hashlib.sha256(
-                capability_payload.encode()
-            ).hexdigest(),
+            capability_fingerprint=hashlib.sha256(capability_payload.encode()).hexdigest(),
         )
         if persisted_plan != plan:
             raise ValueError("persisted Fixed Review Plan changed during preparation")
@@ -748,6 +744,7 @@ class WorkerReviewExecutor:
         record = await self._review_store.get_review(task_id)
         if record is not None and record.status in _TERMINAL_STATUSES:
             await self._transcripts.finalize(task_id)
+
     async def _cleanup_terminal_worktree(self, task_id: str) -> None:
         """Remove a verified checkout only after its durable task becomes terminal."""
 
@@ -803,9 +800,7 @@ class WorkerReviewExecutor:
                 specs.append(
                     self._capability_resolver.resolve(
                         agent=resolved_agent,
-                        prompt_content_hash=hashlib.sha256(
-                            view.prompt.encode("utf-8")
-                        ).hexdigest(),
+                        prompt_content_hash=hashlib.sha256(view.prompt.encode("utf-8")).hexdigest(),
                         facts=self._skill_facts(snapshot),
                         execution_limits=execution_limits,
                     )
@@ -828,7 +823,7 @@ class WorkerReviewExecutor:
             ".ts": "typescript",
             ".tsx": "typescript",
         }
-        changed_paths = tuple(sorted(snapshot.manifest.target_paths))
+        changed_paths = tuple(sorted(snapshot.manifest.review_paths))
         languages = tuple(
             sorted(
                 {
@@ -848,38 +843,23 @@ class WorkerReviewExecutor:
         prepared: PreparedReview,
         agent: AgentVersion,
         checkpoint: CheckpointRecord,
-    ) -> (
-        FindingValidator
-        | CandidateValidator
-        | VerdictValidator
-    ):
+    ) -> CandidateValidator | VerdictValidator:
         if agent.role.value == "verifier":
             verdict_codec = self._verdict_codecs.get((task_id, node_key))
             if verdict_codec is None:
                 raise ValueError("Verdict constraints were not prepared")
             return VerdictValidator(verdict_codec)
-        if agent.output_contract_version == "2":
-            if checkpoint.run_id is None:
-                raise ValueError("Candidate AgentRun lacks a stable run ID")
-            return CandidateValidator(
-                task_id=task_id,
-                run_id=checkpoint.run_id,
-                snapshot=prepared.snapshot,
-                agent=agent,
-                excerpt_reader=self._excerpt_reader,
-            )
-        return FindingValidator(
+        if checkpoint.run_id is None:
+            raise ValueError("Candidate AgentRun lacks a stable run ID")
+        return CandidateValidator(
             task_id=task_id,
-            node_key=node_key,
+            run_id=checkpoint.run_id,
             snapshot=prepared.snapshot,
             agent=agent,
-            codec=self._codec,
             excerpt_reader=self._excerpt_reader,
         )
 
-    async def _prepare_verdict(
-        self, task_id: str, prepared: PreparedReview
-    ) -> None:
+    async def _prepare_verdict(self, task_id: str, prepared: PreparedReview) -> None:
         """Persist deterministic clusters and prepare Final Verifier input."""
 
         if self._candidate_store is None or self._verdict_store is None:
@@ -904,6 +884,39 @@ class WorkerReviewExecutor:
         verifier_role_context = verifier_envelope.setdefault("role_context", {})
         if not isinstance(verifier_role_context, dict):
             raise ValueError("Verifier role context must be an object")
+        candidate_context_by_id: dict[str, dict[str, object]] = {}
+        verifier_spec = prepared.execution_specs_by_node[verifier.node_id]
+        for candidate in candidates:
+            location = candidate.primary_location
+            excerpt = await self._excerpt_reader.read(
+                prepared.snapshot,
+                location.path,
+                location.start_line,
+                location.end_line,
+                location.side,
+                verifier_spec.execution_limits.max_tool_result_bytes,
+            )
+            candidate_context_by_id[candidate.candidate_id] = {
+                "candidate_id": candidate.candidate_id,
+                "reviewer_reference": candidate.reviewer_reference,
+                "location": {
+                    "path": location.path,
+                    "side": location.side,
+                    "start_line": location.start_line,
+                    "end_line": location.end_line,
+                    "excerpt_hash": location.excerpt_hash,
+                },
+                "existing_code": excerpt.content.decode("utf-8", errors="replace"),
+                "existing_code_hash": candidate.existing_code_hash,
+                "is_existing_code_truncated": excerpt.truncated,
+                "title": candidate.title,
+                "content": candidate.content,
+                "recommendation": candidate.recommendation,
+                "category": candidate.category,
+                "severity": candidate.severity.value,
+                "primary_dimension": candidate.primary_dimension,
+                "evidence_strength": candidate.evidence_strength.value,
+            }
         verifier_role_context["verdict_context"] = {
             "clusters": [
                 {
@@ -917,17 +930,20 @@ class WorkerReviewExecutor:
                     "recommendation": cluster.recommendation,
                     "primary_dimension": cluster.primary_dimension,
                     "evidence_strength": cluster.evidence_strength.value,
+                    "candidates": [
+                        candidate_context_by_id[candidate_id]
+                        for candidate_id in cluster.candidate_ids
+                        if candidate_id in candidate_context_by_id
+                    ],
                 }
                 for cluster in clusters
             ],
-            "schema_version": "1",
+            "schema_version": "2",
         }
         prepared.input_payloads[verifier.node_id] = json.dumps(
             verifier_envelope, sort_keys=True, separators=(",", ":")
         ).encode()
-        self._verdict_codecs[(task_id, verifier.node_id)] = VerdictCodec(
-            clusters=clusters
-        )
+        self._verdict_codecs[(task_id, verifier.node_id)] = VerdictCodec(clusters=clusters)
 
     async def _publish_findings(self, task_id: str) -> None:
         if self._candidate_store is None or self._verdict_store is None:
@@ -945,9 +961,7 @@ class WorkerReviewExecutor:
                 clusters=clusters,
             )
         )
-        await self._review_store.publish_verdict_findings(
-            task_id, verdicts, publications
-        )
+        await self._review_store.publish_verdict_findings(task_id, verdicts, publications)
 
 
 def _failure_summary(error: AgentRuntimeError) -> str:

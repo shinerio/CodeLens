@@ -118,9 +118,7 @@ class SetDefaultReviewProfileHandler:
         self._repository = repository
         self._clock = clock
 
-    async def handle(
-        self, profile_id: str, *, expected_revision: int
-    ) -> ReviewProfile:
+    async def handle(self, profile_id: str, *, expected_revision: int) -> ReviewProfile:
         return await self._repository.set_default_review_profile(
             profile_id,
             expected_revision=expected_revision,

@@ -22,6 +22,7 @@ from codelens.findings.infrastructure.verdict_codec import (
 )
 from codelens.review.domain.ports import FindingValidationWarning
 from codelens.review.infrastructure.capability_tools import RoleOutputToolBinding
+from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
 
 
 class VerdictSubmissionCollector:
@@ -33,9 +34,15 @@ class VerdictSubmissionCollector:
     once and produce the final output.
     """
 
-    def __init__(self, codec: VerdictCodec) -> None:
+    def __init__(
+        self,
+        codec: VerdictCodec,
+        location_resolver: SnapshotLocationResolver | None = None,
+    ) -> None:
         self._codec = codec
+        self._location_resolver = location_resolver
         self._decisions: list[VerdictDecision] = []
+        self._covered_cluster_ids: set[str] = set()
         self._finalized: tuple[VerdictDecision, ...] | None = None
 
     @property
@@ -60,12 +67,13 @@ class VerdictSubmissionCollector:
         if self._finalized is not None:
             raise ValueError("Final Verifier has already finalized decisions")
 
+        validated_ids = self._codec.validate_new_cluster_ids(cluster_ids, self._covered_cluster_ids)
         outcome = VerdictOutcome.ACCEPT if action == "accept" else VerdictOutcome.DENY
-        decision = VerdictDecision(
-            cluster_ids=tuple(cluster_ids),
-            outcome=outcome,
+        self._decisions.extend(
+            VerdictDecision(cluster_ids=(cluster_id,), outcome=outcome)
+            for cluster_id in validated_ids
         )
-        self._decisions.append(decision)
+        self._covered_cluster_ids.update(validated_ids)
         verb = "accepted" if action == "accept" else "denied"
         return f"{len(cluster_ids)} cluster(s) {verb}. Total decisions: {len(self._decisions)}"
 
@@ -90,8 +98,17 @@ class VerdictSubmissionCollector:
         from codelens.findings.domain.candidates import EvidenceStrength
         from codelens.findings.domain.models import FindingSeverity
 
+        if self._location_resolver is None:
+            raise ValueError("merge location resolver is unavailable")
+        primary_location, changed_hunk_id = await self._location_resolver.resolve(
+            path,
+            side,
+            existing_code,
+        )
+
+        validated_ids = self._codec.validate_new_cluster_ids(cluster_ids, self._covered_cluster_ids)
         decision = VerdictDecision.merge(
-            cluster_ids=tuple(cluster_ids),
+            cluster_ids=validated_ids,
             path=path,
             side=side,
             existing_code=existing_code,
@@ -102,8 +119,11 @@ class VerdictSubmissionCollector:
             severity=FindingSeverity(severity),
             primary_dimension=primary_dimension,
             evidence_strength=EvidenceStrength(evidence_strength),
+            primary_location=primary_location,
+            changed_hunk_id=changed_hunk_id,
         )
         self._decisions.append(decision)
+        self._covered_cluster_ids.update(validated_ids)
         count = len(self._decisions)
         return f"Merged {len(cluster_ids)} cluster(s) into one Finding. Total decisions: {count}"
 
@@ -165,9 +185,7 @@ class VerdictSubmissionCollector:
     def as_finalize_tool(self, description: str) -> Tool:
         collector = self
 
-        @function_tool(
-            name_override="finalize_verdicts", description_override=description
-        )
+        @function_tool(name_override="finalize_verdicts", description_override=description)
         async def finalize_verdicts() -> str:
             """Validate accumulated verdicts and finalize the Final Verifier stage."""
             return await collector.finalize()
@@ -182,15 +200,15 @@ class VerdictSubmissionCollector:
     ) -> tuple[RoleOutputToolBinding, RoleOutputToolBinding, RoleOutputToolBinding]:
         return (
             RoleOutputToolBinding(
-                ToolContractReference("verdict", 1),
+                ToolContractReference("verdict", 2),
                 self.as_verdict_tool(verdict_description),
             ),
             RoleOutputToolBinding(
-                ToolContractReference("merge", 1),
+                ToolContractReference("merge", 2),
                 self.as_merge_tool(merge_description),
             ),
             RoleOutputToolBinding(
-                ToolContractReference("finalize_verdicts", 1),
+                ToolContractReference("finalize_verdicts", 2),
                 self.as_finalize_tool(finalize_description),
                 self,
             ),

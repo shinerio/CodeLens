@@ -3,7 +3,7 @@ import hashlib
 import json
 import logging
 from collections.abc import Awaitable, Callable
-from dataclasses import asdict, dataclass, fields
+from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any, cast
@@ -28,7 +28,6 @@ from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
     Finding,
-    FindingBatch,
     FindingDisposition,
     FindingSeverity,
     RuleReference,
@@ -77,13 +76,16 @@ from codelens.review.infrastructure.tables import (
     jobs,
     recent_repositories,
     recent_repository_settings,
+    review_file_scopes,
     review_plans,
     review_profiles,
     review_tasks,
     task_worktrees,
-    verification_decisions,
+    verdict_decision_clusters,
+    verdict_decisions,
 )
 from codelens.workspace.domain.models import ReviewScopeType, TaskWorktree
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 _LOGGER = logging.getLogger("codelens.review.infrastructure.repositories")
 
@@ -263,13 +265,7 @@ def _finding_from_payload(payload: str) -> Finding:
     severity = FindingSeverity(value.pop("severity"))
     disposition = FindingDisposition(value.pop("disposition"))
     change_origin = ChangeOrigin(value.pop("change_origin"))
-    source_reviewer_references = tuple(
-        value.pop("source_reviewer_references", ())
-    )
-    # Drop legacy fields that Finding no longer accepts (e.g. impact_certainty, reproducibility)
-    valid_fields = {f.name for f in fields(Finding)}
-    for key in set(value) - valid_fields:
-        del value[key]
+    source_reviewer_references = tuple(value.pop("source_reviewer_references"))
     return Finding(
         **value,
         severity=severity,
@@ -294,10 +290,6 @@ def _candidate_from_payload(payload: str) -> CandidateFinding:
     severity = FindingSeverity(value.pop("severity"))
     evidence_strength = EvidenceStrength(value.pop("evidence_strength"))
     evidence_hashes = tuple(value.pop("evidence_hashes"))
-    # Drop legacy fields that CandidateFinding no longer accepts
-    valid_fields = {f.name for f in fields(CandidateFinding)}
-    for key in set(value) - valid_fields:
-        del value[key]
     return CandidateFinding(
         **value,
         severity=severity,
@@ -325,10 +317,12 @@ def _verdict_payload(decision: VerdictDecision) -> str:
             "severity": decision.severity.value if decision.severity is not None else None,
             "primary_dimension": decision.primary_dimension,
             "evidence_strength": (
-                decision.evidence_strength.value
-                if decision.evidence_strength is not None
-                else None
+                decision.evidence_strength.value if decision.evidence_strength is not None else None
             ),
+            "primary_location": (
+                asdict(decision.primary_location) if decision.primary_location is not None else None
+            ),
+            "changed_hunk_id": decision.changed_hunk_id,
         }
     )
 
@@ -347,11 +341,7 @@ def _review_scope_refs(scope: dict[str, object]) -> tuple[str | None, str | None
 def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
     scope: dict[str, object] = json.loads(str(row["scope_json"]))
     selected_agents: list[str] = json.loads(str(row["selected_agent_versions_json"]))
-    selection_value = (
-        json.loads(str(row["selection_request_json"]))
-        if row["selection_request_json"] is not None
-        else {"mode": "fixed", "reviewer_versions": selected_agents}
-    )
+    selection_value = json.loads(str(row["selection_request_json"]))
     selection: ReviewerSelection = (
         AdaptiveReviewerSelection()
         if selection_value["mode"] == "adaptive"
@@ -621,9 +611,7 @@ class SqlReviewPlanStore:
 
         async def operation(session: AsyncSession) -> None:
             existing = await session.scalar(
-                select(review_plans.c.task_id).where(
-                    review_plans.c.task_id == plan.task_id
-                )
+                select(review_plans.c.task_id).where(review_plans.c.task_id == plan.task_id)
             )
             await session.execute(
                 sqlite_insert(review_plans)
@@ -775,9 +763,7 @@ class SqlAgentExecutionSpecStore:
                     existing.skill_artifacts,
                 )
                 if actual_identity != expected_identity:
-                    raise ValueError(
-                        "execution spec already exists with different frozen inputs"
-                    )
+                    raise ValueError("execution spec already exists with different frozen inputs")
                 return
             for ordinal, artifact in enumerate(skill_artifacts):
                 await session.execute(
@@ -813,9 +799,7 @@ class SqlAgentExecutionSpecStore:
             raise ValueError("execution spec already exists with different frozen inputs")
         return record
 
-    async def get(
-        self, task_id: str, logical_node_id: str
-    ) -> AgentExecutionSpecRecord | None:
+    async def get(self, task_id: str, logical_node_id: str) -> AgentExecutionSpecRecord | None:
         """Load safe metadata and fail closed if any Artifact identity changed."""
 
         async with self._database.sessions() as session:
@@ -864,9 +848,7 @@ class SqlAgentExecutionSpecStore:
         if actual != {item.reference: item.content_hash for item in expected}:
             raise ValueError("execution spec Artifact hash mismatch")
 
-    async def _record(
-        self, session: AsyncSession, row: RowMapping
-    ) -> AgentExecutionSpecRecord:
+    async def _record(self, session: AsyncSession, row: RowMapping) -> AgentExecutionSpecRecord:
         spec_json = str(row["spec_json"])
         fingerprint = str(row["fingerprint"])
         if hashlib.sha256(spec_json.encode()).hexdigest() != fingerprint:
@@ -876,8 +858,7 @@ class SqlAgentExecutionSpecStore:
                 select(agent_execution_skill_artifacts)
                 .where(
                     agent_execution_skill_artifacts.c.task_id == row["task_id"],
-                    agent_execution_skill_artifacts.c.logical_node_id
-                    == row["logical_node_id"],
+                    agent_execution_skill_artifacts.c.logical_node_id == row["logical_node_id"],
                 )
                 .order_by(agent_execution_skill_artifacts.c.ordinal)
             )
@@ -886,9 +867,7 @@ class SqlAgentExecutionSpecStore:
             ArtifactIdentity(str(item["artifact_ref"]), str(item["artifact_hash"]))
             for item in skill_rows
         )
-        prompt = ArtifactIdentity(
-            str(row["prompt_artifact_ref"]), str(row["prompt_artifact_hash"])
-        )
+        prompt = ArtifactIdentity(str(row["prompt_artifact_ref"]), str(row["prompt_artifact_hash"]))
         await self._verify_artifacts(session, (prompt, *skills))
         payload = json.loads(spec_json)
         if payload.get("prompt_content_hash") != prompt.content_hash:
@@ -995,9 +974,7 @@ class SqlVerdictStore:
                         select(
                             candidate_findings.c.candidate_id,
                             candidate_findings.c.task_id,
-                        ).where(
-                            candidate_findings.c.candidate_id.in_(cluster.candidate_ids)
-                        )
+                        ).where(candidate_findings.c.candidate_id.in_(cluster.candidate_ids))
                     )
                 ).all()
                 if {str(row.candidate_id) for row in candidate_rows} != set(
@@ -1010,16 +987,11 @@ class SqlVerdictStore:
                             finding_cluster_candidates.c.candidate_id,
                             finding_cluster_candidates.c.cluster_id,
                         ).where(
-                            finding_cluster_candidates.c.candidate_id.in_(
-                                cluster.candidate_ids
-                            )
+                            finding_cluster_candidates.c.candidate_id.in_(cluster.candidate_ids)
                         )
                     )
                 ).all()
-                if any(
-                    str(row.cluster_id) != cluster.cluster_id
-                    for row in existing_memberships
-                ):
+                if any(str(row.cluster_id) != cluster.cluster_id for row in existing_memberships):
                     raise ValueError("Candidate already belongs to another cluster")
                 for ordinal, candidate_id in enumerate(cluster.candidate_ids):
                     await session.execute(
@@ -1093,30 +1065,44 @@ class SqlVerdictStore:
         async def operation(session: AsyncSession) -> None:
             for decision in decisions:
                 payload = _verdict_payload(decision)
-                decision_id = "verdict_" + hashlib.sha256(
-                    f"{task_id}\0{','.join(decision.cluster_ids)}".encode()
-                ).hexdigest()
+                decision_id = (
+                    "verdict_"
+                    + hashlib.sha256(
+                        f"{task_id}\0{','.join(decision.cluster_ids)}".encode()
+                    ).hexdigest()
+                )
                 await session.execute(
-                    sqlite_insert(verification_decisions)
+                    sqlite_insert(verdict_decisions)
                     .values(
-                        verification_decision_id=decision_id,
+                        verdict_decision_id=decision_id,
                         task_id=task_id,
                         verifier_run_id="",
                         outcome=decision.outcome.value,
-                        reason_code="verdict",
                         payload_json=payload,
                         created_at=timestamp,
                     )
                     .on_conflict_do_nothing(
-                        index_elements=(
-                            verification_decisions.c.verification_decision_id,
-                        )
+                        index_elements=(verdict_decisions.c.verdict_decision_id,)
                     )
                 )
+                for ordinal, cluster_id in enumerate(decision.cluster_ids):
+                    await session.execute(
+                        sqlite_insert(verdict_decision_clusters)
+                        .values(
+                            verdict_decision_id=decision_id,
+                            cluster_id=cluster_id,
+                            ordinal=ordinal,
+                        )
+                        .on_conflict_do_nothing(
+                            index_elements=(
+                                verdict_decision_clusters.c.verdict_decision_id,
+                                verdict_decision_clusters.c.cluster_id,
+                            )
+                        )
+                    )
                 stored = await session.scalar(
-                    select(verification_decisions.c.payload_json).where(
-                        verification_decisions.c.verification_decision_id
-                        == decision_id
+                    select(verdict_decisions.c.payload_json).where(
+                        verdict_decisions.c.verdict_decision_id == decision_id
                     )
                 )
                 if str(stored) != payload:
@@ -1132,9 +1118,9 @@ class SqlVerdictStore:
         async with self._database.sessions() as session:
             rows = (
                 await session.execute(
-                    select(verification_decisions.c.payload_json)
-                    .where(verification_decisions.c.task_id == task_id)
-                    .order_by(verification_decisions.c.verification_decision_id)
+                    select(verdict_decisions.c.payload_json)
+                    .where(verdict_decisions.c.task_id == task_id)
+                    .order_by(verdict_decisions.c.verdict_decision_id)
                 )
             ).scalars()
             result: list[VerdictDecision] = []
@@ -1162,6 +1148,12 @@ class SqlVerdictStore:
                             if value.get("evidence_strength") is not None
                             else None
                         ),
+                        primary_location=(
+                            SourceLocation(**value["primary_location"])
+                            if value.get("primary_location") is not None
+                            else None
+                        ),
+                        changed_hunk_id=value.get("changed_hunk_id"),
                     )
                 )
             return tuple(result)
@@ -1266,6 +1258,74 @@ class SqlReviewStore:
         self._event_bus = event_bus
         self._terminal_hook = terminal_hook
 
+    async def record_empty_review_scope(self, task_id: str) -> None:
+        """Append the durable empty-scope fact once across retries and recovery."""
+
+        captured: list[ReviewEvent] = []
+
+        async def operation(session: AsyncSession) -> None:
+            existing = await session.scalar(
+                select(events.c.event_id).where(
+                    events.c.task_id == task_id,
+                    events.c.event_type == "review.scope_empty",
+                )
+            )
+            if existing is not None:
+                return
+            payload: dict[str, object] = {"reason_code": "review_scope_empty"}
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, "review.scope_empty", payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is not None:
+                captured.append(
+                    ReviewEvent(
+                        event_id=int(event_id),
+                        task_id=task_id,
+                        event_type="review.scope_empty",
+                        payload=payload,
+                    )
+                )
+
+        await self._database.run_transaction(operation)
+        await self._publish_events(captured)
+
+    async def get_review_file_scope(self, task_id: str) -> ReviewFileScope | None:
+        """Load and hash-verify the immutable scope resolved for one task."""
+
+        async with self._database.sessions() as session:
+            row = (
+                (
+                    await session.execute(
+                        select(review_file_scopes).where(review_file_scopes.c.task_id == task_id)
+                    )
+                )
+                .mappings()
+                .one_or_none()
+            )
+        if row is None:
+            return None
+        return ReviewFileScope.from_json(str(row["scope_json"]), str(row["scope_hash"]))
+
+    async def save_review_file_scope(self, task_id: str, scope: ReviewFileScope) -> None:
+        """Idempotently persist the first canonical scope and reject divergence."""
+
+        async with self._database.sessions.begin() as session:
+            await session.execute(
+                sqlite_insert(review_file_scopes)
+                .values(
+                    task_id=task_id,
+                    scope_json=scope.canonical_json(),
+                    scope_hash=scope.scope_hash,
+                    created_at=_now(),
+                )
+                .on_conflict_do_nothing(index_elements=[review_file_scopes.c.task_id])
+            )
+        persisted = await self.get_review_file_scope(task_id)
+        if persisted != scope:
+            raise ValueError("Review file scope already exists with different content")
+
     def set_terminal_hook(self, hook: Callable[[str, str], Awaitable[None]]) -> None:
         """Late-bind the post-terminal-status hook.
 
@@ -1330,7 +1390,9 @@ class SqlReviewStore:
                     head_oid=task.target.head_oid,
                     overlay_hash=task.target.overlay_hash,
                     overlay_artifact_ref=task.overlay_artifact_ref,
-                    target_paths_json=_json(task.target_paths),
+                    candidate_paths_json=_json(task.candidate_paths),
+                    file_exclusion_policy_json=task.file_exclusion_policy_json,
+                    file_exclusion_policy_hash=task.file_exclusion_policy_hash,
                     status=task.status.value,
                     selected_agent_versions_json=_json(task.selected_agent_versions),
                     selection_request_json=_json(selection_payload),
@@ -1514,7 +1576,9 @@ class SqlReviewStore:
                 head_oid=task.target.head_oid,
                 overlay_hash=task.target.overlay_hash,
                 overlay_artifact_ref=task.overlay_artifact_ref,
-                target_paths_json=_json(task.target_paths),
+                candidate_paths_json=_json(task.candidate_paths),
+                file_exclusion_policy_json=task.file_exclusion_policy_json,
+                file_exclusion_policy_hash=task.file_exclusion_policy_hash,
                 status=task.status.value,
                 selected_agent_versions_json=_json(task.selected_agent_versions),
                 selection_request_json=_json(selection_payload),
@@ -1730,7 +1794,9 @@ class SqlReviewStore:
                     head_oid=source["head_oid"],
                     overlay_hash=source["overlay_hash"],
                     overlay_artifact_ref=source["overlay_artifact_ref"],
-                    target_paths_json=source["target_paths_json"],
+                    candidate_paths_json=source["candidate_paths_json"],
+                    file_exclusion_policy_json=source["file_exclusion_policy_json"],
+                    file_exclusion_policy_hash=source["file_exclusion_policy_hash"],
                     status="created",
                     selected_agent_versions_json=source["selected_agent_versions_json"],
                     selection_request_json=source["selection_request_json"],
@@ -1880,11 +1946,15 @@ class SqlReviewStore:
         if row is None:
             return None
         raw_path = row["repository_path"]
-        raw_targets = row["target_paths_json"]
+        raw_targets = row["candidate_paths_json"]
         if raw_path is None or raw_targets is None:
             raise RuntimeError("review lacks restart-safe execution inputs")
         selected: list[str] = json.loads(str(row["selected_agent_versions_json"]))
-        target_paths: list[str] = json.loads(str(raw_targets))
+        candidate_paths: list[str] = json.loads(str(raw_targets))
+        policy_json = str(row["file_exclusion_policy_json"])
+        policy_hash = str(row["file_exclusion_policy_hash"])
+        if hashlib.sha256(policy_json.encode()).hexdigest() != policy_hash:
+            raise ValueError("frozen file exclusion policy hash mismatch")
         repository_path = await asyncio.to_thread(_resolve_path, str(raw_path))
         summary = _review_record(row)
         if summary.planning_context_json is not None:
@@ -1907,7 +1977,9 @@ class SqlReviewStore:
                 if row["overlay_artifact_ref"] is not None
                 else None
             ),
-            target_paths=tuple(target_paths),
+            candidate_paths=tuple(candidate_paths),
+            file_exclusion_policy_json=policy_json,
+            file_exclusion_policy_hash=policy_hash,
             selected_agent_versions=tuple(selected),
             review_profile=summary.review_profile,
             planning_context_json=summary.planning_context_json,
@@ -1939,11 +2011,15 @@ class SqlReviewStore:
         executions: list[ReviewExecutionRecord] = []
         for row in rows:
             raw_path = row["repository_path"]
-            raw_targets = row["target_paths_json"]
+            raw_targets = row["candidate_paths_json"]
             if raw_path is None or raw_targets is None:
                 continue
             selected: list[str] = json.loads(str(row["selected_agent_versions_json"]))
-            target_paths: list[str] = json.loads(str(raw_targets))
+            candidate_paths: list[str] = json.loads(str(raw_targets))
+            policy_json = str(row["file_exclusion_policy_json"])
+            policy_hash = str(row["file_exclusion_policy_hash"])
+            if hashlib.sha256(policy_json.encode()).hexdigest() != policy_hash:
+                raise ValueError("frozen file exclusion policy hash mismatch")
             repository_path = await asyncio.to_thread(_resolve_path, str(raw_path))
             summary = _review_record(row)
             executions.append(
@@ -1965,7 +2041,9 @@ class SqlReviewStore:
                         if row["overlay_artifact_ref"] is not None
                         else None
                     ),
-                    target_paths=tuple(target_paths),
+                    candidate_paths=tuple(candidate_paths),
+                    file_exclusion_policy_json=policy_json,
+                    file_exclusion_policy_hash=policy_hash,
                     selected_agent_versions=tuple(selected),
                     review_profile=summary.review_profile,
                     planning_context_json=summary.planning_context_json,
@@ -2008,9 +2086,7 @@ class SqlReviewStore:
 
         async with self._database.sessions() as session:
             value = await session.scalar(
-                select(review_tasks.c.has_partial_coverage).where(
-                    review_tasks.c.task_id == task_id
-                )
+                select(review_tasks.c.has_partial_coverage).where(review_tasks.c.task_id == task_id)
             )
         if value is None:
             raise KeyError(task_id)
@@ -2285,110 +2361,6 @@ class SqlReviewStore:
 
         await self._database.run_transaction(operation)
 
-    async def complete_agent_run(
-        self,
-        task_id: str,
-        node_key: str,
-        batch: FindingBatch,
-    ) -> None:
-        """Insert Findings, mark SUCCEEDED, and append its event atomically."""
-
-        timestamp = _now()
-
-        async def operation(session: AsyncSession) -> ReviewEvent | None:
-            status = await session.scalar(
-                select(dag_checkpoints.c.status).where(
-                    dag_checkpoints.c.task_id == task_id,
-                    dag_checkpoints.c.node_key == node_key,
-                )
-            )
-            if status == "succeeded":
-                stored_payloads = tuple(
-                    (
-                        await session.execute(
-                            select(findings.c.payload_json)
-                            .where(
-                                findings.c.task_id == task_id,
-                                findings.c.node_key == node_key,
-                            )
-                            .order_by(findings.c.finding_id)
-                        )
-                    ).scalars()
-                )
-                expected_payloads = tuple(
-                    _finding_payload(finding)
-                    for finding in sorted(batch.findings, key=lambda item: item.finding_id)
-                )
-                if tuple(str(payload) for payload in stored_payloads) != expected_payloads:
-                    raise ValueError("completed AgentRun Findings do not match replay")
-                return None
-            if status not in {"output_saved", "validating"}:
-                raise InvalidAgentRunStateError("AgentRun is not ready for atomic completion")
-            for finding in batch.findings:
-                await session.execute(
-                    insert(findings).values(
-                        finding_id=finding.finding_id,
-                        task_id=task_id,
-                        node_key=node_key,
-                        fingerprint=finding.fingerprint,
-                        payload_json=_finding_payload(finding),
-                        severity=finding.severity.value,
-                        confidence=finding.confidence,
-                        path=finding.primary_location.path,
-                        start_line=finding.primary_location.start_line,
-                        created_at=timestamp,
-                    )
-                )
-            if self._completion_hook is not None:
-                await self._completion_hook("after_finding_insert_attempt")
-            result = cast(
-                CursorResult[Any],
-                await session.execute(
-                    update(dag_checkpoints)
-                    .where(
-                        dag_checkpoints.c.task_id == task_id,
-                        dag_checkpoints.c.node_key == node_key,
-                        dag_checkpoints.c.status.in_(("output_saved", "validating")),
-                    )
-                    .values(status="succeeded", updated_at=timestamp)
-                ),
-            )
-            if result.rowcount != 1:
-                raise InvalidAgentRunStateError("AgentRun completion lost its expected state")
-            event_payload = {"node_key": node_key, "finding_count": len(batch.findings)}
-            await session.execute(
-                insert(events).values(
-                    **_event_values(task_id, "agent_run.completed", event_payload)
-                )
-            )
-            event_id = await session.scalar(
-                insert(events)
-                .values(**_event_values(task_id, "agent.succeeded", event_payload))
-                .returning(events.c.event_id)
-            )
-            if event_id is not None:
-                return ReviewEvent(
-                    event_id=int(event_id),
-                    task_id=task_id,
-                    event_type="agent.succeeded",
-                    payload=event_payload,
-                )
-            raise RuntimeError("Agent completion event was not persisted")
-
-        event = await self._database.run_transaction(operation)
-        if event is not None:
-            await self._publish_events([event])
-
-    async def complete_with_findings(
-        self,
-        task_id: str,
-        node_key: str,
-        findings_batch: FindingBatch,
-    ) -> None:
-        """Implement the orchestrator atomic-completion Port."""
-
-        await self.complete_agent_run(task_id, node_key, findings_batch)
-
     async def complete_agent_run_with_candidates(
         self,
         task_id: str,
@@ -2430,9 +2402,7 @@ class SqlReviewStore:
                 )
                 expected_payloads = tuple(
                     _candidate_payload(candidate)
-                    for candidate in sorted(
-                        batch.candidates, key=lambda item: item.candidate_id
-                    )
+                    for candidate in sorted(batch.candidates, key=lambda item: item.candidate_id)
                 )
                 if tuple(str(payload) for payload in stored_payloads) != expected_payloads:
                     raise ValueError("completed AgentRun Candidates do not match replay")
@@ -2461,9 +2431,7 @@ class SqlReviewStore:
                         payload_json=payload,
                         created_at=timestamp,
                     )
-                    .on_conflict_do_nothing(
-                        index_elements=(candidate_findings.c.candidate_id,)
-                    )
+                    .on_conflict_do_nothing(index_elements=(candidate_findings.c.candidate_id,))
                 )
                 stored = await session.scalar(
                     select(candidate_findings.c.payload_json).where(
@@ -2556,41 +2524,51 @@ class SqlReviewStore:
             if checkpoint_status == "succeeded":
                 return None
             if checkpoint_status not in {"output_saved", "validating"}:
-                raise InvalidAgentRunStateError(
-                    "Verifier AgentRun is not ready for completion"
-                )
+                raise InvalidAgentRunStateError("Verifier AgentRun is not ready for completion")
             for decision in decisions:
                 payload = _verdict_payload(decision)
-                decision_id = "verdict_" + hashlib.sha256(
-                    f"{task_id}\0{','.join(decision.cluster_ids)}".encode()
-                ).hexdigest()
+                decision_id = (
+                    "verdict_"
+                    + hashlib.sha256(
+                        f"{task_id}\0{','.join(decision.cluster_ids)}".encode()
+                    ).hexdigest()
+                )
                 await session.execute(
-                    sqlite_insert(verification_decisions)
+                    sqlite_insert(verdict_decisions)
                     .values(
-                        verification_decision_id=decision_id,
+                        verdict_decision_id=decision_id,
                         task_id=task_id,
                         verifier_run_id="",
                         outcome=decision.outcome.value,
-                        reason_code="verdict",
                         payload_json=payload,
                         created_at=timestamp,
                     )
                     .on_conflict_do_nothing(
-                        index_elements=(
-                            verification_decisions.c.verification_decision_id,
-                        )
+                        index_elements=(verdict_decisions.c.verdict_decision_id,)
                     )
                 )
+                for ordinal, cluster_id in enumerate(decision.cluster_ids):
+                    await session.execute(
+                        sqlite_insert(verdict_decision_clusters)
+                        .values(
+                            verdict_decision_id=decision_id,
+                            cluster_id=cluster_id,
+                            ordinal=ordinal,
+                        )
+                        .on_conflict_do_nothing(
+                            index_elements=(
+                                verdict_decision_clusters.c.verdict_decision_id,
+                                verdict_decision_clusters.c.cluster_id,
+                            )
+                        )
+                    )
                 stored = await session.scalar(
-                    select(verification_decisions.c.payload_json).where(
-                        verification_decisions.c.verification_decision_id
-                        == decision_id
+                    select(verdict_decisions.c.payload_json).where(
+                        verdict_decisions.c.verdict_decision_id == decision_id
                     )
                 )
                 if str(stored) != payload:
-                    raise ValueError(
-                        "Verdict decision conflicts with persisted content"
-                    )
+                    raise ValueError("Verdict decision conflicts with persisted content")
             result = cast(
                 CursorResult[Any],
                 await session.execute(
@@ -2602,17 +2580,13 @@ class SqlReviewStore:
                     )
                     .values(
                         status="succeeded",
-                        result_summary_json=_json(
-                            {"verdict_count": len(decisions)}
-                        ),
+                        result_summary_json=_json({"verdict_count": len(decisions)}),
                         updated_at=timestamp,
                     )
                 ),
             )
             if result.rowcount != 1:
-                raise InvalidAgentRunStateError(
-                    "Verifier completion lost its expected state"
-                )
+                raise InvalidAgentRunStateError("Verifier completion lost its expected state")
             event_payload = {
                 "node_key": node_key,
                 "verdict_count": len(decisions),
@@ -2672,6 +2646,12 @@ class SqlReviewStore:
                 if finding is None:
                     continue
                 payload = _finding_payload(finding)
+                decision_id = (
+                    "verdict_"
+                    + hashlib.sha256(
+                        f"{task_id}\0{','.join(verdict.cluster_ids)}".encode()
+                    ).hexdigest()
+                )
                 # Idempotency: skip event emission when the Finding already
                 # exists from a previous publication attempt. This keeps
                 # replay calls from duplicating finding.published events while
@@ -2684,9 +2664,7 @@ class SqlReviewStore:
                 )
                 if existing_payload is not None:
                     if str(existing_payload) != payload:
-                        raise ValueError(
-                            "Published Finding conflicts with persisted content"
-                        )
+                        raise ValueError("Published Finding conflicts with persisted content")
                     continue
                 await session.execute(
                     sqlite_insert(findings)
@@ -2697,7 +2675,7 @@ class SqlReviewStore:
                         fingerprint=finding.fingerprint,
                         payload_json=payload,
                         severity=finding.severity.value,
-                        confidence=None,
+                        verdict_decision_id=decision_id,
                         verification_status="confirmed",
                         path=finding.primary_location.path,
                         start_line=finding.primary_location.start_line,
@@ -2727,9 +2705,7 @@ class SqlReviewStore:
                 )
                 if event_id is not None:
                     emitted.append(
-                        ReviewEvent(
-                            int(event_id), task_id, "finding.published", event_payload
-                        )
+                        ReviewEvent(int(event_id), task_id, "finding.published", event_payload)
                     )
             return emitted
 
@@ -2738,7 +2714,7 @@ class SqlReviewStore:
             await self._publish_events(emitted)
 
     async def list_findings(self, task_id: str) -> tuple[Finding, ...]:
-        """Return trusted Findings in stable severity/confidence/path order."""
+        """Return trusted Findings in stable severity and source order."""
 
         severity_order = case(
             (findings.c.severity == "critical", 0),
@@ -2754,7 +2730,6 @@ class SqlReviewStore:
                     .where(findings.c.task_id == task_id)
                     .order_by(
                         severity_order,
-                        findings.c.confidence.desc().nullslast(),
                         findings.c.path,
                         findings.c.start_line,
                         findings.c.finding_id,
@@ -2820,6 +2795,18 @@ class SqlCheckpointStore:
         """Create one PENDING checkpoint with a stable composite key."""
 
         timestamp = _now()
+        parts = node_key.rsplit(":", 2)
+        agent_version = parts[0] if len(parts) == 3 else node_key
+        pass_index = int(parts[1]) if len(parts) == 3 and parts[1].isdigit() else 0
+        shard_id = parts[2] if len(parts) == 3 else "root"
+        run = AgentRun.create(
+            task_id=task_id,
+            agent_version=agent_version,
+            pass_index=pass_index,
+            shard_id=shard_id,
+            logical_attempt_group=logical_attempt_group,
+            node_role="reviewer",
+        )
 
         async def operation(session: AsyncSession) -> None:
             await session.execute(
@@ -2831,6 +2818,11 @@ class SqlCheckpointStore:
                     status="pending",
                     execution_attempts=0,
                     validation_attempts=0,
+                    run_id=run.run_id,
+                    node_role="reviewer",
+                    agent_version=agent_version,
+                    pass_index=pass_index,
+                    shard_id=shard_id,
                     created_at=timestamp,
                     updated_at=timestamp,
                 )
@@ -3078,9 +3070,7 @@ class SqlCheckpointStore:
 
         await self._database.run_transaction(operation)
 
-    async def mark_skipped(
-        self, task_id: str, node_key: str, reason_code: str
-    ) -> None:
+    async def mark_skipped(self, task_id: str, node_key: str, reason_code: str) -> None:
         """Terminally omit one prebuilt conditional node from PENDING."""
 
         if not reason_code:
@@ -3096,9 +3086,7 @@ class SqlCheckpointStore:
                         dag_checkpoints.c.node_key == node_key,
                         dag_checkpoints.c.status == "pending",
                     )
-                    .values(
-                        status="skipped", error_code=reason_code, updated_at=_now()
-                    )
+                    .values(status="skipped", error_code=reason_code, updated_at=_now())
                 ),
             )
             if result.rowcount != 1:
@@ -3172,9 +3160,7 @@ class SqlCheckpointStore:
             validation_attempts=int(row["validation_attempts"]),
             run_id=str(row["run_id"]) if row["run_id"] is not None else None,
             node_role=str(row["node_role"]) if row["node_role"] is not None else None,
-            agent_version=(
-                str(row["agent_version"]) if row["agent_version"] is not None else None
-            ),
+            agent_version=(str(row["agent_version"]) if row["agent_version"] is not None else None),
             pass_index=int(row["pass_index"]) if row["pass_index"] is not None else None,
             shard_id=str(row["shard_id"]) if row["shard_id"] is not None else None,
             capability_fingerprint=(

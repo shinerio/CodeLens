@@ -6,10 +6,11 @@ from fastapi import APIRouter, Depends
 from pydantic import StringConstraints
 
 from codelens.bootstrap.logging import get_runtime_log_level, set_runtime_log_level
-from codelens.interface.http.dependencies import HttpComponents, get_components
+from codelens.interface.http.dependencies import HttpComponents, HttpProblem, get_components
 from codelens.interface.http.dto import (
     ActivateModelGatewayRequest,
     CreateModelGatewayRequest,
+    FileExclusionSettingsResponse,
     GatewayAvailabilityTestResponse,
     GatewayConnectivityTestResponse,
     InstructionFileSettingsResponse,
@@ -21,6 +22,7 @@ from codelens.interface.http.dto import (
     RuntimeLogLevelResponse,
     ToolLimitsResponse,
     TriggerIdempotencySettingsResponse,
+    UpdateFileExclusionSettingsRequest,
     UpdateInstructionFileSettingsRequest,
     UpdateModelGatewayRequest,
     UpdateRecentRepositorySettingsRequest,
@@ -31,6 +33,7 @@ from codelens.interface.http.dto import (
 )
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 _LOGGER = logging.getLogger("codelens.settings")
@@ -90,11 +93,47 @@ def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
         max_pattern_chars=limits.max_pattern_chars,
         regex_timeout_seconds=limits.regex_timeout_seconds,
         comment_batch_size=limits.comment_batch_size,
-        reviewed_files_batch=limits.reviewed_files_batch,
         short_text_max=limits.short_text_max,
         long_text_max=limits.long_text_max,
         task_summary_max=limits.task_summary_max,
     )
+
+
+def _file_exclusion_response(
+    policy: ReviewFileExclusionPolicy,
+) -> FileExclusionSettingsResponse:
+    return FileExclusionSettingsResponse(
+        suffixes=list(policy.suffixes),
+        path_regexes=list(policy.path_regexes),
+        exclude_binary=policy.exclude_binary,
+    )
+
+
+@router.get("/file-exclusions", response_model=FileExclusionSettingsResponse)
+async def get_file_exclusions(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> FileExclusionSettingsResponse:
+    """Return the file exclusion policy used for newly created Reviews."""
+
+    return _file_exclusion_response(await components.file_exclusion_settings.get())
+
+
+@router.put("/file-exclusions", response_model=FileExclusionSettingsResponse)
+async def update_file_exclusions(
+    request: UpdateFileExclusionSettingsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> FileExclusionSettingsResponse:
+    """Validate and atomically update the file exclusion policy."""
+
+    try:
+        policy = await components.file_exclusion_settings.update(
+            suffixes=None if request.suffixes is None else tuple(request.suffixes),
+            path_regexes=(None if request.path_regexes is None else tuple(request.path_regexes)),
+            exclude_binary=request.exclude_binary,
+        )
+    except ValueError as error:
+        raise HttpProblem(422, "invalid_file_exclusion_policy", str(error)) from error
+    return _file_exclusion_response(policy)
 
 
 @router.get("/logging", response_model=RuntimeLogLevelResponse)
@@ -370,7 +409,6 @@ async def update_tool_limits(
         max_pattern_chars=request.max_pattern_chars,
         regex_timeout_seconds=request.regex_timeout_seconds,
         comment_batch_size=request.comment_batch_size,
-        reviewed_files_batch=request.reviewed_files_batch,
         short_text_max=request.short_text_max,
         long_text_max=request.long_text_max,
         task_summary_max=request.task_summary_max,
@@ -396,11 +434,19 @@ async def reset_all_settings(
     from codelens.review.application.settings import DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
     from codelens.review.domain.ports import DEFAULT_RECENT_REPOSITORY_LIMIT
     from codelens.review.domain.tool_limits import ToolLimits
+    from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
     # Reset instruction file limits
     instruction_limits = await components.instruction_settings.update(
         root_max_lines=DEFAULT_ROOT_INSTRUCTION_MAX_LINES,
         nested_max_lines=DEFAULT_NESTED_INSTRUCTION_MAX_LINES,
+    )
+
+    default_file_exclusions = ReviewFileExclusionPolicy()
+    file_exclusions = await components.file_exclusion_settings.update(
+        suffixes=default_file_exclusions.suffixes,
+        path_regexes=default_file_exclusions.path_regexes,
+        exclude_binary=default_file_exclusions.exclude_binary,
     )
 
     # Reset review completion settings
@@ -428,7 +474,6 @@ async def reset_all_settings(
         max_pattern_chars=default_tool_limits.max_pattern_chars,
         regex_timeout_seconds=default_tool_limits.regex_timeout_seconds,
         comment_batch_size=default_tool_limits.comment_batch_size,
-        reviewed_files_batch=default_tool_limits.reviewed_files_batch,
         short_text_max=default_tool_limits.short_text_max,
         long_text_max=default_tool_limits.long_text_max,
         task_summary_max=default_tool_limits.task_summary_max,
@@ -471,6 +516,7 @@ async def reset_all_settings(
             instruction_limits.root_max_lines,
             instruction_limits.nested_max_lines,
         ),
+        file_exclusions=_file_exclusion_response(file_exclusions),
         review_completion=ReviewCompletionSettingsResponse(
             max_incomplete_review_retries=review_completion.max_incomplete_review_retries,
         ),

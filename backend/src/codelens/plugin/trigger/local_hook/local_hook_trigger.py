@@ -6,13 +6,11 @@ from pathlib import Path
 from typing import Any
 
 from codelens.plugin.api.v2 import TriggerReviewPolicy
-from codelens.plugin.application.config_migration import migrate_config_to_v2
 from codelens.plugin.domain.models import HookEvent
 from codelens.plugin.domain.ports import (
     ReviewCreatorPort,
     TriggerSinkPort,
 )
-from codelens.plugin.domain.versioning import PluginApiVersion
 
 _LOGGER = logging.getLogger("codelens.plugin.trigger.local_hook")
 
@@ -92,20 +90,11 @@ class LocalHookTriggerAdapter(TriggerSinkPort):
 
         # Create the review
         try:
-            policy_config = migrate_config_to_v2(
-                manifest_id=self.TRIGGER_ID,
-                source_api_version=(
-                    PluginApiVersion.V2
-                    if "reviewer_selection" in config
-                    else PluginApiVersion.V1
-                ),
-                config=config,
-            )
             task_id = await self._review_creator.create_review_from_trigger(
                 repository_path=repository_path,
                 scope_type=config.get("scope_type", "uncommitted"),
                 scope_params=scope_params,
-                review_policy=TriggerReviewPolicy.from_config(policy_config),
+                review_policy=TriggerReviewPolicy.from_config(config),
                 external_context=None,
             )
             _LOGGER.info(

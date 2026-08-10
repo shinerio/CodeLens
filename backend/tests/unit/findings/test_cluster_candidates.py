@@ -8,9 +8,7 @@ from codelens.findings.domain.candidates import (
 from codelens.findings.domain.models import FindingSeverity, SourceLocation
 
 
-def candidate(
-    candidate_id: str, *, reviewer: str, path: str, line: int
-) -> CandidateFinding:
+def candidate(candidate_id: str, *, reviewer: str, path: str, line: int) -> CandidateFinding:
     return CandidateFinding(
         task_id="review-1",
         candidate_id=candidate_id,
@@ -36,12 +34,8 @@ def candidate(
 def test_candidates_with_same_location_root_cause_and_impact_cluster_together() -> None:
     clusters = CandidateClusterer().cluster(
         (
-            candidate(
-                "candidate-a", reviewer="correctness:v2", path="src/cache.py", line=40
-            ),
-            candidate(
-                "candidate-b", reviewer="security:v1", path="src/cache.py", line=40
-            ),
+            candidate("candidate-a", reviewer="correctness:v2", path="src/cache.py", line=40),
+            candidate("candidate-b", reviewer="security:v2", path="src/cache.py", line=40),
         )
     )
 
@@ -50,13 +44,9 @@ def test_candidates_with_same_location_root_cause_and_impact_cluster_together() 
 
 
 def test_distinct_root_causes_at_same_line_do_not_cluster() -> None:
-    first = candidate(
-        "candidate-a", reviewer="correctness:v2", path="src/cache.py", line=40
-    )
+    first = candidate("candidate-a", reviewer="correctness:v2", path="src/cache.py", line=40)
     second = replace(
-        candidate(
-            "candidate-b", reviewer="security:v1", path="src/cache.py", line=40
-        ),
+        candidate("candidate-b", reviewer="security:v2", path="src/cache.py", line=40),
         category="authorization",
         title="Missing tenant boundary",
     )
@@ -65,15 +55,9 @@ def test_distinct_root_causes_at_same_line_do_not_cluster() -> None:
 
 
 def test_cluster_ids_and_membership_are_deterministic_and_keep_single_reporters() -> None:
-    first = candidate(
-        "candidate-a", reviewer="correctness:v2", path="src/cache.py", line=40
-    )
-    second = candidate(
-        "candidate-b", reviewer="security:v1", path="src/cache.py", line=40
-    )
-    single = candidate(
-        "candidate-c", reviewer="performance:v1", path="src/slow.py", line=8
-    )
+    first = candidate("candidate-a", reviewer="correctness:v2", path="src/cache.py", line=40)
+    second = candidate("candidate-b", reviewer="security:v2", path="src/cache.py", line=40)
+    single = candidate("candidate-c", reviewer="performance:v2", path="src/slow.py", line=8)
     clusterer = CandidateClusterer()
 
     forward = clusterer.cluster((first, second, single))
@@ -81,4 +65,3 @@ def test_cluster_ids_and_membership_are_deterministic_and_keep_single_reporters(
 
     assert forward == reverse
     assert any(cluster.candidate_ids == ("candidate-c",) for cluster in forward)
-

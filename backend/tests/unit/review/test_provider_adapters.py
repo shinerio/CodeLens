@@ -19,8 +19,8 @@ def _config(
 
 
 def test_openai_adapter_uses_selected_transport_and_omits_disabled_reasoning() -> None:
-    behavior = ModelProviderAdapterRegistry().resolve("openai").request_behavior(
-        _config(vendor="openai")
+    behavior = (
+        ModelProviderAdapterRegistry().resolve("openai").request_behavior(_config(vendor="openai"))
     )
 
     assert behavior.model_class is OpenAIResponsesModel
@@ -29,8 +29,10 @@ def test_openai_adapter_uses_selected_transport_and_omits_disabled_reasoning() -
 
 
 def test_deepseek_adapter_uses_chat_and_documented_thinking_extension() -> None:
-    behavior = ModelProviderAdapterRegistry().resolve("deepseek").request_behavior(
-        _config(vendor="deepseek")
+    behavior = (
+        ModelProviderAdapterRegistry()
+        .resolve("deepseek")
+        .request_behavior(_config(vendor="deepseek"))
     )
 
     assert behavior.model_class is OpenAIChatCompletionsModel
@@ -39,8 +41,8 @@ def test_deepseek_adapter_uses_chat_and_documented_thinking_extension() -> None:
 
 
 def test_zhipu_adapter_uses_chat_and_disables_thinking_via_extra_body() -> None:
-    behavior = ModelProviderAdapterRegistry().resolve("zhipu").request_behavior(
-        _config(vendor="zhipu")
+    behavior = (
+        ModelProviderAdapterRegistry().resolve("zhipu").request_behavior(_config(vendor="zhipu"))
     )
 
     assert behavior.model_class is OpenAIChatCompletionsModel
@@ -49,8 +51,10 @@ def test_zhipu_adapter_uses_chat_and_disables_thinking_via_extra_body() -> None:
 
 
 def test_zhipu_adapter_enables_thinking_with_configured_effort() -> None:
-    behavior = ModelProviderAdapterRegistry().resolve("zhipu").request_behavior(
-        _config(vendor="zhipu", thinking="low")
+    behavior = (
+        ModelProviderAdapterRegistry()
+        .resolve("zhipu")
+        .request_behavior(_config(vendor="zhipu", thinking="low"))
     )
 
     assert behavior.model_class is OpenAIChatCompletionsModel

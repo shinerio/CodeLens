@@ -18,8 +18,8 @@ from codelens.reviewer_catalog.infrastructure.builtin_agents import builtin_agen
 
 def _profile(*tools: ToolContractReference) -> CapabilityProfile:
     return CapabilityProfile(
-        profile_id="legacy-reviewer",
-        version=1,
+        profile_id="reviewer",
+        version=2,
         builtin_tools=tools,
         mcp_tools=(),
         is_read_only=True,
@@ -27,39 +27,39 @@ def _profile(*tools: ToolContractReference) -> CapabilityProfile:
 
 
 def test_execution_fingerprint_changes_when_tool_contract_changes() -> None:
-    agent = builtin_agent_catalog()["correctness:v1"]
-    first_profile = _profile(ToolContractReference("comment", 1))
+    agent = builtin_agent_catalog()["correctness:v2"]
+    first_profile = _profile(ToolContractReference("comment", 2))
     second_profile = replace(
         first_profile,
-        builtin_tools=(ToolContractReference("comment", 2),),
+        builtin_tools=(ToolContractReference("comment", 3),),
     )
 
     first = FrozenAgentExecutionSpec.create(
         agent=agent,
         capability_profile=first_profile,
-        skill_policy=SkillPolicyReference("none", 1),
+        skill_policy=SkillPolicyReference("none", 2),
         prompt_content_hash="a" * 64,
         skills=(),
-        execution_limits=AgentExecutionLimits.legacy_default(),
+        execution_limits=AgentExecutionLimits.default(),
     )
     second = FrozenAgentExecutionSpec.create(
         agent=agent,
         capability_profile=second_profile,
-        skill_policy=SkillPolicyReference("none", 1),
+        skill_policy=SkillPolicyReference("none", 2),
         prompt_content_hash="a" * 64,
         skills=(),
-        execution_limits=AgentExecutionLimits.legacy_default(),
+        execution_limits=AgentExecutionLimits.default(),
     )
 
     assert first.fingerprint != second.fingerprint
 
 
 def test_profile_rejects_duplicate_contracts_and_write_access() -> None:
-    duplicate = ToolContractReference("read_file", 1)
+    duplicate = ToolContractReference("read_file", 2)
     with pytest.raises(ValueError, match="duplicate tool contracts"):
         _profile(duplicate, duplicate)
     with pytest.raises(ValueError, match="read-only"):
-        CapabilityProfile("unsafe", 1, (duplicate,), (), False)
+        CapabilityProfile("unsafe", 2, (duplicate,), (), False)
 
 
 @pytest.mark.parametrize("content_hash", ["", "a" * 63, "z" * 64])
@@ -84,12 +84,12 @@ def test_execution_spec_rejects_duplicate_skills() -> None:
     )
     with pytest.raises(ValueError, match="duplicate Skill activations"):
         FrozenAgentExecutionSpec.create(
-            agent=builtin_agent_catalog()["correctness:v1"],
-            capability_profile=_profile(ToolContractReference("read_file", 1)),
-            skill_policy=SkillPolicyReference("none", 1),
+            agent=builtin_agent_catalog()["correctness:v2"],
+            capability_profile=_profile(ToolContractReference("read_file", 2)),
+            skill_policy=SkillPolicyReference("none", 2),
             prompt_content_hash="a" * 64,
             skills=(skill, skill),
-            execution_limits=AgentExecutionLimits.legacy_default(),
+            execution_limits=AgentExecutionLimits.default(),
         )
 
 
@@ -105,11 +105,11 @@ def test_execution_fingerprint_is_independent_of_skill_input_order() -> None:
         for skill_id, content_hash in (("security-review", "a"), ("python-review", "b"))
     )
     values = {
-        "agent": builtin_agent_catalog()["correctness:v1"],
-        "capability_profile": _profile(ToolContractReference("read_file", 1)),
-        "skill_policy": SkillPolicyReference("none", 1),
+        "agent": builtin_agent_catalog()["correctness:v2"],
+        "capability_profile": _profile(ToolContractReference("read_file", 2)),
+        "skill_policy": SkillPolicyReference("none", 2),
         "prompt_content_hash": "c" * 64,
-        "execution_limits": AgentExecutionLimits.legacy_default(),
+        "execution_limits": AgentExecutionLimits.default(),
     }
 
     first = FrozenAgentExecutionSpec.create(skills=skills, **values)
@@ -120,15 +120,15 @@ def test_execution_fingerprint_is_independent_of_skill_input_order() -> None:
 
 
 def test_execution_values_are_immutable_and_limits_must_be_positive() -> None:
-    reference = ToolContractReference("read_file", 1)
+    reference = ToolContractReference("read_file", 2)
     with pytest.raises(FrozenInstanceError):
         reference.version = 2  # type: ignore[misc]
     with pytest.raises(ValueError, match="positive"):
-        replace(AgentExecutionLimits.legacy_default(), max_tool_calls=0)
+        replace(AgentExecutionLimits.default(), max_tool_calls=0)
 
 
-def test_legacy_limits_are_frozen_to_the_approved_values() -> None:
-    assert AgentExecutionLimits.legacy_default() == AgentExecutionLimits(
+def test_default_limits_are_frozen_to_the_approved_values() -> None:
+    assert AgentExecutionLimits.default() == AgentExecutionLimits(
         max_turns=20,
         max_tool_calls=120,
         max_input_tokens=120_000,
@@ -149,14 +149,12 @@ def test_hydrate_execution_spec_reconstructs_the_frozen_runtime_values() -> None
         instruction_text=instruction_text,
     )
     spec = FrozenAgentExecutionSpec.create(
-        agent=replace(
-            builtin_agent_catalog()["correctness:v1"], prompt_template=prompt_text
-        ),
-        capability_profile=_profile(ToolContractReference("read_file", 1)),
-        skill_policy=SkillPolicyReference("none", 1),
+        agent=replace(builtin_agent_catalog()["correctness:v2"], prompt_template=prompt_text),
+        capability_profile=_profile(ToolContractReference("read_file", 2)),
+        skill_policy=SkillPolicyReference("none", 2),
         prompt_content_hash=hashlib.sha256(prompt_text.encode()).hexdigest(),
         skills=(skill,),
-        execution_limits=AgentExecutionLimits.legacy_default(),
+        execution_limits=AgentExecutionLimits.default(),
     )
     spec_json = canonical_execution_payload(
         spec.agent,
@@ -196,12 +194,12 @@ def test_hydrate_execution_spec_rejects_changed_artifact_bytes(
         instruction_text=original_skill,
     )
     spec = FrozenAgentExecutionSpec.create(
-        agent=builtin_agent_catalog()["correctness:v1"],
-        capability_profile=_profile(ToolContractReference("read_file", 1)),
-        skill_policy=SkillPolicyReference("none", 1),
+        agent=builtin_agent_catalog()["correctness:v2"],
+        capability_profile=_profile(ToolContractReference("read_file", 2)),
+        skill_policy=SkillPolicyReference("none", 2),
         prompt_content_hash=hashlib.sha256(original_prompt.encode()).hexdigest(),
         skills=(skill,),
-        execution_limits=AgentExecutionLimits.legacy_default(),
+        execution_limits=AgentExecutionLimits.default(),
     )
     spec_json = canonical_execution_payload(
         spec.agent,

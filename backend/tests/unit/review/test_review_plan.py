@@ -16,6 +16,7 @@ def _node(
     node_type: ReviewPlanNodeType,
     review_pass: ReviewPass,
     *,
+    shard_id: str = "root",
     depends_on: tuple[str, ...] = (),
 ) -> ReviewPlanNode:
     return ReviewPlanNode.create(
@@ -23,7 +24,7 @@ def _node(
         node_type=node_type,
         agent_reference=reference,
         pass_index=review_pass,
-        shard_id="root",
+        shard_id=shard_id,
         logical_attempt_group="primary",
         depends_on=depends_on,
     )
@@ -32,16 +33,16 @@ def _node(
 def reviewer_nodes_only() -> tuple[ReviewPlanNode, ...]:
     return tuple(
         _node(reference, ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER)
-        for reference in ("correctness:v2", "security:v1")
+        for reference in ("correctness:v2", "security:v2")
     )
 
 
-def test_multi_specialist_plan_requires_resolver() -> None:
-    with pytest.raises(ValueError, match="multi-specialist plan requires one batched verifier"):
+def test_every_plan_requires_one_batched_verifier() -> None:
+    with pytest.raises(ValueError, match="Review plan requires one batched verifier"):
         ReviewPlan.create(
             task_id=TASK_ID,
             selection_mode="fixed",
-            reviewer_references=("correctness:v2", "security:v1"),
+            reviewer_references=("correctness:v2", "security:v2"),
             nodes=reviewer_nodes_only(),
             planner_reason=None,
         )
@@ -50,7 +51,7 @@ def test_multi_specialist_plan_requires_resolver() -> None:
 def test_multi_specialist_plan_requires_one_batched_verifier() -> None:
     reviewers = reviewer_nodes_only()
     resolver = _node(
-        "review-verifier:v1",
+        "review-verifier:v2",
         ReviewPlanNodeType.VERIFIER,
         ReviewPass.VERIFIER,
         depends_on=tuple(node.node_id for node in reviewers),
@@ -60,19 +61,27 @@ def test_multi_specialist_plan_requires_one_batched_verifier() -> None:
         ReviewPlan.create(
             task_id=TASK_ID,
             selection_mode="fixed",
-            reviewer_references=("correctness:v2", "security:v1"),
+            reviewer_references=("correctness:v2", "security:v2"),
             nodes=(*reviewers, resolver),
             planner_reason=None,
         )
 
 
-@pytest.mark.parametrize("reviewer_reference", ["general:v1", "security:v1"])
-def test_single_reviewer_plan_does_not_require_resolver(reviewer_reference: str) -> None:
+@pytest.mark.parametrize("reviewer_reference", ["general:v2", "security:v2"])
+def test_single_reviewer_plan_requires_verifier(reviewer_reference: str) -> None:
+    reviewer = _node(reviewer_reference, ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER)
+    verifier = _node(
+        "review-verifier:v2",
+        ReviewPlanNodeType.VERIFIER,
+        ReviewPass.VERIFIER,
+        shard_id="batch",
+        depends_on=(reviewer.node_id,),
+    )
     plan = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
         reviewer_references=(reviewer_reference,),
-        nodes=(_node(reviewer_reference, ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER),),
+        nodes=(reviewer, verifier),
         planner_reason=None,
     )
 
@@ -84,8 +93,8 @@ def test_adaptive_plan_requires_a_planner_reason() -> None:
         ReviewPlan.create(
             task_id=TASK_ID,
             selection_mode="adaptive",
-            reviewer_references=("general:v1",),
-            nodes=(_node("general:v1", ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER),),
+            reviewer_references=("general:v2",),
+            nodes=(_node("general:v2", ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER),),
             planner_reason=None,
         )
 
@@ -95,7 +104,7 @@ def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
     verifier = ReviewPlanNode.create(
         task_id=TASK_ID,
         node_type=ReviewPlanNodeType.VERIFIER,
-        agent_reference="review-verifier:v1",
+        agent_reference="review-verifier:v2",
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
@@ -104,14 +113,14 @@ def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
     first = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
-        reviewer_references=("security:v1", "correctness:v2"),
+        reviewer_references=("security:v2", "correctness:v2"),
         nodes=(*reviewers, verifier),
         planner_reason=None,
     )
     second = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
-        reviewer_references=("correctness:v2", "security:v1"),
+        reviewer_references=("correctness:v2", "security:v2"),
         nodes=(verifier, *reversed(reviewers)),
         planner_reason=None,
     )
@@ -122,11 +131,11 @@ def test_plan_hash_is_independent_of_reviewer_and_node_input_order() -> None:
 
 
 def test_node_identity_includes_the_logical_attempt_group() -> None:
-    first = _node("security:v1", ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER)
+    first = _node("security:v2", ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER)
     second = ReviewPlanNode.create(
         task_id=TASK_ID,
         node_type=ReviewPlanNodeType.REVIEWER,
-        agent_reference="security:v1",
+        agent_reference="security:v2",
         pass_index=ReviewPass.REVIEWER,
         shard_id="root",
         logical_attempt_group="repair",

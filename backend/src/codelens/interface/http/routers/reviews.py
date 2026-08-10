@@ -44,9 +44,7 @@ _TERMINAL_EVENTS = {
 _TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled", "superseded"}
 
 
-async def _review_response(
-    review: ReviewRecord, components: HttpComponents
-) -> ReviewResponse:
+async def _review_response(review: ReviewRecord, components: HttpComponents) -> ReviewResponse:
     """Project public multi-Agent state exclusively from durable Plan and checkpoints."""
 
     plan_record = await components.review_plan_store.get(review.task_id)
@@ -54,8 +52,7 @@ async def _review_response(
         return ReviewResponse.from_domain(review)
     plan = plan_record.plan
     checkpoint_records = {
-        item.node_key: item
-        for item in await components.checkpoints.list_for_task(review.task_id)
+        item.node_key: item for item in await components.checkpoints.list_for_task(review.task_id)
     }
     coverage: dict[str, list[str]] = {
         "planned": [],
@@ -176,9 +173,7 @@ async def cancel_review(
 ) -> ReviewResponse:
     """Persist cancellation intent; the singleton Worker performs propagation."""
 
-    return await _review_response(
-        await components.cancel_review.handle(task_id), components
-    )
+    return await _review_response(await components.cancel_review.handle(task_id), components)
 
 
 @router.post("/{task_id}/retry", response_model=ReviewResponse, status_code=202)

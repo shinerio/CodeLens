@@ -3,8 +3,8 @@ import json
 from pathlib import Path
 from typing import Literal
 
-from codelens.findings.infrastructure.comment_v2_output import CommentV2FindingSchema
-from codelens.review.infrastructure.comment_collector_v2 import ReviewCommentCollectorV2
+from codelens.findings.infrastructure.comment_output import CommentFindingSchema
+from codelens.review.infrastructure.comment_collector import ReviewCommentCollector
 from codelens.workspace.domain.models import (
     ChangedHunk,
     ChangeIndex,
@@ -15,6 +15,7 @@ from codelens.workspace.domain.models import (
     SnapshotManifest,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
 def _hash(payload: bytes) -> str:
@@ -67,16 +68,10 @@ def _snapshot() -> ReviewSnapshot:
         ReviewTarget("a" * 40, "b" * 40, None),
         RepositoryFingerprint("b" * 40, "d" * 64, "e" * 64),
         SnapshotManifest(
-            ("src/webhook.py", "src/deleted.py"),
-            (),
-            (),
+            ReviewFileScope.include_all(("src/webhook.py", "src/deleted.py")),
             entries=(
-                SnapshotEntry(
-                    "src/webhook.py", "file", 0o644, 22, "f" * 64, None, "target"
-                ),
-                SnapshotEntry(
-                    "src/deleted.py", "deleted", 0o644, 0, "1" * 64, None, "target"
-                ),
+                SnapshotEntry("src/webhook.py", "file", 0o644, 22, "f" * 64, None, "target"),
+                SnapshotEntry("src/deleted.py", "deleted", 0o644, 0, "1" * 64, None, "target"),
             ),
         ),
         ChangeIndex(
@@ -102,7 +97,7 @@ def _snapshot() -> ReviewSnapshot:
     )
 
 
-def _submission(**overrides: object) -> CommentV2FindingSchema:
+def _submission(**overrides: object) -> CommentFindingSchema:
     payload: dict[str, object] = {
         "reviewer_id": "security",
         "path": "src/webhook.py",
@@ -117,15 +112,15 @@ def _submission(**overrides: object) -> CommentV2FindingSchema:
         "evidence_strength": "direct",
         **overrides,
     }
-    return CommentV2FindingSchema.model_validate(payload)
+    return CommentFindingSchema.model_validate(payload)
 
 
 def _collector(
     *,
-    reviewer_reference: str = "security:v1",
+    reviewer_reference: str = "security:v2",
     reviewer_dimensions: tuple[str, ...] = ("security",),
-) -> ReviewCommentCollectorV2:
-    return ReviewCommentCollectorV2(
+) -> ReviewCommentCollector:
+    return ReviewCommentCollector(
         task_id="review-1",
         run_id="run-1",
         snapshot=_snapshot(),
@@ -163,9 +158,7 @@ async def test_collector_rejects_items_independently() -> None:
     collector = _collector()
 
     result = json.loads(
-        await collector.submit_many(
-            [_submission(path="outside.py"), _submission()]
-        )
+        await collector.submit_many([_submission(path="outside.py"), _submission()])
     )
 
     assert result["accepted_count"] == 1
@@ -189,11 +182,7 @@ async def test_collector_rejects_duplicate_candidate_identity() -> None:
 async def test_specialist_primary_dimension_must_match_assignment() -> None:
     collector = _collector()
 
-    result = json.loads(
-        await collector.submit_many(
-            [_submission(primary_dimension="performance")]
-        )
-    )
+    result = json.loads(await collector.submit_many([_submission(primary_dimension="performance")]))
 
     assert result["accepted_count"] == 0
     assert result["rejected_comments"][0]["index"] == 0
@@ -202,7 +191,7 @@ async def test_specialist_primary_dimension_must_match_assignment() -> None:
 
 async def test_general_accepts_any_dimension_in_its_declared_scope() -> None:
     collector = _collector(
-        reviewer_reference="general:v1",
+        reviewer_reference="general:v2",
         reviewer_dimensions=(
             "correctness",
             "security",
@@ -214,8 +203,6 @@ async def test_general_accepts_any_dimension_in_its_declared_scope() -> None:
         ),
     )
 
-    result = json.loads(
-        await collector.submit_many([_submission(reviewer_id="general")])
-    )
+    result = json.loads(await collector.submit_many([_submission(reviewer_id="general")]))
 
     assert result["accepted_count"] == 1

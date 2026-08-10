@@ -15,7 +15,6 @@ from codelens.review.application.settings import ReviewCompletionSettings
 from codelens.review.domain.errors import PermanentAgentOutputError
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.comment_collector import ReviewCommentCollector
-from codelens.review.infrastructure.comment_collector_v2 import ReviewCommentCollectorV2
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.review.infrastructure.tool_contract import enforce_tool_execution_limits
 from codelens.workspace.domain.models import ReviewSnapshot
@@ -77,31 +76,24 @@ class RoleOutputToolBinding:
 class ReviewerOutputState:
     """Retain one reviewer's versioned comments and shared completion controls."""
 
-    contract_version: Literal["1", "2"]
-    comment_collector: ReviewCommentCollector | ReviewCommentCollectorV2
-    completion_controls: ReviewCommentCollector
+    contract_version: Literal["2"]
+    comment_collector: ReviewCommentCollector
 
     @property
     def is_completed(self) -> bool:
         """Return whether this Agent Run made one accepted task_done call."""
 
-        return self.completion_controls.is_completed
+        return self.comment_collector.is_completed
 
     @property
     def incomplete_review_files(self) -> tuple[str, ...]:
         """Return files omitted only after completion retry exhaustion."""
 
-        return self.completion_controls.incomplete_review_files
+        return self.comment_collector.incomplete_review_files
 
     def final_output(self) -> dict[str, object] | CandidateFindingBatch:
         """Return the collector output matching the frozen Comment contract."""
 
-        if self.contract_version == "1":
-            if not isinstance(self.comment_collector, ReviewCommentCollector):
-                raise RuntimeError("Comment v1 output state has the wrong collector")
-            return self.comment_collector.finding_batch()
-        if not isinstance(self.comment_collector, ReviewCommentCollectorV2):
-            raise RuntimeError("Comment v2 output state has the wrong collector")
         return self.comment_collector.candidate_batch()
 
 
@@ -182,7 +174,6 @@ class RuntimeToolContext:
             "read_file",
             "get_diff",
             "comment",
-            "review_file_done",
             "task_done",
             "submit_review_plan",
             "finalize_plan",
@@ -193,7 +184,7 @@ class RuntimeToolContext:
         descriptions = {name: f"Test contract for {name}." for name in names}
         internal = tuple(
             RoleOutputToolBinding(
-                ToolContractReference(name, 1),
+                ToolContractReference(name, 2),
                 _submission_stub(name, descriptions[name]),
             )
             for name in (
@@ -263,52 +254,14 @@ class CapabilityToolAssembler:
             tool_limits=context.tool_limits,
         )
         available = {
-            (tool.name, 1): tool
-            for tool in evidence.as_agent_tools(context.tool_descriptions)
+            (tool.name, 2): tool for tool in evidence.as_agent_tools(context.tool_descriptions)
         }
         requested = {
             (reference.name, reference.version)
             for reference in spec.capability_profile.builtin_tools
         }
-        if ("comment", 1) in requested:
-            if spec.agent.confidence_floor is None:
-                raise PermanentAgentOutputError(
-                    "Comment v1 requires a numeric confidence floor",
-                    phase="investigation",
-                    reason_code="legacy_confidence_floor_missing",
-                    retryable=False,
-                )
-            legacy = ReviewCommentCollector(
-                snapshot=context.snapshot,
-                reviewer_id=spec.agent.agent_id,
-                confidence_floor=spec.agent.confidence_floor,
-                tools=evidence,
-                max_incomplete_review_retries=(
-                    context.completion_settings.max_incomplete_review_retries
-                ),
-                tool_descriptions=context.tool_descriptions,
-                tool_limits=context.tool_limits,
-            )
-            available.update({(tool.name, 1): tool for tool in legacy.as_agent_tools()})
-            context.collector_contract_version = "1"
-            context.reviewer_output = ReviewerOutputState("1", legacy, legacy)
-        elif ("comment", 2) in requested:
-            controls = ReviewCommentCollector(
-                snapshot=context.snapshot,
-                reviewer_id=spec.agent.agent_id,
-                confidence_floor=0.0,
-                tools=evidence,
-                max_incomplete_review_retries=(
-                    context.completion_settings.max_incomplete_review_retries
-                ),
-                tool_descriptions=context.tool_descriptions,
-                tool_limits=context.tool_limits,
-            )
-            control_tools = controls.as_agent_tools()
-            for tool in control_tools:
-                if tool.name != "comment":
-                    available[(tool.name, 1)] = tool
-            collector = ReviewCommentCollectorV2(
+        if ("comment", 2) in requested:
+            collector = ReviewCommentCollector(
                 task_id=context.snapshot.worktree.task_id,
                 run_id=(
                     context.logical_run_id
@@ -320,12 +273,18 @@ class CapabilityToolAssembler:
                 reviewer_dimensions=spec.agent.dimensions,
                 tools=evidence,
                 tool_limits=context.tool_limits,
+                max_incomplete_review_retries=(
+                    context.completion_settings.max_incomplete_review_retries
+                ),
             )
-            available[("comment", 2)] = collector.as_comment_agent_tool(
-                context.tool_descriptions["comment"]
+            available.update(
+                {
+                    (tool.name, 2): tool
+                    for tool in collector.as_agent_tools(context.tool_descriptions)
+                }
             )
             context.collector_contract_version = "2"
-            context.reviewer_output = ReviewerOutputState("2", collector, controls)
+            context.reviewer_output = ReviewerOutputState("2", collector)
         for binding in context.role_output_tools:
             key = (binding.contract.name, binding.contract.version)
             if key in available:

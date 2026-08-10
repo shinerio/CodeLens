@@ -32,6 +32,7 @@ from codelens.workspace.domain.models import (
     SnapshotManifest,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
 class _ReviewStore:
@@ -114,7 +115,7 @@ def _snapshot(tmp_path: Path) -> ReviewSnapshot:
         worktree,
         ReviewTarget("a" * 40, "b" * 40, None),
         RepositoryFingerprint("b" * 40, "f" * 64, "1" * 64),
-        SnapshotManifest((), (), ()),
+        SnapshotManifest(ReviewFileScope.include_all(("src/review.py",))),
         ChangeIndex(()),
     )
 
@@ -122,9 +123,7 @@ def _snapshot(tmp_path: Path) -> ReviewSnapshot:
 async def test_prepare_compiles_fixed_team_plan_without_planner(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
-    profile = ReviewProfileSnapshot(
-        FixedReviewerSelection(("correctness:v2", "security:v1"))
-    )
+    profile = ReviewProfileSnapshot(FixedReviewerSelection(("correctness:v2", "security:v2")))
     record = ReviewExecutionRecord(
         task_id="review-fixed",
         repository_path=tmp_path,
@@ -137,8 +136,12 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
         target_ref="feature",
         overlay_hash=None,
         overlay_artifact_ref=None,
-        target_paths=("src/review.py",),
-        selected_agent_versions=("correctness:v2", "security:v1"),
+        candidate_paths=("src/review.py",),
+        file_exclusion_policy_json=('{"exclude_binary":true,"path_regexes":[],"suffixes":[]}'),
+        file_exclusion_policy_hash=(
+            "f135f14995e69bb776fd5c18af7fa0d19e45f867501b3274e9cb38cfbc7676c3"
+        ),
+        selected_agent_versions=("correctness:v2", "security:v2"),
         prompt_locale="en",
         status="provisioning_worktree",
         cancellation_requested=False,
@@ -158,12 +161,14 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
         freeze=AsyncMock(return_value=snapshot),
     )
     executor._provider_config = SimpleNamespace(
-        load=AsyncMock(return_value=SimpleNamespace(
-            max_agent_turns=20,
-            max_tool_calls=120,
-            max_tokens=16_000,
-            agent_timeout=600.0,
-        ))
+        load=AsyncMock(
+            return_value=SimpleNamespace(
+                max_agent_turns=20,
+                max_tool_calls=120,
+                max_tokens=16_000,
+                agent_timeout=600.0,
+            )
+        )
     )
     executor._tool_limits_service = SimpleNamespace(
         get=AsyncMock(return_value=SimpleNamespace(max_read_bytes=65_536))
@@ -186,7 +191,7 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
 
     async def execution_specs(references: tuple[str, ...], *_args: Any) -> tuple[Any, ...]:
         catalog = builtin_agent_catalog()
-        limits = AgentExecutionLimits.legacy_default()
+        limits = AgentExecutionLimits.default()
         return tuple(
             CapabilityResolver.testing().resolve(
                 agent=catalog[reference],
@@ -205,10 +210,8 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
     prepared = await executor.prepare("review-fixed")
 
     assert prepared.plan is not None
-    assert prepared.plan.reviewer_references == ("correctness:v2", "security:v1")
-    assert all(
-        node.node_type is not ReviewPlanNodeType.PLANNER for node in prepared.plan.nodes
-    )
+    assert prepared.plan.reviewer_references == ("correctness:v2", "security:v2")
+    assert all(node.node_type is not ReviewPlanNodeType.PLANNER for node in prepared.plan.nodes)
     assert {node.node_type for node in prepared.plan.nodes} == {
         ReviewPlanNodeType.REVIEWER,
         ReviewPlanNodeType.VERIFIER,

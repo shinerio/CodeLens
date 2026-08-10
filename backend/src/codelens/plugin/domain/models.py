@@ -85,7 +85,7 @@ class PluginManifest:
     min_codelens_version: str | None = None
     name_i18n: dict[str, str] = field(default_factory=dict)
     description_i18n: dict[str, str] = field(default_factory=dict)
-    plugin_api_version: PluginApiVersion = PluginApiVersion.V1
+    plugin_api_version: PluginApiVersion = PluginApiVersion.V2
 
     @property
     def trigger(self) -> TriggerCapability | None:
@@ -173,12 +173,8 @@ def validate_capability_toggle(
     if record.is_builtin:
         return
 
-    final_trigger = (
-        enable_trigger if enable_trigger is not None else record.trigger_enabled
-    )
-    final_report = (
-        enable_report if enable_report is not None else record.report_enabled
-    )
+    final_trigger = enable_trigger if enable_trigger is not None else record.trigger_enabled
+    final_report = enable_report if enable_report is not None else record.report_enabled
 
     if final_report and not final_trigger:
         raise PluginCapabilityError(

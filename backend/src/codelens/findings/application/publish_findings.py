@@ -8,6 +8,7 @@ from codelens.findings.domain.models import (
     Evidence,
     Finding,
     FindingDisposition,
+    SourceLocation,
 )
 from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome
 
@@ -55,6 +56,8 @@ class FindingPublisher:
             if canonical is None:
                 canonical = sources[0]
 
+            related_locations: tuple[SourceLocation, ...]
+            evidence_hashes: tuple[str, ...]
             if verdict.outcome is VerdictOutcome.MERGE:
                 # __post_init__ guarantees all merge fields are non-None
                 # when outcome is MERGE, so narrowing via assert is safe.
@@ -65,6 +68,7 @@ class FindingPublisher:
                 assert verdict.recommendation is not None
                 assert verdict.primary_dimension is not None
                 assert verdict.evidence_strength is not None
+                assert verdict.primary_location is not None
                 title = verdict.title
                 category = verdict.category
                 severity = verdict.severity
@@ -72,6 +76,10 @@ class FindingPublisher:
                 recommendation = verdict.recommendation
                 primary_dimension = verdict.primary_dimension
                 evidence_strength = verdict.evidence_strength
+                primary_location = verdict.primary_location
+                related_locations = ()
+                changed_hunk_id = verdict.changed_hunk_id
+                evidence_hashes = (verdict.primary_location.excerpt_hash,)
             else:
                 title = primary_cluster.title
                 category = primary_cluster.category
@@ -80,15 +88,24 @@ class FindingPublisher:
                 recommendation = primary_cluster.recommendation
                 primary_dimension = primary_cluster.primary_dimension
                 evidence_strength = primary_cluster.evidence_strength
+                primary_location = canonical.primary_location
+                related_locations = canonical.related_locations
+                changed_hunk_id = canonical.changed_hunk_id
+                evidence_hashes = canonical.evidence_hashes
 
             fingerprint = hashlib.sha256(
                 json.dumps(
                     {
-                        "candidate_fingerprints": sorted(
-                            item.fingerprint for item in sources
-                        ),
+                        "candidate_fingerprints": sorted(item.fingerprint for item in sources),
                         "cluster_ids": sorted(verdict.cluster_ids),
                         "content": content,
+                        "location": {
+                            "path": primary_location.path,
+                            "start_line": primary_location.start_line,
+                            "end_line": primary_location.end_line,
+                            "side": primary_location.side,
+                            "excerpt_hash": primary_location.excerpt_hash,
+                        },
                         "recommendation": recommendation,
                         "severity": severity.value,
                         "title": title,
@@ -97,9 +114,9 @@ class FindingPublisher:
                     separators=(",", ":"),
                 ).encode()
             ).hexdigest()
-            finding_id = "finding_" + hashlib.sha256(
-                f"{task_id}\0{fingerprint}".encode()
-            ).hexdigest()
+            finding_id = (
+                "finding_" + hashlib.sha256(f"{task_id}\0{fingerprint}".encode()).hexdigest()
+            )
             findings.append(
                 Finding(
                     finding_id=finding_id,
@@ -110,9 +127,9 @@ class FindingPublisher:
                     severity=severity,
                     disposition=FindingDisposition.BLOCKING,
                     confidence=None,
-                    primary_location=canonical.primary_location,
-                    related_locations=canonical.related_locations,
-                    changed_hunk_id=canonical.changed_hunk_id,
+                    primary_location=primary_location,
+                    related_locations=related_locations,
+                    changed_hunk_id=changed_hunk_id,
                     change_origin=ChangeOrigin.INTRODUCED,
                     evidence=tuple(
                         Evidence(
@@ -121,7 +138,7 @@ class FindingPublisher:
                             artifact_ref=None,
                             excerpt_hash=evidence_hash,
                         )
-                        for evidence_hash in canonical.evidence_hashes
+                        for evidence_hash in evidence_hashes
                     ),
                     impact=content,
                     explanation=content,

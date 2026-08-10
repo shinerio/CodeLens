@@ -27,7 +27,7 @@ _Path = Annotated[
 ]
 
 
-class CommentV2FindingSchema(BaseModel):
+class CommentFindingSchema(BaseModel):
     """Validate only the bounded fields exposed by the Comment v2 model tool."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -45,38 +45,36 @@ class CommentV2FindingSchema(BaseModel):
     evidence_strength: Literal["direct", "inferred", "weak"]
 
 
-class CommentV2BatchSchema(BaseModel):
+class CommentBatchSchema(BaseModel):
     """Version the strict model-facing Comment v2 submission envelope."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     schema_version: Literal["2"]
-    findings: tuple[CommentV2FindingSchema, ...] = Field(max_length=100)
+    findings: tuple[CommentFindingSchema, ...] = Field(max_length=100)
 
 
-class CommentV2OutputCodecError(ValueError):
+class CommentOutputCodecError(ValueError):
     """Reject malformed or incorrectly versioned Comment v2 output."""
 
 
 @dataclass(frozen=True)
-class CommentV2OutputCodec:
+class CommentOutputCodec:
     """Canonicalize the Comment v2 transport envelope without accepting v1 fields."""
 
     schema_version: Literal["2"] = "2"
 
     def __post_init__(self) -> None:
         if self.schema_version != "2":
-            raise CommentV2OutputCodecError("unsupported Comment v2 schema version")
+            raise CommentOutputCodecError("unsupported Comment schema version")
 
     def encode(self, final_output: object) -> bytes:
         """Revalidate untrusted output and return deterministic UTF-8 JSON."""
 
         try:
-            batch = CommentV2BatchSchema.model_validate(final_output)
+            batch = CommentBatchSchema.model_validate(final_output)
         except ValidationError as error:
-            raise CommentV2OutputCodecError(
-                "Agent output does not match Comment v2"
-            ) from error
+            raise CommentOutputCodecError("Agent output does not match Comment v2") from error
         return json.dumps(
             batch.model_dump(mode="json"),
             ensure_ascii=False,
@@ -84,11 +82,11 @@ class CommentV2OutputCodec:
             separators=(",", ":"),
         ).encode("utf-8")
 
-    def decode(self, payload: bytes) -> CommentV2BatchSchema:
+    def decode(self, payload: bytes) -> CommentBatchSchema:
         """Validate persisted bytes before returning model-facing values."""
 
         try:
             decoded = json.loads(payload)
-            return CommentV2BatchSchema.model_validate(decoded)
+            return CommentBatchSchema.model_validate(decoded)
         except (UnicodeDecodeError, json.JSONDecodeError, ValidationError) as error:
-            raise CommentV2OutputCodecError("persisted Comment v2 output is invalid") from error
+            raise CommentOutputCodecError("persisted Comment output is invalid") from error

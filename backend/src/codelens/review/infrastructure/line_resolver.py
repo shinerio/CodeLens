@@ -188,9 +188,7 @@ def resolve_from_hunk(
     return None
 
 
-def resolve_from_file_content(
-    file_content: str, existing_code: str
-) -> tuple[int, int] | None:
+def resolve_from_file_content(file_content: str, existing_code: str) -> tuple[int, int] | None:
     """Tier 2: resolve line range by matching against full file content.
 
     Blank lines are filtered out so that "consecutive" means adjacent

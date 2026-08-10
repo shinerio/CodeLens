@@ -9,12 +9,7 @@ from codelens.review.domain.review_strategy import (
 
 def test_fixed_rejects_general_with_specialists() -> None:
     with pytest.raises(ValueError, match="General reviewer must run alone"):
-        FixedReviewerSelection(("general:v1", "security:v1"))
-
-
-def test_fixed_rejects_legacy_correctness_team() -> None:
-    with pytest.raises(ValueError, match="correctness:v1 is legacy single-reviewer only"):
-        FixedReviewerSelection(("correctness:v1", "test-regression:v1"))
+        FixedReviewerSelection(("general:v2", "security:v2"))
 
 
 def test_profile_source_identity_is_all_or_nothing() -> None:
@@ -30,8 +25,9 @@ def test_profile_source_identity_is_all_or_nothing() -> None:
     "reviewer_versions, message",
     [
         ((), "at least one reviewer"),
-        (("security:v1", "security:v1"), "duplicate reviewers"),
+        (("security:v2", "security:v2"), "duplicate reviewers"),
         (("Security:v1",), "invalid reference"),
+        (("security:v1",), "invalid reference"),
         (("security:1",), "invalid reference"),
     ],
 )
@@ -42,14 +38,13 @@ def test_fixed_rejects_invalid_reviewer_sets(
         FixedReviewerSelection(reviewer_versions)
 
 
-def test_fixed_accepts_general_legacy_and_specialist_selections() -> None:
-    assert FixedReviewerSelection(("general:v1",)).mode == "fixed"
-    assert FixedReviewerSelection(("correctness:v1",)).reviewer_versions == (
-        "correctness:v1",
+def test_fixed_accepts_general_and_specialist_selections() -> None:
+    assert FixedReviewerSelection(("general:v2",)).mode == "fixed"
+    assert FixedReviewerSelection(("correctness:v2",)).reviewer_versions == ("correctness:v2",)
+    assert FixedReviewerSelection(("correctness:v2", "security:v2")).reviewer_versions == (
+        "correctness:v2",
+        "security:v2",
     )
-    assert FixedReviewerSelection(
-        ("correctness:v2", "security:v1")
-    ).reviewer_versions == ("correctness:v2", "security:v1")
 
 
 def test_profile_rejects_a_non_positive_source_revision() -> None:
@@ -59,4 +54,3 @@ def test_profile_rejects_a_non_positive_source_revision() -> None:
             source_profile_id="profile-balanced",
             source_profile_revision=0,
         )
-

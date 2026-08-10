@@ -183,8 +183,7 @@ class InstructionResolver:
             )
             base = relative.parent.as_posix()
             excludes.extend(
-                pattern if base == "." else f"{base}/{pattern}"
-                for pattern in parsed.excludes
+                pattern if base == "." else f"{base}/{pattern}" for pattern in parsed.excludes
             )
             warnings.extend(parsed.warnings)
         return ResolvedInstructionSet(

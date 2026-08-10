@@ -27,7 +27,7 @@ def candidate(
         candidate_id=candidate_id,
         run_id="run-private",
         snapshot_id="snapshot-1",
-        reviewer_reference="security:v1",
+        reviewer_reference="security:v2",
         category=category,
         title=title,
         severity=FindingSeverity.HIGH,
@@ -48,9 +48,7 @@ class FakeClusterStore:
     """In-memory ClusterStorePort fake for assertions."""
 
     def __init__(self) -> None:
-        self.saved: list[
-            tuple[str, str, tuple[FindingCluster, ...]]
-        ] = []
+        self.saved: list[tuple[str, str, tuple[FindingCluster, ...]]] = []
 
     async def save_clusters(
         self,
@@ -85,9 +83,7 @@ def test_clusterer_groups_candidates_with_identical_evidence() -> None:
 
 def test_clusterer_splits_when_evidence_differs() -> None:
     same_evidence = candidate("candidate-a")
-    differing_evidence = candidate(
-        "candidate-b", evidence_hashes=("z" * 64,)
-    )
+    differing_evidence = candidate("candidate-b", evidence_hashes=("z" * 64,))
 
     clusters = CandidateClusterer().cluster((same_evidence, differing_evidence))
 

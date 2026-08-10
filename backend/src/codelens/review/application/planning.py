@@ -92,9 +92,9 @@ class ChangeRiskSummary:
     def from_snapshot(cls, snapshot: ReviewSnapshot) -> "ChangeRiskSummary":
         hunks_by_file: dict[str, dict[str, list[tuple[int, int]]]] = {}
         for hunk in snapshot.change_index.hunks:
-            hunks_by_file.setdefault(hunk.path, {"old": [], "new": []})[
-                hunk.side
-            ].append((hunk.start_line, hunk.end_line))
+            hunks_by_file.setdefault(hunk.path, {"old": [], "new": []})[hunk.side].append(
+                (hunk.start_line, hunk.end_line)
+            )
         files = tuple(
             ChangedFileRiskSummary(
                 path=change.path,
@@ -135,7 +135,7 @@ class ChangeRiskSummary:
 
 @dataclass(frozen=True, slots=True)
 class PlannerSelection:
-    schema_version: Literal["1"]
+    schema_version: Literal["2"]
     reviewer_references: tuple[str, ...]
 
 
@@ -144,7 +144,7 @@ class PlannerPort(Protocol):
         self,
         *,
         task_id: str,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
         readiness: Mapping[str, CapabilityReadiness],
         risk_summary: ChangeRiskSummary | None,
     ) -> PlannerSelection: ...
@@ -172,8 +172,7 @@ def build_planner_input_payload(
     unavailable = tuple(
         reference
         for reference in eligible_reviewer_references
-        if readiness.get(reference, CapabilityReadiness("unavailable", ())).status
-        == "unavailable"
+        if readiness.get(reference, CapabilityReadiness("unavailable", ())).status == "unavailable"
     )
     envelope["role_context"] = {
         "change_risk_summary": asdict(risk_summary),
@@ -204,15 +203,11 @@ class ReviewPlanCompiler:
         readiness: Mapping[str, CapabilityReadiness],
     ) -> ReviewPlan:
         try:
-            reviewers = self._validate_team(
-                reviewer_references, selection_mode, readiness
-            )
-            is_multi = len(reviewers) > 1
+            reviewers = self._validate_team(reviewer_references, selection_mode, readiness)
             required = list(reviewers)
             if selection_mode == "adaptive":
-                required.append("review-planner:v1")
-            if is_multi:
-                required.append("review-verifier:v1")
+                required.append("review-planner:v2")
+            required.append("review-verifier:v2")
             missing = [reference for reference in required if reference not in execution_specs]
             if missing:
                 raise ValueError(f"frozen execution spec is missing: {missing}")
@@ -244,21 +239,17 @@ class ReviewPlanCompiler:
             agent = self._catalog.get(reference)
             if agent is None or agent.role is not AgentRole.REVIEWER:
                 raise ValueError(f"unknown Reviewer reference: {reference}")
-            if selection_mode == "adaptive" and (
-                not agent.planner_eligible or not agent.is_public or agent.is_legacy
-            ):
+            if selection_mode == "adaptive" and (not agent.planner_eligible or not agent.is_public):
                 raise ValueError(f"Reviewer is not Planner eligible: {reference}")
-            if selection_mode == "fixed" and not (agent.is_public or agent.is_legacy):
+            if selection_mode == "fixed" and not agent.is_public:
                 raise ValueError(f"Reviewer is not selectable: {reference}")
             state = readiness.get(reference)
             if state is not None and state.status == "unavailable":
                 raise ValueError(f"Reviewer capability is unavailable: {reference}")
             agents.append(agent)
-        if "general:v1" in references and references != ("general:v1",):
+        if "general:v2" in references and references != ("general:v2",):
             raise ValueError("General reviewer must run alone")
-        if "correctness:v1" in references and references != ("correctness:v1",):
-            raise ValueError("correctness:v1 is legacy single-reviewer only")
-        if selection_mode == "adaptive" and references != ("general:v1",):
+        if selection_mode == "adaptive" and references != ("general:v2",):
             if len(references) < 2:
                 raise ValueError("Adaptive specialist team requires at least two reviewers")
         return tuple(agent.reference for agent in agents)
@@ -301,7 +292,7 @@ class ReviewPlanCompiler:
             planner_node = self._node(
                 task_id,
                 ReviewPlanNodeType.PLANNER,
-                "review-planner:v1",
+                "review-planner:v2",
                 ReviewPass.PLANNER,
             )
         elif planner_selection is not None:
@@ -321,23 +312,22 @@ class ReviewPlanCompiler:
         if planner_node:
             nodes.append(planner_node)
         nodes.extend(reviewer_nodes)
-        if len(reviewers) > 1:
-            verifier = self._node(
-                task_id,
-                ReviewPlanNodeType.VERIFIER,
-                "review-verifier:v1",
-                ReviewPass.VERIFIER,
-                shard_id="batch",
-                depends_on=tuple(node.node_id for node in reviewer_nodes),
-            )
-            nodes.append(verifier)
+        verifier = self._node(
+            task_id,
+            ReviewPlanNodeType.VERIFIER,
+            "review-verifier:v2",
+            ReviewPass.VERIFIER,
+            shard_id="batch",
+            depends_on=tuple(node.node_id for node in reviewer_nodes),
+        )
+        nodes.append(verifier)
         guidance: tuple[ReviewerPlanGuidance, ...] = ()
         return ReviewPlan.create(
             task_id=task_id,
             selection_mode=selection_mode,
             reviewer_references=reviewers,
             nodes=tuple(nodes),
-            planner_reason=("planner-selection:v1" if planner_selection else None),
+            planner_reason=("planner-selection:v2" if planner_selection else None),
             reviewer_guidance=guidance,
             capability_degradations=tuple(
                 PlanCapabilityDegradation(reference, readiness[reference].reason_codes)
@@ -368,7 +358,7 @@ class ReviewPlanningService:
         profile: ReviewProfileSnapshot,
         execution_specs: Mapping[str, FrozenAgentExecutionSpec],
         readiness: Mapping[str, CapabilityReadiness],
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
         catalog_version: str,
         capability_fingerprint: str,
         risk_summary: ChangeRiskSummary | None = None,
@@ -381,7 +371,7 @@ class ReviewPlanningService:
         if isinstance(selection, AdaptiveReviewerSelection):
             planner_selection = await self._planner.select(
                 task_id=task_id,
-                target_paths=target_paths,
+                candidate_paths=candidate_paths,
                 readiness=readiness,
                 risk_summary=risk_summary,
             )

@@ -103,7 +103,9 @@ test("streams the correctness fixture from inspect to validated findings", async
   await expect(embeddedProcessReport).toHaveCSS("color", "rgb(241, 247, 246)");
   await expect(embeddedProcessReport).toHaveCSS("background-color", "rgb(21, 33, 38)");
   await console.getByRole("button", { name: /Reviewers/ }).click();
-  await expect(console.getByText("correctness:v1", { exact: true })).toBeVisible();
+  await expect(console.getByText("correctness:v2", { exact: true }).first()).toBeVisible();
+  await console.getByRole("button", { name: /Verifier/ }).click();
+  await expect(console.getByText("review-verifier:v2", { exact: true }).first()).toBeVisible();
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 
   await page.getByRole("tab", { name: /Findings/ }).click();

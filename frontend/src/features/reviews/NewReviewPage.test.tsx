@@ -92,13 +92,12 @@ function installApiMock({
     if (url === "/api/reviewer-catalog") {
       return jsonResponse([
         {
-          reference: "general:v1",
+          reference: "general:v2",
           agent_id: "general",
           version: 1,
           dimensions: ["general"],
           planner_eligible: true,
           capability_readiness: "ready",
-          is_legacy: false,
         },
       ]);
     }

@@ -1,6 +1,8 @@
 # Multi-Agent Review Frontend v2 Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **SUPERSEDED（2026-08-09）：** 不得继续执行本文。请使用 [`2026-08-09-multi-agent-review-v2-hard-cut.md`](./2026-08-09-multi-agent-review-v2-hard-cut.md)。
+
+> Historical implementation record only.
 
 **Goal:** Deliver the desktop frontend for Review Profiles, Fixed/Adaptive execution, plugin policy snapshots, live multi-Agent progress, coverage, and published v2 Findings.
 

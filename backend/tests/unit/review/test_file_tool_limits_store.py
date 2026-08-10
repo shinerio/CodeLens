@@ -29,7 +29,6 @@ def test_store_persists_and_reloads_limits(tmp_path: Path) -> None:
         max_pattern_chars=1024,
         regex_timeout_seconds=60.0,
         comment_batch_size=50,
-        reviewed_files_batch=5000,
         short_text_max=480,
         long_text_max=16000,
         task_summary_max=16000,

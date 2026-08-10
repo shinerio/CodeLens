@@ -108,9 +108,7 @@ class ReviewScheduler:
         if task is not None:
             task.cancel()
 
-    def _make_unregister_callback(
-        self, task_id: str
-    ) -> Callable[[asyncio.Task[None]], None]:
+    def _make_unregister_callback(self, task_id: str) -> Callable[[asyncio.Task[None]], None]:
         """Return a callback that removes a task from the active registry."""
 
         def unregister(task: asyncio.Task[None]) -> None:

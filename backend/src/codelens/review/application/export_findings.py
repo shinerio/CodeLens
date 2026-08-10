@@ -135,23 +135,6 @@ class ReviewExportMetaV2:
 
 
 @dataclass(frozen=True)
-class ReviewExportMetaV1:
-    """Historical API v1 metadata retained for installed legacy sinks."""
-
-    task_id: str
-    repository_name: str
-    scope_type: str
-    base_oid: str
-    head_oid: str
-    base_ref: str | None
-    target_ref: str | None
-    selected_agent_versions: tuple[str, ...]
-    status: str
-    created_at: datetime
-    external_context: dict | None = None
-
-
-@dataclass(frozen=True)
 class FindingExportEnvelopeV2:
     """Canonical Published-Finding export structure for plugin API v2."""
 
@@ -161,42 +144,8 @@ class FindingExportEnvelopeV2:
     findings: tuple[FindingExportItem, ...]
 
 
-@dataclass(frozen=True)
-class FindingExportEnvelopeV1:
-    """Historical envelope emitted only to explicitly legacy plugin sinks."""
-
-    schema_version: Literal["1.0"]
-    exported_at: datetime
-    review: ReviewExportMetaV1
-    findings: tuple[FindingExportItem, ...]
-
-
-def to_v1_export_envelope(envelope: FindingExportEnvelopeV2) -> FindingExportEnvelopeV1:
-    """Project v2 publication data onto the frozen v1 compatibility shape."""
-
-    review = envelope.review
-    return FindingExportEnvelopeV1(
-        schema_version="1.0",
-        exported_at=envelope.exported_at,
-        review=ReviewExportMetaV1(
-            task_id=review.task_id,
-            repository_name=review.repository_name,
-            scope_type=review.scope_type,
-            base_oid=review.base_oid,
-            head_oid=review.head_oid,
-            base_ref=review.base_ref,
-            target_ref=review.target_ref,
-            selected_agent_versions=review.plan_summary.selected_reviewer_versions,
-            status=review.status,
-            created_at=review.created_at,
-            external_context=review.external_context,
-        ),
-        findings=envelope.findings,
-    )
-
-
-# Public aliases keep internal callers source-compatible while every newly
-# produced envelope follows the 2.0 contract.
+# Canonical aliases keep domain-facing names concise while the public plugin
+# contract remains explicitly versioned.
 ReviewExportMeta = ReviewExportMetaV2
 FindingExportEnvelope = FindingExportEnvelopeV2
 
@@ -278,9 +227,7 @@ class ExportFindingsHandler:
         if not findings:
             raise ValueError("No findings to export for this review.")
 
-        return await self._build_envelope_from_findings(
-            task_id, review, execution, findings
-        )
+        return await self._build_envelope_from_findings(task_id, review, execution, findings)
 
     async def _build_envelope_from_findings(
         self,
@@ -293,9 +240,7 @@ class ExportFindingsHandler:
 
         export_items: list[FindingExportItem] = []
         for finding in findings:
-            source_excerpt = await self._build_source_snippet(
-                execution, finding.primary_location
-            )
+            source_excerpt = await self._build_source_snippet(execution, finding.primary_location)
 
             export_items.append(
                 FindingExportItem(
@@ -321,11 +266,7 @@ class ExportFindingsHandler:
                 )
             )
 
-        plan_record = (
-            await self._plan_store.get(task_id)
-            if self._plan_store is not None
-            else None
-        )
+        plan_record = await self._plan_store.get(task_id) if self._plan_store is not None else None
         selected_versions = (
             plan_record.plan.reviewer_references
             if plan_record is not None
@@ -336,9 +277,7 @@ class ExportFindingsHandler:
             "adaptive" if isinstance(selection, AdaptiveReviewerSelection) else "fixed"
         )
         requested_versions = (
-            ()
-            if isinstance(selection, AdaptiveReviewerSelection)
-            else selection.reviewer_versions
+            () if isinstance(selection, AdaptiveReviewerSelection) else selection.reviewer_versions
         )
         planner_version = None
         if plan_record is not None:

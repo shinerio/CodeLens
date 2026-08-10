@@ -1,5 +1,7 @@
 # CodeLens 多 Agent Review 设计
 
+> **SUPERSEDED（2026-08-09）：** 本文中的 v1 兼容和迁移设计已废弃。当前实现合同与执行顺序以 [`docs/ARCHITECTURE.md`](../../ARCHITECTURE.md) 和 [`2026-08-09-multi-agent-review-v2-hard-cut.md`](../plans/2026-08-09-multi-agent-review-v2-hard-cut.md) 为准，本文仅保留为历史记录。
+
 ## 1. 文档状态
 
 - 状态：已批准（后端编排、插件、Capability 与前端交互均已确认）

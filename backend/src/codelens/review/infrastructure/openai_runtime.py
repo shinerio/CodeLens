@@ -59,7 +59,6 @@ from codelens.review.domain.errors import (
     TransientAgentRuntimeError,
 )
 from codelens.review.domain.ports import (
-    AgentOutputCodecPort,
     AgentResponseDiagnostic,
     AgentRuntimeEvent,
     AgentRuntimeEventSink,
@@ -72,9 +71,11 @@ from codelens.review.infrastructure.capability_tools import (
     RuntimeToolContext,
     ToolExecutionLimits,
 )
+from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
+from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.review.infrastructure.verdict_tools import VerdictSubmissionCollector
 from codelens.reviewer_catalog.domain.models import AgentRole
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
@@ -148,7 +149,6 @@ class OpenAIAgentRuntime:
     def __init__(
         self,
         config_store: ModelProviderConfigPort,
-        output_codec: AgentOutputCodecPort,
         git: GitCli,
         prompt_loader: I18nPromptLoaderPort,
         runner: _RunnerPort | None = None,
@@ -156,7 +156,6 @@ class OpenAIAgentRuntime:
         tool_limits_service: ToolLimitsService | None = None,
     ) -> None:
         self._config_store = config_store
-        self._output_codec = output_codec
         self._git = git
         self._prompt_loader = prompt_loader
         self._runner = runner or _PublicSdkRunner()
@@ -222,10 +221,7 @@ class OpenAIAgentRuntime:
             else ToolLimits()
         )
         is_reviewer = agent.role is AgentRole.REVIEWER
-        if is_reviewer and agent.output_contract_version not in {
-            self._output_codec.schema_version,
-            "2",
-        }:
+        if is_reviewer and agent.output_contract_version != "2":
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
         provider_config = replace(
@@ -255,12 +251,19 @@ class OpenAIAgentRuntime:
             planner_collector = ReviewPlanSubmissionCollector(planner_codec)
             submit_description = prompts.tools["submit_review_plan"].description
             finalize_description = prompts.tools["finalize_plan"].description
-            role_output_tools = planner_collector.bindings(
-                submit_description, finalize_description
-            )
+            role_output_tools = planner_collector.bindings(submit_description, finalize_description)
         elif agent.role is AgentRole.VERIFIER:
             verdict_codec = _verdict_codec(role_context)
-            verdict_collector = VerdictSubmissionCollector(verdict_codec)
+            verdict_evidence = FilesystemReviewTools(
+                snapshot,
+                self._git,
+                max_tool_calls=None,
+                tool_limits=bounded_tool_limits,
+            )
+            verdict_collector = VerdictSubmissionCollector(
+                verdict_codec,
+                SnapshotLocationResolver(snapshot, verdict_evidence),
+            )
             verdict_description = prompts.tools["verdict"].description
             merge_description = prompts.tools["merge"].description
             finalize_description = prompts.tools["finalize_verdicts"].description
@@ -433,7 +436,7 @@ class OpenAIAgentRuntime:
                 investigation = None
                 break
 
-            delay = min(retry_backoff_base * (2 ** attempt), retry_max_delay)
+            delay = min(retry_backoff_base * (2**attempt), retry_max_delay)
             retry_reason = attempt_failure.reason_code or "unknown"
             _LOGGER.warning(
                 "Retrying agent invocation after transient error",
@@ -495,13 +498,11 @@ class OpenAIAgentRuntime:
                 ):
                     raise ValueError("Verdict output state has the wrong value")
                 canonical_bytes = verdict_codec.canonical_bytes(final_output)
-            elif agent.output_contract_version == "2":
+            else:
                 final_output = tool_context.final_output()
                 if not isinstance(final_output, CandidateFindingBatch):
                     raise ValueError("Comment v2 output state has the wrong value")
                 canonical_bytes = CandidateBatchCodec().encode(final_output)
-            else:
-                canonical_bytes = self._output_codec.encode(tool_context.final_output())
         except ValueError as error:
             await client.close()
             raise PermanentAgentOutputError(
@@ -800,18 +801,12 @@ def _split_agent_input(input_payload: bytes) -> tuple[str, str, dict[str, object
     if not isinstance(repository_instructions, list) or not all(
         isinstance(item, dict) for item in repository_instructions
     ):
-        raise PermanentAgentOutputError(
-            "Agent repository_instructions input has an invalid shape"
-        )
+        raise PermanentAgentOutputError("Agent repository_instructions input has an invalid shape")
     if role_context is not None and not isinstance(role_context, dict):
         raise PermanentAgentOutputError("Agent role_context input has an invalid shape")
 
     model_role_context = (
-        {
-            key: value
-            for key, value in role_context.items()
-            if not key.startswith("_host_")
-        }
+        {key: value for key, value in role_context.items() if not key.startswith("_host_")}
         if role_context is not None
         else None
     )
@@ -819,11 +814,7 @@ def _split_agent_input(input_payload: bytes) -> tuple[str, str, dict[str, object
         json.dumps(
             {
                 "review_files": review_files,
-                **(
-                    {"role_context": model_role_context}
-                    if model_role_context
-                    else {}
-                ),
+                **({"role_context": model_role_context} if model_role_context else {}),
             },
             ensure_ascii=False,
             sort_keys=True,
@@ -847,9 +838,11 @@ def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec
         "unavailable_reviewer_references",
     }
     allowed = required | {"change_risk_summary", "reviewer_catalog"}
-    if role_context is None or not required.issubset(role_context) or not set(
-        role_context
-    ).issubset(allowed):
+    if (
+        role_context is None
+        or not required.issubset(role_context)
+        or not set(role_context).issubset(allowed)
+    ):
         raise PermanentAgentOutputError("Planner role context has an invalid shape")
 
     def string_tuple(name: str) -> tuple[str, ...]:
@@ -860,9 +853,7 @@ def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec
 
     return PlannerOutputCodec(
         eligible_reviewer_references=string_tuple("eligible_reviewer_references"),
-        unavailable_reviewer_references=string_tuple(
-            "unavailable_reviewer_references"
-        ),
+        unavailable_reviewer_references=string_tuple("unavailable_reviewer_references"),
     )
 
 
@@ -885,7 +876,7 @@ def _verdict_codec(role_context: dict[str, object] | None) -> VerdictCodec:
     }:
         raise PermanentAgentOutputError("Verdict role context has an invalid shape")
     raw_clusters = context["clusters"]
-    if context["schema_version"] != "1" or not isinstance(raw_clusters, list):
+    if context["schema_version"] != "2" or not isinstance(raw_clusters, list):
         raise PermanentAgentOutputError("Verdict role context has an invalid value")
     try:
         from codelens.findings.domain.candidates import EvidenceStrength
@@ -911,9 +902,7 @@ def _verdict_codec(role_context: dict[str, object] | None) -> VerdictCodec:
             raise ValueError("Verdict projection contains non-object values")
         return VerdictCodec(clusters=clusters)
     except (KeyError, TypeError, ValueError) as error:
-        raise PermanentAgentOutputError(
-            "Verdict role context has an invalid value"
-        ) from error
+        raise PermanentAgentOutputError("Verdict role context has an invalid value") from error
 
 
 def _model_input(

@@ -18,6 +18,9 @@ from codelens.review.domain.ports import (
 from codelens.review.domain.review_strategy import FixedReviewerSelection, ReviewProfileSnapshot
 from codelens.shared.domain.errors import DomainError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
+from codelens.workspace.application.file_exclusion_settings import (
+    FileExclusionSettingsService,
+)
 from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.domain.models import ReviewScope, UncommittedScope
 from codelens.workspace.domain.ports import (
@@ -26,6 +29,7 @@ from codelens.workspace.domain.ports import (
     ReviewWorktreePort,
     WorktreeRegistryPort,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
 _LOGGER = logging.getLogger("codelens.review.commands")
 
@@ -63,6 +67,7 @@ class CreateReviewHandler:
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
         idempotency_settings: TriggerIdempotencySettingsService | None = None,
+        file_exclusion_settings: FileExclusionSettingsService | None = None,
     ) -> None:
         self._planner = planner
         self._capture = capture
@@ -71,6 +76,7 @@ class CreateReviewHandler:
         self._id_factory = id_factory or (lambda: f"review_{uuid.uuid4().hex}")
         self._clock = clock or (lambda: datetime.now(UTC))
         self._idempotency_settings = idempotency_settings
+        self._file_exclusion_settings = file_exclusion_settings
 
     async def handle(self, command: CreateReviewCommand) -> ReviewRecord:
         """Create a task only after all mutable repository input is frozen."""
@@ -79,7 +85,7 @@ class CreateReviewHandler:
         scope_plan = await self._planner.plan(command.repository.path, command.scope)
         _LOGGER.info(
             "Review scope planned",
-            extra={"target_path_count": len(scope_plan.target_paths)},
+            extra={"target_path_count": len(scope_plan.candidate_paths)},
         )
         captured = await self._capture.capture(command.repository.path, scope_plan)
         artifact = captured.overlay_artifact
@@ -110,6 +116,11 @@ class CreateReviewHandler:
                     )
                     return existing
 
+        file_exclusion_policy = (
+            await self._file_exclusion_settings.get()
+            if self._file_exclusion_settings is not None
+            else ReviewFileExclusionPolicy()
+        )
         task = ReviewTask.create(
             task_id=self._id_factory(),
             repository_id=command.repository.repository_id,
@@ -118,7 +129,7 @@ class CreateReviewHandler:
             scope=command.scope,
             target=captured.target,
             repository_path=command.repository.path,
-            target_paths=scope_plan.target_paths,
+            candidate_paths=scope_plan.candidate_paths,
             selected_agent_versions=(
                 command.review_profile.reviewer_selection.reviewer_versions
                 if isinstance(command.review_profile.reviewer_selection, FixedReviewerSelection)
@@ -131,6 +142,7 @@ class CreateReviewHandler:
             created_at=self._clock(),
             overlay_artifact_ref=artifact.reference if artifact is not None else None,
             external_context=command.external_context,
+            file_exclusion_policy=file_exclusion_policy,
         )
         try:
             await self._store.create_with_job(task)

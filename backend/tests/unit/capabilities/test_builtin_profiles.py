@@ -11,7 +11,7 @@ def _tool_names(profile_reference: str) -> tuple[str, ...]:
 
 
 def test_builtin_profiles_expose_only_the_approved_tools() -> None:
-    assert _tool_names("planner:v1") == (
+    assert _tool_names("planner:v2") == (
         "find_files",
         "grep",
         "read_file",
@@ -19,17 +19,15 @@ def test_builtin_profiles_expose_only_the_approved_tools() -> None:
         "submit_review_plan",
         "finalize_plan",
     )
-    assert _tool_names("legacy-reviewer:v1") == (
+    assert _tool_names("reviewer:v2") == (
         "find_files",
         "grep",
         "read_file",
         "get_diff",
         "comment",
-        "review_file_done",
         "task_done",
     )
-    assert _tool_names("reviewer-comment-v2:v1") == _tool_names("legacy-reviewer:v1")
-    assert _tool_names("verifier:v1") == (
+    assert _tool_names("verifier:v2") == (
         "read_file",
         "get_diff",
         "verdict",
@@ -38,39 +36,29 @@ def test_builtin_profiles_expose_only_the_approved_tools() -> None:
     )
 
 
-def test_comment_contract_is_versioned_without_renaming_the_visible_tool() -> None:
+def test_every_visible_tool_contract_is_v2() -> None:
     profiles = builtin_capability_profiles()
-    legacy_comment = next(
-        tool for tool in profiles["legacy-reviewer:v1"].builtin_tools if tool.name == "comment"
-    )
-    candidate_comment = next(
-        tool
-        for tool in profiles["reviewer-comment-v2:v1"].builtin_tools
-        if tool.name == "comment"
-    )
 
-    assert legacy_comment.version == 1
-    assert candidate_comment.version == 2
+    assert all(tool.version == 2 for profile in profiles.values() for tool in profile.builtin_tools)
 
 
 def test_every_builtin_profile_is_read_only_and_contains_no_forbidden_tool() -> None:
     profiles = builtin_capability_profiles()
 
     assert set(profiles) == {
-        "legacy-reviewer:v1",
-        "reviewer-comment-v2:v1",
-        "planner:v1",
-        "verifier:v1",
+        "reviewer:v2",
+        "planner:v2",
+        "verifier:v2",
     }
     assert all(profile.is_read_only for profile in profiles.values())
-    assert not {
-        tool.name for profile in profiles.values() for tool in profile.builtin_tools
-    } & FORBIDDEN_REVIEW_TOOL_NAMES
+    assert (
+        not {tool.name for profile in profiles.values() for tool in profile.builtin_tools}
+        & FORBIDDEN_REVIEW_TOOL_NAMES
+    )
 
 
 def test_builtin_skill_policy_contains_only_the_no_skill_policy() -> None:
     policies = builtin_skill_policies()
 
-    assert tuple(policies) == ("none:v1",)
-    assert policies["none:v1"].reference == "none:v1"
-
+    assert tuple(policies) == ("none:v2",)
+    assert policies["none:v2"].reference == "none:v2"

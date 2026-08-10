@@ -11,7 +11,7 @@ function reviewResponse(taskId: string, repositoryName: string, status: string) 
     scope_type: "branch",
     base_oid: "a".repeat(40),
     head_oid: "b".repeat(40),
-    selected_agents: ["correctness:v1"],
+    selected_agents: ["correctness:v2"],
     worktree_status: "pending",
     repository_id: `repository_${"c".repeat(64)}`,
     repository_realpath_hash: "d".repeat(64),
@@ -19,6 +19,13 @@ function reviewResponse(taskId: string, repositoryName: string, status: string) 
     cancellation_requested: false,
     repository_name: repositoryName,
     created_at: "2026-07-26T12:00:00Z",
+    finding_count: 0,
+    external_context: null,
+    selection_request: { mode: "fixed", reviewer_versions: ["correctness:v2"] },
+    profile_source: null,
+    review_plan: null,
+    coverage: { planned: [], completed: [], failed: [], omitted: [] },
+    verdict_summary: { accept: 0, deny: 0, merge: 0 },
   };
 }
 

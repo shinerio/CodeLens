@@ -15,9 +15,7 @@ def _normalized_root_cause(value: str) -> str:
 class CandidateClusterer:
     """Partition validated Candidates by deterministic evidence and root-cause facts."""
 
-    def cluster(
-        self, candidates: tuple[CandidateFinding, ...]
-    ) -> tuple[FindingCluster, ...]:
+    def cluster(self, candidates: tuple[CandidateFinding, ...]) -> tuple[FindingCluster, ...]:
         groups: dict[str, list[CandidateFinding]] = {}
         for candidate in candidates:
             key_payload = {
@@ -44,9 +42,7 @@ class CandidateClusterer:
         return tuple(sorted(clusters, key=lambda cluster: cluster.cluster_id))
 
     @staticmethod
-    def _build_cluster(
-        cluster_id: str, members: tuple[CandidateFinding, ...]
-    ) -> FindingCluster:
+    def _build_cluster(cluster_id: str, members: tuple[CandidateFinding, ...]) -> FindingCluster:
         canonical = members[0]
         return FindingCluster(
             cluster_id=cluster_id,

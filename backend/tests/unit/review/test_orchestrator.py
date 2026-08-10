@@ -12,7 +12,6 @@ from codelens.capabilities.domain.models import (
 )
 from codelens.capabilities.domain.skills import SkillActivationFacts
 from codelens.findings.domain.candidates import CandidateFindingBatch
-from codelens.findings.domain.models import FindingBatch
 from codelens.review.application.dag_scheduler import (
     PersistedDagScheduler,
     reviewer_stage_outcome,
@@ -21,7 +20,6 @@ from codelens.review.application.orchestrator import (
     PreparedReview,
     ReviewOrchestrator,
 )
-from codelens.review.application.validate_findings import FindingValidationError
 from codelens.review.domain.ports import (
     AgentResponseDiagnostic,
     AgentRuntimeEvent,
@@ -47,6 +45,7 @@ from codelens.workspace.domain.models import (
     SnapshotManifest,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
 @dataclass
@@ -206,9 +205,7 @@ class CancellingRuntime(RecordingRuntime):
         snapshot: object,
         prompt_locale: str,
     ) -> UnvalidatedAgentOutput:
-        output = await super().invoke(
-            execution_spec, input_payload, snapshot, prompt_locale
-        )
+        output = await super().invoke(execution_spec, input_payload, snapshot, prompt_locale)
         self._workflow.is_cancellation_requested = True
         return output
 
@@ -231,15 +228,15 @@ class MemoryArtifacts:
 class EmptyValidator:
     warnings: tuple[FindingValidationWarning, ...] = ()
 
-    async def validate(self, _payload: bytes) -> FindingBatch:
-        return FindingBatch("1", ())
+    async def validate(self, _payload: bytes) -> CandidateFindingBatch:
+        return CandidateFindingBatch(())
 
 
 class FailingValidator:
     warnings: tuple[FindingValidationWarning, ...] = ()
 
-    async def validate(self, _payload: bytes) -> FindingBatch:
-        raise FindingValidationError("Agent output schema is invalid")
+    async def validate(self, _payload: bytes) -> CandidateFindingBatch:
+        raise ValueError("Agent output schema is invalid")
 
 
 class WarningValidator:
@@ -248,8 +245,8 @@ class WarningValidator:
         FindingValidationWarning(2, "invalid", "Finding references an unknown changed hunk"),
     )
 
-    async def validate(self, _payload: bytes) -> FindingBatch:
-        return FindingBatch("1", ())
+    async def validate(self, _payload: bytes) -> CandidateFindingBatch:
+        return CandidateFindingBatch(())
 
 
 class EmptyCandidateValidator:
@@ -265,15 +262,6 @@ class RecordingCompletion:
         self.calls = 0
         self.candidate_calls = 0
 
-    async def complete_with_findings(
-        self,
-        _task_id: str,
-        _node_key: str,
-        _findings: FindingBatch,
-    ) -> None:
-        self.calls += 1
-        self.checkpoints.value.status = "succeeded"
-
     async def complete_with_candidates(
         self,
         _task_id: str,
@@ -283,6 +271,7 @@ class RecordingCompletion:
         result_summary: dict[str, object] | None = None,
     ) -> None:
         assert result_summary == {"candidate_count": 0}
+        self.calls += 1
         self.candidate_calls += 1
         self.checkpoints.value.status = "succeeded"
 
@@ -305,7 +294,7 @@ def _prepared() -> PreparedReview:
         worktree,
         ReviewTarget("a" * 40, "b" * 40, None),
         RepositoryFingerprint("b" * 40, "d" * 64, "e" * 64),
-        SnapshotManifest((), (), ()),
+        SnapshotManifest(ReviewFileScope.include_all()),
         ChangeIndex(()),
     )
     agent = correctness_agent()
@@ -313,12 +302,12 @@ def _prepared() -> PreparedReview:
         agent=agent,
         prompt_content_hash=hashlib.sha256(agent.prompt_template.encode("utf-8")).hexdigest(),
         facts=SkillActivationFacts.empty(),
-        execution_limits=AgentExecutionLimits.legacy_default(),
+        execution_limits=AgentExecutionLimits.default(),
     )
     return PreparedReview(
         snapshot=snapshot,
         execution_specs=(execution_spec,),
-        input_payloads={"correctness:v1": b"{}"},
+        input_payloads={"correctness:v2": b"{}"},
         prompt_locale="en",
     )
 
@@ -353,7 +342,7 @@ def _orchestrator(
 async def test_happy_path_persists_the_complete_state_sequence() -> None:
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()
-    runtime = RecordingRuntime(b'{"schema_version":"1","findings":[]}')
+    runtime = RecordingRuntime(b'{"schema_version":"2","candidates":[]}')
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
 
@@ -370,8 +359,8 @@ async def test_happy_path_persists_the_complete_state_sequence() -> None:
     ]
     assert checkpoints.value.status == "succeeded"
     assert runtime.calls == completion.calls == 1
-    assert runtime.specs[0].agent.reference == "correctness:v1"
-    assert runtime.specs[0].capability_profile.reference == "legacy-reviewer:v1"
+    assert runtime.specs[0].agent.reference == "correctness:v2"
+    assert runtime.specs[0].capability_profile.reference == "reviewer:v2"
     assert len(runtime.specs[0].fingerprint) == 64
     assert workflow.job_completed
 
@@ -400,7 +389,7 @@ async def test_candidate_output_uses_prepublication_completion_path() -> None:
 
     await orchestrator.execute("review-1")
 
-    assert completion.calls == 0
+    assert completion.calls == 1
     assert completion.candidate_calls == 1
     assert workflow.status == "completed"
 
@@ -408,7 +397,7 @@ async def test_candidate_output_uses_prepublication_completion_path() -> None:
 async def test_streamed_model_events_publish_the_prompt_before_completion() -> None:
     workflow = MemoryWorkflow("reviewing")
     checkpoints = MemoryCheckpoints()
-    runtime = StreamingRuntime(b'{"schema_version":"1","findings":[]}')
+    runtime = StreamingRuntime(b'{"schema_version":"2","candidates":[]}')
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
     transcript = RecordingTranscript()
@@ -427,7 +416,7 @@ async def test_streamed_model_events_publish_the_prompt_before_completion() -> N
     ]
     model_output = next(entry for entry in entries if entry[0] == "model_output")
     assert model_output[2] == {
-        "agent": "correctness:v1",
+        "agent": "correctness:v2",
         "model_name": "fake-model",
         "llm_call_count": "2",
         "input_tokens": "11",
@@ -446,13 +435,11 @@ async def test_restart_reuses_only_durably_checkpointed_output(
 ) -> None:
     workflow = MemoryWorkflow("reviewing")
     checkpoints = MemoryCheckpoints()
-    runtime = RecordingRuntime(json.dumps({"schema_version": "1", "findings": []}).encode())
+    runtime = RecordingRuntime(json.dumps({"schema_version": "2", "candidates": []}).encode())
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
     crash = OneShotCrash(boundary)
-    orchestrator = _orchestrator(
-        workflow, checkpoints, runtime, artifacts, completion, crash
-    )
+    orchestrator = _orchestrator(workflow, checkpoints, runtime, artifacts, completion, crash)
 
     with pytest.raises(RuntimeError, match=f"crash:{boundary}"):
         await orchestrator.execute("review-1")
@@ -469,7 +456,7 @@ async def test_restart_reuses_only_durably_checkpointed_output(
 async def test_cancellation_after_model_output_stops_before_validation_and_aggregation() -> None:
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()
-    runtime = CancellingRuntime(b'{"schema_version":"1","findings":[]}', workflow)
+    runtime = CancellingRuntime(b'{"schema_version":"2","candidates":[]}', workflow)
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
     aggregation_crash = OneShotCrash("before_task_aggregation")
@@ -492,7 +479,7 @@ async def test_cancellation_after_model_output_stops_before_validation_and_aggre
 async def test_finding_validation_failure_does_not_reinvoke_the_model() -> None:
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()
-    runtime = RecordingRuntime(b'{"schema_version":"1","findings":[]}')
+    runtime = RecordingRuntime(b'{"schema_version":"2","candidates":[]}')
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
     validator = FailingValidator()
@@ -512,7 +499,7 @@ async def test_finding_validation_failure_does_not_reinvoke_the_model() -> None:
         max_agent_runs_per_review=1,
     )
 
-    with pytest.raises(FindingValidationError):
+    with pytest.raises(ValueError):
         await orchestrator.execute("review-1")
 
     assert runtime.calls == 1
@@ -526,7 +513,7 @@ async def test_finding_validation_failure_does_not_reinvoke_the_model() -> None:
 async def test_candidate_validation_warnings_complete_the_review_and_reach_transcript() -> None:
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()
-    runtime = RecordingRuntime(b'{"schema_version":"1","findings":[]}')
+    runtime = RecordingRuntime(b'{"schema_version":"2","candidates":[]}')
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
     transcript = RecordingTranscript()
@@ -553,7 +540,7 @@ async def test_candidate_validation_warnings_complete_the_review_and_reach_trans
     warning = next(entry for entry in entries if entry[2] and entry[2].get("warning_code"))
     assert warning[1] == "Finding validation retained 0 and skipped 2 model candidates"
     assert warning[2] == {
-        "agent": "correctness:v1",
+        "agent": "correctness:v2",
         "warning_code": "finding_validation_partial",
         "retained_count": "0",
         "skipped_count": "2",
@@ -572,7 +559,7 @@ async def test_forced_completion_warns_about_files_without_verified_review_cover
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()
     runtime = RecordingRuntime(
-        b'{"schema_version":"1","findings":[]}',
+        b'{"schema_version":"2","candidates":[]}',
         ("src/missed.py", "src/unread.py"),
     )
     artifacts = MemoryArtifacts()
@@ -594,7 +581,7 @@ async def test_forced_completion_warns_about_files_without_verified_review_cover
         "2 files lack verified review coverage"
     )
     assert warning[2] == {
-        "agent": "correctness:v1",
+        "agent": "correctness:v2",
         "warning_code": "review_coverage_incomplete",
         "incomplete_file_count": "2",
         "incomplete_files": '["src/missed.py","src/unread.py"]',
@@ -607,7 +594,7 @@ async def test_forced_completion_warns_about_files_without_verified_review_cover
 async def test_replay_before_output_saved_reinvokes_the_interrupted_model_call() -> None:
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()
-    runtime = RecordingRuntime(b'{"schema_version":"1","findings":[]}')
+    runtime = RecordingRuntime(b'{"schema_version":"2","candidates":[]}')
     artifacts = MemoryArtifacts()
     completion = RecordingCompletion(checkpoints)
     crash = OneShotCrash("after_model_return")
@@ -671,12 +658,12 @@ def _multi_plan() -> ReviewPlan:
             logical_attempt_group="primary",
             depends_on=(),
         )
-        for reference in ("security:v1", "performance:v1")
+        for reference in ("security:v2", "performance:v2")
     )
     verifier = ReviewPlanNode.create(
         task_id="review-1",
         node_type=ReviewPlanNodeType.VERIFIER,
-        agent_reference="review-verifier:v1",
+        agent_reference="review-verifier:v2",
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
@@ -685,7 +672,7 @@ def _multi_plan() -> ReviewPlan:
     return ReviewPlan.create(
         task_id="review-1",
         selection_mode="fixed",
-        reviewer_references=("security:v1", "performance:v1"),
+        reviewer_references=("security:v2", "performance:v2"),
         nodes=(*reviewer_nodes, verifier),
         planner_reason=None,
     )
@@ -693,12 +680,8 @@ def _multi_plan() -> ReviewPlan:
 
 async def test_persisted_dag_waits_for_all_reviewers_then_allows_partial_team() -> None:
     plan = _multi_plan()
-    reviewers = tuple(
-        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.REVIEWER
-    )
-    verifier = next(
-        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER
-    )
+    reviewers = tuple(node for node in plan.nodes if node.node_type is ReviewPlanNodeType.REVIEWER)
+    verifier = next(node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER)
     statuses = {node.node_id: "pending" for node in plan.nodes}
     store = _DagCheckpoints(statuses)
     scheduler = PersistedDagScheduler(plan, store)
@@ -711,15 +694,16 @@ async def test_persisted_dag_waits_for_all_reviewers_then_allows_partial_team() 
     assert await scheduler.next_ready_nodes("review-1") == (verifier,)
 
 
-
 def test_reviewer_stage_outcome_is_derived_from_persisted_terminal_records() -> None:
     assert reviewer_stage_outcome((_DagRecord("a", "succeeded"),)) == "continue"
-    assert reviewer_stage_outcome(
-        (_DagRecord("a", "succeeded"), _DagRecord("b", "failed"))
-    ) == "partial"
-    assert reviewer_stage_outcome(
-        (_DagRecord("a", "timed_out"), _DagRecord("b", "failed"))
-    ) == "failed"
+    assert (
+        reviewer_stage_outcome((_DagRecord("a", "succeeded"), _DagRecord("b", "failed")))
+        == "partial"
+    )
+    assert (
+        reviewer_stage_outcome((_DagRecord("a", "timed_out"), _DagRecord("b", "failed")))
+        == "failed"
+    )
 
 
 @dataclass
@@ -787,9 +771,7 @@ class _PlanCheckpoints:
     ) -> None:
         self.records[node_key].status = "timed_out" if is_timeout else "failed"
 
-    async def mark_skipped(
-        self, _task_id: str, node_key: str, _reason_code: str
-    ) -> None:
+    async def mark_skipped(self, _task_id: str, node_key: str, _reason_code: str) -> None:
         self.records[node_key].status = "skipped"
 
     async def cancel_non_terminal(self, _task_id: str) -> None:
@@ -802,9 +784,15 @@ class _PlanCompletion:
     def __init__(self, checkpoints: _PlanCheckpoints) -> None:
         self._checkpoints = checkpoints
 
-    async def complete_with_findings(
-        self, _task_id: str, node_key: str, _findings: FindingBatch
+    async def complete_with_candidates(
+        self,
+        _task_id: str,
+        node_key: str,
+        _candidates: CandidateFindingBatch,
+        *,
+        result_summary: dict[str, object] | None = None,
     ) -> None:
+        assert result_summary == {"candidate_count": 0}
         self._checkpoints.records[node_key].status = "succeeded"
 
 
@@ -825,7 +813,7 @@ class _ScriptedRuntime:
         if reference in self.failures:
             raise RuntimeError("scripted provider failure")
         return UnvalidatedAgentOutput(
-            b'{"schema_version":"1","findings":[]}', (), "fake", 0, 0, ()
+            b'{"schema_version":"2","candidates":[]}', (), "fake", 0, 0, ()
         )
 
 
@@ -838,7 +826,7 @@ def _prepared_plan(plan: ReviewPlan) -> PreparedReview:
             agent=catalog[node.agent_reference],
             prompt_content_hash="a" * 64,
             facts=SkillActivationFacts.empty(),
-            execution_limits=AgentExecutionLimits.legacy_default(),
+            execution_limits=AgentExecutionLimits.default(),
         )
         for node in plan.nodes
     }
@@ -852,9 +840,9 @@ def _prepared_plan(plan: ReviewPlan) -> PreparedReview:
     )
 
 
-async def _run_multi_plan(failures: set[str]) -> tuple[
-    MemoryWorkflow, _PlanCheckpoints, _ScriptedRuntime
-]:
+async def _run_multi_plan(
+    failures: set[str],
+) -> tuple[MemoryWorkflow, _PlanCheckpoints, _ScriptedRuntime]:
     workflow = MemoryWorkflow("preparing")
     checkpoints = _PlanCheckpoints()
     runtime = _ScriptedRuntime(failures)
@@ -879,40 +867,32 @@ async def _run_multi_plan(failures: set[str]) -> tuple[
 
 
 async def test_one_reviewer_failure_allows_verifier_and_keeps_sticky_partial() -> None:
-    workflow, checkpoints, runtime = await _run_multi_plan({"security:v1"})
+    workflow, checkpoints, runtime = await _run_multi_plan({"security:v2"})
     plan = _multi_plan()
 
     assert workflow.status == "partial"
-    assert checkpoints.records[
-        next(
-            node.node_id
-            for node in plan.nodes
-            if node.agent_reference == "security:v1"
-        )
-    ].status == "failed"
-    assert "review-verifier:v1" in runtime.calls
-    verifier = next(
-        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER
+    assert (
+        checkpoints.records[
+            next(node.node_id for node in plan.nodes if node.agent_reference == "security:v2")
+        ].status
+        == "failed"
     )
+    assert "review-verifier:v2" in runtime.calls
+    verifier = next(node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER)
     assert checkpoints.records[verifier.node_id].status == "succeeded"
 
 
 async def test_all_reviewer_failures_fail_task_without_running_verifier() -> None:
-    workflow, checkpoints, runtime = await _run_multi_plan(
-        {"security:v1", "performance:v1"}
-    )
+    workflow, checkpoints, runtime = await _run_multi_plan({"security:v2", "performance:v2"})
     plan = _multi_plan()
-    verifier = next(
-        node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER
-    )
+    verifier = next(node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER)
 
     assert workflow.status == "failed"
-    assert "review-verifier:v1" not in runtime.calls
+    assert "review-verifier:v2" not in runtime.calls
     assert checkpoints.records[verifier.node_id].status == "skipped"
 
 
-
-@pytest.mark.parametrize("reference", ("general:v1", "security:v1"))
+@pytest.mark.parametrize("reference", ("general:v2", "security:v2"))
 async def test_general_or_fixed_single_reviewer_failure_fails_task(
     reference: str,
 ) -> None:
@@ -925,11 +905,20 @@ async def test_general_or_fixed_single_reviewer_failure_fails_task(
         logical_attempt_group="primary",
         depends_on=(),
     )
+    verifier = ReviewPlanNode.create(
+        task_id="review-1",
+        node_type=ReviewPlanNodeType.VERIFIER,
+        agent_reference="review-verifier:v2",
+        pass_index=ReviewPass.VERIFIER,
+        shard_id="batch",
+        logical_attempt_group="primary",
+        depends_on=(reviewer.node_id,),
+    )
     plan = ReviewPlan.create(
         task_id="review-1",
         selection_mode="fixed",
         reviewer_references=(reference,),
-        nodes=(reviewer,),
+        nodes=(reviewer, verifier),
         planner_reason=None,
     )
     workflow = MemoryWorkflow("preparing")
@@ -972,18 +961,14 @@ class _GatedPlanRuntime(_ScriptedRuntime):
     ) -> UnvalidatedAgentOutput:
         if execution_spec.agent.role.value == "reviewer":
             self.active_reviewers += 1
-            self.maximum_reviewers = max(
-                self.maximum_reviewers, self.active_reviewers
-            )
+            self.maximum_reviewers = max(self.maximum_reviewers, self.active_reviewers)
             if self.active_reviewers == 2:
                 self.entered.set()
             try:
                 await self.release.wait()
             finally:
                 self.active_reviewers -= 1
-        return await super().invoke(
-            execution_spec, input_payload, snapshot, prompt_locale
-        )
+        return await super().invoke(execution_spec, input_payload, snapshot, prompt_locale)
 
 
 async def test_persisted_reviewer_fanout_obeys_task_level_concurrency() -> None:
@@ -997,12 +982,12 @@ async def test_persisted_reviewer_fanout_obeys_task_level_concurrency() -> None:
             logical_attempt_group="primary",
             depends_on=(),
         )
-        for reference in ("security:v1", "performance:v1", "architecture:v1")
+        for reference in ("security:v2", "performance:v2", "architecture:v2")
     )
     verifier = ReviewPlanNode.create(
         task_id="review-1",
         node_type=ReviewPlanNodeType.VERIFIER,
-        agent_reference="review-verifier:v1",
+        agent_reference="review-verifier:v2",
         pass_index=ReviewPass.VERIFIER,
         shard_id="batch",
         logical_attempt_group="primary",
@@ -1011,9 +996,7 @@ async def test_persisted_reviewer_fanout_obeys_task_level_concurrency() -> None:
     plan = ReviewPlan.create(
         task_id="review-1",
         selection_mode="fixed",
-        reviewer_references=tuple(
-            node.agent_reference for node in reviewer_nodes
-        ),
+        reviewer_references=tuple(node.agent_reference for node in reviewer_nodes),
         nodes=(*reviewer_nodes, verifier),
         planner_reason=None,
     )

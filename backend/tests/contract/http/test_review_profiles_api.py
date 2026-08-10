@@ -61,7 +61,7 @@ def test_copy_starts_independent_non_default_revision_one(tmp_path: Path) -> Non
                 "is_default": True,
                 "reviewer_selection": {
                     "mode": "fixed",
-                    "reviewer_versions": ["security:v1"],
+                    "reviewer_versions": ["security:v2"],
                 },
             },
         )

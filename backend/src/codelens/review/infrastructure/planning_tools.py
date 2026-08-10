@@ -93,11 +93,11 @@ class ReviewPlanSubmissionCollector:
     ) -> tuple[RoleOutputToolBinding, RoleOutputToolBinding]:
         return (
             RoleOutputToolBinding(
-                ToolContractReference("submit_review_plan", 1),
+                ToolContractReference("submit_review_plan", 2),
                 self.as_submit_tool(submit_description),
             ),
             RoleOutputToolBinding(
-                ToolContractReference("finalize_plan", 1),
+                ToolContractReference("finalize_plan", 2),
                 self.as_finalize_tool(finalize_description),
                 self,
             ),

@@ -5,6 +5,8 @@ manifest entry and validates its content hash before returning repository text.
 """
 
 import asyncio
+import base64
+import binascii
 import difflib
 import fnmatch
 import hashlib
@@ -175,7 +177,7 @@ class FilesystemReviewTools:
             max_ranges=max(1, len(snapshot.change_index.hunks)),
         )
         self._review_files_by_path = {item.path: item for item in review_files}
-        self._evidence_viewed_paths: set[str] = set()
+        self._diff_viewed_paths: set[str] = set()
 
     async def find_files(self, path: str = "", pattern: str = "**") -> str:
         """Find visible files below a directory using a relative POSIX glob pattern."""
@@ -189,10 +191,12 @@ class FilesystemReviewTools:
             if candidate.startswith(prefix)
             and _matches_posix_path_glob(candidate[len(prefix) :], pattern)
         ]
-        return self._json({
-            "paths": paths[: self._limits.max_results],
-            "truncated": len(paths) > self._limits.max_results,
-        })
+        return self._json(
+            {
+                "paths": paths[: self._limits.max_results],
+                "truncated": len(paths) > self._limits.max_results,
+            }
+        )
 
     async def grep(
         self,
@@ -282,7 +286,7 @@ class FilesystemReviewTools:
             effective_start_line = 1
             payload = await self._file_payload(path, version)
             lines = payload.splitlines(keepends=True)
-            selected_lines = lines[:self._limits.max_lines]
+            selected_lines = lines[: self._limits.max_lines]
             selected = b"".join(selected_lines)
             effective_end_line = len(selected_lines)
             is_line_truncated = len(lines) > self._limits.max_lines
@@ -292,10 +296,8 @@ class FilesystemReviewTools:
             effective_end_line = end_line
             selected = await self._selected_file_lines(path, start_line, end_line, version)
             is_line_truncated = False
-        raw_content = selected[:self._limits.max_read_bytes].decode("utf-8", errors="replace")
+        raw_content = selected[: self._limits.max_read_bytes].decode("utf-8", errors="replace")
         content = self._add_line_prefixes(raw_content, effective_start_line)
-        if path in self._review_files_by_path:
-            self._evidence_viewed_paths.add(path)
         return self._json(
             {
                 "path": path,
@@ -319,20 +321,57 @@ class FilesystemReviewTools:
         selected = await self._selected_file_lines(path, start_line, end_line, version)
         return hashlib.sha256(selected).hexdigest(), len(selected) > self._limits.max_read_bytes
 
-    async def get_diff(self, path: str) -> str:
-        """Read the bounded base-to-verified-current diff for one changed visible file."""
+    async def get_diff(self, path: str, cursor: str | None = None) -> str:
+        """Read one stable page of verified diffs for a Review file or directory."""
 
         self._consume()
-        result = await self._get_diff(path)
-        self._evidence_viewed_paths.add(path)
-        return result
+        paths = self._diff_paths(path)
+        offset = self._decode_diff_cursor(path, cursor)
+        if offset > len(paths):
+            raise ValueError("get_diff cursor is invalid")
+
+        diffs: list[dict[str, object]] = []
+        content_bytes = 0
+        next_offset = offset
+        for candidate_path in paths[offset:]:
+            if len(diffs) >= self._limits.max_results:
+                break
+            output = await self._get_diff_payload(candidate_path)
+            remaining_bytes = self._limits.max_read_bytes - content_bytes
+            if len(output) > remaining_bytes and diffs:
+                break
+            is_truncated = len(output) > remaining_bytes
+            content = output[:remaining_bytes]
+            diffs.append(
+                {
+                    "path": candidate_path,
+                    "content": content.decode("utf-8", errors="replace"),
+                    "truncated": is_truncated,
+                }
+            )
+            next_offset += 1
+            content_bytes += len(content)
+            if not is_truncated:
+                self._diff_viewed_paths.add(candidate_path)
+            if is_truncated:
+                break
+
+        has_more = next_offset < len(paths)
+        return self._json(
+            {
+                "diffs": diffs,
+                "has_more": has_more,
+                "next_cursor": (self._encode_diff_cursor(path, next_offset) if has_more else None),
+            }
+        )
 
     async def read_diff_for_resolution(self, path: str) -> str:
         """Read a verified diff internally without recording model-visible evidence."""
 
-        return await self._get_diff(path)
+        output = await self._get_diff_payload(path)
+        return self._json({"path": path, "content": output.decode("utf-8"), "truncated": False})
 
-    async def _get_diff(self, path: str) -> str:
+    async def _get_diff_payload(self, path: str) -> bytes:
         """Build one verified diff without applying model-visible call accounting."""
 
         entry = self._entry(path)
@@ -345,15 +384,54 @@ class FilesystemReviewTools:
             if review_file.change_type == "added"
             else await self._revision_payload(path, "base")
         )
-        output = self._build_verified_diff(entry, review_file, base_payload, current_payload)
-        content = output[:self._limits.max_read_bytes]
-        return self._json(
-            {
-                "path": path,
-                "content": content.decode("utf-8", errors="replace"),
-                "truncated": len(output) > self._limits.max_read_bytes,
-            }
+        return self._build_verified_diff(entry, review_file, base_payload, current_payload)
+
+    def _diff_paths(self, path: str) -> tuple[str, ...]:
+        if path in self._review_files_by_path:
+            return (path,)
+        prefix = self._directory_prefix(path)
+        matches = tuple(
+            candidate
+            for candidate in sorted(self._review_files_by_path)
+            if candidate.startswith(prefix)
         )
+        if not matches:
+            raise ValueError("path is not a Review file or directory")
+        return matches
+
+    @staticmethod
+    def _encode_diff_cursor(path: str, offset: int) -> str:
+        payload = json.dumps(
+            {"path": path, "offset": offset},
+            sort_keys=True,
+            separators=(",", ":"),
+        ).encode("utf-8")
+        return base64.urlsafe_b64encode(payload).decode("ascii").rstrip("=")
+
+    @staticmethod
+    def _decode_diff_cursor(path: str, cursor: str | None) -> int:
+        if cursor is None:
+            return 0
+        try:
+            padding = "=" * (-len(cursor) % 4)
+            decoded = base64.b64decode(
+                f"{cursor}{padding}",
+                altchars=b"-_",
+                validate=True,
+            )
+            payload = json.loads(decoded)
+        except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
+            raise ValueError("get_diff cursor is invalid") from None
+        if (
+            not isinstance(payload, dict)
+            or set(payload) != {"path", "offset"}
+            or payload["path"] != path
+            or isinstance(payload["offset"], bool)
+            or not isinstance(payload["offset"], int)
+            or payload["offset"] < 0
+        ):
+            raise ValueError("get_diff cursor is invalid")
+        return payload["offset"]
 
     @property
     def review_file_paths(self) -> tuple[str, ...]:
@@ -362,10 +440,10 @@ class FilesystemReviewTools:
         return tuple(sorted(self._review_files_by_path))
 
     @property
-    def evidence_viewed_paths(self) -> frozenset[str]:
-        """Return Review paths exposed through successful model-visible evidence calls."""
+    def diff_viewed_paths(self) -> frozenset[str]:
+        """Return Review paths whose complete diff was exposed to the model."""
 
-        return frozenset(self._evidence_viewed_paths)
+        return frozenset(self._diff_viewed_paths)
 
     def as_agent_tools(self, descriptions: dict[str, str]) -> list[Tool]:
         """Expose the stable read-only contract using startup-loaded descriptions."""
@@ -374,6 +452,7 @@ class FilesystemReviewTools:
         ModelPattern = Annotated[
             str, Field(min_length=1, max_length=self._limits.max_pattern_chars)
         ]
+        ModelCursor = Annotated[str, Field(min_length=1, max_length=8192)]
 
         @function_tool(
             name_override="find_files",
@@ -421,10 +500,13 @@ class FilesystemReviewTools:
             name_override="get_diff",
             description_override=descriptions["get_diff"],
         )
-        async def get_diff_tool(path: ModelPath) -> str:
-            """Read the base-to-current diff for a changed visible file."""
+        async def get_diff_tool(path: ModelPath, cursor: ModelCursor | None = None) -> str:
+            """Read one page of diffs for a changed visible file or directory."""
 
-            return await self.get_diff(path)
+            return await self.get_diff(path, cursor)
+
+        get_diff_tool.params_json_schema["required"] = ["path"]
+        get_diff_tool.strict_json_schema = False
 
         return [
             reject_unknown_arguments(find_files_tool),
@@ -641,9 +723,7 @@ class FilesystemReviewTools:
         entry = self._entry(path)
         current_payload = await self._payload(entry)
         payload = (
-            current_payload
-            if version == "current"
-            else await self._revision_payload(path, "base")
+            current_payload if version == "current" else await self._revision_payload(path, "base")
         )
         if b"\0" in payload:
             raise ValueError("Snapshot file is binary")

@@ -48,16 +48,12 @@ class GitPluginInstaller:
             try:
                 await self._git.clone(git_url, temp_dir, ref=ref)
             except InvalidRepositoryError:
-                raise PluginInstallError(
-                    "Git repository could not be cloned"
-                ) from None
+                raise PluginInstallError("Git repository could not be cloned") from None
             manifest = await asyncio.to_thread(self._read_manifest, temp_dir)
             self._validate_manifest(manifest)
             install_path = self._plugins_dir / manifest.plugin_id
             if install_path.exists():
-                raise PluginInstallError(
-                    f"plugin '{manifest.plugin_id}' is already installed"
-                )
+                raise PluginInstallError(f"plugin '{manifest.plugin_id}' is already installed")
             install_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(temp_dir), str(install_path))
             return manifest
@@ -90,9 +86,7 @@ class GitPluginInstaller:
             try:
                 await self._git.clone(git_url, temp_dir, ref=ref)
             except InvalidRepositoryError:
-                raise PluginInstallError(
-                    "Git repository could not be cloned"
-                ) from None
+                raise PluginInstallError("Git repository could not be cloned") from None
             manifest = await asyncio.to_thread(self._read_manifest, temp_dir)
             self._validate_manifest(manifest)
 
@@ -132,12 +126,10 @@ class GitPluginInstaller:
                 author=raw.get("author", ""),
                 platform=raw.get("platform", "local"),
                 capabilities=capabilities,
-                min_codelens_version=raw.get("min_codelens_version"),
+                min_codelens_version=raw["min_codelens_version"],
                 name_i18n=raw.get("name_i18n", {}),
                 description_i18n=raw.get("description_i18n", {}),
-                plugin_api_version=PluginApiVersion(
-                    str(raw.get("plugin_api_version", "1"))
-                ),
+                plugin_api_version=PluginApiVersion(str(raw["plugin_api_version"])),
             )
         except (KeyError, ValueError) as error:
             raise PluginInstallError(
@@ -168,16 +160,11 @@ class GitPluginInstaller:
     def _validate_manifest(self, manifest: PluginManifest) -> None:
         try:
             plugin_version = Version(manifest.version)
-            if manifest.plugin_api_version is PluginApiVersion.V2:
-                if manifest.min_codelens_version is None:
-                    raise PluginCompatibilityError(
-                        "v2 plugin requires min_codelens_version"
-                    )
-                if plugin_version.major < 2:
-                    raise PluginCompatibilityError(
-                        "v2 plugin API requires plugin version 2 or later"
-                    )
-            minimum = Version(manifest.min_codelens_version or "0")
+            if manifest.min_codelens_version is None:
+                raise PluginCompatibilityError("v2 plugin requires min_codelens_version")
+            if plugin_version.major < 2:
+                raise PluginCompatibilityError("v2 plugin API requires plugin version 2 or later")
+            minimum = Version(manifest.min_codelens_version)
             ensure_plugin_compatible(
                 plugin_api_version=manifest.plugin_api_version,
                 minimum_codelens_version=minimum,

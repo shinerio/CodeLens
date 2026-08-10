@@ -74,10 +74,8 @@ def _parse_reviewer_selection(value: object) -> ReviewerSelection:
     references = tuple(raw_references)
     if not references or len(references) != len(set(references)):
         raise ValueError("reviewer_versions must be non-empty and unique")
-    if "general:v1" in references and references != ("general:v1",):
-        raise ValueError("general:v1 must be the only reviewer")
-    if "correctness:v1" in references and references != ("correctness:v1",):
-        raise ValueError("correctness:v1 is legacy single-reviewer only")
+    if "general:v2" in references and references != ("general:v2",):
+        raise ValueError("general:v2 must be the only reviewer")
     return FixedReviewerSelection(mode="fixed", reviewer_versions=references)
 
 

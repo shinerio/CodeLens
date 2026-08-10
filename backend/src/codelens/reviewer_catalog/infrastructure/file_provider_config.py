@@ -135,23 +135,15 @@ class FilesystemModelProviderConfigAdapter:
                 "tool_timeout_seconds", _DEFAULT_TOOL_TIMEOUT_SECONDS
             )
             raw_max_retries = item.get("max_retries", _DEFAULT_MAX_RETRIES)
-            raw_retry_backoff_base = item.get(
-                "retry_backoff_base", _DEFAULT_RETRY_BACKOFF_BASE
-            )
-            raw_retry_max_delay = item.get(
-                "retry_max_delay", _DEFAULT_RETRY_MAX_DELAY
-            )
+            raw_retry_backoff_base = item.get("retry_backoff_base", _DEFAULT_RETRY_BACKOFF_BASE)
+            raw_retry_max_delay = item.get("retry_max_delay", _DEFAULT_RETRY_MAX_DELAY)
             cls._validate_execution_limit(raw_agent_timeout, minimum=60, maximum=7200)
             cls._validate_execution_limit(raw_max_agent_turns, minimum=1, maximum=500)
             cls._validate_execution_limit(raw_max_tool_calls, minimum=1, maximum=5000)
-            cls._validate_execution_limit(
-                raw_max_identical_tool_results, minimum=2, maximum=20
-            )
+            cls._validate_execution_limit(raw_max_identical_tool_results, minimum=2, maximum=20)
             cls._validate_execution_limit(raw_tool_timeout_seconds, minimum=1, maximum=300)
             cls._validate_execution_limit(raw_max_retries, minimum=0, maximum=10)
-            cls._validate_float_limit(
-                raw_retry_backoff_base, minimum=0.1, maximum=60.0
-            )
+            cls._validate_float_limit(raw_retry_backoff_base, minimum=0.1, maximum=60.0)
             cls._validate_float_limit(raw_retry_max_delay, minimum=1.0, maximum=300.0)
             gateways.append(
                 ModelGateway(

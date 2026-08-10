@@ -113,9 +113,7 @@ def build_process_report(
             usage_entries += 1
             if _has_complete_usage(entry.metadata):
                 complete_usage_entries += 1
-                accumulator.llm_call_count += _non_negative_int(
-                    entry.metadata, "llm_call_count"
-                )
+                accumulator.llm_call_count += _non_negative_int(entry.metadata, "llm_call_count")
                 accumulator.input_tokens += _non_negative_int(entry.metadata, "input_tokens")
                 accumulator.output_tokens += _non_negative_int(entry.metadata, "output_tokens")
                 accumulator.total_tokens += _non_negative_int(entry.metadata, "total_tokens")

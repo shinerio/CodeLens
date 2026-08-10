@@ -24,11 +24,10 @@ from codelens.workspace.domain.models import (
     SnapshotManifest,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
-def candidate(
-    candidate_id: str, *, reviewer: str, path: str, line: int
-) -> CandidateFinding:
+def candidate(candidate_id: str, *, reviewer: str, path: str, line: int) -> CandidateFinding:
     return CandidateFinding(
         task_id="review-1",
         candidate_id=candidate_id,
@@ -58,18 +57,12 @@ def _snapshot() -> ReviewSnapshot:
         ReviewTarget("a" * 40, "b" * 40, None),
         RepositoryFingerprint("b" * 40, "f" * 64, "1" * 64),
         SnapshotManifest(
-            ("src/webhook.py",),
-            (),
-            (),
+            ReviewFileScope.include_all(("src/webhook.py",)),
             entries=(
-                SnapshotEntry(
-                    "src/webhook.py", "file", 0o100644, 20, "2" * 64, None, "target"
-                ),
+                SnapshotEntry("src/webhook.py", "file", 0o100644, 20, "2" * 64, None, "target"),
             ),
         ),
-        ChangeIndex(
-            (ChangedHunk("hunk-1", "src/webhook.py", 5, 5, "new", "a" * 64),)
-        ),
+        ChangeIndex((ChangedHunk("hunk-1", "src/webhook.py", 5, 5, "new", "a" * 64),)),
     )
 
 
@@ -78,11 +71,11 @@ async def test_candidate_validator_accepts_only_matching_snapshot_and_reviewer()
         task_id="review-1",
         run_id="run-1",
         snapshot=_snapshot(),
-        agent=builtin_agent_catalog()["security:v1"],
+        agent=builtin_agent_catalog()["security:v2"],
     )
     value = candidate(
         "candidate_" + "c" * 64,
-        reviewer="security:v1",
+        reviewer="security:v2",
         path="src/webhook.py",
         line=5,
     )
@@ -101,7 +94,7 @@ async def test_candidate_validator_accepts_only_matching_snapshot_and_reviewer()
     (
         ({"changed_hunk_id": "hunk-unknown"}, "hunk"),
         ({"evidence_hashes": ("z" * 64,)}, "evidence"),
-        ({"reviewer_reference": "performance:v1"}, "reviewer"),
+        ({"reviewer_reference": "performance:v2"}, "reviewer"),
     ),
 )
 async def test_candidate_validator_skips_invalid_candidate_and_records_warning(
@@ -111,12 +104,12 @@ async def test_candidate_validator_skips_invalid_candidate_and_records_warning(
         task_id="review-1",
         run_id="run-1",
         snapshot=_snapshot(),
-        agent=builtin_agent_catalog()["security:v1"],
+        agent=builtin_agent_catalog()["security:v2"],
     )
     value = replace(
         candidate(
             "candidate_" + "c" * 64,
-            reviewer="security:v1",
+            reviewer="security:v2",
             path="src/webhook.py",
             line=5,
         ),
@@ -137,18 +130,18 @@ async def test_candidate_validator_best_effort_keeps_valid_and_skips_invalid() -
         task_id="review-1",
         run_id="run-1",
         snapshot=_snapshot(),
-        agent=builtin_agent_catalog()["security:v1"],
+        agent=builtin_agent_catalog()["security:v2"],
     )
     valid = candidate(
         "candidate_" + "c" * 64,
-        reviewer="security:v1",
+        reviewer="security:v2",
         path="src/webhook.py",
         line=5,
     )
     invalid = replace(
         candidate(
             "candidate_" + "d" * 64,
-            reviewer="security:v1",
+            reviewer="security:v2",
             path="src/webhook.py",
             line=5,
         ),
@@ -170,17 +163,17 @@ async def test_candidate_validator_deduplicates_by_fingerprint() -> None:
         task_id="review-1",
         run_id="run-1",
         snapshot=_snapshot(),
-        agent=builtin_agent_catalog()["security:v1"],
+        agent=builtin_agent_catalog()["security:v2"],
     )
     first = candidate(
         "candidate_" + "c" * 64,
-        reviewer="security:v1",
+        reviewer="security:v2",
         path="src/webhook.py",
         line=5,
     )
     second = candidate(
         "candidate_" + "d" * 64,
-        reviewer="security:v1",
+        reviewer="security:v2",
         path="src/webhook.py",
         line=5,
     )

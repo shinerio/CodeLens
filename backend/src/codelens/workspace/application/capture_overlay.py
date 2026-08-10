@@ -30,10 +30,10 @@ class ReviewInputCaptureService:
             )
 
         for _attempt in range(2):
-            before = await self._source.fingerprint(repository, scope_plan.target_paths)
-            payload = await self._source.capture_overlay(repository, scope_plan.target_paths)
+            before = await self._source.fingerprint(repository, scope_plan.candidate_paths)
+            payload = await self._source.capture_overlay(repository, scope_plan.candidate_paths)
             artifact = await self._artifacts.write_bytes(payload)
-            after = await self._source.fingerprint(repository, scope_plan.target_paths)
+            after = await self._source.fingerprint(repository, scope_plan.candidate_paths)
             if before == after:
                 return CapturedReviewInput(
                     target=ReviewTarget(

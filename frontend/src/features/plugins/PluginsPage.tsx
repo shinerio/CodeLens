@@ -43,13 +43,6 @@ import {
 import type { HookStatusResponse, PluginProfileSource, PluginRecord } from "./types";
 import "./PluginsPage.css";
 
-const AVAILABLE_AGENTS = [
-  { reference: "correctness:v1", labelKey: "review.correctness", enabled: true },
-  { reference: "security:v1", labelKey: "review.security", enabled: false },
-  { reference: "performance:v1", labelKey: "review.performance", enabled: false },
-  { reference: "maintainability:v1", labelKey: "review.maintainability", enabled: false },
-] as const;
-
 function isStringKeyedRecord(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
 }
@@ -71,13 +64,8 @@ function strategyFromPluginConfig(config: Record<string, unknown>): ReviewStrate
       };
     }
   }
-  const legacyReviewers = Array.isArray(config.selected_agents)
-    ? config.selected_agents.filter(
-        (reference): reference is string => typeof reference === "string",
-      )
-    : [];
   return {
-    reviewerSelection: { mode: "fixed", reviewerVersions: legacyReviewers },
+    reviewerSelection: { mode: "fixed", reviewerVersions: [] },
   };
 }
 
@@ -348,7 +336,6 @@ function TriggerCapabilitySection({
   onConfigUpdate,
 }: TriggerCapabilitySectionProps) {
   const { t, locale } = useI18n();
-  const isPluginApiVersionTwo = (plugin.plugin_api_version ?? plugin.manifest.plugin_api_version) === "2";
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(plugin.trigger_config);
   const [profileSourceDraft, setProfileSourceDraft] = useState<PluginProfileSource | null>(
     plugin.profile_source ?? null,
@@ -362,30 +349,24 @@ function TriggerCapabilitySection({
   const profilesQuery = useQuery({
     queryKey: ["review-profiles"],
     queryFn: listReviewProfiles,
-    enabled: isPluginApiVersionTwo,
   });
   const reviewerCatalogQuery = useQuery({
     queryKey: ["reviewer-catalog"],
     queryFn: listReviewerCatalog,
-    enabled: isPluginApiVersionTwo,
   });
 
   const configMutation = useMutation({
     mutationFn: (config: Record<string, unknown>) =>
       updateTriggerConfig(plugin.plugin_id, {
         config,
-        ...(isPluginApiVersionTwo
-          ? {
-              profile_source:
-                profileSourceDraft === null
-                  ? null
-                  : {
-                      profile_id: profileSourceDraft.profile_id,
-                      profile_name: profileSourceDraft.profile_name,
-                      profile_revision: profileSourceDraft.profile_revision,
-                    },
-            }
-          : {}),
+        profile_source:
+          profileSourceDraft === null
+            ? null
+            : {
+                profile_id: profileSourceDraft.profile_id,
+                profile_name: profileSourceDraft.profile_name,
+                profile_revision: profileSourceDraft.profile_revision,
+              },
       }),
     onSuccess: () => {
       setError(null);
@@ -436,7 +417,6 @@ function TriggerCapabilitySection({
   // For webhook: use config_schema to dynamically render fields
   const repositoryPaths = (configDraft.repository_paths as string[]) ?? [];
   const events = (configDraft.events as string[]) ?? [];
-  const selectedAgents = (configDraft.selected_agents as string[]) ?? [];
   const scopeType = (configDraft.scope_type as string) ?? "uncommitted";
   const baseRef = (configDraft.base_ref as string | null) ?? "";
   const targetRef = (configDraft.target_ref as string | null) ?? "";
@@ -488,18 +468,10 @@ function TriggerCapabilitySection({
     setConfigDraft({ ...configDraft, scope_type: newScopeType });
   }
 
-  function handleAgentToggle(reference: string, checked: boolean) {
-    const newAgents = checked
-      ? [...selectedAgents, reference]
-      : selectedAgents.filter((a) => a !== reference);
-    setConfigDraft({ ...configDraft, selected_agents: newAgents });
-  }
-
   const supportedEvents = plugin.manifest.capabilities.trigger?.supported_events ?? [];
 
   // Common trigger fields rendered with specialized UI for all trigger types
   const COMMON_TRIGGER_FIELDS = new Set([
-    "selected_agents",
     "reviewer_selection",
     "supersede_policy",
     "prompt_locale",
@@ -582,8 +554,7 @@ function TriggerCapabilitySection({
               </div>
             </div>
 
-            {isPluginApiVersionTwo ? (
-              <PluginReviewStrategySection
+            <PluginReviewStrategySection
                 catalog={reviewerCatalogQuery.data ?? []}
                 hasProfileDrift={hasProfileDrift}
                 isCatalogLoading={reviewerCatalogQuery.isLoading}
@@ -598,16 +569,9 @@ function TriggerCapabilitySection({
                   setConfigDraft(withStrategy(configDraft, nextStrategy));
                   setProfileSourceDraft(null);
                 }}
-              />
-            ) : (
-              <LegacyReviewerSection
-                selectedAgents={selectedAgents}
-                onToggle={handleAgentToggle}
-              />
-            )}
+            />
 
-            {isPluginApiVersionTwo ? (
-              <div className="config-section">
+            <div className="config-section">
                 <label className="config-section__label" htmlFor={`supersede-${plugin.plugin_id}`}>
                   {t("plugins.supersede")}
                 </label>
@@ -623,8 +587,7 @@ function TriggerCapabilitySection({
                   <option value="latest_snapshot">{t("plugins.keepLatest")}</option>
                   <option value="preserve_all">{t("plugins.preserveAll")}</option>
                 </select>
-              </div>
-            ) : null}
+            </div>
 
             <div className="config-section">
               <label className="config-section__label">{t("plugins.scopeType")}</label>
@@ -697,8 +660,7 @@ function TriggerCapabilitySection({
 
         {isWebhook && (
           <>
-            {isPluginApiVersionTwo ? (
-              <PluginReviewStrategySection
+            <PluginReviewStrategySection
                 catalog={reviewerCatalogQuery.data ?? []}
                 hasProfileDrift={hasProfileDrift}
                 isCatalogLoading={reviewerCatalogQuery.isLoading}
@@ -713,16 +675,9 @@ function TriggerCapabilitySection({
                   setConfigDraft(withStrategy(configDraft, nextStrategy));
                   setProfileSourceDraft(null);
                 }}
-              />
-            ) : (
-              <LegacyReviewerSection
-                selectedAgents={selectedAgents}
-                onToggle={handleAgentToggle}
-              />
-            )}
+            />
 
-            {isPluginApiVersionTwo ? (
-              <div className="config-section">
+            <div className="config-section">
                 <label className="config-section__label" htmlFor={`supersede-${plugin.plugin_id}`}>
                   {t("plugins.supersede")}
                 </label>
@@ -738,8 +693,7 @@ function TriggerCapabilitySection({
                   <option value="latest_snapshot">{t("plugins.keepLatest")}</option>
                   <option value="preserve_all">{t("plugins.preserveAll")}</option>
                 </select>
-              </div>
-            ) : null}
+            </div>
 
             <div className="config-section">
               <label className="config-section__label">{t("plugins.locale")}</label>
@@ -790,7 +744,7 @@ function TriggerCapabilitySection({
           disabled={
             !configChanged ||
             configMutation.isPending ||
-            (isPluginApiVersionTwo && strategyErrors.length > 0)
+            strategyErrors.length > 0
           }
           onClick={() => configMutation.mutate(configDraft)}
           type="button"
@@ -864,43 +818,6 @@ function TriggerCapabilitySection({
           onSelect={handleRepositorySelect}
         />
       )}
-    </div>
-  );
-}
-
-function LegacyReviewerSection({
-  selectedAgents,
-  onToggle,
-}: {
-  selectedAgents: readonly string[];
-  onToggle: (reference: string, checked: boolean) => void;
-}) {
-  const { t } = useI18n();
-  return (
-    <div className="config-section">
-      <label className="config-section__label">{t("plugins.selectedAgents")}</label>
-      <div className="config-checkboxes">
-        {AVAILABLE_AGENTS.map((agent) => (
-          <label
-            key={agent.reference}
-            className={`config-checkbox ${!agent.enabled ? "config-checkbox--disabled" : ""}`}
-          >
-            <input
-              checked={selectedAgents.includes(agent.reference)}
-              disabled={!agent.enabled}
-              type="checkbox"
-              onChange={(event) => onToggle(agent.reference, event.currentTarget.checked)}
-            />
-            <span>{t(agent.labelKey)}</span>
-            {!agent.enabled ? (
-              <span className="config-agent-badge">{t("plugins.comingSoon")}</span>
-            ) : null}
-          </label>
-        ))}
-      </div>
-      {selectedAgents.length === 0 ? (
-        <p className="config-error">{t("plugins.noAgentSelected")}</p>
-      ) : null}
     </div>
   );
 }

@@ -4,7 +4,6 @@ from packaging.version import Version
 
 
 class PluginApiVersion(StrEnum):
-    V1 = "1"
     V2 = "2"
 
 
@@ -18,7 +17,7 @@ def ensure_plugin_compatible(
     minimum_codelens_version: Version,
     current_codelens_version: Version,
 ) -> None:
-    if plugin_api_version not in {PluginApiVersion.V1, PluginApiVersion.V2}:
+    if plugin_api_version is not PluginApiVersion.V2:
         raise PluginCompatibilityError("unsupported plugin API")
     if current_codelens_version < minimum_codelens_version:
         raise PluginCompatibilityError("CodeLens version is below plugin minimum")

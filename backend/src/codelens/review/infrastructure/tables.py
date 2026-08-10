@@ -3,7 +3,6 @@ from sqlalchemy import (
     CheckConstraint,
     Column,
     DateTime,
-    Float,
     ForeignKey,
     ForeignKeyConstraint,
     Index,
@@ -36,6 +35,20 @@ Index(
     sqlite_where=review_profiles.c.is_default.is_(True),
 )
 
+review_file_scopes = Table(
+    "review_file_scopes",
+    metadata,
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("scope_json", Text, nullable=False),
+    Column("scope_hash", String(64), nullable=False),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
 review_tasks = Table(
     "review_tasks",
     metadata,
@@ -49,10 +62,12 @@ review_tasks = Table(
     Column("head_oid", String(64), nullable=False),
     Column("overlay_hash", String(64)),
     Column("overlay_artifact_ref", String(128)),
-    Column("target_paths_json", Text),
+    Column("candidate_paths_json", Text, nullable=False),
+    Column("file_exclusion_policy_json", Text, nullable=False),
+    Column("file_exclusion_policy_hash", String(64), nullable=False),
     Column("status", String(32), nullable=False),
     Column("selected_agent_versions_json", Text, nullable=False),
-    Column("selection_request_json", Text),
+    Column("selection_request_json", Text, nullable=False),
     Column("profile_source_id", String(128)),
     Column("profile_source_revision", Integer),
     Column("trigger_source", String(16)),
@@ -322,10 +337,10 @@ finding_cluster_candidates = Table(
     UniqueConstraint("cluster_id", "ordinal", name="uq_cluster_candidate_ordinal"),
 )
 
-verification_decisions = Table(
-    "verification_decisions",
+verdict_decisions = Table(
+    "verdict_decisions",
     metadata,
-    Column("verification_decision_id", String(128), primary_key=True),
+    Column("verdict_decision_id", String(128), primary_key=True),
     Column(
         "task_id",
         String(128),
@@ -335,9 +350,32 @@ verification_decisions = Table(
     ),
     Column("verifier_run_id", String(128)),
     Column("outcome", String(32), nullable=False),
-    Column("reason_code", String(128), nullable=False),
     Column("payload_json", Text, nullable=False),
     Column("created_at", DateTime(timezone=True), nullable=False),
+)
+
+verdict_decision_clusters = Table(
+    "verdict_decision_clusters",
+    metadata,
+    Column(
+        "verdict_decision_id",
+        String(128),
+        ForeignKey("verdict_decisions.verdict_decision_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "cluster_id",
+        String(128),
+        ForeignKey("finding_clusters.cluster_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column("ordinal", Integer, nullable=False),
+    UniqueConstraint("cluster_id", name="uq_verdict_decision_cluster"),
+    UniqueConstraint(
+        "verdict_decision_id",
+        "ordinal",
+        name="uq_verdict_decision_cluster_ordinal",
+    ),
 )
 
 findings = Table(
@@ -355,7 +393,12 @@ findings = Table(
     Column("fingerprint", String(256), nullable=False),
     Column("payload_json", Text, nullable=False),
     Column("severity", String(16), nullable=False),
-    Column("confidence", Float),
+    Column(
+        "verdict_decision_id",
+        String(128),
+        ForeignKey("verdict_decisions.verdict_decision_id", ondelete="CASCADE"),
+        nullable=False,
+    ),
     Column("verification_status", String(32)),
     Column("path", String(1024), nullable=False),
     Column("start_line", Integer, nullable=False),

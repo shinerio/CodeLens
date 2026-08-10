@@ -6,11 +6,9 @@ test("lists backend reviewers and edits a non-correctness prompt", async ({ page
   const reviewerCards = page.getByTestId("reviewer-card");
   await expect(reviewerCards).toHaveCount(8);
   await expect(reviewerCards.filter({ hasText: "correctness:v2" })).toHaveCount(1);
-  await expect(reviewerCards.filter({ hasText: "security:v1" })).toHaveCount(1);
-  await expect(reviewerCards.filter({ hasText: "general:v1" })).toHaveCount(1);
-  await expect(page.getByText("correctness:v1", { exact: true })).toHaveCount(0);
-
-  const securityCard = reviewerCards.filter({ hasText: "security:v1" });
+  await expect(reviewerCards.filter({ hasText: "security:v2" })).toHaveCount(1);
+  await expect(reviewerCards.filter({ hasText: "general:v2" })).toHaveCount(1);
+  const securityCard = reviewerCards.filter({ hasText: "security:v2" });
   await securityCard.getByRole("button", { name: "Edit prompt" }).click();
   const promptEditor = page.getByLabel("Reviewer prompt");
   await expect(promptEditor).not.toHaveValue("");

@@ -182,9 +182,7 @@ class ReviewPlan:
             reviewer_references=tuple(str(item) for item in value["reviewer_references"]),
             nodes=nodes,
             planner_reason=(
-                str(value["planner_reason"])
-                if value["planner_reason"] is not None
-                else None
+                str(value["planner_reason"]) if value["planner_reason"] is not None else None
             ),
             reviewer_guidance=tuple(
                 ReviewerPlanGuidance(
@@ -269,12 +267,8 @@ class ReviewPlan:
             raise ValueError("Review plan requires at least one reviewer")
         if len(reviewer_references) != len(set(reviewer_references)):
             raise ValueError("Review plan contains duplicate reviewers")
-        if "general:v1" in reviewer_references and reviewer_references != ("general:v1",):
+        if "general:v2" in reviewer_references and reviewer_references != ("general:v2",):
             raise ValueError("General reviewer must run alone")
-        if "correctness:v1" in reviewer_references and reviewer_references != (
-            "correctness:v1",
-        ):
-            raise ValueError("correctness:v1 is legacy single-reviewer only")
         if selection_mode == "adaptive" and not planner_reason:
             raise ValueError("Adaptive plan requires a planner reason")
         if selection_mode == "fixed" and planner_reason is not None:
@@ -284,9 +278,7 @@ class ReviewPlan:
             raise ValueError("Review plan contains duplicate reviewer guidance")
         if not set(guidance_references).issubset(reviewer_references):
             raise ValueError("Review plan guidance references an unselected reviewer")
-        degradation_references = tuple(
-            item.agent_reference for item in capability_degradations
-        )
+        degradation_references = tuple(item.agent_reference for item in capability_degradations)
         if len(degradation_references) != len(set(degradation_references)):
             raise ValueError("Review plan contains duplicate capability degradations")
         if not set(degradation_references).issubset(reviewer_references):
@@ -298,15 +290,11 @@ class ReviewPlan:
             raise ValueError("Review plan contains duplicate nodes")
         known_node_ids = set(node_ids)
         if any(
-            dependency not in known_node_ids
-            for node in nodes
-            for dependency in node.depends_on
+            dependency not in known_node_ids for node in nodes for dependency in node.depends_on
         ):
             raise ValueError("Review plan contains an unknown dependency")
         reviewer_node_references = {
-            node.agent_reference
-            for node in nodes
-            if node.node_type is ReviewPlanNodeType.REVIEWER
+            node.agent_reference for node in nodes if node.node_type is ReviewPlanNodeType.REVIEWER
         }
         if reviewer_node_references != set(reviewer_references):
             raise ValueError("Review plan reviewer nodes do not match selected reviewers")
@@ -317,30 +305,23 @@ class ReviewPlan:
             node for node in nodes if node.node_type is ReviewPlanNodeType.REVIEWER
         )
         if selection_mode == "adaptive":
-            if (
-                len(planner_nodes) != 1
-                or planner_nodes[0].agent_reference != "review-planner:v1"
-            ):
-                raise ValueError("Adaptive plan requires one review-planner:v1 node")
+            if len(planner_nodes) != 1 or planner_nodes[0].agent_reference != "review-planner:v2":
+                raise ValueError("Adaptive plan requires one review-planner:v2 node")
             if any(node.depends_on != (planner_nodes[0].node_id,) for node in reviewer_nodes):
                 raise ValueError("Adaptive Reviewer nodes must depend on the Planner")
         elif planner_nodes:
             raise ValueError("Fixed plan cannot contain a Planner node")
         elif any(node.depends_on for node in reviewer_nodes):
             raise ValueError("Fixed Reviewer nodes cannot have dependencies")
-        is_multi_specialist = len(reviewer_references) > 1
         verifier_nodes = tuple(
             node for node in nodes if node.node_type is ReviewPlanNodeType.VERIFIER
         )
-        if is_multi_specialist:
-            if len(verifier_nodes) != 1 or verifier_nodes[0].shard_id != "batch":
-                raise ValueError("multi-specialist plan requires one batched verifier")
-            if verifier_nodes[0].depends_on != tuple(
-                sorted(node.node_id for node in reviewer_nodes)
-            ):
-                raise ValueError("batched verifier must depend on every Reviewer node")
-        elif verifier_nodes:
-            raise ValueError("General and single-specialist plans cannot have a verifier")
+        if len(verifier_nodes) != 1 or verifier_nodes[0].shard_id != "batch":
+            raise ValueError("Review plan requires one batched verifier")
+        if verifier_nodes[0].depends_on != tuple(
+            sorted(node.node_id for node in reviewer_nodes)
+        ):
+            raise ValueError("batched verifier must depend on every Reviewer node")
 
         canonical_reviewers = tuple(sorted(reviewer_references))
         canonical_nodes = tuple(sorted(nodes, key=lambda node: node.node_id))

@@ -6,6 +6,5 @@ export interface ReviewerCatalogEntry {
   version: number;
   dimensions: readonly string[];
   isPlannerEligible: boolean;
-  isLegacy: boolean;
   capabilityStatus: ReviewerCapabilityStatus;
 }

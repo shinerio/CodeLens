@@ -1,2 +1,1 @@
 """Capability resolution use cases."""
-

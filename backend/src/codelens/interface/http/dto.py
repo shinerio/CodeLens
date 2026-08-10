@@ -48,7 +48,7 @@ class FixedReviewerSelectionDto(StrictDto):
         list[
             Annotated[
                 str,
-                StringConstraints(pattern=r"^[a-z][a-z0-9_.-]*:v[1-9][0-9]*$"),
+                StringConstraints(pattern=r"^[a-z][a-z0-9_.-]*:v2$"),
             ]
         ],
         Field(min_length=1),
@@ -56,13 +56,12 @@ class FixedReviewerSelectionDto(StrictDto):
 
     @model_validator(mode="after")
     def validate_reviewer_team(self) -> "FixedReviewerSelectionDto":
-        """Reject duplicate and legacy singleton combinations at the HTTP boundary."""
+        """Reject duplicate, non-v2, and General team combinations."""
 
         if len(self.reviewer_versions) != len(set(self.reviewer_versions)):
             raise ValueError("reviewer_versions must be unique")
-        for singleton in ("general:v1", "correctness:v1"):
-            if singleton in self.reviewer_versions and self.reviewer_versions != [singleton]:
-                raise ValueError(f"{singleton} must run alone")
+        if "general:v2" in self.reviewer_versions and self.reviewer_versions != ["general:v2"]:
+            raise ValueError("general:v2 must run alone")
         return self
 
 
@@ -193,7 +192,6 @@ class ToolLimitsResponse(StrictDto):
     max_pattern_chars: Annotated[int, Field(ge=64, le=4096)]
     regex_timeout_seconds: Annotated[float, Field(ge=1.0, le=300.0)]
     comment_batch_size: Annotated[int, Field(ge=1, le=100)]
-    reviewed_files_batch: Annotated[int, Field(ge=1, le=10_000)]
     short_text_max: Annotated[int, Field(ge=64, le=2048)]
     long_text_max: Annotated[int, Field(ge=256, le=64_000)]
     task_summary_max: Annotated[int, Field(ge=256, le=64_000)]
@@ -211,10 +209,25 @@ class UpdateToolLimitsRequest(StrictDto):
     max_pattern_chars: Annotated[int | None, Field(ge=64, le=4096)] = None
     regex_timeout_seconds: Annotated[float | None, Field(ge=1.0, le=300.0)] = None
     comment_batch_size: Annotated[int | None, Field(ge=1, le=100)] = None
-    reviewed_files_batch: Annotated[int | None, Field(ge=1, le=10_000)] = None
     short_text_max: Annotated[int | None, Field(ge=64, le=2048)] = None
     long_text_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
     task_summary_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
+
+
+class FileExclusionSettingsResponse(StrictDto):
+    """Expose the policy frozen by subsequently created Review tasks."""
+
+    suffixes: Annotated[list[str], Field(max_length=128)]
+    path_regexes: Annotated[list[str], Field(max_length=128)]
+    exclude_binary: bool
+
+
+class UpdateFileExclusionSettingsRequest(StrictDto):
+    """Accept an atomic partial replacement of file exclusion rules."""
+
+    suffixes: Annotated[list[str] | None, Field(max_length=128)] = None
+    path_regexes: Annotated[list[str] | None, Field(max_length=128)] = None
+    exclude_binary: bool | None = None
 
 
 RefLabel = Annotated[str, StringConstraints(min_length=1, max_length=512)]
@@ -393,34 +406,13 @@ class DirectoryListingResponse(StrictDto):
 class CreateReviewRequest(StrictDto):
     repository_path: Path
     scope: ScopeRequest
-    reviewer_selection: ReviewerSelectionDto | None = None
+    reviewer_selection: ReviewerSelectionDto
     profile_source: "ReviewProfileSourceDto | None" = None
-    selected_agents: Annotated[
-        list[AgentReference] | None, Field(min_length=1, max_length=32)
-    ] = None
     prompt_locale: Literal["en", "zh-CN"] = "en"
     external_context: dict[str, Any] | None = None
 
-    @model_validator(mode="after")
-    def validate_selection_contract(self) -> "CreateReviewRequest":
-        """Require exactly one v2 selection or the explicit legacy adapter field."""
-
-        if (self.reviewer_selection is None) == (self.selected_agents is None):
-            raise ValueError(
-                "exactly one of reviewer_selection or selected_agents is required"
-            )
-        if self.selected_agents is not None and self.profile_source is not None:
-            raise ValueError(
-                "legacy selected_agents cannot set v2 profile provenance"
-            )
-        return self
-
     def review_profile_snapshot(self) -> ReviewProfileSnapshot:
         selection = self.reviewer_selection
-        if selection is None:
-            selection = FixedReviewerSelectionDto(
-                mode="fixed", reviewer_versions=self.selected_agents or []
-            )
         domain_selection = (
             AdaptiveReviewerSelection()
             if isinstance(selection, AdaptiveReviewerSelectionDto)
@@ -523,10 +515,8 @@ class ReviewResponse(StrictDto):
             selection_request=selection_request,
             profile_source=source,
             review_plan=review_plan,
-            coverage=coverage
-            or {"planned": [], "completed": [], "failed": [], "omitted": []},
-            verdict_summary=verdict_summary
-            or {"accept": 0, "deny": 0, "merge": 0},
+            coverage=coverage or {"planned": [], "completed": [], "failed": [], "omitted": []},
+            verdict_summary=verdict_summary or {"accept": 0, "deny": 0, "merge": 0},
         )
 
 
@@ -726,6 +716,7 @@ class ResetAllSettingsResponse(StrictDto):
     """Aggregate response after resetting all user-facing settings to defaults."""
 
     instruction_files: InstructionFileSettingsResponse
+    file_exclusions: FileExclusionSettingsResponse
     review_completion: ReviewCompletionSettingsResponse
     trigger_idempotency: TriggerIdempotencySettingsResponse
     recent_repositories: RecentRepositorySettingsResponse

@@ -15,7 +15,7 @@ async def test_transcript_redacts_credentials_and_preserves_entry_order(tmp_path
         task_id,
         "prompt",
         "Authorization: Bearer secret-value\napi_key=another-secret\nReview this change.",
-        metadata={"agent": "correctness:v1"},
+        metadata={"agent": "correctness:v2"},
     )
 
     entries = await store.list(task_id)
@@ -24,7 +24,7 @@ async def test_transcript_redacts_credentials_and_preserves_entry_order(tmp_path
     assert entries[1].redacted
     assert "secret-value" not in entries[1].content
     assert "another-secret" not in entries[1].content
-    assert entries[1].metadata == {"agent": "correctness:v1"}
+    assert entries[1].metadata == {"agent": "correctness:v2"}
 
 
 async def test_transcript_append_many_reads_and_writes_one_complete_batch(tmp_path: Path) -> None:
@@ -34,9 +34,9 @@ async def test_transcript_append_many_reads_and_writes_one_complete_batch(tmp_pa
     await store.append_many(
         task_id,
         (
-            ("model_started", "", {"agent": "correctness:v1"}),
-            ("model_reasoning_delta", "Checking change map", {"agent": "correctness:v1"}),
-            ("model_output_delta", "No defect found", {"agent": "correctness:v1"}),
+            ("model_started", "", {"agent": "correctness:v2"}),
+            ("model_reasoning_delta", "Checking change map", {"agent": "correctness:v2"}),
+            ("model_output_delta", "No defect found", {"agent": "correctness:v2"}),
         ),
     )
 
@@ -64,7 +64,7 @@ async def test_transcript_keeps_complete_stream_chunks_without_truncation(tmp_pa
         "review_" + "c" * 32,
         "model_output_delta",
         content,
-        metadata={"agent": "correctness:v1", "message_id": "message-1"},
+        metadata={"agent": "correctness:v2", "message_id": "message-1"},
     )
 
     (entry,) = await store.list("review_" + "c" * 32)
@@ -149,7 +149,7 @@ async def test_worker_transcript_persists_one_logical_event_for_interleaved_delt
             (
                 "model_output_delta",
                 "Security ",
-                {"agent": "security:v1", "message_id": "provider-message"},
+                {"agent": "security:v2", "message_id": "provider-message"},
             ),
             (
                 "model_output_delta",
@@ -164,7 +164,7 @@ async def test_worker_transcript_persists_one_logical_event_for_interleaved_delt
             (
                 "model_output_delta",
                 "complete",
-                {"agent": "security:v1", "message_id": "provider-message"},
+                {"agent": "security:v2", "message_id": "provider-message"},
             ),
             (
                 "model_output_delta",
@@ -197,14 +197,14 @@ async def test_worker_transcript_starts_a_new_model_event_after_an_agent_boundar
     durable = ExecutionTranscriptStore(tmp_path / "artifacts")
     worker_store = WorkerTranscriptStore(durable)
     task_id = "review_" + "j" * 32
-    metadata = {"agent": "security:v1", "message_id": "reused-provider-message"}
+    metadata = {"agent": "security:v2", "message_id": "reused-provider-message"}
 
     await worker_store.append(task_id, "model_output_delta", "first response", metadata=metadata)
     await worker_store.append(
         task_id,
         "tool_call",
         "get_diff",
-        metadata={"agent": "security:v1", "tool_name": "get_diff"},
+        metadata={"agent": "security:v2", "tool_name": "get_diff"},
     )
     await worker_store.append(task_id, "model_output_delta", "second response", metadata=metadata)
 

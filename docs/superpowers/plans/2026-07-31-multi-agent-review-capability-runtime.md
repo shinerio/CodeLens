@@ -1,6 +1,8 @@
 # Multi-Agent Review Capability Runtime Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **SUPERSEDED（2026-08-09）：** 不得继续执行本文。请使用 [`2026-08-09-multi-agent-review-v2-hard-cut.md`](./2026-08-09-multi-agent-review-v2-hard-cut.md)。
+
+> Historical implementation record only.
 
 **Goal:** Replace hard-coded model tool exposure with versioned, frozen Capability Profiles while preserving the existing `correctness:v1` execution path and defining safe extension contracts for future MCP and Skills.
 

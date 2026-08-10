@@ -1,2 +1,1 @@
 """Capability unit tests."""
-

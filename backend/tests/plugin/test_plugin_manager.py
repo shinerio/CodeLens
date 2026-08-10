@@ -67,9 +67,7 @@ def _record() -> PluginRecord:
                 entry_point="sink:Sink",
                 config_schema={
                     "type": "object",
-                    "properties": {
-                        "retries": {"type": "integer", "minimum": 0}
-                    },
+                    "properties": {"retries": {"type": "integer", "minimum": 0}},
                 },
             )
         },
@@ -161,11 +159,11 @@ async def test_builtin_trigger_rejects_an_empty_reviewer_selection() -> None:
     assert store.record is not None
     assert store.record.trigger_config["reviewer_selection"] == {
         "mode": "fixed",
-        "reviewer_versions": ["correctness:v1"],
+        "reviewer_versions": ["correctness:v2"],
     }
 
 
-async def test_existing_builtin_v1_is_migrated_to_current_v2_manifest() -> None:
+async def test_existing_builtin_manifest_is_refreshed_without_rewriting_config() -> None:
     store = EmptyPluginStore()
     manager = PluginManager(
         cast(PluginStorePort, store),
@@ -179,20 +177,16 @@ async def test_existing_builtin_v1_is_migrated_to_current_v2_manifest() -> None:
         current,
         manifest=replace(
             current.manifest,
-            version="1.0.0",
-            min_codelens_version=None,
-            plugin_api_version=PluginApiVersion.V1,
+            version="2.0.1",
         ),
         trigger_enabled=True,
         trigger_config={
-            "repository_paths": ["/workspace/repository"],
-            "events": ["post-commit"],
-            "scope_type": "commit",
-            "base_ref": None,
-            "target_ref": None,
-            "selected_agents": ["correctness:v1"],
+            "reviewer_selection": {
+                "mode": "fixed",
+                "reviewer_versions": ["correctness:v2"],
+            },
+            "supersede_policy": "latest_snapshot",
             "prompt_locale": "zh-CN",
-            "debounce_seconds": 15,
         },
         config_revision=4,
     )
@@ -206,10 +200,9 @@ async def test_existing_builtin_v1_is_migrated_to_current_v2_manifest() -> None:
     assert migrated.trigger_enabled is True
     assert migrated.trigger_config["reviewer_selection"] == {
         "mode": "fixed",
-        "reviewer_versions": ["correctness:v1"],
+        "reviewer_versions": ["correctness:v2"],
     }
     assert migrated.trigger_config["prompt_locale"] == "zh-CN"
-    assert "selected_agents" not in migrated.trigger_config
     assert migrated.config_revision == 5
 
 

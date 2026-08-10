@@ -398,10 +398,16 @@ class Supervisor:
         log_file = open(supervisor_log, "a")
 
         cmd = [
-            _resolve_executable("uv"), "run", "--project", "backend",
-            "codelens-review", "run-backend",
-            "--host", settings.host,
-            "--port", str(settings.port),
+            _resolve_executable("uv"),
+            "run",
+            "--project",
+            "backend",
+            "codelens-review",
+            "run-backend",
+            "--host",
+            settings.host,
+            "--port",
+            str(settings.port),
         ]
         if settings.data_dir != self._project_root / "data":
             cmd.extend(["--data-dir", str(settings.data_dir)])
@@ -439,9 +445,14 @@ class Supervisor:
         log_file = open(frontend_log, "a")
 
         cmd = [
-            _resolve_executable("pnpm"), "--dir", "frontend", "dev",
-            "--host", config.frontend_host,
-            "--port", str(config.frontend_port),
+            _resolve_executable("pnpm"),
+            "--dir",
+            "frontend",
+            "dev",
+            "--host",
+            config.frontend_host,
+            "--port",
+            str(config.frontend_port),
             "--strictPort",
         ]
 

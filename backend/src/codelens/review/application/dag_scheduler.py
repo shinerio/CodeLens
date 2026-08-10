@@ -61,9 +61,7 @@ class PersistedDagScheduler:
         self._plan = plan
         self._checkpoints = checkpoints
 
-    async def initialize(
-        self, capability_fingerprints: Mapping[str, str] | None = None
-    ) -> None:
+    async def initialize(self, capability_fingerprints: Mapping[str, str] | None = None) -> None:
         """Idempotently create every prebuilt node before any model invocation."""
 
         await self._checkpoints.ensure_plan_nodes(
@@ -90,16 +88,12 @@ class PersistedDagScheduler:
         return tuple(sorted(ready, key=lambda node: (node.pass_index, node.node_id)))
 
     @staticmethod
-    def _dependencies_allow(
-        node: ReviewPlanNode, status_by_node: Mapping[str, str]
-    ) -> bool:
-        dependency_statuses = tuple(
-            status_by_node[dependency] for dependency in node.depends_on
-        )
+    def _dependencies_allow(node: ReviewPlanNode, status_by_node: Mapping[str, str]) -> bool:
+        dependency_statuses = tuple(status_by_node[dependency] for dependency in node.depends_on)
         if not dependency_statuses:
             return True
         if node.node_type is ReviewPlanNodeType.VERIFIER:
-            return all(
-                status in _TERMINAL_NODE_STATUSES for status in dependency_statuses
-            ) and any(status == "succeeded" for status in dependency_statuses)
+            return all(status in _TERMINAL_NODE_STATUSES for status in dependency_statuses) and any(
+                status == "succeeded" for status in dependency_statuses
+            )
         return all(status == "succeeded" for status in dependency_statuses)
