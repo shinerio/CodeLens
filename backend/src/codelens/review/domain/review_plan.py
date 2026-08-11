@@ -316,12 +316,16 @@ class ReviewPlan:
         verifier_nodes = tuple(
             node for node in nodes if node.node_type is ReviewPlanNodeType.VERIFIER
         )
-        if len(verifier_nodes) != 1 or verifier_nodes[0].shard_id != "batch":
-            raise ValueError("Review plan requires one batched verifier")
-        if verifier_nodes[0].depends_on != tuple(
-            sorted(node.node_id for node in reviewer_nodes)
-        ):
-            raise ValueError("batched verifier must depend on every Reviewer node")
+        should_run_verifier = selection_mode == "adaptive" or len(reviewer_nodes) > 1
+        if should_run_verifier:
+            if len(verifier_nodes) != 1 or verifier_nodes[0].shard_id != "batch":
+                raise ValueError("Review plan requires one batched verifier")
+            if verifier_nodes[0].depends_on != tuple(
+                sorted(node.node_id for node in reviewer_nodes)
+            ):
+                raise ValueError("batched verifier must depend on every Reviewer node")
+        elif verifier_nodes:
+            raise ValueError("Fixed single-Reviewer plan cannot contain a Verifier")
 
         canonical_reviewers = tuple(sorted(reviewer_references))
         canonical_nodes = tuple(sorted(nodes, key=lambda node: node.node_id))

@@ -67,7 +67,7 @@ export function parseReviewResponse(value: ReviewResponseDto): ReviewResponse {
 
 export interface TranscriptEntry {
   sequence: number;
-  kind: "lifecycle" | "prompt" | "model_output" | "tool_call" | "tool_result" | "skill_loaded" | "model_started" | "model_reasoning_delta" | "model_reasoning_completed" | "model_output_delta" | "model_output_completed" | "model_completed" | "model_raw_output";
+  kind: "lifecycle" | "prompt" | "model_output" | "tool_call" | "invalid_tool_call" | "tool_result" | "skill_loaded" | "model_started" | "model_reasoning_delta" | "model_reasoning_completed" | "model_output_delta" | "model_output_completed" | "model_completed" | "model_raw_output";
   content: string;
   created_at: string;
   redacted: boolean;
@@ -81,11 +81,22 @@ export interface ToolUsageSummary {
   result_count: number;
 }
 
+export interface InvalidToolUsageSummary {
+  tool_name: string;
+  call_count: number;
+}
+
 export interface AgentProcessSummary {
   agent: string;
   model_name: string | null;
   llm_call_count: number;
   input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_input_tokens: number;
+  context_compaction_count?: number;
+  context_compacted_result_count?: number;
+  context_compaction_original_bytes?: number;
+  context_compaction_compressed_bytes?: number;
   output_tokens: number;
   total_tokens: number;
   tool_call_count: number;
@@ -101,9 +112,16 @@ export interface ReviewProcessReport {
   agent_run_count: number;
   llm_call_count: number;
   input_tokens: number;
+  cached_input_tokens: number;
+  cache_write_input_tokens: number;
+  context_compaction_count?: number;
+  context_compacted_result_count?: number;
+  context_compaction_original_bytes?: number;
+  context_compaction_compressed_bytes?: number;
   output_tokens: number;
   total_tokens: number;
   tool_call_count: number;
+  invalid_tool_call_count: number;
   tool_result_count: number;
   unmatched_tool_result_count: number;
   finding_count: number;
@@ -112,6 +130,7 @@ export interface ReviewProcessReport {
   completed_at: string | null;
   duration_ms: number | null;
   tools: ToolUsageSummary[];
+  invalid_tools: InvalidToolUsageSummary[];
   agents: AgentProcessSummary[];
 }
 

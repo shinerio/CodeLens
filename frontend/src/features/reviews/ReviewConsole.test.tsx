@@ -393,9 +393,16 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         agent_run_count: 3,
         llm_call_count: 9,
         input_tokens: 480,
+        cached_input_tokens: 120,
+        cache_write_input_tokens: 30,
+        context_compaction_count: 2,
+        context_compacted_result_count: 5,
+        context_compaction_original_bytes: 9000,
+        context_compaction_compressed_bytes: 600,
         output_tokens: 120,
         total_tokens: 600,
         tool_call_count: 3,
+        invalid_tool_call_count: 1,
         tool_result_count: 3,
         unmatched_tool_result_count: 0,
         finding_count: 1,
@@ -408,10 +415,11 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
           { tool_name: "get_diff", call_count: 1, result_count: 1 },
           { tool_name: "verdict", call_count: 1, result_count: 1 },
         ],
+        invalid_tools: [{ tool_name: "grep_create_triggered", call_count: 1 }],
         agents: [
-          { agent: "security:v2", model_name: "model", llm_call_count: 2, input_tokens: 80, output_tokens: 20, total_tokens: 100, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
-          { agent: "performance:v2", model_name: "model", llm_call_count: 3, input_tokens: 160, output_tokens: 40, total_tokens: 200, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
-          { agent: "review-verifier:v2", model_name: "model", llm_call_count: 4, input_tokens: 240, output_tokens: 60, total_tokens: 300, tool_call_count: 1, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
+          { agent: "security:v2", model_name: "model", llm_call_count: 2, input_tokens: 80, cached_input_tokens: 20, cache_write_input_tokens: 5, output_tokens: 20, total_tokens: 100, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
+          { agent: "performance:v2", model_name: "model", llm_call_count: 3, input_tokens: 160, cached_input_tokens: 40, cache_write_input_tokens: 10, output_tokens: 40, total_tokens: 200, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
+          { agent: "review-verifier:v2", model_name: "model", llm_call_count: 4, input_tokens: 240, cached_input_tokens: 60, cache_write_input_tokens: 15, output_tokens: 60, total_tokens: 300, tool_call_count: 1, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
         ],
       }}
       plan={{
@@ -437,7 +445,16 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
   );
 
   const report = screen.getByRole("article", { name: "Process report" });
-  expect(within(report).getByText("600")).toBeInTheDocument();
+  const totalTokens = within(report).getByText("Total tokens").closest("div");
+  expect(totalTokens).not.toBeNull();
+  if (totalTokens === null) throw new Error("Total tokens metric is missing");
+  expect(within(totalTokens).getByText("600")).toBeInTheDocument();
+  expect(within(report).getByText("grep_create_triggered")).toBeInTheDocument();
+  const cachedTokensMetric = within(report).getByText("Cached input tokens").closest("div");
+  expect(cachedTokensMetric).not.toBeNull();
+  if (cachedTokensMetric === null) throw new Error("Cached input tokens metric is missing");
+  expect(within(cachedTokensMetric).getByText("120")).toBeInTheDocument();
+  expect(within(report).getByText("9,000")).toBeInTheDocument();
 
   fireEvent.click(screen.getByRole("button", { name: /Reviewers/ }));
   expect(within(report).getByText("300")).toBeInTheDocument();

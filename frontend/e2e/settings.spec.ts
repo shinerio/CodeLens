@@ -8,7 +8,7 @@ test("persists the recent repository limit without layout overflow", async ({ pa
     exact: true,
   });
   const saveButton = page.getByRole("button", {
-    name: "Save recent repository limit",
+    name: "Save review settings",
   });
   await expect(limitInput).toBeEnabled();
   if ((await limitInput.inputValue()) !== "12") {
@@ -70,10 +70,26 @@ test("persists the recent repository limit without layout overflow", async ({ pa
     await expect(input).toHaveAttribute("max", limit.max);
   }
 
-  const reviewSettingsField = limitInput.locator("xpath=..");
+  const compactionCheckbox = page.getByRole("checkbox", {
+    name: "Enable deterministic context compaction",
+  });
+  await expect(compactionCheckbox).toBeChecked();
+  const checkboxField = compactionCheckbox.locator("xpath=..");
+  const [checkboxBox, checkboxFieldBox] = await Promise.all([
+    compactionCheckbox.boundingBox(),
+    checkboxField.boundingBox(),
+  ]);
+  expect(checkboxBox).not.toBeNull();
+  expect(checkboxFieldBox).not.toBeNull();
+  if (checkboxBox !== null && checkboxFieldBox !== null) {
+    expect(checkboxBox.width).toBeLessThanOrEqual(20);
+    expect(checkboxBox.x).toBeLessThanOrEqual(checkboxFieldBox.x + 24);
+  }
+
+  const reviewSettingsField = limitInput.locator("xpath=ancestor::section[1]");
   await expect(reviewSettingsField).toContainText("Recent repository limit");
   await expect(reviewSettingsField.getByRole("button", {
-    name: "Save recent repository limit",
+    name: "Save review settings",
   })).toHaveCount(1);
 
   const boxes = await Promise.all([

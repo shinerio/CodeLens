@@ -488,6 +488,20 @@
   transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
+.settings-field--toggle {
+  align-content: start;
+}
+
+.settings-field input.settings-field__checkbox {
+  width: 18px;
+  height: 18px;
+  min-width: 18px;
+  justify-self: start;
+  margin: 0;
+  padding: 0;
+  accent-color: var(--settings-accent);
+}
+
 .settings-field textarea {
   resize: vertical;
   overflow-wrap: anywhere;

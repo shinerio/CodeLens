@@ -17,6 +17,7 @@ TranscriptKind = Literal[
     "prompt",
     "model_output",
     "tool_call",
+    "invalid_tool_call",
     "tool_result",
     "skill_loaded",
     "model_started",

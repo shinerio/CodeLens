@@ -236,6 +236,14 @@ frontend/src/
 - 非 HTTPS 的远程模型 Base URL 会明文传输凭证和 Review 内容，界面必须显式警告；是否使用该受信任网络边界由本机操作者决定。
 - 数据库结构只能通过 Alembic migration 演进；v2 初始版本只保留 `0001_codelens_v2` 一个 `down_revision = None` 的基线 revision，从空数据库直接创建最终 v2 Schema。系统不识别或升级任何 v1 revision，也不包含 backfill、旧列改名或旧表搬运脚本。持久化任务和事件必须支持幂等、重启恢复及部分失败。
 
+### 6.1 运行期成本与诊断契约
+
+- 每个系统语言包必须包含 `context-compaction.md`，用于提供旧证据被确定性压缩后的本地化重读说明；该说明属于平台系统提示词，不能由 Agent 自定义 Prompt 覆盖。
+- `/api/settings/tool-limits` 持久化 `context_compaction_enabled`、`context_compaction_trigger_bytes`、`context_compaction_target_bytes` 和 `context_compaction_keep_recent_evidence_results`；默认分别为开启、128 KiB、32 KiB 和 6，target 必须严格小于 trigger。HTTP 契约和持久化继续使用字节，设置界面的容量字段统一换算为 KB 展示和输入。Runtime 在每个 Agent Run 启动时读取一次并冻结该组配置，运行中的设置变更只影响后续 Run。
+- 每次供应商调用前，Runtime 通过 Agents SDK `call_model_input_filter` 确定性压缩已经进入较旧历史的只读证据工具结果。证据正文总字节数达到 trigger 后，按最早优先批量压缩直到不高于 target 或没有可压缩结果；最近配置的 N 条证据结果始终保留。只有 `find_files`、`grep`、`read_file` 和 `get_diff` 的结果正文可以替换为包含稳定版本标记、工具名、参数、原 call ID、原始字节数和本地化重读说明的有界占位对象；已压缩占位不得嵌套或反复改写。模型历史输出、可见推理摘要、系统提示、仓库规则、初始 `review_files`、`comment`、`task_done`、Planner 与 Verifier 输出/控制工具结果必须完整保留。压缩不得改变宿主已记录的 diff 覆盖、候选状态或完整脱敏 Transcript；占位对象本身不构成证据，模型需要精确正文时必须重新调用对应工具。
+- 过程报告必须返回压缩次数、被压缩结果数、压缩前后字节数，以及供应商报告的缓存命中/写入 input token。一次逻辑 Agent Run 内的 provider 重试不增加 Agent Run 数，也不应导致 `usage_is_complete=false`。
+- 模型产生的工具名不在当前冻结 allowlist 时，Runtime 必须记录独立的非法工具调用事件；过程报告返回非法工具名及次数，且不得把它计入正常工具调用与结果统计。
+
 ## 7. 架构治理
 
 架构设计或调整完成前至少确认：

@@ -32,6 +32,10 @@ class ToolLimitsService:
         short_text_max: int | None = None,
         long_text_max: int | None = None,
         task_summary_max: int | None = None,
+        context_compaction_enabled: bool | None = None,
+        context_compaction_trigger_bytes: int | None = None,
+        context_compaction_target_bytes: int | None = None,
+        context_compaction_keep_recent_evidence_results: int | None = None,
     ) -> ToolLimits:
         """Merge partial updates into the current limits and atomically persist."""
 
@@ -60,6 +64,26 @@ class ToolLimitsService:
             long_text_max=long_text_max if long_text_max is not None else current.long_text_max,
             task_summary_max=(
                 task_summary_max if task_summary_max is not None else current.task_summary_max
+            ),
+            context_compaction_enabled=(
+                context_compaction_enabled
+                if context_compaction_enabled is not None
+                else current.context_compaction_enabled
+            ),
+            context_compaction_trigger_bytes=(
+                context_compaction_trigger_bytes
+                if context_compaction_trigger_bytes is not None
+                else current.context_compaction_trigger_bytes
+            ),
+            context_compaction_target_bytes=(
+                context_compaction_target_bytes
+                if context_compaction_target_bytes is not None
+                else current.context_compaction_target_bytes
+            ),
+            context_compaction_keep_recent_evidence_results=(
+                context_compaction_keep_recent_evidence_results
+                if context_compaction_keep_recent_evidence_results is not None
+                else current.context_compaction_keep_recent_evidence_results
             ),
         )
         await asyncio.to_thread(self._store.save_tool_limits, limits)

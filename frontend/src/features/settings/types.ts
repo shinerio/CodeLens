@@ -113,6 +113,10 @@ export type ToolLimits = {
   short_text_max: number;
   long_text_max: number;
   task_summary_max: number;
+  context_compaction_enabled: boolean;
+  context_compaction_trigger_bytes: number;
+  context_compaction_target_bytes: number;
+  context_compaction_keep_recent_evidence_results: number;
 };
 
 export type ResetAllSettingsResponse = {

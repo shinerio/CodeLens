@@ -71,6 +71,7 @@ const DEFAULT_TOOL_TIMEOUT_SECONDS = 30;
 const DEFAULT_MAX_RETRIES = 10;
 const DEFAULT_RETRY_BACKOFF_BASE = 1.0;
 const DEFAULT_RETRY_MAX_DELAY = 30.0;
+const BYTES_PER_KILOBYTE = 1024;
 
 export function SettingsPage() {
   const { t } = useI18n();
@@ -514,7 +515,10 @@ export function SettingsPage() {
     instructionFileSettingsMutation.isPending ||
     reviewCompletionSettingsMutation.isPending ||
     triggerIdempotencySettingsMutation.isPending;
-  const areToolLimitsValid = toolLimitsDraft !== null;
+  const areToolLimitsValid =
+    toolLimitsDraft !== null &&
+    toolLimitsDraft.context_compaction_target_bytes <
+      toolLimitsDraft.context_compaction_trigger_bytes;
   const areToolLimitsUnchanged =
     toolLimitsDraft === null ||
     JSON.stringify(toolLimitsDraft) === JSON.stringify(toolLimitsQuery.data);
@@ -1166,11 +1170,11 @@ export function SettingsPage() {
                   <span className="settings-field__label">{t("settings.maxReadBytes")}</span>
                   <input
                     type="number"
-                    min={1024}
-                    max={10485760}
-                    value={toolLimitsDraft.max_read_bytes}
+                    min={1}
+                    max={10240}
+                    value={toolLimitsDraft.max_read_bytes / BYTES_PER_KILOBYTE}
                     onChange={(e) =>
-                      setToolLimitsDraft({ ...toolLimitsDraft, max_read_bytes: Number(e.currentTarget.value) })
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_read_bytes: Number(e.currentTarget.value) * BYTES_PER_KILOBYTE })
                     }
                   />
                 </label>
@@ -1178,11 +1182,11 @@ export function SettingsPage() {
                   <span className="settings-field__label">{t("settings.maxScanBytes")}</span>
                   <input
                     type="number"
-                    min={1024}
-                    max={104857600}
-                    value={toolLimitsDraft.max_scan_bytes}
+                    min={1}
+                    max={102400}
+                    value={toolLimitsDraft.max_scan_bytes / BYTES_PER_KILOBYTE}
                     onChange={(e) =>
-                      setToolLimitsDraft({ ...toolLimitsDraft, max_scan_bytes: Number(e.currentTarget.value) })
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_scan_bytes: Number(e.currentTarget.value) * BYTES_PER_KILOBYTE })
                     }
                   />
                 </label>
@@ -1190,11 +1194,11 @@ export function SettingsPage() {
                   <span className="settings-field__label">{t("settings.maxSourceBytes")}</span>
                   <input
                     type="number"
-                    min={1024}
-                    max={104857600}
-                    value={toolLimitsDraft.max_source_bytes}
+                    min={1}
+                    max={102400}
+                    value={toolLimitsDraft.max_source_bytes / BYTES_PER_KILOBYTE}
                     onChange={(e) =>
-                      setToolLimitsDraft({ ...toolLimitsDraft, max_source_bytes: Number(e.currentTarget.value) })
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_source_bytes: Number(e.currentTarget.value) * BYTES_PER_KILOBYTE })
                     }
                   />
                 </label>
@@ -1292,6 +1296,70 @@ export function SettingsPage() {
                     value={toolLimitsDraft.task_summary_max}
                     onChange={(e) =>
                       setToolLimitsDraft({ ...toolLimitsDraft, task_summary_max: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field settings-field--toggle">
+                  <span className="settings-field__label">{t("settings.contextCompactionEnabled")}</span>
+                  <input
+                    aria-label={t("settings.contextCompactionEnabled")}
+                    className="settings-field__checkbox"
+                    type="checkbox"
+                    checked={toolLimitsDraft.context_compaction_enabled}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_enabled: event.currentTarget.checked,
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionTriggerBytes")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={102400}
+                    value={toolLimitsDraft.context_compaction_trigger_bytes / BYTES_PER_KILOBYTE}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_trigger_bytes:
+                          Number(event.currentTarget.value) * BYTES_PER_KILOBYTE,
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionTargetBytes")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={102400}
+                    value={toolLimitsDraft.context_compaction_target_bytes / BYTES_PER_KILOBYTE}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_target_bytes:
+                          Number(event.currentTarget.value) * BYTES_PER_KILOBYTE,
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionKeepRecent")}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={toolLimitsDraft.context_compaction_keep_recent_evidence_results}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_keep_recent_evidence_results: Number(
+                          event.currentTarget.value,
+                        ),
+                      })
                     }
                   />
                 </label>

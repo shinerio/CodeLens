@@ -68,24 +68,18 @@ def test_multi_specialist_plan_requires_one_batched_verifier() -> None:
 
 
 @pytest.mark.parametrize("reviewer_reference", ["general:v2", "security:v2"])
-def test_single_reviewer_plan_requires_verifier(reviewer_reference: str) -> None:
+def test_fixed_single_reviewer_plan_omits_verifier(reviewer_reference: str) -> None:
     reviewer = _node(reviewer_reference, ReviewPlanNodeType.REVIEWER, ReviewPass.REVIEWER)
-    verifier = _node(
-        "review-verifier:v2",
-        ReviewPlanNodeType.VERIFIER,
-        ReviewPass.VERIFIER,
-        shard_id="batch",
-        depends_on=(reviewer.node_id,),
-    )
     plan = ReviewPlan.create(
         task_id=TASK_ID,
         selection_mode="fixed",
         reviewer_references=(reviewer_reference,),
-        nodes=(reviewer, verifier),
+        nodes=(reviewer,),
         planner_reason=None,
     )
 
     assert plan.reviewer_references == (reviewer_reference,)
+    assert tuple(node.node_type for node in plan.nodes) == (ReviewPlanNodeType.REVIEWER,)
 
 
 def test_adaptive_plan_requires_a_planner_reason() -> None:

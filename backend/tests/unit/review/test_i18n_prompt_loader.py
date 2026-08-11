@@ -4,6 +4,7 @@ from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 
 PROMPT_ROOT = Path(__file__).parents[4] / "prompts"
 EXPECTED_BUNDLE_FILES = {
+    "context-compaction.md",
     "review-policy.md",
     "review-workflow.md",
     "review-feedback.md",
@@ -42,6 +43,8 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "side=old" in chinese.tools["comment"].description
     assert "does not fall on an actual changed diff line" in english.review_feedback
     assert "没有落在本次实际变更的 diff 行" in chinese.review_feedback
+    assert "not evidence" in english.context_compaction_notice
+    assert "不能作为证据" in chinese.context_compaction_notice
     assert "narrow path or pattern" in english.tools["find_files"].description
     assert "缩小 path 或细化 pattern" in chinese.tools["find_files"].description
     assert "file_pattern" in english.tools["grep"].description

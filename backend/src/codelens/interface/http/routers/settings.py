@@ -96,6 +96,12 @@ def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
         short_text_max=limits.short_text_max,
         long_text_max=limits.long_text_max,
         task_summary_max=limits.task_summary_max,
+        context_compaction_enabled=limits.context_compaction_enabled,
+        context_compaction_trigger_bytes=limits.context_compaction_trigger_bytes,
+        context_compaction_target_bytes=limits.context_compaction_target_bytes,
+        context_compaction_keep_recent_evidence_results=(
+            limits.context_compaction_keep_recent_evidence_results
+        ),
     )
 
 
@@ -399,20 +405,29 @@ async def update_tool_limits(
 ) -> ToolLimitsResponse:
     """Persist replacement tool limits for subsequent Agent runs."""
 
-    limits = await components.tool_limits.update(
-        max_results=request.max_results,
-        max_read_bytes=request.max_read_bytes,
-        max_scan_bytes=request.max_scan_bytes,
-        max_source_bytes=request.max_source_bytes,
-        max_lines=request.max_lines,
-        max_path_chars=request.max_path_chars,
-        max_pattern_chars=request.max_pattern_chars,
-        regex_timeout_seconds=request.regex_timeout_seconds,
-        comment_batch_size=request.comment_batch_size,
-        short_text_max=request.short_text_max,
-        long_text_max=request.long_text_max,
-        task_summary_max=request.task_summary_max,
-    )
+    try:
+        limits = await components.tool_limits.update(
+            max_results=request.max_results,
+            max_read_bytes=request.max_read_bytes,
+            max_scan_bytes=request.max_scan_bytes,
+            max_source_bytes=request.max_source_bytes,
+            max_lines=request.max_lines,
+            max_path_chars=request.max_path_chars,
+            max_pattern_chars=request.max_pattern_chars,
+            regex_timeout_seconds=request.regex_timeout_seconds,
+            comment_batch_size=request.comment_batch_size,
+            short_text_max=request.short_text_max,
+            long_text_max=request.long_text_max,
+            task_summary_max=request.task_summary_max,
+            context_compaction_enabled=request.context_compaction_enabled,
+            context_compaction_trigger_bytes=request.context_compaction_trigger_bytes,
+            context_compaction_target_bytes=request.context_compaction_target_bytes,
+            context_compaction_keep_recent_evidence_results=(
+                request.context_compaction_keep_recent_evidence_results
+            ),
+        )
+    except ValueError as error:
+        raise HttpProblem(422, "invalid_tool_limits", str(error)) from error
     return _tool_limits_response(limits)
 
 
@@ -477,6 +492,12 @@ async def reset_all_settings(
         short_text_max=default_tool_limits.short_text_max,
         long_text_max=default_tool_limits.long_text_max,
         task_summary_max=default_tool_limits.task_summary_max,
+        context_compaction_enabled=default_tool_limits.context_compaction_enabled,
+        context_compaction_trigger_bytes=default_tool_limits.context_compaction_trigger_bytes,
+        context_compaction_target_bytes=default_tool_limits.context_compaction_target_bytes,
+        context_compaction_keep_recent_evidence_results=(
+            default_tool_limits.context_compaction_keep_recent_evidence_results
+        ),
     )
 
     # Reset log level

@@ -1,0 +1,1 @@
+The complete tool-result body was moved out of the active model context after the host recorded the tool call and review-coverage effects. This placeholder is not evidence. Call the named tool again when exact evidence is required.

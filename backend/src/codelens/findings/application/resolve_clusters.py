@@ -1,4 +1,4 @@
-"""Cluster Candidate audit state and persist deterministic clusters.
+"""Cluster Candidate audit state and derive deterministic verdicts.
 
 The Final Verifier consumes the resulting ``FindingCluster`` objects via the
 verdict/merge tools. This module no longer carries a separate resolution or
@@ -10,6 +10,20 @@ from typing import Protocol
 from codelens.findings.application.cluster_candidates import CandidateClusterer
 from codelens.findings.domain.candidates import CandidateFinding
 from codelens.findings.domain.clusters import FindingCluster
+from codelens.findings.domain.verdict import VerdictDecision
+
+
+def direct_verdicts(clusters: tuple[FindingCluster, ...]) -> tuple[VerdictDecision, ...]:
+    """Accept direct-evidence clusters and retain all others as denied audit decisions."""
+
+    return tuple(
+        (
+            VerdictDecision.accept(cluster_ids=(cluster.cluster_id,))
+            if cluster.evidence_strength.value == "direct"
+            else VerdictDecision.deny(cluster_ids=(cluster.cluster_id,))
+        )
+        for cluster in clusters
+    )
 
 
 class ClusterStorePort(Protocol):

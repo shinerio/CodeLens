@@ -22,6 +22,10 @@ class _ToolLimitsPayload(TypedDict):
     short_text_max: int
     long_text_max: int
     task_summary_max: int
+    context_compaction_enabled: bool
+    context_compaction_trigger_bytes: int
+    context_compaction_target_bytes: int
+    context_compaction_keep_recent_evidence_results: int
 
 
 _INT_FIELDS = (
@@ -36,6 +40,9 @@ _INT_FIELDS = (
     "short_text_max",
     "long_text_max",
     "task_summary_max",
+    "context_compaction_trigger_bytes",
+    "context_compaction_target_bytes",
+    "context_compaction_keep_recent_evidence_results",
 )
 
 
@@ -55,8 +62,9 @@ class FilesystemToolLimitsStore:
             raise ValueError("tool limits are invalid")
         payload = cast(dict[object, object], raw)
         kwargs: dict[str, int | float] = {}
+        defaults = ToolLimits()
         for field in _INT_FIELDS:
-            value = payload.get(field)
+            value = payload.get(field, getattr(defaults, field))
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(f"tool limits field {field} is invalid")
             kwargs[field] = value
@@ -64,6 +72,12 @@ class FilesystemToolLimitsStore:
         if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
             raise ValueError("tool limits field regex_timeout_seconds is invalid")
         kwargs["regex_timeout_seconds"] = float(timeout)
+        enabled = payload.get(
+            "context_compaction_enabled", defaults.context_compaction_enabled
+        )
+        if not isinstance(enabled, bool):
+            raise ValueError("tool limits field context_compaction_enabled is invalid")
+        kwargs["context_compaction_enabled"] = enabled
         return ToolLimits(**kwargs)  # type: ignore[arg-type]
 
     def save_tool_limits(self, limits: ToolLimits) -> None:
@@ -89,6 +103,12 @@ class FilesystemToolLimitsStore:
             "short_text_max": limits.short_text_max,
             "long_text_max": limits.long_text_max,
             "task_summary_max": limits.task_summary_max,
+            "context_compaction_enabled": limits.context_compaction_enabled,
+            "context_compaction_trigger_bytes": limits.context_compaction_trigger_bytes,
+            "context_compaction_target_bytes": limits.context_compaction_target_bytes,
+            "context_compaction_keep_recent_evidence_results": (
+                limits.context_compaction_keep_recent_evidence_results
+            ),
         }
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:

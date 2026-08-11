@@ -32,10 +32,30 @@ def test_store_persists_and_reloads_limits(tmp_path: Path) -> None:
         short_text_max=480,
         long_text_max=16000,
         task_summary_max=16000,
+        context_compaction_enabled=False,
+        context_compaction_trigger_bytes=262_144,
+        context_compaction_target_bytes=131_072,
+        context_compaction_keep_recent_evidence_results=4,
     )
     store.save_tool_limits(custom)
     reloaded = store.get_tool_limits()
     assert reloaded == custom
+
+
+def test_store_loads_legacy_document_with_context_compaction_defaults(tmp_path: Path) -> None:
+    store = FilesystemToolLimitsStore(tmp_path)
+    store.save_tool_limits(ToolLimits())
+    path = tmp_path / "tool-limits.json"
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    for field in tuple(payload):
+        if field.startswith("context_compaction_"):
+            del payload[field]
+    path.write_text(json.dumps(payload), encoding="utf-8")
+
+    reloaded = store.get_tool_limits()
+
+    assert reloaded.context_compaction_enabled is True
+    assert reloaded.context_compaction_target_bytes < reloaded.context_compaction_trigger_bytes
 
 
 def test_store_overwrites_previous_limits(tmp_path: Path) -> None:

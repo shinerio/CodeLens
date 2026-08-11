@@ -19,7 +19,7 @@ from codelens.capabilities.infrastructure.builtin_profiles import (
     builtin_skill_policies,
 )
 from codelens.findings.application.publish_findings import FindingPublisher
-from codelens.findings.application.resolve_clusters import ClusterService
+from codelens.findings.application.resolve_clusters import ClusterService, direct_verdicts
 from codelens.findings.application.validate_candidates import CandidateValidator
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.review.application.context_builder import ContextBuilder
@@ -591,7 +591,8 @@ class WorkerReviewExecutor:
         if execution_spec_store is None or review_plan_store is None:
             raise ValueError("Fixed Review Plan persistence is unavailable")
         required_references = list(selection.reviewer_versions)
-        required_references.append("review-verifier:v2")
+        if len(selection.reviewer_versions) > 1:
+            required_references.append("review-verifier:v2")
         specs_by_reference = {spec.agent.reference: spec for spec in stored_specs.values()}
         missing_references = tuple(
             reference for reference in required_references if reference not in specs_by_reference
@@ -879,6 +880,7 @@ class WorkerReviewExecutor:
             None,
         )
         if verifier is None:
+            await self._verdict_store.save_decisions(task_id, direct_verdicts(clusters))
             return
         verifier_envelope = json.loads(prepared.input_payloads[verifier.node_id])
         verifier_role_context = verifier_envelope.setdefault("role_context", {})

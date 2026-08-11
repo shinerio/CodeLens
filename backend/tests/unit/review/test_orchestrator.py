@@ -420,6 +420,12 @@ async def test_streamed_model_events_publish_the_prompt_before_completion() -> N
         "model_name": "fake-model",
         "llm_call_count": "2",
         "input_tokens": "11",
+        "cached_input_tokens": "0",
+        "cache_write_input_tokens": "0",
+        "context_compaction_count": "0",
+        "context_compacted_result_count": "0",
+        "context_compaction_original_bytes": "0",
+        "context_compaction_compressed_bytes": "0",
         "output_tokens": "4",
         "total_tokens": "15",
     }
@@ -905,20 +911,11 @@ async def test_general_or_fixed_single_reviewer_failure_fails_task(
         logical_attempt_group="primary",
         depends_on=(),
     )
-    verifier = ReviewPlanNode.create(
-        task_id="review-1",
-        node_type=ReviewPlanNodeType.VERIFIER,
-        agent_reference="review-verifier:v2",
-        pass_index=ReviewPass.VERIFIER,
-        shard_id="batch",
-        logical_attempt_group="primary",
-        depends_on=(reviewer.node_id,),
-    )
     plan = ReviewPlan.create(
         task_id="review-1",
         selection_mode="fixed",
         reviewer_references=(reference,),
-        nodes=(reviewer, verifier),
+        nodes=(reviewer,),
         planner_reason=None,
     )
     workflow = MemoryWorkflow("preparing")

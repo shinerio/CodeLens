@@ -28,6 +28,10 @@ def test_tool_limits_returns_defaults_initially(tmp_path: Path) -> None:
     assert data["short_text_max"] == 240
     assert data["long_text_max"] == 8000
     assert data["task_summary_max"] == 8000
+    assert data["context_compaction_enabled"] is True
+    assert data["context_compaction_trigger_bytes"] == 131072
+    assert data["context_compaction_target_bytes"] == 32768
+    assert data["context_compaction_keep_recent_evidence_results"] == 6
 
 
 def test_tool_limits_update_and_persist(tmp_path: Path) -> None:
@@ -48,10 +52,15 @@ def test_tool_limits_update_and_persist(tmp_path: Path) -> None:
                 "short_text_max": 480,
                 "long_text_max": 16000,
                 "task_summary_max": 16000,
+                "context_compaction_enabled": False,
+                "context_compaction_trigger_bytes": 262144,
+                "context_compaction_target_bytes": 131072,
+                "context_compaction_keep_recent_evidence_results": 4,
             },
         )
         assert update.status_code == 200
         assert update.json()["max_results"] == 500
+        assert update.json()["context_compaction_enabled"] is False
 
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
         persisted = client.get("/api/settings/tool-limits")
@@ -78,6 +87,22 @@ def test_tool_limits_rejects_invalid_range(tmp_path: Path) -> None:
         too_large = client.put("/api/settings/tool-limits", json={"max_results": 99999})
         assert too_small.status_code == 422
         assert too_large.status_code == 422
+
+
+def test_tool_limits_rejects_compaction_target_not_smaller_than_trigger(
+    tmp_path: Path,
+) -> None:
+    settings = Settings(data_dir=tmp_path / "data")
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
+        response = client.put(
+            "/api/settings/tool-limits",
+            json={
+                "context_compaction_trigger_bytes": 65536,
+                "context_compaction_target_bytes": 65536,
+            },
+        )
+
+    assert response.status_code == 422
 
 
 def test_reset_all_restores_defaults(tmp_path: Path) -> None:

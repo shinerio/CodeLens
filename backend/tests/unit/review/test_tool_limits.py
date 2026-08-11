@@ -59,6 +59,11 @@ def test_default_tool_limits_are_within_bounds() -> None:
     assert limits.short_text_max == DEFAULT_SHORT_TEXT_MAX
     assert limits.long_text_max == DEFAULT_LONG_TEXT_MAX
     assert limits.task_summary_max == DEFAULT_TASK_SUMMARY_MAX
+    assert limits.context_compaction_enabled is True
+    assert limits.context_compaction_trigger_bytes == 128 * 1024
+    assert limits.context_compaction_target_bytes == 32 * 1024
+    assert limits.context_compaction_target_bytes < limits.context_compaction_trigger_bytes
+    assert limits.context_compaction_keep_recent_evidence_results == 6
 
 
 def test_tool_limits_accept_boundary_values() -> None:
@@ -123,6 +128,14 @@ def test_tool_limits_reject_out_of_range_values(field: str, invalid_value: int |
 def test_tool_limits_reject_boolean_values() -> None:
     with pytest.raises(ValueError, match="max_results"):
         ToolLimits(max_results=True)  # type: ignore[arg-type]
+
+
+def test_context_compaction_target_must_be_smaller_than_trigger() -> None:
+    with pytest.raises(ValueError, match="context_compaction_target_bytes"):
+        ToolLimits(
+            context_compaction_trigger_bytes=100_000,
+            context_compaction_target_bytes=100_000,
+        )
 
 
 def test_tool_limits_are_frozen() -> None:

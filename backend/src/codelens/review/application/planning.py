@@ -207,7 +207,9 @@ class ReviewPlanCompiler:
             required = list(reviewers)
             if selection_mode == "adaptive":
                 required.append("review-planner:v2")
-            required.append("review-verifier:v2")
+            should_run_verifier = selection_mode == "adaptive" or len(reviewers) > 1
+            if should_run_verifier:
+                required.append("review-verifier:v2")
             missing = [reference for reference in required if reference not in execution_specs]
             if missing:
                 raise ValueError(f"frozen execution spec is missing: {missing}")
@@ -312,15 +314,16 @@ class ReviewPlanCompiler:
         if planner_node:
             nodes.append(planner_node)
         nodes.extend(reviewer_nodes)
-        verifier = self._node(
-            task_id,
-            ReviewPlanNodeType.VERIFIER,
-            "review-verifier:v2",
-            ReviewPass.VERIFIER,
-            shard_id="batch",
-            depends_on=tuple(node.node_id for node in reviewer_nodes),
-        )
-        nodes.append(verifier)
+        if selection_mode == "adaptive" or len(reviewers) > 1:
+            verifier = self._node(
+                task_id,
+                ReviewPlanNodeType.VERIFIER,
+                "review-verifier:v2",
+                ReviewPass.VERIFIER,
+                shard_id="batch",
+                depends_on=tuple(node.node_id for node in reviewer_nodes),
+            )
+            nodes.append(verifier)
         guidance: tuple[ReviewerPlanGuidance, ...] = ()
         return ReviewPlan.create(
             task_id=task_id,

@@ -71,6 +71,19 @@ def test_fixed_compiler_builds_host_dag_without_planner() -> None:
     )
 
 
+def test_fixed_single_reviewer_plan_omits_verifier() -> None:
+    plan = _compiler().compile(
+        task_id=TASK_ID,
+        selection_mode="fixed",
+        reviewer_references=("general:v2",),
+        planner_selection=None,
+        execution_specs=_specs("general:v2"),
+        readiness=_ready(),
+    )
+
+    assert [node.agent_reference for node in plan.nodes] == ["general:v2"]
+
+
 def test_adaptive_rejects_general_plus_specialists() -> None:
     selection = PlannerSelection(
         schema_version="2",

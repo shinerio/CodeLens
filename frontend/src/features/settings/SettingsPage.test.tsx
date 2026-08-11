@@ -62,6 +62,10 @@ function toolLimitsResponse() {
     short_text_max: 240,
     long_text_max: 8000,
     task_summary_max: 8000,
+    context_compaction_enabled: true,
+    context_compaction_trigger_bytes: 131072,
+    context_compaction_target_bytes: 32768,
+    context_compaction_keep_recent_evidence_results: 6,
   }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
@@ -74,6 +78,47 @@ beforeEach(() => {
 });
 
 afterEach(() => cleanup());
+
+it("shows context and tool sizes in KB with compaction enabled by default", async () => {
+  fetchMock.mockImplementation((url: string) => {
+    if (url === "/api/settings/model-gateways") {
+      return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
+    }
+    if (url === "/api/settings/logging") {
+      return Promise.resolve(new Response(JSON.stringify({ level: "info" })));
+    }
+    if (url === "/api/settings/repositories") {
+      return Promise.resolve(new Response(JSON.stringify({ recent_repository_limit: 10 })));
+    }
+    if (url === "/api/settings/instruction-files") {
+      return Promise.resolve(instructionSettingsResponse());
+    }
+    if (url === "/api/settings/review-completion") {
+      return Promise.resolve(reviewCompletionSettingsResponse());
+    }
+    if (url === "/api/settings/trigger-idempotency") {
+      return Promise.resolve(triggerIdempotencySettingsResponse());
+    }
+    if (url === "/api/settings/tool-limits") {
+      return Promise.resolve(toolLimitsResponse());
+    }
+    if (url === "/api/settings/file-exclusions") {
+      return Promise.resolve(fileExclusionSettingsResponse());
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  expect(await screen.findByRole("spinbutton", { name: "Max read size (KB)" })).toHaveValue(64);
+  expect(screen.getByRole("spinbutton", { name: "Max scan size (KB)" })).toHaveValue(1024);
+  expect(screen.getByRole("spinbutton", { name: "Max source size (KB)" })).toHaveValue(1024);
+  expect(screen.getByRole("spinbutton", { name: "Context compaction trigger (KB)" })).toHaveValue(128);
+  expect(screen.getByRole("spinbutton", { name: "Context compaction target (KB)" })).toHaveValue(32);
+  expect(
+    screen.getByRole("checkbox", { name: "Enable deterministic context compaction" }),
+  ).toBeChecked();
+});
 
 it("creates the first persistent model gateway without retaining its API key", async () => {
   fetchMock

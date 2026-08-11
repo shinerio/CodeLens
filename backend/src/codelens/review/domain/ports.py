@@ -97,6 +97,8 @@ class AgentResponseDiagnostic:
     input_tokens: int
     output_tokens: int
     output_item_count: int
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
 
 
 @dataclass(frozen=True)
@@ -110,12 +112,28 @@ class UnvalidatedAgentOutput:
     output_tokens: int
     diagnostics: tuple[AgentResponseDiagnostic, ...]
     incomplete_review_files: tuple[str, ...] = ()
+    context_compaction_count: int = 0
+    context_compacted_result_count: int = 0
+    context_compaction_original_bytes: int = 0
+    context_compaction_compressed_bytes: int = 0
 
     @property
     def review_completion_status(self) -> AgentReviewCompletionStatus:
         """Classify an accepted Agent completion without duplicating its coverage evidence."""
 
         return "incomplete" if self.incomplete_review_files else "complete"
+
+    @property
+    def cached_input_tokens(self) -> int:
+        """Return provider-reported cache-hit input tokens across model requests."""
+
+        return sum(item.cached_input_tokens for item in self.diagnostics)
+
+    @property
+    def cache_write_input_tokens(self) -> int:
+        """Return provider-reported cache-write input tokens across model requests."""
+
+        return sum(item.cache_write_input_tokens for item in self.diagnostics)
 
 
 @dataclass(frozen=True)
@@ -132,6 +150,7 @@ class AgentRuntimeEvent:
         "model_completed",
         "model_raw_output",
         "tool_call",
+        "invalid_tool_call",
         "tool_result",
         "skill_loaded",
         "lifecycle",

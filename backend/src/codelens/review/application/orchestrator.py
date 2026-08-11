@@ -31,6 +31,7 @@ type TranscriptKind = Literal[
     "prompt",
     "model_output",
     "tool_call",
+    "invalid_tool_call",
     "tool_result",
     "skill_loaded",
     "model_started",
@@ -362,6 +363,8 @@ class ReviewOrchestrator:
                     await self._finish_persisted_task(task_id, status)
                     return
             elif verifier is None and reviewers_terminal:
+                if self._prepare_verdict is not None:
+                    await self._prepare_verdict(task_id, prepared)
                 if self._publish_findings is not None:
                     await self._publish_findings(task_id)
                 await self._finish_persisted_task(task_id, status)
@@ -496,6 +499,18 @@ class ReviewOrchestrator:
                     "model_name": output.model_name,
                     "llm_call_count": str(len(output.diagnostics)),
                     "input_tokens": str(output.input_tokens),
+                    "cached_input_tokens": str(output.cached_input_tokens),
+                    "cache_write_input_tokens": str(output.cache_write_input_tokens),
+                    "context_compaction_count": str(output.context_compaction_count),
+                    "context_compacted_result_count": str(
+                        output.context_compacted_result_count
+                    ),
+                    "context_compaction_original_bytes": str(
+                        output.context_compaction_original_bytes
+                    ),
+                    "context_compaction_compressed_bytes": str(
+                        output.context_compaction_compressed_bytes
+                    ),
                     "output_tokens": str(output.output_tokens),
                     "total_tokens": str(output.input_tokens + output.output_tokens),
                 },

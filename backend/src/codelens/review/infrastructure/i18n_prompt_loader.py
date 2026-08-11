@@ -109,4 +109,5 @@ class I18nPromptLoader(I18nPromptLoaderPort):
             tool_loop_warning=read_markdown("tool-loop-warning.md"),
             tools=MappingProxyType(tools),
             review_feedback=read_markdown("review-feedback.md"),
+            context_compaction_notice=read_markdown("context-compaction.md"),
         )

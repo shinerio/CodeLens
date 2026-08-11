@@ -6,6 +6,22 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
+_STABLE_REVIEW_TOOL_NAMES = frozenset(
+    {
+        "comment",
+        "finalize_plan",
+        "finalize_verdicts",
+        "find_files",
+        "get_diff",
+        "grep",
+        "merge",
+        "read_file",
+        "submit_review_plan",
+        "task_done",
+        "verdict",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ProcessTranscriptEntry:
@@ -28,6 +44,14 @@ class ToolUsageSummary:
 
 
 @dataclass(frozen=True)
+class InvalidToolUsageSummary:
+    """Aggregate provider-issued tool names rejected by the frozen allowlist."""
+
+    tool_name: str
+    call_count: int
+
+
+@dataclass(frozen=True)
 class AgentProcessSummary:
     """Aggregate provider usage and tool activity for one Agent version."""
 
@@ -35,6 +59,12 @@ class AgentProcessSummary:
     model_name: str | None
     llm_call_count: int
     input_tokens: int
+    cached_input_tokens: int
+    cache_write_input_tokens: int
+    context_compaction_count: int
+    context_compacted_result_count: int
+    context_compaction_original_bytes: int
+    context_compaction_compressed_bytes: int
     output_tokens: int
     total_tokens: int
     tool_call_count: int
@@ -53,9 +83,16 @@ class ReviewProcessReport:
     agent_run_count: int
     llm_call_count: int
     input_tokens: int
+    cached_input_tokens: int
+    cache_write_input_tokens: int
+    context_compaction_count: int
+    context_compacted_result_count: int
+    context_compaction_original_bytes: int
+    context_compaction_compressed_bytes: int
     output_tokens: int
     total_tokens: int
     tool_call_count: int
+    invalid_tool_call_count: int
     tool_result_count: int
     unmatched_tool_result_count: int
     finding_count: int
@@ -64,6 +101,7 @@ class ReviewProcessReport:
     completed_at: datetime | None
     duration_ms: int | None
     tools: tuple[ToolUsageSummary, ...]
+    invalid_tools: tuple[InvalidToolUsageSummary, ...]
     agents: tuple[AgentProcessSummary, ...]
 
 
@@ -72,6 +110,12 @@ class _AgentAccumulator:
     model_name: str | None = None
     llm_call_count: int = 0
     input_tokens: int = 0
+    cached_input_tokens: int = 0
+    cache_write_input_tokens: int = 0
+    context_compaction_count: int = 0
+    context_compacted_result_count: int = 0
+    context_compaction_original_bytes: int = 0
+    context_compaction_compressed_bytes: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
     tool_call_count: int = 0
@@ -93,9 +137,9 @@ def build_process_report(
     agents: dict[str, _AgentAccumulator] = defaultdict(_AgentAccumulator)
     tool_calls: dict[str, int] = defaultdict(int)
     tool_results: dict[str, int] = defaultdict(int)
+    invalid_tool_calls: dict[str, int] = defaultdict(int)
     calls_by_id: dict[tuple[str, str], str] = {}
     pending_calls: dict[str, deque[str]] = defaultdict(deque)
-    model_started_count = 0
     usage_entries = 0
     complete_usage_entries = 0
     tool_result_count = 0
@@ -105,7 +149,6 @@ def build_process_report(
         agent_name = entry.metadata.get("agent", "unknown")
         accumulator = agents[agent_name]
         if entry.kind == "model_started":
-            model_started_count += 1
             accumulator.started_at = _earliest(accumulator.started_at, entry.created_at)
         elif entry.kind == "model_completed":
             accumulator.completed_at = _latest(accumulator.completed_at, entry.created_at)
@@ -115,6 +158,24 @@ def build_process_report(
                 complete_usage_entries += 1
                 accumulator.llm_call_count += _non_negative_int(entry.metadata, "llm_call_count")
                 accumulator.input_tokens += _non_negative_int(entry.metadata, "input_tokens")
+                accumulator.cached_input_tokens += _non_negative_int(
+                    entry.metadata, "cached_input_tokens"
+                )
+                accumulator.cache_write_input_tokens += _non_negative_int(
+                    entry.metadata, "cache_write_input_tokens"
+                )
+                accumulator.context_compaction_count += _non_negative_int(
+                    entry.metadata, "context_compaction_count"
+                )
+                accumulator.context_compacted_result_count += _non_negative_int(
+                    entry.metadata, "context_compacted_result_count"
+                )
+                accumulator.context_compaction_original_bytes += _non_negative_int(
+                    entry.metadata, "context_compaction_original_bytes"
+                )
+                accumulator.context_compaction_compressed_bytes += _non_negative_int(
+                    entry.metadata, "context_compaction_compressed_bytes"
+                )
                 accumulator.output_tokens += _non_negative_int(entry.metadata, "output_tokens")
                 accumulator.total_tokens += _non_negative_int(entry.metadata, "total_tokens")
                 accumulator.model_name = entry.metadata.get("model_name") or accumulator.model_name
@@ -122,12 +183,20 @@ def build_process_report(
         elif entry.kind == "tool_call":
             tool_name = entry.metadata.get("tool_name") or _legacy_tool_name(entry.content)
             tool_name = tool_name or "unknown"
+            if tool_name not in _STABLE_REVIEW_TOOL_NAMES:
+                # Explicit invalid-tool events were added after some transcripts existed.
+                # The frozen Review contract lets those legacy records be classified safely.
+                invalid_tool_calls[tool_name] += 1
+                continue
             tool_calls[tool_name] += 1
             accumulator.tool_call_count += 1
             pending_calls[agent_name].append(tool_name)
             call_id = entry.metadata.get("tool_call_id")
             if call_id:
                 calls_by_id[(agent_name, call_id)] = tool_name
+        elif entry.kind == "invalid_tool_call":
+            tool_name = entry.metadata.get("tool_name") or _legacy_tool_name(entry.content)
+            invalid_tool_calls[tool_name or "unknown"] += 1
         elif entry.kind == "tool_result":
             tool_result_count += 1
             call_id = entry.metadata.get("tool_call_id")
@@ -150,6 +219,12 @@ def build_process_report(
             model_name=value.model_name,
             llm_call_count=value.llm_call_count,
             input_tokens=value.input_tokens,
+            cached_input_tokens=value.cached_input_tokens,
+            cache_write_input_tokens=value.cache_write_input_tokens,
+            context_compaction_count=value.context_compaction_count,
+            context_compacted_result_count=value.context_compacted_result_count,
+            context_compaction_original_bytes=value.context_compaction_original_bytes,
+            context_compaction_compressed_bytes=value.context_compaction_compressed_bytes,
             output_tokens=value.output_tokens,
             total_tokens=value.total_tokens,
             tool_call_count=value.tool_call_count,
@@ -166,9 +241,15 @@ def build_process_report(
             tool_calls.items(), key=lambda item: (-item[1], item[0])
         )
     )
+    invalid_tools = tuple(
+        InvalidToolUsageSummary(tool_name, call_count)
+        for tool_name, call_count in sorted(
+            invalid_tool_calls.items(), key=lambda item: (-item[1], item[0])
+        )
+    )
     started_at = ordered[0].created_at if ordered else None
     completed_at = ordered[-1].created_at if ordered else None
-    agent_run_count = model_started_count or len(agent_summaries)
+    agent_run_count = len(agent_summaries)
     usage_is_complete = (
         usage_entries > 0
         and usage_entries == complete_usage_entries
@@ -182,9 +263,26 @@ def build_process_report(
         agent_run_count=agent_run_count,
         llm_call_count=sum(agent.llm_call_count for agent in agent_summaries),
         input_tokens=sum(agent.input_tokens for agent in agent_summaries),
+        cached_input_tokens=sum(agent.cached_input_tokens for agent in agent_summaries),
+        cache_write_input_tokens=sum(
+            agent.cache_write_input_tokens for agent in agent_summaries
+        ),
+        context_compaction_count=sum(
+            agent.context_compaction_count for agent in agent_summaries
+        ),
+        context_compacted_result_count=sum(
+            agent.context_compacted_result_count for agent in agent_summaries
+        ),
+        context_compaction_original_bytes=sum(
+            agent.context_compaction_original_bytes for agent in agent_summaries
+        ),
+        context_compaction_compressed_bytes=sum(
+            agent.context_compaction_compressed_bytes for agent in agent_summaries
+        ),
         output_tokens=sum(agent.output_tokens for agent in agent_summaries),
         total_tokens=sum(agent.total_tokens for agent in agent_summaries),
         tool_call_count=sum(tool.call_count for tool in tools),
+        invalid_tool_call_count=sum(tool.call_count for tool in invalid_tools),
         tool_result_count=tool_result_count,
         unmatched_tool_result_count=unmatched_tool_result_count,
         finding_count=finding_count,
@@ -193,6 +291,7 @@ def build_process_report(
         completed_at=completed_at,
         duration_ms=_duration_ms(started_at, completed_at),
         tools=tools,
+        invalid_tools=invalid_tools,
         agents=agent_summaries,
     )
 
@@ -257,6 +356,12 @@ def _has_activity(value: _AgentAccumulator) -> bool:
         (
             value.llm_call_count,
             value.input_tokens,
+            value.cached_input_tokens,
+            value.cache_write_input_tokens,
+            value.context_compaction_count,
+            value.context_compacted_result_count,
+            value.context_compaction_original_bytes,
+            value.context_compaction_compressed_bytes,
             value.output_tokens,
             value.total_tokens,
             value.tool_call_count,

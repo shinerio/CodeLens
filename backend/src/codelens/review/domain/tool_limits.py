@@ -14,6 +14,10 @@ DEFAULT_COMMENT_BATCH_SIZE = 20
 DEFAULT_SHORT_TEXT_MAX = 240
 DEFAULT_LONG_TEXT_MAX = 8000
 DEFAULT_TASK_SUMMARY_MAX = 8000
+DEFAULT_CONTEXT_COMPACTION_ENABLED = True
+DEFAULT_CONTEXT_COMPACTION_TRIGGER_BYTES = 128 * 1024
+DEFAULT_CONTEXT_COMPACTION_TARGET_BYTES = 32 * 1024
+DEFAULT_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 6
 
 MIN_MAX_RESULTS = 1
 MAX_MAX_RESULTS = 10_000
@@ -39,6 +43,10 @@ MIN_LONG_TEXT_MAX = 1
 MAX_LONG_TEXT_MAX = 64_000
 MIN_TASK_SUMMARY_MAX = 1
 MAX_TASK_SUMMARY_MAX = 64_000
+MIN_CONTEXT_COMPACTION_BYTES = 1024
+MAX_CONTEXT_COMPACTION_BYTES = 100 * 1024 * 1024
+MIN_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 0
+MAX_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 100
 
 
 @dataclass(frozen=True)
@@ -57,6 +65,12 @@ class ToolLimits:
     short_text_max: int = DEFAULT_SHORT_TEXT_MAX
     long_text_max: int = DEFAULT_LONG_TEXT_MAX
     task_summary_max: int = DEFAULT_TASK_SUMMARY_MAX
+    context_compaction_enabled: bool = DEFAULT_CONTEXT_COMPACTION_ENABLED
+    context_compaction_trigger_bytes: int = DEFAULT_CONTEXT_COMPACTION_TRIGGER_BYTES
+    context_compaction_target_bytes: int = DEFAULT_CONTEXT_COMPACTION_TARGET_BYTES
+    context_compaction_keep_recent_evidence_results: int = (
+        DEFAULT_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS
+    )
 
     def __post_init__(self) -> None:
         for name, value, lo, hi in (
@@ -97,6 +111,31 @@ class ToolLimits:
                 MIN_TASK_SUMMARY_MAX,
                 MAX_TASK_SUMMARY_MAX,
             ),
+            (
+                "context_compaction_trigger_bytes",
+                self.context_compaction_trigger_bytes,
+                MIN_CONTEXT_COMPACTION_BYTES,
+                MAX_CONTEXT_COMPACTION_BYTES,
+            ),
+            (
+                "context_compaction_target_bytes",
+                self.context_compaction_target_bytes,
+                MIN_CONTEXT_COMPACTION_BYTES,
+                MAX_CONTEXT_COMPACTION_BYTES,
+            ),
+            (
+                "context_compaction_keep_recent_evidence_results",
+                self.context_compaction_keep_recent_evidence_results,
+                MIN_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS,
+                MAX_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS,
+            ),
         ):
             if isinstance(value, bool) or value < lo or value > hi:
                 raise ValueError(f"{name} must be between {lo} and {hi}")
+        if not isinstance(self.context_compaction_enabled, bool):
+            raise ValueError("context_compaction_enabled must be a boolean")
+        if self.context_compaction_target_bytes >= self.context_compaction_trigger_bytes:
+            raise ValueError(
+                "context_compaction_target_bytes must be smaller than "
+                "context_compaction_trigger_bytes"
+            )

@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import fields, is_dataclass, replace
+from dataclasses import dataclass, field, fields, is_dataclass, replace
 from typing import Any, Literal, Protocol, cast
 
 import httpx
@@ -31,7 +31,9 @@ from agents.exceptions import (
     ModelRefusalError,
     UserError,
 )
+from agents.items import TResponseInputItem
 from agents.result import RunResult
+from agents.run_config import CallModelData, ModelInputData
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -97,6 +99,168 @@ _FORBIDDEN_TOOL_CONTRACT_TERMS = (
     "context_plan",
     "precedence",
 )
+
+_EVIDENCE_TOOL_NAMES = frozenset({"find_files", "grep", "read_file", "get_diff"})
+_COMPACTION_MARKER = "codelens_context_compaction_v1"
+
+
+@dataclass
+class _ContextCompactionTracker:
+    """Accumulate unique, deterministic compaction effects for one Agent Run."""
+
+    compression_count: int = 0
+    compressed_result_count: int = 0
+    original_bytes: int = 0
+    compressed_bytes: int = 0
+    _placeholders: dict[str, str] = field(default_factory=dict)
+
+    def placeholder(self, call_id: str) -> str | None:
+        return self._placeholders.get(call_id)
+
+    def record(self, call_id: str, placeholder: str, original_bytes: int) -> None:
+        if call_id in self._placeholders:
+            return
+        self._placeholders[call_id] = placeholder
+        self.compressed_result_count += 1
+        self.original_bytes += original_bytes
+        self.compressed_bytes += len(placeholder.encode("utf-8"))
+
+
+def _compact_evidence_tool_results(
+    items: list[TResponseInputItem] | list[dict[str, object]],
+    *,
+    enabled: bool,
+    trigger_bytes: int,
+    target_bytes: int,
+    keep_recent_evidence_results: int,
+    notice: str,
+    tracker: _ContextCompactionTracker,
+) -> list[TResponseInputItem]:
+    """Replace oldest evidence bodies until the frozen target budget is reached."""
+
+    calls_by_id: dict[str, tuple[str, object]] = {}
+    evidence_outputs: list[tuple[int, str, str, object, object, int]] = []
+    normalized = [cast(TResponseInputItem, dict(item)) for item in items]
+    if not enabled:
+        return normalized
+    for item in normalized:
+        if item.get("type") != "function_call":
+            continue
+        call_id = item.get("call_id")
+        name = item.get("name")
+        if isinstance(call_id, str) and isinstance(name, str):
+            calls_by_id[call_id] = (name, item.get("arguments", "{}"))
+    for index, item in enumerate(normalized):
+        if item.get("type") != "function_call_output":
+            continue
+        call_id = item.get("call_id")
+        if not isinstance(call_id, str) or call_id not in calls_by_id:
+            continue
+        name, arguments = calls_by_id[call_id]
+        if name not in _EVIDENCE_TOOL_NAMES:
+            continue
+        output = item.get("output", "")
+        encoded_size = len(
+            (output if isinstance(output, str) else _json_value(output)).encode("utf-8")
+        )
+        evidence_outputs.append((index, call_id, name, arguments, output, encoded_size))
+    active_bytes = sum(item[5] for item in evidence_outputs)
+    if active_bytes < trigger_bytes:
+        return normalized
+
+    compactable_count = max(
+        0, len(evidence_outputs) - keep_recent_evidence_results
+    )
+    compressed_in_pass = 0
+    for index, call_id, name, arguments, output, encoded_size in evidence_outputs[
+        :compactable_count
+    ]:
+        if active_bytes <= target_bytes:
+            break
+        existing_placeholder = tracker.placeholder(call_id)
+        is_new_compaction = False
+        if existing_placeholder is not None:
+            compacted_output = existing_placeholder
+        elif _is_compaction_placeholder(output):
+            continue
+        else:
+            try:
+                parsed_arguments: object = (
+                    json.loads(arguments) if isinstance(arguments, str) else arguments
+                )
+            except json.JSONDecodeError:
+                parsed_arguments = str(arguments)[:2048]
+            compacted_output = json.dumps(
+                {
+                    "arguments": parsed_arguments,
+                    "call_id": call_id,
+                    "compaction": _COMPACTION_MARKER,
+                    "notice": notice,
+                    "original_bytes": encoded_size,
+                    "tool_name": name,
+                },
+                ensure_ascii=False,
+                sort_keys=True,
+                separators=(",", ":"),
+            )
+            if len(compacted_output.encode("utf-8")) >= encoded_size:
+                continue
+            tracker.record(call_id, compacted_output, encoded_size)
+            is_new_compaction = True
+        normalized[index] = cast(
+            TResponseInputItem,
+            {**normalized[index], "output": compacted_output},
+        )
+        compacted_size = len(compacted_output.encode("utf-8"))
+        active_bytes -= encoded_size - compacted_size
+        if is_new_compaction:
+            compressed_in_pass += 1
+    if compressed_in_pass > 0:
+        tracker.compression_count += 1
+    return normalized
+
+
+def _is_compaction_placeholder(output: object) -> bool:
+    if not isinstance(output, str):
+        return False
+    try:
+        value: object = json.loads(output)
+    except json.JSONDecodeError:
+        return False
+    return isinstance(value, dict) and value.get("compaction") == _COMPACTION_MARKER
+
+
+def _context_compaction_filter(
+    *, limits: ToolLimits, notice: str, tracker: _ContextCompactionTracker
+) -> Callable[[CallModelData[object]], ModelInputData]:
+    """Build one deterministic SDK pre-call filter for bounded evidence history."""
+
+    def compact(data: CallModelData[object]) -> ModelInputData:
+        return ModelInputData(
+            input=_compact_evidence_tool_results(
+                data.model_data.input,
+                enabled=limits.context_compaction_enabled,
+                trigger_bytes=limits.context_compaction_trigger_bytes,
+                target_bytes=limits.context_compaction_target_bytes,
+                keep_recent_evidence_results=(
+                    limits.context_compaction_keep_recent_evidence_results
+                ),
+                notice=notice,
+                tracker=tracker,
+            ),
+            instructions=data.model_data.instructions,
+        )
+
+    return compact
+
+
+def _cache_token_details(usage: object) -> tuple[int, int]:
+    """Read optional provider cache counters without treating omission as an error."""
+
+    details = getattr(usage, "input_tokens_details", None)
+    cached = getattr(details, "cached_tokens", 0) if details is not None else 0
+    cache_write = getattr(details, "cache_write_tokens", 0) if details is not None else 0
+    return int(cached or 0), int(cache_write or 0)
 
 
 class _RunnerPort(Protocol):
@@ -297,7 +461,15 @@ class OpenAIAgentRuntime:
                 *self._skill_instruction_sections(execution_spec),
             )
         )
-        run_config = RunConfig(trace_include_sensitive_data=False)
+        compaction_tracker = _ContextCompactionTracker()
+        run_config = RunConfig(
+            trace_include_sensitive_data=False,
+            call_model_input_filter=_context_compaction_filter(
+                limits=bounded_tool_limits,
+                notice=prompts.context_compaction_notice,
+                tracker=compaction_tracker,
+            ),
+        )
         investigation: object | None = None
         failure: _AgentFailure | None = None
         phase: Literal["investigation", "unknown"] = "investigation"
@@ -520,6 +692,8 @@ class OpenAIAgentRuntime:
                 input_tokens=response.usage.input_tokens,
                 output_tokens=response.usage.output_tokens,
                 output_item_count=len(response.output),
+                cached_input_tokens=_cache_token_details(response.usage)[0],
+                cache_write_input_tokens=_cache_token_details(response.usage)[1],
             )
             for response in result.raw_responses
         )
@@ -535,6 +709,10 @@ class OpenAIAgentRuntime:
             output_tokens=sum(item.output_tokens for item in diagnostics),
             diagnostics=diagnostics,
             incomplete_review_files=tool_context.incomplete_review_files,
+            context_compaction_count=compaction_tracker.compression_count,
+            context_compacted_result_count=compaction_tracker.compressed_result_count,
+            context_compaction_original_bytes=compaction_tracker.original_bytes,
+            context_compaction_compressed_bytes=compaction_tracker.compressed_bytes,
         )
         await client.close()
         return output
@@ -684,6 +862,9 @@ class OpenAIAgentRuntime:
         # Track call_id -> tool_name so tool_result entries carry the name of the
         # tool that produced them (the SDK's tool_output item has no name field).
         tool_names: dict[str, str] = {}
+        allowed_tool_names = {
+            str(getattr(tool, "name", "")) for tool in agent.tools if getattr(tool, "name", "")
+        }
         async with asyncio.timeout(timeout_seconds):
             async for event in stream.stream_events():
                 emitted = _visible_event(event)
@@ -692,6 +873,14 @@ class OpenAIAgentRuntime:
                 if emitted.kind == "tool_call":
                     call_id = emitted.metadata.get("tool_call_id")
                     name = emitted.metadata.get("tool_name")
+                    if name and name not in allowed_tool_names:
+                        emitted = AgentRuntimeEvent(
+                            "invalid_tool_call",
+                            emitted.content,
+                            emitted.metadata,
+                        )
+                        await sink(emitted)
+                        continue
                     if call_id and name:
                         tool_names[call_id] = name
                 elif emitted.kind == "tool_result":

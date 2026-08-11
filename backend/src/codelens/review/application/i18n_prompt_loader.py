@@ -23,6 +23,7 @@ class LocalizedSystemPrompts:
     tool_loop_warning: str
     tools: Mapping[str, SystemToolPrompt]
     review_feedback: str
+    context_compaction_notice: str
 
 
 class I18nPromptLoaderPort(Protocol):

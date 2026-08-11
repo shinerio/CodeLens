@@ -9,6 +9,7 @@ import httpx
 import pytest
 from agents import Agent, RunConfig, Usage
 from agents.exceptions import ModelBehaviorError
+from agents.run_config import CallModelData, ModelInputData
 from agents.tool_context import ToolContext
 from openai import APIConnectionError, InternalServerError, RateLimitError
 
@@ -23,9 +24,13 @@ from codelens.review.domain.errors import (
     PermanentAgentOutputError,
     TransientAgentRuntimeError,
 )
+from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.openai_runtime import (
+    _COMPACTION_MARKER,
     OpenAIAgentRuntime,
+    _compact_evidence_tool_results,
+    _ContextCompactionTracker,
     _split_agent_input,
 )
 from codelens.reviewer_catalog.domain.models import AgentVersion
@@ -47,9 +52,16 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 
 
 @dataclass(frozen=True)
+class FakeInputTokenDetails:
+    cached_tokens: int
+    cache_write_tokens: int
+
+
+@dataclass(frozen=True)
 class FakeUsage:
     input_tokens: int
     output_tokens: int
+    input_tokens_details: FakeInputTokenDetails | None = None
 
 
 @dataclass(frozen=True)
@@ -295,6 +307,164 @@ def test_host_role_context_is_not_model_visible() -> None:
     assert role_context["_host_run_id"].startswith("run_")
 
 
+def test_old_evidence_tool_results_are_compacted_without_touching_recent_or_output_tools() -> None:
+    items = [
+        {
+            "type": "function_call",
+            "call_id": "old",
+            "name": "get_diff",
+            "arguments": '{"path":"src/old.py"}',
+        },
+        {"type": "function_call_output", "call_id": "old", "output": "x" * 8000},
+        {
+            "type": "function_call",
+            "call_id": "comment",
+            "name": "comment",
+            "arguments": "{}",
+        },
+        {"type": "function_call_output", "call_id": "comment", "output": "y" * 80},
+        {
+            "type": "function_call",
+            "call_id": "recent",
+            "name": "read_file",
+            "arguments": '{"path":"src/recent.py"}',
+        },
+        {"type": "function_call_output", "call_id": "recent", "output": "z" * 80},
+    ]
+
+    tracker = _ContextCompactionTracker()
+    compacted = _compact_evidence_tool_results(
+        items,
+        enabled=True,
+        trigger_bytes=8000,
+        target_bytes=1000,
+        keep_recent_evidence_results=1,
+        notice="Earlier evidence was compacted; call the tool again for exact content.",
+        tracker=tracker,
+    )
+
+    old_output = compacted[1]["output"]
+    assert "compacted" in old_output
+    assert "src/old.py" in old_output
+    assert compacted[3]["output"] == "y" * 80
+    assert compacted[5]["output"] == "z" * 80
+    assert tracker.compression_count == 1
+    assert tracker.compressed_result_count == 1
+    assert tracker.original_bytes == 8000
+    assert tracker.compressed_bytes < tracker.original_bytes
+
+    repeated = _compact_evidence_tool_results(
+        compacted,
+        enabled=True,
+        trigger_bytes=100,
+        target_bytes=50,
+        keep_recent_evidence_results=1,
+        notice="Earlier evidence was compacted; call the tool again for exact content.",
+        tracker=tracker,
+    )
+    assert repeated[1]["output"] == old_output
+    assert tracker.compressed_result_count == 1
+
+
+def test_context_compaction_batches_oldest_results_to_target_and_preserves_recent() -> None:
+    items: list[dict[str, object]] = [
+        {"type": "message", "role": "assistant", "content": "visible reasoning summary"}
+    ]
+    for index in range(4):
+        call_id = f"call-{index}"
+        items.extend(
+            (
+                {
+                    "type": "function_call",
+                    "call_id": call_id,
+                    "name": "read_file",
+                    "arguments": json.dumps({"path": f"src/{index}.py"}),
+                },
+                {
+                    "type": "function_call_output",
+                    "call_id": call_id,
+                    "output": str(index) * 4000,
+                },
+            )
+        )
+
+    tracker = _ContextCompactionTracker()
+    compacted = _compact_evidence_tool_results(
+        items,
+        enabled=True,
+        trigger_bytes=10_000,
+        target_bytes=5_000,
+        keep_recent_evidence_results=1,
+        notice="Re-read for exact evidence.",
+        tracker=tracker,
+    )
+
+    assert compacted[0] == items[0]
+    assert all(_COMPACTION_MARKER in str(compacted[index]["output"]) for index in (2, 4, 6))
+    assert compacted[8]["output"] == "3" * 4000
+    assert tracker.compression_count == 1
+    assert tracker.compressed_result_count == 3
+    assert tracker.original_bytes == 12_000
+    assert tracker.compressed_bytes < tracker.original_bytes
+
+
+async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() -> None:
+    class RecordingToolLimitsService:
+        def __init__(self) -> None:
+            self.calls = 0
+            self.limits = ToolLimits(
+                    context_compaction_trigger_bytes=2048,
+                    context_compaction_target_bytes=1024,
+                context_compaction_keep_recent_evidence_results=0,
+            )
+
+        async def get(self) -> ToolLimits:
+            self.calls += 1
+            return self.limits
+
+    service = RecordingToolLimitsService()
+    runner = FakeRunner(FakeResult(None, ()))
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+        tool_limits_service=service,  # type: ignore[arg-type]
+    )
+
+    await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
+
+    assert service.calls == 1
+    assert runner.run_config is not None
+    assert runner.starting_agent is not None
+    input_filter = runner.run_config.call_model_input_filter
+    assert input_filter is not None
+    service.limits = replace(service.limits, context_compaction_enabled=False)
+    items = [
+        {
+            "type": "function_call",
+            "call_id": "frozen-call",
+            "name": "get_diff",
+            "arguments": '{"path":"src/frozen.py"}',
+        },
+        {
+            "type": "function_call_output",
+            "call_id": "frozen-call",
+            "output": "x" * 4000,
+        },
+    ]
+    filtered = input_filter(
+        CallModelData(
+            ModelInputData(input=items, instructions="stable-system-prompt"),
+            runner.starting_agent,
+            None,
+        )
+    )
+
+    assert _COMPACTION_MARKER in str(filtered.input[1]["output"])
+    assert filtered.instructions == "stable-system-prompt"
+
+
 def _planner_runtime_input() -> bytes:
     return json.dumps(
         {
@@ -420,7 +590,14 @@ async def test_successful_provider_responses_are_not_marked_as_parse_failures() 
     runner = FakeRunner(
         FakeResult(
             final_output=None,
-            raw_responses=(FakeResponse("resp_1", "req_1", FakeUsage(1, 1), ()),),
+            raw_responses=(
+                FakeResponse(
+                    "resp_1",
+                    "req_1",
+                    FakeUsage(11, 1, FakeInputTokenDetails(7, 3)),
+                    (),
+                ),
+            ),
         )
     )
     events = []
@@ -435,11 +612,15 @@ async def test_successful_provider_responses_are_not_marked_as_parse_failures() 
         runner=runner,
     )
 
-    await runtime.invoke_stream(_spec(), _runtime_input(), _snapshot(), "en", record_event)
+    output = await runtime.invoke_stream(
+        _spec(), _runtime_input(), _snapshot(), "en", record_event
+    )
 
     raw_events = [event for event in events if event.kind == "model_raw_output"]
     assert len(raw_events) == 1
     assert raw_events[0].metadata == {"parse_failed": "false", "response_index": "1"}
+    assert output.cached_input_tokens == 7
+    assert output.cache_write_input_tokens == 3
 
 
 async def test_accepted_task_done_stops_the_agent_without_another_model_turn() -> None:

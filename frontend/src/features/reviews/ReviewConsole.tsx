@@ -346,7 +346,7 @@ function isVisible(entry: ConsoleMessage, visibility: ConsoleVisibility) {
 }
 
 function isToolEntry(entry: TranscriptEntry) {
-  return entry.kind === "tool_call" || entry.kind === "tool_result";
+  return entry.kind === "tool_call" || entry.kind === "invalid_tool_call" || entry.kind === "tool_result";
 }
 
 function isDelta(entry: TranscriptEntry): entry is StreamingTranscriptEntry {

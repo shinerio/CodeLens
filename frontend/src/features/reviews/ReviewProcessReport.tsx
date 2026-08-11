@@ -34,6 +34,7 @@ export function ReviewProcessReport({
   const findingCount = isFiltered
     ? countCandidates(entries, selectedAgents)
     : report.finding_count;
+  const invalidTools = report.invalid_tools ?? [];
 
   return (
     <article
@@ -58,10 +59,37 @@ export function ReviewProcessReport({
         <Metric icon={Wrench} label={t("run.toolCalls")} value={number.format(totals.tool_call_count)} />
         <Metric icon={Clock3} label={t("run.duration")} value={formatDuration(totals.duration_ms, locale)} />
         <Metric icon={Coins} label={t("run.inputTokens")} value={number.format(totals.input_tokens)} />
+        <Metric icon={Coins} label={t("run.cachedInputTokens")} value={number.format(totals.cached_input_tokens ?? 0)} />
+        <Metric icon={Coins} label={t("run.cacheWriteInputTokens")} value={number.format(totals.cache_write_input_tokens ?? 0)} />
+        <Metric icon={Wrench} label={t("run.contextCompactions")} value={number.format(totals.context_compaction_count ?? 0)} />
+        <Metric icon={Wrench} label={t("run.contextCompactedResults")} value={number.format(totals.context_compacted_result_count ?? 0)} />
+        <Metric icon={Coins} label={t("run.contextCompactionOriginalBytes")} value={number.format(totals.context_compaction_original_bytes ?? 0)} />
+        <Metric icon={Coins} label={t("run.contextCompactionCompressedBytes")} value={number.format(totals.context_compaction_compressed_bytes ?? 0)} />
         <Metric icon={Coins} label={t("run.outputTokens")} value={number.format(totals.output_tokens)} />
         <Metric icon={Bot} label={t("run.agentRuns")} value={number.format(agents.length)} />
         <Metric icon={Wrench} label={t("run.findings")} value={number.format(findingCount)} />
       </dl>
+
+      {invalidTools.length > 0 ? (
+        <section aria-labelledby="invalid-tool-usage-heading">
+          <h3 id="invalid-tool-usage-heading">{t("run.invalidToolUsage")}</h3>
+          <p className="process-report__warning">{t("run.invalidToolUsageNote")}</p>
+          <div className="process-report__table">
+            <div className="process-report__row process-report__row--header">
+              <span>{t("run.invalidToolName")}</span>
+              <span>{t("run.calls")}</span>
+              <span>{t("run.results")}</span>
+            </div>
+            {invalidTools.map((tool) => (
+              <div className="process-report__row" key={tool.tool_name}>
+                <code>{tool.tool_name}</code>
+                <span>{number.format(tool.call_count)}</span>
+                <span>0</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
 
       <div className="process-report__tables">
         <section aria-labelledby="tool-usage-heading">
@@ -110,7 +138,7 @@ export function ReviewProcessReport({
 
 type UsageTotals = Pick<
   ProcessReport,
-  "llm_call_count" | "input_tokens" | "output_tokens" | "total_tokens" | "tool_call_count" | "duration_ms"
+  "llm_call_count" | "input_tokens" | "cached_input_tokens" | "cache_write_input_tokens" | "context_compaction_count" | "context_compacted_result_count" | "context_compaction_original_bytes" | "context_compaction_compressed_bytes" | "output_tokens" | "total_tokens" | "tool_call_count" | "duration_ms"
 >;
 
 function summarizeAgents(agents: readonly AgentProcessSummary[]): UsageTotals {
@@ -126,6 +154,12 @@ function summarizeAgents(agents: readonly AgentProcessSummary[]): UsageTotals {
   return {
     llm_call_count: agents.reduce((total, agent) => total + agent.llm_call_count, 0),
     input_tokens: agents.reduce((total, agent) => total + agent.input_tokens, 0),
+    cached_input_tokens: agents.reduce((total, agent) => total + (agent.cached_input_tokens ?? 0), 0),
+    cache_write_input_tokens: agents.reduce((total, agent) => total + (agent.cache_write_input_tokens ?? 0), 0),
+    context_compaction_count: agents.reduce((total, agent) => total + (agent.context_compaction_count ?? 0), 0),
+    context_compacted_result_count: agents.reduce((total, agent) => total + (agent.context_compacted_result_count ?? 0), 0),
+    context_compaction_original_bytes: agents.reduce((total, agent) => total + (agent.context_compaction_original_bytes ?? 0), 0),
+    context_compaction_compressed_bytes: agents.reduce((total, agent) => total + (agent.context_compaction_compressed_bytes ?? 0), 0),
     output_tokens: agents.reduce((total, agent) => total + agent.output_tokens, 0),
     total_tokens: agents.reduce((total, agent) => total + agent.total_tokens, 0),
     tool_call_count: agents.reduce((total, agent) => total + agent.tool_call_count, 0),

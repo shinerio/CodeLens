@@ -195,6 +195,14 @@ class ToolLimitsResponse(StrictDto):
     short_text_max: Annotated[int, Field(ge=64, le=2048)]
     long_text_max: Annotated[int, Field(ge=256, le=64_000)]
     task_summary_max: Annotated[int, Field(ge=256, le=64_000)]
+    context_compaction_enabled: bool
+    context_compaction_trigger_bytes: Annotated[
+        int, Field(ge=1024, le=100 * 1024 * 1024)
+    ]
+    context_compaction_target_bytes: Annotated[
+        int, Field(ge=1024, le=100 * 1024 * 1024)
+    ]
+    context_compaction_keep_recent_evidence_results: Annotated[int, Field(ge=0, le=100)]
 
 
 class UpdateToolLimitsRequest(StrictDto):
@@ -212,6 +220,16 @@ class UpdateToolLimitsRequest(StrictDto):
     short_text_max: Annotated[int | None, Field(ge=64, le=2048)] = None
     long_text_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
     task_summary_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
+    context_compaction_enabled: bool | None = None
+    context_compaction_trigger_bytes: Annotated[
+        int | None, Field(ge=1024, le=100 * 1024 * 1024)
+    ] = None
+    context_compaction_target_bytes: Annotated[
+        int | None, Field(ge=1024, le=100 * 1024 * 1024)
+    ] = None
+    context_compaction_keep_recent_evidence_results: Annotated[
+        int | None, Field(ge=0, le=100)
+    ] = None
 
 
 class FileExclusionSettingsResponse(StrictDto):
@@ -528,6 +546,13 @@ class ToolUsageResponse(StrictDto):
     result_count: Annotated[int, Field(ge=0)]
 
 
+class InvalidToolUsageResponse(StrictDto):
+    """Expose a provider-issued tool name rejected before dispatch."""
+
+    tool_name: str
+    call_count: Annotated[int, Field(ge=0)]
+
+
 class AgentProcessResponse(StrictDto):
     """Expose provider usage and tool activity for one Agent version."""
 
@@ -535,6 +560,12 @@ class AgentProcessResponse(StrictDto):
     model_name: str | None
     llm_call_count: Annotated[int, Field(ge=0)]
     input_tokens: Annotated[int, Field(ge=0)]
+    cached_input_tokens: Annotated[int, Field(ge=0)]
+    cache_write_input_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_count: Annotated[int, Field(ge=0)]
+    context_compacted_result_count: Annotated[int, Field(ge=0)]
+    context_compaction_original_bytes: Annotated[int, Field(ge=0)]
+    context_compaction_compressed_bytes: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
     total_tokens: Annotated[int, Field(ge=0)]
     tool_call_count: Annotated[int, Field(ge=0)]
@@ -552,9 +583,16 @@ class ReviewProcessReportResponse(StrictDto):
     agent_run_count: Annotated[int, Field(ge=0)]
     llm_call_count: Annotated[int, Field(ge=0)]
     input_tokens: Annotated[int, Field(ge=0)]
+    cached_input_tokens: Annotated[int, Field(ge=0)]
+    cache_write_input_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_count: Annotated[int, Field(ge=0)]
+    context_compacted_result_count: Annotated[int, Field(ge=0)]
+    context_compaction_original_bytes: Annotated[int, Field(ge=0)]
+    context_compaction_compressed_bytes: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
     total_tokens: Annotated[int, Field(ge=0)]
     tool_call_count: Annotated[int, Field(ge=0)]
+    invalid_tool_call_count: Annotated[int, Field(ge=0)]
     tool_result_count: Annotated[int, Field(ge=0)]
     unmatched_tool_result_count: Annotated[int, Field(ge=0)]
     finding_count: Annotated[int, Field(ge=0)]
@@ -563,6 +601,7 @@ class ReviewProcessReportResponse(StrictDto):
     completed_at: datetime | None
     duration_ms: Annotated[int, Field(ge=0)] | None
     tools: list[ToolUsageResponse]
+    invalid_tools: list[InvalidToolUsageResponse]
     agents: list[AgentProcessResponse]
 
     @classmethod

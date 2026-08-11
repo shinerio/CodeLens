@@ -141,20 +141,11 @@ def test_review_plan_projection_includes_derived_plan_hash(
             logical_attempt_group="primary",
             depends_on=(),
         )
-        verifier = ReviewPlanNode.create(
-            task_id=task_id,
-            node_type=ReviewPlanNodeType.VERIFIER,
-            agent_reference="review-verifier:v2",
-            pass_index=ReviewPass.VERIFIER,
-            shard_id="batch",
-            logical_attempt_group="primary",
-            depends_on=(reviewer.node_id,),
-        )
         plan = ReviewPlan.create(
             task_id=task_id,
             selection_mode="fixed",
             reviewer_references=("correctness:v2",),
-            nodes=(reviewer, verifier),
+            nodes=(reviewer,),
             planner_reason=None,
         )
         client.portal.call(
@@ -1010,8 +1001,22 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
                         "model_name": "gpt-5.1",
                         "llm_call_count": "2",
                         "input_tokens": "80",
+                        "cached_input_tokens": "30",
+                        "cache_write_input_tokens": "10",
+                        "context_compaction_count": "1",
+                        "context_compacted_result_count": "3",
+                        "context_compaction_original_bytes": "9000",
+                        "context_compaction_compressed_bytes": "600",
                         "output_tokens": "20",
                         "total_tokens": "100",
+                    },
+                ),
+                (
+                    "invalid_tool_call",
+                    "{}",
+                    {
+                        "agent": "correctness:v2",
+                        "tool_name": "grep_create_triggered",
                     },
                 ),
             ),
@@ -1027,7 +1032,17 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
     assert body["task_id"] == task_id
     assert body["status"] == "completed"
     assert body["llm_call_count"] == 2
+    assert body["cached_input_tokens"] == 30
+    assert body["cache_write_input_tokens"] == 10
+    assert body["context_compaction_count"] == 1
+    assert body["context_compacted_result_count"] == 3
+    assert body["context_compaction_original_bytes"] == 9000
+    assert body["context_compaction_compressed_bytes"] == 600
     assert body["total_tokens"] == 100
     assert body["tool_call_count"] == 1
+    assert body["invalid_tool_call_count"] == 1
     assert body["tools"] == [{"tool_name": "read_file", "call_count": 1, "result_count": 1}]
+    assert body["invalid_tools"] == [
+        {"tool_name": "grep_create_triggered", "call_count": 1}
+    ]
     assert body["usage_is_complete"] is True
