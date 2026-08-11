@@ -125,6 +125,7 @@ const EN_MESSAGES = {
   "settings.instructionLimitHint":
     "Root limits must be at least the nested limit. Allowed range: 1–10,000 lines.",
   "settings.saveInstructionLimits": "Save instruction file limits",
+  "settings.saveReviewSettings": "Save review settings",
   "settings.incompleteReviewRetryLimit": "Incomplete review retry limit",
   "settings.incompleteReviewRetryLimitHint":
     "Return incomplete task_done attempts to the model 0–20 times before finalizing with a coverage warning.",
@@ -742,6 +743,7 @@ const ZH_MESSAGES: Record<TranslationKey, string> = {
   "settings.recommendedLines": "建议值：{count} 行",
   "settings.instructionLimitHint": "根目录上限不得低于嵌套上限，可设置范围为 1–10,000 行。",
   "settings.saveInstructionLimits": "保存规则文件行数上限",
+  "settings.saveReviewSettings": "保存 Review 设置",
   "settings.incompleteReviewRetryLimit": "未完整 Review 最大打回次数",
   "settings.incompleteReviewRetryLimitHint":
     "当 task_done 尚未覆盖全部文件时，最多打回模型 0–20 次；之后保留现有意见并显示覆盖警告。",

@@ -550,7 +550,7 @@ it("updates the recent repository list limit", async () => {
   await waitFor(() => expect(limitInput).toBeEnabled());
   await user.clear(limitInput);
   await user.type(limitInput, "15");
-  const saveButton = screen.getByRole("button", { name: "Save recent repository limit" });
+  const saveButton = screen.getByRole("button", { name: "Save review settings" });
   await waitFor(() => expect(saveButton).toBeEnabled());
   await user.click(saveButton);
 
@@ -603,7 +603,7 @@ it("updates instruction file limits and omits credential handling details", asyn
   await user.type(rootLimit, "800");
   await user.clear(nestedLimit);
   await user.type(nestedLimit, "240");
-  await user.click(screen.getByRole("button", { name: "Save instruction file limits" }));
+  await user.click(screen.getByRole("button", { name: "Save review settings" }));
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/settings/instruction-files",
@@ -648,13 +648,65 @@ it("updates the maximum incomplete review retry count", async () => {
   await waitFor(() => expect(retryLimit).toBeEnabled());
   await user.clear(retryLimit);
   await user.type(retryLimit, "5");
-  await user.click(screen.getByRole("button", { name: "Save incomplete review retry limit" }));
+  await user.click(screen.getByRole("button", { name: "Save review settings" }));
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/settings/review-completion",
     expect.objectContaining({
       method: "PUT",
       body: JSON.stringify({ max_incomplete_review_retries: 5 }),
+    }),
+  );
+});
+
+it("uses one panel-level action for all review settings", async () => {
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    if (url === "/api/settings/model-gateways") {
+      return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
+    }
+    if (url === "/api/settings/logging") {
+      return Promise.resolve(new Response(JSON.stringify({ level: "info" })));
+    }
+    if (url === "/api/settings/repositories") {
+      return Promise.resolve(new Response(JSON.stringify({ recent_repository_limit: 10 })));
+    }
+    if (url === "/api/settings/instruction-files") {
+      return Promise.resolve(instructionSettingsResponse());
+    }
+    if (url === "/api/settings/review-completion") {
+      return Promise.resolve(reviewCompletionSettingsResponse());
+    }
+    if (url === "/api/settings/trigger-idempotency" && init?.method === "PUT") {
+      return Promise.resolve(triggerIdempotencySettingsResponse(true));
+    }
+    if (url === "/api/settings/trigger-idempotency") {
+      return Promise.resolve(triggerIdempotencySettingsResponse());
+    }
+    if (url === "/api/settings/file-exclusions") {
+      return Promise.resolve(fileExclusionSettingsResponse());
+    }
+    return Promise.resolve(toolLimitsResponse());
+  });
+  const user = userEvent.setup();
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  const reviewHeading = await screen.findByRole("heading", { name: "Review Settings" });
+  const reviewPanel = reviewHeading.closest("section");
+  expect(reviewPanel).not.toBeNull();
+  const panel = within(reviewPanel as HTMLElement);
+  expect(panel.getAllByRole("button")).toHaveLength(1);
+
+  const idempotencyCheckbox = panel.getByRole("checkbox", { name: "Trigger idempotency" });
+  expect(idempotencyCheckbox.closest("label")).toHaveClass("settings-field--checkbox");
+  await user.click(idempotencyCheckbox);
+  await user.click(panel.getByRole("button", { name: "Save review settings" }));
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/settings/trigger-idempotency",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
     }),
   );
 });

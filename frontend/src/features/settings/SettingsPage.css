@@ -721,3 +721,26 @@
   font-size: 0.72rem;
   line-height: 1.45;
 }
+
+.settings-panel__grid .settings-field--checkbox {
+  align-items: flex-start;
+  justify-content: flex-start;
+}
+
+.settings-panel__grid .settings-field--checkbox > span {
+  display: inline-flex;
+  align-items: center;
+  align-self: flex-start;
+  gap: 8px;
+  min-height: 44px;
+  color: var(--settings-ink);
+  font-size: 0.9rem;
+  font-weight: 700;
+}
+
+.settings-panel__grid .settings-field--checkbox input[type="checkbox"] {
+  width: auto;
+  height: auto;
+  margin: 0;
+  padding: 0;
+}

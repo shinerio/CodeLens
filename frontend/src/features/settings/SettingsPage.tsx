@@ -494,6 +494,26 @@ export function SettingsPage() {
   const isIncompleteReviewRetryLimitUnchanged =
     parsedIncompleteReviewRetryLimit ===
     reviewCompletionSettingsQuery.data?.max_incomplete_review_retries;
+  const isTriggerIdempotencyUnchanged =
+    triggerIdempotencyEnabledDraft === triggerIdempotencySettingsQuery.data?.enabled;
+  const areReviewSettingsValid =
+    isRecentRepositoryLimitValid &&
+    areInstructionLimitsValid &&
+    isIncompleteReviewRetryLimitValid;
+  const areReviewSettingsUnchanged =
+    isRecentRepositoryLimitUnchanged &&
+    areInstructionLimitsUnchanged &&
+    isIncompleteReviewRetryLimitUnchanged &&
+    isTriggerIdempotencyUnchanged;
+  const areReviewSettingsPending =
+    recentRepositorySettingsQuery.isPending ||
+    instructionFileSettingsQuery.isPending ||
+    reviewCompletionSettingsQuery.isPending ||
+    triggerIdempotencySettingsQuery.isPending ||
+    recentRepositorySettingsMutation.isPending ||
+    instructionFileSettingsMutation.isPending ||
+    reviewCompletionSettingsMutation.isPending ||
+    triggerIdempotencySettingsMutation.isPending;
   const areToolLimitsValid = toolLimitsDraft !== null;
   const areToolLimitsUnchanged =
     toolLimitsDraft === null ||
@@ -533,6 +553,28 @@ export function SettingsPage() {
     setMaxTokens(gateway.max_tokens);
     setThinkingLevel(gateway.thinking_level);
     setShowGatewayModal(true);
+  }
+
+  function handleSaveReviewSettings() {
+    if (!isRecentRepositoryLimitUnchanged) {
+      recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit);
+    }
+    if (!areInstructionLimitsUnchanged) {
+      instructionFileSettingsMutation.mutate({
+        root_max_lines: parsedRootInstructionLimit,
+        nested_max_lines: parsedNestedInstructionLimit,
+      });
+    }
+    if (!isIncompleteReviewRetryLimitUnchanged) {
+      reviewCompletionSettingsMutation.mutate({
+        max_incomplete_review_retries: parsedIncompleteReviewRetryLimit,
+      });
+    }
+    if (!isTriggerIdempotencyUnchanged) {
+      triggerIdempotencySettingsMutation.mutate({
+        enabled: triggerIdempotencyEnabledDraft,
+      });
+    }
   }
 
   function handleAddGateway() {
@@ -926,23 +968,6 @@ export function SettingsPage() {
                   onChange={(event) => setRecentRepositoryLimitDraft(event.currentTarget.value)}
                 />
                 <small>{t("settings.recentRepositoryLimitHint")}</small>
-                <div style={{ marginTop: "8px" }}>
-                  <button
-                    aria-label={t("settings.saveRecentRepositoryLimit")}
-                    className="settings-panel__save-button"
-                    disabled={
-                      recentRepositorySettingsMutation.isPending ||
-                      !isRecentRepositoryLimitValid ||
-                      isRecentRepositoryLimitUnchanged
-                    }
-                    type="button"
-                    onClick={() =>
-                      recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit)
-                    }
-                  >
-                    <Check aria-hidden="true" />
-                  </button>
-                </div>
               </div>
 
               <label className="settings-field">
@@ -996,79 +1021,37 @@ export function SettingsPage() {
                   }
                 />
                 <small>{t("settings.incompleteReviewRetryLimitHint")}</small>
-                <div style={{ marginTop: "8px" }}>
-                  <button
-                    aria-label={t("settings.saveReviewCompletion")}
-                    className="settings-panel__save-button"
-                    disabled={
-                      reviewCompletionSettingsMutation.isPending ||
-                      !isIncompleteReviewRetryLimitValid ||
-                      isIncompleteReviewRetryLimitUnchanged
-                    }
-                    type="button"
-                    onClick={() =>
-                      reviewCompletionSettingsMutation.mutate({
-                        max_incomplete_review_retries: parsedIncompleteReviewRetryLimit,
-                      })
-                    }
-                  >
-                    <Check aria-hidden="true" />
-                  </button>
-                </div>
               </div>
 
-              <div className="settings-field">
-                <label className="settings-field__label">
+              <label className="settings-field settings-field--checkbox">
+                <span>
                   <input
+                    aria-label={t("settings.triggerIdempotency")}
                     type="checkbox"
                     checked={triggerIdempotencyEnabledDraft}
                     onChange={(event) =>
                       setTriggerIdempotencyEnabledDraft(event.currentTarget.checked)
                     }
                     disabled={triggerIdempotencySettingsQuery.isPending}
-                    style={{ marginRight: "8px" }}
                   />
                   {t("settings.triggerIdempotency")}
-                </label>
+                </span>
                 <small>{t("settings.triggerIdempotencyHint")}</small>
-                <div style={{ marginTop: "8px" }}>
-                  <button
-                    aria-label={t("settings.saveTriggerIdempotency")}
-                    className="settings-panel__save-button"
-                    disabled={
-                      triggerIdempotencySettingsMutation.isPending ||
-                      triggerIdempotencyEnabledDraft === triggerIdempotencySettingsQuery.data?.enabled
-                    }
-                    type="button"
-                    onClick={() =>
-                      triggerIdempotencySettingsMutation.mutate({
-                        enabled: triggerIdempotencyEnabledDraft,
-                      })
-                    }
-                  >
-                    <Check aria-hidden="true" />
-                  </button>
-                </div>
-              </div>
+              </label>
             </div>
             <div className="settings-panel__actions">
               <button
                 className="settings-panel__save-button"
                 disabled={
-                  instructionFileSettingsMutation.isPending ||
-                  !areInstructionLimitsValid ||
-                  areInstructionLimitsUnchanged
+                  areReviewSettingsPending ||
+                  !areReviewSettingsValid ||
+                  areReviewSettingsUnchanged
                 }
                 type="button"
-                onClick={() =>
-                  instructionFileSettingsMutation.mutate({
-                    root_max_lines: parsedRootInstructionLimit,
-                    nested_max_lines: parsedNestedInstructionLimit,
-                  })
-                }
+                onClick={handleSaveReviewSettings}
               >
                 <Check aria-hidden="true" />
-                {t("settings.saveInstructionLimits")}
+                {t("settings.saveReviewSettings")}
               </button>
             </div>
           </section>
