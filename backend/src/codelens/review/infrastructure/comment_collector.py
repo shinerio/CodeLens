@@ -23,13 +23,20 @@ from codelens.review.application.settings import (
 )
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.line_resolver import split_and_normalize
-from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
+from codelens.review.infrastructure.location_resolver import (
+    LocationOutsideChangedHunkError,
+    SnapshotLocationResolver,
+)
 from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 from codelens.workspace.domain.models import ReviewSnapshot
 
 
 class CommentCandidateRejectedError(ValueError):
     """Report one semantically invalid candidate without rejecting its batch."""
+
+    def __init__(self, message: str, *, reason_code: str | None = None) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
 
 
 class _EvidenceTools(Protocol):
@@ -88,6 +95,7 @@ class ReviewCommentCollector:
     reviewer_reference: str
     reviewer_dimensions: tuple[str, ...]
     tools: _EvidenceTools
+    review_feedback: str | None = None
     tool_limits: ToolLimits = field(default_factory=ToolLimits)
     max_incomplete_review_retries: int = 3
     _candidates: list[CandidateFinding] = field(default_factory=list, init=False)
@@ -131,6 +139,11 @@ class ReviewCommentCollector:
                 submission.side,
                 submission.existing_code,
             )
+        except LocationOutsideChangedHunkError as error:
+            raise CommentCandidateRejectedError(
+                self.review_feedback or str(error),
+                reason_code="comment_outside_diff",
+            ) from error
         except ValueError as error:
             raise CommentCandidateRejectedError(str(error)) from error
         existing_code_hash = _normalized_excerpt_hash(submission.existing_code)
@@ -216,7 +229,10 @@ class ReviewCommentCollector:
             try:
                 await self.submit(submission)
             except CommentCandidateRejectedError as error:
-                rejected_comments.append({"index": index, "reason": str(error)})
+                rejection: dict[str, object] = {"index": index, "reason": str(error)}
+                if error.reason_code is not None:
+                    rejection["reason_code"] = error.reason_code
+                rejected_comments.append(rejection)
             else:
                 accepted_count += 1
         return json.dumps(

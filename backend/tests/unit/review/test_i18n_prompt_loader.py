@@ -6,6 +6,7 @@ PROMPT_ROOT = Path(__file__).parents[4] / "prompts"
 EXPECTED_BUNDLE_FILES = {
     "review-policy.md",
     "review-workflow.md",
+    "review-feedback.md",
     "tool-loop-warning.md",
     "tools.json",
 }
@@ -39,6 +40,8 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "side=old" in english.tools["comment"].description
     assert "不含 diff 标记和未变更上下文" in chinese.tools["comment"].description
     assert "side=old" in chinese.tools["comment"].description
+    assert "does not fall on an actual changed diff line" in english.review_feedback
+    assert "没有落在本次实际变更的 diff 行" in chinese.review_feedback
     assert "narrow path or pattern" in english.tools["find_files"].description
     assert "缩小 path 或细化 pattern" in chinese.tools["find_files"].description
     assert "file_pattern" in english.tools["grep"].description

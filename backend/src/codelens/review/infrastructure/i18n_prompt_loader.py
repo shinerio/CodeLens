@@ -108,4 +108,5 @@ class I18nPromptLoader(I18nPromptLoaderPort):
             review_workflow=read_markdown("review-workflow.md"),
             tool_loop_warning=read_markdown("tool-loop-warning.md"),
             tools=MappingProxyType(tools),
+            review_feedback=read_markdown("review-feedback.md"),
         )

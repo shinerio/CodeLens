@@ -22,6 +22,7 @@ class LocalizedSystemPrompts:
     review_workflow: str
     tool_loop_warning: str
     tools: Mapping[str, SystemToolPrompt]
+    review_feedback: str
 
 
 class I18nPromptLoaderPort(Protocol):

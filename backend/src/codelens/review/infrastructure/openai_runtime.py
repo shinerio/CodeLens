@@ -284,6 +284,7 @@ class OpenAIAgentRuntime:
             ),
             role_output_tools=role_output_tools,
             logical_run_id=_host_run_id(role_context),
+            review_feedback=prompts.review_feedback,
         )
         model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)

@@ -661,7 +661,8 @@ async def test_streaming_investigation_closes_client_after_a_non_streaming_run(
             max_turns: int,
             run_config: RunConfig,
         ) -> FakeResult:
-            client = starting_agent.model._client
+            provider_model = getattr(starting_agent.model, "delegate", starting_agent.model)
+            client = provider_model._client
             assert client.is_closed is False
             self.calls.append((starting_agent, input, max_turns))
             await self.complete_review(starting_agent)

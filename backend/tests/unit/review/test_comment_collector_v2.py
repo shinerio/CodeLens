@@ -29,7 +29,7 @@ class FakeEvidenceTools:
         if path == "src/deleted.py":
             content = "@@ -1 +0,0 @@\n-dangerous()\n"
         else:
-            content = "@@ -1 +1 @@\n-parse(body)\n+payload = parse(body)\n"
+            content = "@@ -2 +2 @@\n-parse(body)\n+payload = parse(body)\n"
         return json.dumps({"content": content})
 
     async def read_full_file(
@@ -39,7 +39,7 @@ class FakeEvidenceTools:
     ) -> str:
         if path == "src/deleted.py" and version == "base":
             return "dangerous()\n"
-        return "payload = parse(body)\n"
+        return "def handle() -> None:\n    payload = parse(body)\n"
 
     async def excerpt_identity(
         self,
@@ -79,8 +79,8 @@ def _snapshot() -> ReviewSnapshot:
                 ChangedHunk(
                     "new-hunk",
                     "src/webhook.py",
-                    1,
-                    1,
+                    2,
+                    2,
                     "new",
                     _hash(b"payload = parse(body)\n"),
                 ),
@@ -119,6 +119,7 @@ def _collector(
     *,
     reviewer_reference: str = "security:v2",
     reviewer_dimensions: tuple[str, ...] = ("security",),
+    review_feedback: str | None = None,
 ) -> ReviewCommentCollector:
     return ReviewCommentCollector(
         task_id="review-1",
@@ -127,6 +128,7 @@ def _collector(
         reviewer_reference=reviewer_reference,
         reviewer_dimensions=reviewer_dimensions,
         tools=FakeEvidenceTools(),
+        review_feedback=review_feedback,
     )
 
 
@@ -166,6 +168,27 @@ async def test_collector_rejects_items_independently() -> None:
         {"index": 0, "reason": "comment path is outside this Review"}
     ]
     assert len(collector.candidate_batch().candidates) == 1
+
+
+async def test_collector_returns_localized_feedback_for_an_unchanged_location() -> None:
+    feedback = "请聚焦本次代码修改，并将意见提在本次修改的代码行上。"
+    collector = _collector(review_feedback=feedback)
+
+    result = json.loads(
+        await collector.submit_many(
+            [_submission(existing_code="def handle() -> None:", title="Unchanged declaration")]
+        )
+    )
+
+    assert result["accepted_count"] == 0
+    assert result["rejected_comments"] == [
+        {
+            "index": 0,
+            "reason_code": "comment_outside_diff",
+            "reason": feedback,
+        }
+    ]
+    assert collector.candidate_batch().candidates == ()
 
 
 async def test_collector_rejects_duplicate_candidate_identity() -> None:

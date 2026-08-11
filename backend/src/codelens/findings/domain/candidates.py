@@ -34,7 +34,7 @@ class CandidateFinding:
     evidence_strength: EvidenceStrength
     primary_location: SourceLocation
     related_locations: tuple[SourceLocation, ...]
-    changed_hunk_id: str | None
+    changed_hunk_id: str
     existing_code_hash: str
     evidence_hashes: tuple[str, ...]
     content: str
