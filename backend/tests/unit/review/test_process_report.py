@@ -149,7 +149,7 @@ def test_host_prefetched_review_scope_has_no_tool_transcript_or_usage() -> None:
     assert report.tools == ()
 
 
-def test_process_report_treats_provider_retry_as_one_logical_agent_run() -> None:
+def test_process_report_marks_retry_usage_incomplete_without_every_attempt_usage() -> None:
     created_at = datetime(2026, 8, 11, 10, 0, tzinfo=UTC)
     agent = "review-verifier:v2"
     entries = (
@@ -191,7 +191,7 @@ def test_process_report_treats_provider_retry_as_one_logical_agent_run() -> None
     )
 
     assert report.agent_run_count == 1
-    assert report.usage_is_complete is True
+    assert report.usage_is_complete is False
     assert report.cached_input_tokens == 12_000
     assert report.cache_write_input_tokens == 3_000
     assert report.context_compaction_count == 2

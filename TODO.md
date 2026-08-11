@@ -4,6 +4,7 @@
 - [已实现第一阶段] 上下文达到可配置 trigger 时，确定性压缩最早的只读证据正文至 target，保留工具名、参数、调用 ID、原始大小、最近 N 条证据和重读提示；完整 Transcript、宿主覆盖状态以及输出/控制工具结果不变。后续若需要语义压缩审查对话，再设计可验证的结构化摘要（已确认问题、工具结论、已完成任务、待办任务、当前关注点），不得让摘要替代 Finding 证据。
 - 大范围 Review 分片：按目录或变更域生成稳定 shard，为每个 shard 限定 reviewer scope，并在团队 Review 中合并覆盖状态；需要保持同一 Snapshot、证据校验、幂等 checkpoint 和最终聚类语义。
 - Review 启动前成本预估：基于文件数、diff 字节数和 prompt token 估算计算可配置阈值，超限时给出明确提示，并评估自动分片或切换策略；阈值需要通过历史运行数据校准，不能把估算值作为实际 usage。
+- `FrozenAgentExecutionSpec.execution_limits.max_input_tokens` 当前仅参与冻结指纹和审计，Runtime 暂不执行硬限制；后续实现供应商感知的调用前 token 预算，并与上下文压缩协同，且不得改变 Snapshot、工具覆盖和 Finding 语义。
 - 多工具review结果去重
 - repository_root优化
 - 插件支持没触发trigger的情况下，使能report，report时填写pr或mr信息即可。

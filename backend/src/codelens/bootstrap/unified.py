@@ -298,9 +298,6 @@ def build_unified_backend(
         poll_min_seconds=0.05,
         poll_max_seconds=1.0,
         record_failure=executor.record_failure,
-        record_claim=lambda task_id: worker_transcripts.append(
-            task_id, "lifecycle", "Review execution started"
-        ),
     )
 
     # API components (sharing event_bus, review_store, worker_transcripts)

@@ -140,6 +140,7 @@ def build_process_report(
     invalid_tool_calls: dict[str, int] = defaultdict(int)
     calls_by_id: dict[tuple[str, str], str] = {}
     pending_calls: dict[str, deque[str]] = defaultdict(deque)
+    provider_attempt_count = 0
     usage_entries = 0
     complete_usage_entries = 0
     tool_result_count = 0
@@ -149,6 +150,7 @@ def build_process_report(
         agent_name = entry.metadata.get("agent", "unknown")
         accumulator = agents[agent_name]
         if entry.kind == "model_started":
+            provider_attempt_count += 1
             accumulator.started_at = _earliest(accumulator.started_at, entry.created_at)
         elif entry.kind == "model_completed":
             accumulator.completed_at = _latest(accumulator.completed_at, entry.created_at)
@@ -253,7 +255,7 @@ def build_process_report(
     usage_is_complete = (
         usage_entries > 0
         and usage_entries == complete_usage_entries
-        and usage_entries >= agent_run_count
+        and usage_entries == provider_attempt_count
     )
 
     return ReviewProcessReport(

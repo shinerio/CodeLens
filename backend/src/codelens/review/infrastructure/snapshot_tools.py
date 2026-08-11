@@ -177,7 +177,7 @@ class FilesystemReviewTools:
             max_ranges=max(1, len(snapshot.change_index.hunks)),
         )
         self._review_files_by_path = {item.path: item for item in review_files}
-        self._diff_viewed_paths: set[str] = set()
+        self._reviewed_paths: set[str] = set()
 
     async def find_files(self, path: str = "", pattern: str = "**") -> str:
         """Find visible files below a directory using a relative POSIX glob pattern."""
@@ -298,6 +298,8 @@ class FilesystemReviewTools:
             is_line_truncated = False
         raw_content = selected[: self._limits.max_read_bytes].decode("utf-8", errors="replace")
         content = self._add_line_prefixes(raw_content, effective_start_line)
+        if path in self._review_files_by_path:
+            self._reviewed_paths.add(path)
         return self._json(
             {
                 "path": path,
@@ -352,7 +354,7 @@ class FilesystemReviewTools:
             next_offset += 1
             content_bytes += len(content)
             if not is_truncated:
-                self._diff_viewed_paths.add(candidate_path)
+                self._reviewed_paths.add(candidate_path)
             if is_truncated:
                 break
 
@@ -440,10 +442,10 @@ class FilesystemReviewTools:
         return tuple(sorted(self._review_files_by_path))
 
     @property
-    def diff_viewed_paths(self) -> frozenset[str]:
-        """Return Review paths whose complete diff was exposed to the model."""
+    def reviewed_paths(self) -> frozenset[str]:
+        """Return Review paths successfully exposed through read_file or get_diff."""
 
-        return frozenset(self._diff_viewed_paths)
+        return frozenset(self._reviewed_paths)
 
     def as_agent_tools(self, descriptions: dict[str, str]) -> list[Tool]:
         """Expose the stable read-only contract using startup-loaded descriptions."""

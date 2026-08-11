@@ -4,21 +4,21 @@ Reviewer 的模型可见循环只有三类动作：读取冻结证据、提交 C
 
 ```text
 receive review_files
-  -> get_diff(file or directory)
-  -> optional find_files / grep / read_file
+  -> read_file(file) or get_diff(file or directory)
+  -> optional find_files / grep
   -> comment(...)
   -> task_done(summary)
-       |- missing diff files: reject and continue
+       |- missing review files: reject and continue
        `- complete: stop loop
 ```
 
 ## 完成语义
 
 - 宿主以 `ReviewFileScope.review_paths` 为全集。
-- 只有模型可见 `get_diff` 完整返回的文件计入 diff coverage。
-- `read_file` 用于上下文调查，不替代变更 diff 覆盖。
+- 模型成功调用 `read_file` 的 Review 文件，以及模型可见 `get_diff` 完整返回的文件，都计入 reviewed coverage。
 - `task_done` 不接收文件计数或已完成文件列表。
-- 缺失时返回稳定错误码、剩余数量和有界路径列表；模型可以用目录 `get_diff` 批量补齐。
+- 缺失时通过 `missing_review_files` 返回稳定排序的全部未读路径，不分片、不截断；模型可以用 `read_file` 或目录 `get_diff` 补齐。
+- 正常完成时不返回已读文件列表。
 - 超过不完整重试上限后沿现有 partial fallback 结束，checkpoint 保存准确缺失路径。
 
 ## Comment

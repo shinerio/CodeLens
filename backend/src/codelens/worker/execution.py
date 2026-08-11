@@ -19,7 +19,7 @@ from codelens.capabilities.infrastructure.builtin_profiles import (
     builtin_skill_policies,
 )
 from codelens.findings.application.publish_findings import FindingPublisher
-from codelens.findings.application.resolve_clusters import ClusterService, direct_verdicts
+from codelens.findings.application.resolve_clusters import ClusterService, publish_all_verdicts
 from codelens.findings.application.validate_candidates import CandidateValidator
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.review.application.context_builder import ContextBuilder
@@ -405,7 +405,6 @@ class WorkerReviewExecutor:
     async def execute(self, task_id: str) -> None:
         """Execute one claimed task while sharing only bounded Worker semaphores."""
 
-        await self._transcripts.append(task_id, "lifecycle", "Review execution started")
         orchestrator = ReviewOrchestrator(
             workflow=self._review_store,
             prepare=self.prepare,
@@ -880,7 +879,7 @@ class WorkerReviewExecutor:
             None,
         )
         if verifier is None:
-            await self._verdict_store.save_decisions(task_id, direct_verdicts(clusters))
+            await self._verdict_store.save_decisions(task_id, publish_all_verdicts(clusters))
             return
         verifier_envelope = json.loads(prepared.input_payloads[verifier.node_id])
         verifier_role_context = verifier_envelope.setdefault("role_context", {})

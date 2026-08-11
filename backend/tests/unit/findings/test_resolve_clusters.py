@@ -5,7 +5,7 @@ from dataclasses import replace
 import pytest
 
 from codelens.findings.application.cluster_candidates import CandidateClusterer
-from codelens.findings.application.resolve_clusters import ClusterService, direct_verdicts
+from codelens.findings.application.resolve_clusters import ClusterService, publish_all_verdicts
 from codelens.findings.domain.candidates import (
     CandidateFinding,
     EvidenceStrength,
@@ -153,7 +153,7 @@ async def test_cluster_service_prepare_persists_empty_when_no_candidates() -> No
     assert store.saved == [("review-empty", "snapshot-empty", ())]
 
 
-def test_direct_verdicts_accept_only_direct_evidence_clusters() -> None:
+def test_publish_all_verdicts_accepts_every_single_reviewer_cluster() -> None:
     direct = CandidateClusterer().cluster((candidate("candidate-direct"),))[0]
     inferred_candidate = replace(
         candidate("candidate-inferred"),
@@ -161,7 +161,7 @@ def test_direct_verdicts_accept_only_direct_evidence_clusters() -> None:
     )
     inferred = CandidateClusterer().cluster((inferred_candidate,))[0]
 
-    decisions = direct_verdicts((direct, inferred))
+    decisions = publish_all_verdicts((direct, inferred))
 
     outcomes = {decision.cluster_ids[0]: decision.outcome.value for decision in decisions}
-    assert outcomes == {direct.cluster_id: "accept", inferred.cluster_id: "deny"}
+    assert outcomes == {direct.cluster_id: "accept", inferred.cluster_id: "accept"}

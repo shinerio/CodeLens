@@ -13,15 +13,11 @@ from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.verdict import VerdictDecision
 
 
-def direct_verdicts(clusters: tuple[FindingCluster, ...]) -> tuple[VerdictDecision, ...]:
-    """Accept direct-evidence clusters and retain all others as denied audit decisions."""
+def publish_all_verdicts(clusters: tuple[FindingCluster, ...]) -> tuple[VerdictDecision, ...]:
+    """Accept every host-validated cluster when no Final Verifier is planned."""
 
     return tuple(
-        (
-            VerdictDecision.accept(cluster_ids=(cluster.cluster_id,))
-            if cluster.evidence_strength.value == "direct"
-            else VerdictDecision.deny(cluster_ids=(cluster.cluster_id,))
-        )
+        VerdictDecision.accept(cluster_ids=(cluster.cluster_id,))
         for cluster in clusters
     )
 

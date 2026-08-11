@@ -488,7 +488,7 @@ async def test_get_diff_pages_directory_in_stable_path_order(tmp_path: Path) -> 
     assert [item["path"] for item in second["diffs"]] == ["src/zeta.py"]
     assert second["has_more"] is False
     assert second["next_cursor"] is None
-    assert tools.diff_viewed_paths == {
+    assert tools.reviewed_paths == {
         "src/alpha.py",
         "src/service.py",
         "src/zeta.py",
@@ -507,7 +507,7 @@ async def test_get_diff_cursor_is_bound_to_the_requested_scope(tmp_path: Path) -
         await tools.get_diff("src", cursor="not-a-valid-cursor")
 
 
-async def test_only_complete_diff_results_count_as_review_coverage(tmp_path: Path) -> None:
+async def test_successful_read_file_counts_as_review_coverage(tmp_path: Path) -> None:
     snapshot = await _snapshot(tmp_path)
     tools = FilesystemReviewTools(
         snapshot,
@@ -520,7 +520,7 @@ async def test_only_complete_diff_results_count_as_review_coverage(tmp_path: Pat
     result = json.loads(await tools.get_diff("src/service.py"))
 
     assert result["diffs"][0]["truncated"] is True
-    assert tools.diff_viewed_paths == frozenset()
+    assert tools.reviewed_paths == {"src/service.py"}
 
 
 async def test_get_diff_separates_lines_without_trailing_newlines(tmp_path: Path) -> None:

@@ -46,7 +46,7 @@ class _EvidenceTools(Protocol):
     def review_file_paths(self) -> tuple[str, ...]: ...
 
     @property
-    def diff_viewed_paths(self) -> Collection[str]: ...
+    def reviewed_paths(self) -> Collection[str]: ...
 
     async def read_diff_for_resolution(self, path: str) -> str: ...
 
@@ -299,8 +299,8 @@ class ReviewCommentCollector:
         if self._completion_summary is not None:
             raise ValueError("task_done has already been called")
         targets = set(self.tools.review_file_paths)
-        viewed = set(self.tools.diff_viewed_paths)
-        incomplete = tuple(sorted(targets - viewed))
+        reviewed = set(self.tools.reviewed_paths)
+        incomplete = tuple(sorted(targets - reviewed))
         if incomplete:
             self._incomplete_retry_count += 1
             if self._incomplete_retry_count <= self.max_incomplete_review_retries:
@@ -309,7 +309,7 @@ class ReviewCommentCollector:
                         "accepted": False,
                         "incomplete_retry_count": self._incomplete_retry_count,
                         "max_incomplete_review_retries": self.max_incomplete_review_retries,
-                        "missing_diff_files": incomplete,
+                        "missing_review_files": incomplete,
                     },
                     ensure_ascii=False,
                     sort_keys=True,
@@ -323,7 +323,6 @@ class ReviewCommentCollector:
                 "comment_count": len(self._candidates),
                 "forced_completion": bool(incomplete),
                 **({"incomplete_files": incomplete} if incomplete else {}),
-                "diff_viewed_files": tuple(sorted(targets & viewed)),
             },
             ensure_ascii=False,
             sort_keys=True,

@@ -142,10 +142,10 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
         runtime_context,
     )
 
-    async def invoke(tool_name: str, arguments: dict[str, object]) -> None:
+    async def invoke(tool_name: str, arguments: dict[str, object]) -> str:
         tool = next(tool for tool in tools if tool.name == tool_name)
         payload = json.dumps(arguments)
-        await tool.on_invoke_tool(
+        return await tool.on_invoke_tool(
             ToolContext(
                 None,
                 usage=Usage(),
@@ -157,11 +157,25 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
             payload,
         )
 
-    await invoke("get_diff", {"path": "src/value.py"})
-    await invoke("task_done", {"summary": "Reviewed the complete frozen scope."})
+    rejected_completion = json.loads(
+        await invoke("task_done", {"summary": "Need to inspect the frozen scope."})
+    )
+    assert rejected_completion["accepted"] is False
+    assert rejected_completion["missing_review_files"] == ["src/value.py"]
+    assert "missing_diff_files" not in rejected_completion
+
+    await invoke("read_file", {"path": "src/value.py", "version": "current"})
+    completion = json.loads(
+        await invoke("task_done", {"summary": "Reviewed the complete frozen scope."})
+    )
 
     assert runtime_context.is_completed is True
     assert runtime_context.incomplete_review_files == ()
+    assert completion == {
+        "accepted": True,
+        "comment_count": 0,
+        "forced_completion": False,
+    }
     assert isinstance(runtime_context.final_output(), CandidateFindingBatch)
 
 
