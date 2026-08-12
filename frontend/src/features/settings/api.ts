@@ -1,6 +1,7 @@
 import { api } from "../../shared/api/client";
 import type {
   CreateModelGateway,
+  FileExclusionSettings,
   GatewayTestResult,
   InstructionFileSettings,
   ModelGatewayCatalog,
@@ -46,6 +47,19 @@ export async function updateRecentRepositoryLimit(
 
 export async function getInstructionFileSettings(): Promise<InstructionFileSettings> {
   return api<InstructionFileSettings>("/settings/instruction-files");
+}
+
+export async function getFileExclusionSettings(): Promise<FileExclusionSettings> {
+  return api<FileExclusionSettings>("/settings/file-exclusions");
+}
+
+export async function updateFileExclusionSettings(
+  settings: FileExclusionSettings,
+): Promise<FileExclusionSettings> {
+  return api<FileExclusionSettings>("/settings/file-exclusions", {
+    method: "PUT",
+    body: JSON.stringify(settings),
+  });
 }
 
 export async function updateInstructionFileSettings(

@@ -101,6 +101,7 @@ from codelens.workspace.application.worktree_lifecycle import (
 from codelens.workspace.infrastructure.change_index import GitChangeIndexBuilder
 from codelens.workspace.infrastructure.file_exclusion_settings import (
     FilesystemFileExclusionPolicySource,
+    FilesystemFileExclusionPolicyStore,
 )
 from codelens.workspace.infrastructure.filesystem_snapshot import FilesystemSnapshotBuilder
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -203,7 +204,10 @@ def build_unified_backend(
         settings.file_exclusion_config
     )
     file_exclusion_source.get_policy()
-    file_exclusion_settings = FileExclusionPolicyService(file_exclusion_source)
+    file_exclusion_settings = FileExclusionPolicyService(
+        file_exclusion_source,
+        FilesystemFileExclusionPolicyStore(settings.data_dir),
+    )
 
     # Create repository inspector early so it can be shared with Worker
     from codelens.workspace.application.inspect_repository import RepositoryInspector
@@ -458,6 +462,7 @@ def build_unified_backend(
         hook_installer=hook_installer,
         trigger_hooks=trigger_hooks,
         tool_limits=tool_limits,
+        file_exclusion_settings=file_exclusion_settings,
     )
 
     return UnifiedBackend(

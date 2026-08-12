@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -28,6 +28,21 @@ function reviewCompletionSettingsResponse(maxIncompleteReviewRetries = 3) {
 
 function triggerIdempotencySettingsResponse(enabled = false) {
   return new Response(JSON.stringify({ enabled }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function fileExclusionSettingsResponse(
+  suffixes: string[] = [],
+  pathRegexes: string[] = [],
+  excludeBinary = true,
+) {
+  return new Response(JSON.stringify({
+    suffixes,
+    path_regexes: pathRegexes,
+    exclude_binary: excludeBinary,
+  }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
   });
@@ -87,6 +102,9 @@ it("shows context and tool sizes in KB with compaction enabled by default", asyn
     if (url === "/api/settings/tool-limits") {
       return Promise.resolve(toolLimitsResponse());
     }
+    if (url === "/api/settings/file-exclusions") {
+      return Promise.resolve(fileExclusionSettingsResponse());
+    }
     throw new Error(`Unexpected request: ${url}`);
   });
 
@@ -126,6 +144,7 @@ it("creates the first persistent model gateway without retaining its API key", a
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -184,8 +203,14 @@ it("creates the first persistent model gateway without retaining its API key", a
   expect(screen.getByLabelText("API Key")).toHaveValue("");
 }, 10_000);
 
-it("does not expose file exclusion configuration in web settings", async () => {
-  fetchMock.mockImplementation((url: string) => {
+it("edits, deduplicates, validates, and saves Web file exclusion rules", async () => {
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    if (url === "/api/settings/file-exclusions" && init?.method === "PUT") {
+      return Promise.resolve(fileExclusionSettingsResponse([".map"], ["^generated/"], false));
+    }
+    if (url === "/api/settings/file-exclusions") {
+      return Promise.resolve(fileExclusionSettingsResponse());
+    }
     if (url === "/api/settings/model-gateways") {
       return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
     }
@@ -206,11 +231,31 @@ it("does not expose file exclusion configuration in web settings", async () => {
     }
     return Promise.resolve(toolLimitsResponse());
   });
+  const user = userEvent.setup();
   render(<SettingsPage />, { wrapper: TestProviders });
 
-  expect(await screen.findByRole("heading", { name: "Review Settings" })).toBeInTheDocument();
-  expect(screen.queryByText("File Exclusions")).not.toBeInTheDocument();
-  expect(fetchMock.mock.calls.some(([url]) => url === "/api/settings/file-exclusions")).toBe(false);
+  const suffixes = await screen.findByLabelText("Excluded literal suffixes");
+  const regexes = screen.getByLabelText("Excluded path regular expressions");
+  await user.type(suffixes, ".map\n.map");
+  fireEvent.change(regexes, { target: { value: "[" } });
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "At least one path regular expression is invalid.",
+  );
+  await user.clear(regexes);
+  await user.type(regexes, "^generated/");
+  await user.click(screen.getByRole("checkbox", { name: "Exclude binary files" }));
+  await user.click(screen.getByRole("button", { name: "Save file exclusions" }));
+
+  await waitFor(() => {
+    const updateCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === "/api/settings/file-exclusions" && init?.method === "PUT",
+    );
+    expect(JSON.parse(String(updateCall?.[1]?.body))).toEqual({
+      suffixes: [".map"],
+      path_regexes: ["^generated/"],
+      exclude_binary: false,
+    });
+  });
 });
 
 it("switches the active gateway without asking for the stored key", async () => {
@@ -256,6 +301,7 @@ it("switches the active gateway without asking for the stored key", async () => 
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -420,6 +466,7 @@ it("sends a connectivity test request when the test connectivity button is click
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: true, latency_ms: 42, detail: "TCP connection succeeded." }),
@@ -482,6 +529,7 @@ it("sends an availability test request when the test availability button is clic
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: false, latency_ms: 100, detail: "Connection failed." }),
@@ -532,6 +580,7 @@ it("updates the recent repository list limit", async () => {
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ recent_repository_limit: 15 }), {
         status: 200,
@@ -583,6 +632,7 @@ it("updates instruction file limits and omits credential handling details", asyn
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(instructionSettingsResponse(800, 240));
   const user = userEvent.setup();
 
@@ -633,6 +683,7 @@ it("updates the maximum incomplete review retry count", async () => {
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse(5));
   const user = userEvent.setup();
 
@@ -675,6 +726,9 @@ it("uses one panel-level action for all review settings", async () => {
     }
     if (url === "/api/settings/trigger-idempotency") {
       return Promise.resolve(triggerIdempotencySettingsResponse());
+    }
+    if (url === "/api/settings/file-exclusions") {
+      return Promise.resolve(fileExclusionSettingsResponse());
     }
     return Promise.resolve(toolLimitsResponse());
   });

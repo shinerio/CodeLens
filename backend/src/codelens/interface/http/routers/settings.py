@@ -10,6 +10,7 @@ from codelens.interface.http.dependencies import HttpComponents, HttpProblem, ge
 from codelens.interface.http.dto import (
     ActivateModelGatewayRequest,
     CreateModelGatewayRequest,
+    FileExclusionSettingsResponse,
     GatewayAvailabilityTestResponse,
     GatewayConnectivityTestResponse,
     InstructionFileSettingsResponse,
@@ -21,6 +22,7 @@ from codelens.interface.http.dto import (
     RuntimeLogLevelResponse,
     ToolLimitsResponse,
     TriggerIdempotencySettingsResponse,
+    UpdateFileExclusionSettingsRequest,
     UpdateInstructionFileSettingsRequest,
     UpdateModelGatewayRequest,
     UpdateRecentRepositorySettingsRequest,
@@ -31,6 +33,7 @@ from codelens.interface.http.dto import (
 )
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 _LOGGER = logging.getLogger("codelens.settings")
@@ -100,6 +103,43 @@ def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
             limits.context_compaction_keep_recent_evidence_results
         ),
     )
+
+
+def _file_exclusion_response(
+    policy: ReviewFileExclusionPolicy,
+) -> FileExclusionSettingsResponse:
+    return FileExclusionSettingsResponse(
+        suffixes=list(policy.suffixes),
+        path_regexes=list(policy.path_regexes),
+        exclude_binary=policy.exclude_binary,
+    )
+
+
+@router.get("/file-exclusions", response_model=FileExclusionSettingsResponse)
+async def get_file_exclusions(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> FileExclusionSettingsResponse:
+    """Return the independently editable Web exclusion overlay."""
+
+    return _file_exclusion_response(await components.file_exclusion_settings.get_web())
+
+
+@router.put("/file-exclusions", response_model=FileExclusionSettingsResponse)
+async def update_file_exclusions(
+    request: UpdateFileExclusionSettingsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> FileExclusionSettingsResponse:
+    """Validate and atomically update the Web exclusion overlay."""
+
+    try:
+        policy = await components.file_exclusion_settings.update_web(
+            suffixes=None if request.suffixes is None else tuple(request.suffixes),
+            path_regexes=(None if request.path_regexes is None else tuple(request.path_regexes)),
+            exclude_binary=request.exclude_binary,
+        )
+    except ValueError as error:
+        raise HttpProblem(422, "invalid_file_exclusion_policy", str(error)) from error
+    return _file_exclusion_response(policy)
 
 
 @router.get("/logging", response_model=RuntimeLogLevelResponse)
@@ -416,6 +456,12 @@ async def reset_all_settings(
         nested_max_lines=DEFAULT_NESTED_INSTRUCTION_MAX_LINES,
     )
 
+    file_exclusions = await components.file_exclusion_settings.update_web(
+        suffixes=(),
+        path_regexes=(),
+        exclude_binary=True,
+    )
+
     # Reset review completion settings
     review_completion = await components.review_completion_settings.update(
         max_incomplete_review_retries=DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
@@ -489,6 +535,7 @@ async def reset_all_settings(
             instruction_limits.root_max_lines,
             instruction_limits.nested_max_lines,
         ),
+        file_exclusions=_file_exclusion_response(file_exclusions),
         review_completion=ReviewCompletionSettingsResponse(
             max_incomplete_review_retries=review_completion.max_incomplete_review_retries,
         ),

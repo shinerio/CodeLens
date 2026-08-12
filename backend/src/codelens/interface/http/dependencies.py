@@ -95,6 +95,7 @@ from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.application.repository_catalog import RepositoryCatalogService
 from codelens.workspace.infrastructure.file_exclusion_settings import (
     FilesystemFileExclusionPolicySource,
+    FilesystemFileExclusionPolicyStore,
 )
 from codelens.workspace.infrastructure.filesystem_browser import LocalFilesystemBrowserAdapter
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -137,6 +138,7 @@ class HttpComponents:
     review_completion_settings: ReviewCompletionSettingsService
     trigger_idempotency_settings: TriggerIdempotencySettingsService
     tool_limits: ToolLimitsService
+    file_exclusion_settings: FileExclusionPolicyService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
     retry_review: RetryReviewHandler
@@ -209,7 +211,10 @@ def build_components(settings: Settings) -> HttpComponents:
         settings.file_exclusion_config
     )
     file_exclusion_source.get_policy()
-    file_exclusion_settings = FileExclusionPolicyService(file_exclusion_source)
+    file_exclusion_settings = FileExclusionPolicyService(
+        file_exclusion_source,
+        FilesystemFileExclusionPolicyStore(settings.data_dir),
+    )
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
     plugins_dir = settings.data_dir / "plugins"
@@ -294,6 +299,7 @@ def build_components(settings: Settings) -> HttpComponents:
         review_completion_settings=review_completion_settings,
         trigger_idempotency_settings=trigger_idempotency_settings,
         tool_limits=tool_limits,
+        file_exclusion_settings=file_exclusion_settings,
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,

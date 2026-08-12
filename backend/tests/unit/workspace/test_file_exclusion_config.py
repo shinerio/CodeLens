@@ -6,8 +6,10 @@ from codelens.bootstrap.settings import Settings
 from codelens.workspace.application.file_exclusion_settings import (
     FileExclusionPolicyService,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 from codelens.workspace.infrastructure.file_exclusion_settings import (
     FilesystemFileExclusionPolicySource,
+    FilesystemFileExclusionPolicyStore,
 )
 
 
@@ -73,7 +75,8 @@ async def test_file_exclusion_service_reloads_configuration_for_each_review(
         encoding="utf-8",
     )
     service = FileExclusionPolicyService(
-        FilesystemFileExclusionPolicySource(config_path)
+        FilesystemFileExclusionPolicySource(config_path),
+        FilesystemFileExclusionPolicyStore(tmp_path / "data"),
     )
 
     initial = await service.get()
@@ -85,3 +88,52 @@ async def test_file_exclusion_service_reloads_configuration_for_each_review(
 
     assert initial.suffixes == (".log",)
     assert updated.suffixes == (".trace",)
+
+
+async def test_file_exclusion_service_merges_config_and_web_rules(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "file-exclusions.toml"
+    config_path.write_text(
+        "exclude_binary = false\nsuffixes = [\".log\"]\npath_regexes = [\"^cache/\"]",
+        encoding="utf-8",
+    )
+    web_store = FilesystemFileExclusionPolicyStore(tmp_path / "data")
+    web_store.save_policy(
+        ReviewFileExclusionPolicy(
+            suffixes=(".trace", ".LOG"),
+            path_regexes=(r"^generated/",),
+            exclude_binary=True,
+        )
+    )
+    service = FileExclusionPolicyService(
+        FilesystemFileExclusionPolicySource(config_path),
+        web_store,
+    )
+
+    effective = await service.get()
+    web = await service.get_web()
+
+    assert effective.suffixes == (".log", ".trace")
+    assert effective.path_regexes == (r"^cache/", r"^generated/")
+    assert effective.exclude_binary is True
+    assert web.suffixes == (".log", ".trace")
+    assert web.path_regexes == (r"^generated/",)
+
+
+async def test_web_update_takes_effect_without_restarting_service(tmp_path: Path) -> None:
+    config_path = tmp_path / "file-exclusions.toml"
+    config_path.write_text(
+        "exclude_binary = true\nsuffixes = []\npath_regexes = []",
+        encoding="utf-8",
+    )
+    service = FileExclusionPolicyService(
+        FilesystemFileExclusionPolicySource(config_path),
+        FilesystemFileExclusionPolicyStore(tmp_path / "data"),
+    )
+
+    await service.update_web(suffixes=(".custom",), path_regexes=(), exclude_binary=False)
+
+    effective = await service.get()
+    assert effective.suffixes == (".custom",)
+    assert effective.exclude_binary is True
