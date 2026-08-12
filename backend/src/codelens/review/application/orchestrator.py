@@ -502,6 +502,7 @@ class ReviewOrchestrator:
                 output.canonical_bytes.decode("utf-8", errors="replace"),
                 {
                     "agent": self._agent_key(execution_spec),
+                    "usage_scope": "agent_run",
                     "model_name": output.model_name,
                     "llm_call_count": str(len(output.diagnostics)),
                     "input_tokens": str(output.input_tokens),

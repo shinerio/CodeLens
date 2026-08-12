@@ -960,6 +960,27 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
             ),
         )
         task_id = created.json()["task_id"]
+        worker_transcripts = app.state.components.worker_transcripts
+        client.portal.call(
+            worker_transcripts.append_many,
+            task_id,
+            (
+                (
+                    "tool_call",
+                    "{}",
+                    {
+                        "agent": "correctness:v2",
+                        "tool_name": "read_file",
+                        "tool_call_id": "live-call-1",
+                    },
+                ),
+                (
+                    "tool_result",
+                    "{}",
+                    {"agent": "correctness:v2", "tool_call_id": "live-call-1"},
+                ),
+            ),
+        )
         active_report = client.get(f"/api/reviews/{task_id}/process-report")
         review_store = app.state.components.review_store
         for status in (
@@ -1023,10 +1044,13 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
         )
         report = client.get(f"/api/reviews/{task_id}/process-report")
 
-    assert active_report.status_code == 409
-    assert active_report.json()["code"] == "process_report_not_ready"
-    assert pending_persistence_report.status_code == 409
-    assert pending_persistence_report.json()["code"] == "process_report_not_ready"
+    assert active_report.status_code == 200, active_report.text
+    assert active_report.json()["status"] == "created"
+    assert active_report.json()["tool_call_count"] == 1
+    assert active_report.json()["accepted_tool_call_count"] == 1
+    assert pending_persistence_report.status_code == 200, pending_persistence_report.text
+    assert pending_persistence_report.json()["status"] == "completed"
+    assert pending_persistence_report.json()["tool_call_count"] == 1
     assert report.status_code == 200, report.text
     body = report.json()
     assert body["task_id"] == task_id
@@ -1041,7 +1065,19 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
     assert body["total_tokens"] == 100
     assert body["tool_call_count"] == 1
     assert body["invalid_tool_call_count"] == 1
-    assert body["tools"] == [{"tool_name": "read_file", "call_count": 1, "result_count": 1}]
+    assert body["accepted_tool_call_count"] == 1
+    assert body["rejected_tool_call_count"] == 0
+    assert body["unclassified_tool_call_count"] == 0
+    assert body["tools"] == [
+        {
+            "tool_name": "read_file",
+            "call_count": 1,
+            "result_count": 1,
+            "accepted_call_count": 1,
+            "rejected_call_count": 0,
+            "unclassified_call_count": 0,
+        }
+    ]
     assert body["invalid_tools"] == [
         {"tool_name": "grep_create_triggered", "call_count": 1}
     ]

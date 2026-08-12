@@ -96,6 +96,51 @@ def test_stream_events_ignore_incremental_tool_arguments() -> None:
     assert event is None
 
 
+def test_stream_response_boundaries_expose_live_provider_usage() -> None:
+    started = _visible_event(
+        RawResponsesStreamEvent(
+            data=SimpleNamespace(type="response.created", response=SimpleNamespace(id="resp-1"))
+        )
+    )
+    completed = _visible_event(
+        RawResponsesStreamEvent(
+            data=SimpleNamespace(
+                type="response.completed",
+                response=SimpleNamespace(
+                    id="resp-1",
+                    model="gpt-5.1",
+                    usage=SimpleNamespace(
+                        input_tokens=120,
+                        output_tokens=30,
+                        total_tokens=150,
+                        input_tokens_details=SimpleNamespace(
+                            cached_tokens=80,
+                            cache_write_tokens=10,
+                        ),
+                    ),
+                ),
+            )
+        )
+    )
+
+    assert started is not None
+    assert started.kind == "model_started"
+    assert started.metadata == {"response_id": "resp-1", "usage_scope": "provider_call"}
+    assert completed is not None
+    assert completed.kind == "model_completed"
+    assert completed.metadata == {
+        "response_id": "resp-1",
+        "usage_scope": "provider_call",
+        "model_name": "gpt-5.1",
+        "llm_call_count": "1",
+        "input_tokens": "120",
+        "cached_input_tokens": "80",
+        "cache_write_input_tokens": "10",
+        "output_tokens": "30",
+        "total_tokens": "150",
+    }
+
+
 def test_stream_tool_events_include_stable_name_and_call_identity() -> None:
     raw_call = SimpleNamespace(name="read_file", call_id="call-1")
     tool_call = _visible_event(
@@ -114,7 +159,30 @@ def test_stream_tool_events_include_stable_name_and_call_identity() -> None:
     assert tool_call is not None
     assert tool_result is not None
     assert tool_call.metadata == {"tool_call_id": "call-1", "tool_name": "read_file"}
-    assert tool_result.metadata == {"tool_call_id": "call-1"}
+    assert tool_result.metadata == {"tool_call_id": "call-1", "tool_outcome": "accepted"}
+
+
+def test_stream_tool_result_records_bounded_rejection_reason() -> None:
+    tool_result = _visible_event(
+        RunItemStreamEvent(
+            name="tool_output",
+            item=_LockBearingToolResultItem(
+                raw_item=SimpleNamespace(call_id="call-rejected"),
+                output=(
+                    "An error occurred while running the tool. Please try again. Error: "
+                    "Invalid JSON input for tool comment: extra inputs are not permitted"
+                ),
+            ),
+        )
+    )
+
+    assert tool_result is not None
+    assert tool_result.metadata == {
+        "tool_call_id": "call-rejected",
+        "tool_outcome": "rejected",
+        "tool_rejection_reason_code": "invalid_tool_arguments",
+        "tool_rejection_reason": "Tool arguments failed schema validation.",
+    }
 
 
 def test_stream_tool_events_exclude_non_serializable_sdk_runtime_state() -> None:
@@ -139,3 +207,4 @@ def test_stream_tool_events_exclude_non_serializable_sdk_runtime_state() -> None
     assert tool_result is not None
     assert json.loads(tool_call.content) == raw_call
     assert json.loads(tool_result.content) == {"content": "bounded", "path": "a.py"}
+    assert tool_result.metadata["tool_outcome"] == "accepted"

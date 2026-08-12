@@ -3,9 +3,8 @@ import { useEffect, useMemo, useState } from "react";
 import ReactMarkdown from "react-markdown";
 
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
-import type { ReviewProcessReport as ProcessReport, TranscriptEntry } from "./api";
+import type { TranscriptEntry } from "./api";
 import { failureDetails } from "./failure-details";
-import { ReviewProcessReport } from "./ReviewProcessReport";
 import type { ReviewPlanNodeRole, ReviewPlanProjection } from "./types";
 
 type ConsoleMessage = TranscriptEntry & { content: string; messageKey: string; sequence: number };
@@ -13,6 +12,7 @@ type StreamingTranscriptEntry = TranscriptEntry & {
   kind: "model_reasoning_delta" | "model_output_delta";
 };
 type ConsoleVisibility = {
+  system: boolean;
   prompt: boolean;
   reasoning: boolean;
   output: boolean;
@@ -21,6 +21,7 @@ type ConsoleVisibility = {
 };
 
 const DEFAULT_VISIBILITY: ConsoleVisibility = {
+  system: true,
   prompt: true,
   reasoning: true,
   output: true,
@@ -48,12 +49,10 @@ const STAGE_OPTIONS: ReadonlyArray<{
 export function ReviewConsole({
   entries,
   plan,
-  processReport,
   reviewerReferences: fallbackReviewerReferences = [],
 }: {
   entries: TranscriptEntry[];
   plan?: ReviewPlanProjection | null;
-  processReport?: ProcessReport;
   reviewerReferences?: readonly string[];
 }) {
   const { locale, t } = useI18n();
@@ -96,24 +95,13 @@ export function ReviewConsole({
     }),
     [allMessages, nodeRoleByAgent, selectedReviewer, selectedStage],
   );
-  const scopedAgentReferences = selectedStage === "all"
-    ? undefined
-    : selectedStage === "reviewer" && selectedReviewer !== "all"
-      ? [selectedReviewer]
-      : Array.from(nodeRoleByAgent.entries())
-        .filter(([, role]) => role === selectedStage)
-        .map(([reference]) => reference);
-  const scopeLabel = selectedStage === "all"
-    ? t("logs.allStages")
-    : selectedStage === "reviewer" && selectedReviewer !== "all"
-      ? reviewerDisplayName(selectedReviewer, t)
-      : t(STAGE_OPTIONS.find((stage) => stage.id === selectedStage)?.labelKey ?? "logs.allStages");
   const completedMessages = useMemo(() => completedMessageKeys(entries), [entries]);
-  const filtered = messages.filter((entry) =>
-    (isToolEntry(entry) ? visibility.tools : isVisible(entry, visibility)) &&
-    entry.content.toLocaleLowerCase().includes(query.toLocaleLowerCase()) &&
-    !(entry.kind === "model_output_delta" && !entry.content.trim()),
-  );
+  const matchesActiveFilters = (entry: ConsoleMessage) =>
+    (isToolEntry(entry) ? visibility.tools : isVisible(entry, visibility))
+    && entry.content.toLocaleLowerCase().includes(query.toLocaleLowerCase())
+    && !(entry.kind === "model_output_delta" && !entry.content.trim());
+  const visibleMessages = allMessages.filter(matchesActiveFilters);
+  const filtered = messages.filter(matchesActiveFilters);
   const parseFailed = messages.some((e) => e.kind === "model_raw_output" && e.metadata?.parse_failed === "true");
   const totalCount = filtered.length;
   const showAll = headCount + tailCount >= totalCount;
@@ -159,11 +147,12 @@ export function ReviewConsole({
             <span>{t("logs.timeline")}</span>
             <strong>{t("logs.chooseStage")}</strong>
           </div>
-          <small>{t("logs.visibleEvents", { count: String(messages.length), total: String(allMessages.length) })}</small>
+          <small>{t("logs.visibleEvents", { count: String(filtered.length), total: String(visibleMessages.length) })}</small>
+          {selectedStage !== "all" ? <small>{t("logs.globalLifecycleRule")}</small> : null}
         </div>
         <nav className="review-console__stage-nav" aria-label={t("logs.stageNavigator")}>
           <ScopeButton
-            count={allMessages.length}
+            count={visibleMessages.length}
             isActive={selectedStage === "all"}
             label={t("logs.allStages")}
             onClick={() => {
@@ -173,7 +162,7 @@ export function ReviewConsole({
           />
           {availableStages.map((stage) => (
             <ScopeButton
-              count={allMessages.filter((entry) => nodeRoleByAgent.get(entry.metadata.agent ?? "") === stage.id).length}
+              count={visibleMessages.filter((entry) => nodeRoleByAgent.get(entry.metadata.agent ?? "") === stage.id).length}
               isActive={selectedStage === stage.id}
               key={stage.id}
               label={t(stage.labelKey)}
@@ -187,14 +176,14 @@ export function ReviewConsole({
         {selectedStage === "reviewer" && reviewerReferences.length > 1 ? (
           <nav className="review-console__reviewer-nav" aria-label={t("logs.reviewerNavigator")}>
             <ScopeButton
-              count={allMessages.filter((entry) => nodeRoleByAgent.get(entry.metadata.agent ?? "") === "reviewer").length}
+              count={visibleMessages.filter((entry) => nodeRoleByAgent.get(entry.metadata.agent ?? "") === "reviewer").length}
               isActive={selectedReviewer === "all"}
               label={t("logs.allReviewers")}
               onClick={() => setSelectedReviewer("all")}
             />
             {reviewerReferences.map((reference) => (
               <ScopeButton
-                count={allMessages.filter((entry) => entry.metadata.agent === reference).length}
+                count={visibleMessages.filter((entry) => entry.metadata.agent === reference).length}
                 isActive={selectedReviewer === reference}
                 key={reference}
                 label={reviewerDisplayName(reference, t)}
@@ -205,24 +194,16 @@ export function ReviewConsole({
         ) : null}
       </div>
     ) : null}
-    {processReport !== undefined ? (
-      <ReviewProcessReport
-        agentReferences={scopedAgentReferences}
-        entries={entries}
-        isEmbedded
-        report={processReport}
-        scopeLabel={scopeLabel}
-      />
-    ) : null}
     <div className="review-console__toolbar">
       <label className="review-console__search"><Search aria-hidden="true" /><span className="sr-only">Search console</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search complete execution output" /></label>
       <fieldset className="review-console__filters">
-        <legend>Output</legend>
-        <FilterOption label="Prompt" checked={visibility.prompt} onChange={(checked) => setVisibility((value) => ({ ...value, prompt: checked }))} />
-        <FilterOption label="Thinking" checked={visibility.reasoning} onChange={(checked) => setVisibility((value) => ({ ...value, reasoning: checked }))} />
-        <FilterOption label="Model output" checked={visibility.output} onChange={(checked) => setVisibility((value) => ({ ...value, output: checked }))} />
-        <FilterOption label="Tools" checked={visibility.tools} onChange={(checked) => setVisibility((value) => ({ ...value, tools: checked }))} />
-        <FilterOption label="Raw responses" checked={visibility.rawResponses} onChange={(checked) => setVisibility((value) => ({ ...value, rawResponses: checked }))} />
+        <legend>{t("logs.filters")}</legend>
+        <FilterOption label={t("logs.filterSystem")} checked={visibility.system} onChange={(checked) => setVisibility((value) => ({ ...value, system: checked }))} />
+        <FilterOption label={t("logs.filterPrompt")} checked={visibility.prompt} onChange={(checked) => setVisibility((value) => ({ ...value, prompt: checked }))} />
+        <FilterOption label={t("logs.filterReasoning")} checked={visibility.reasoning} onChange={(checked) => setVisibility((value) => ({ ...value, reasoning: checked }))} />
+        <FilterOption label={t("logs.filterOutput")} checked={visibility.output} onChange={(checked) => setVisibility((value) => ({ ...value, output: checked }))} />
+        <FilterOption label={t("logs.filterTools")} checked={visibility.tools} onChange={(checked) => setVisibility((value) => ({ ...value, tools: checked }))} />
+        <FilterOption label={t("logs.filterRawResponses")} checked={visibility.rawResponses} onChange={(checked) => setVisibility((value) => ({ ...value, rawResponses: checked }))} />
       </fieldset>
       <button type="button" onClick={() => setCollapsed(new Set(messages.map((entry) => entry.messageKey)))}>Collapse all</button>
       <button type="button" onClick={() => setCollapsed(new Set())}>Expand all</button>
@@ -337,12 +318,12 @@ function completedMessageKeys(entries: TranscriptEntry[]): Set<string> {
 
 function isVisible(entry: ConsoleMessage, visibility: ConsoleVisibility) {
   if (entry.kind === "prompt") return visibility.prompt;
-  if (entry.kind === "model_reasoning_delta") return visibility.reasoning;
-  if (entry.kind === "model_output" || entry.kind === "model_output_delta") return visibility.output;
+  if (entry.kind === "model_reasoning_delta" || entry.kind === "model_reasoning_completed") return visibility.reasoning;
+  if (entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_output_completed" || entry.kind === "model_completed") return visibility.output;
   if (entry.kind === "model_raw_output") {
     return entry.metadata.parse_failed === "true" ? visibility.output : visibility.rawResponses;
   }
-  return false;
+  return visibility.system;
 }
 
 function isToolEntry(entry: TranscriptEntry) {

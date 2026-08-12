@@ -66,6 +66,7 @@ from codelens.review.domain.ports import (
     AgentRuntimeEventSink,
     UnvalidatedAgentOutput,
 )
+from codelens.review.domain.tool_invocation import classify_tool_result, outcome_metadata
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.capability_tools import (
     CapabilityToolAssembler,
@@ -844,7 +845,7 @@ class OpenAIAgentRuntime:
         run_config: RunConfig,
         sink: AgentRuntimeEventSink | None,
         *,
-        timeout_seconds: float = 1800,
+        timeout_seconds: float = 3600,
     ) -> object:
         if sink is None or not hasattr(self._runner, "run_streamed"):
             async with asyncio.timeout(timeout_seconds):
@@ -854,7 +855,13 @@ class OpenAIAgentRuntime:
                     max_turns=max_turns,
                     run_config=run_config,
                 )
-        await sink(AgentRuntimeEvent("model_started", "", {"agent_name": agent.name}))
+        await sink(
+            AgentRuntimeEvent(
+                "model_started",
+                "",
+                {"agent_name": agent.name, "usage_scope": "agent_run"},
+            )
+        )
         stream = cast(Any, self._runner).run_streamed(
             agent, input_value, max_turns=max_turns, run_config=run_config
         )
@@ -887,7 +894,13 @@ class OpenAIAgentRuntime:
                     if call_id and call_id in tool_names and "tool_name" not in emitted.metadata:
                         emitted.metadata["tool_name"] = tool_names[call_id]
                 await sink(emitted)
-        await sink(AgentRuntimeEvent("model_completed", "", {"agent_name": agent.name}))
+        await sink(
+            AgentRuntimeEvent(
+                "model_completed",
+                "",
+                {"agent_name": agent.name, "usage_scope": "agent_run"},
+            )
+        )
         return stream
 
 
@@ -896,23 +909,55 @@ def _visible_event(event: object) -> AgentRuntimeEvent | None:
 
     if isinstance(event, RawResponsesStreamEvent):
         payload = event.data
-        if getattr(payload, "type", "") == "response.output_text.delta":
+        event_type = getattr(payload, "type", "")
+        if event_type == "response.created":
+            response = getattr(payload, "response", None)
+            return AgentRuntimeEvent(
+                "model_started",
+                "",
+                {
+                    "response_id": str(getattr(response, "id", "")),
+                    "usage_scope": "provider_call",
+                },
+            )
+        if event_type == "response.completed":
+            response = getattr(payload, "response", None)
+            usage = getattr(response, "usage", None)
+            metadata = {
+                "response_id": str(getattr(response, "id", "")),
+                "usage_scope": "provider_call",
+                "model_name": str(getattr(response, "model", "")),
+            }
+            if usage is not None:
+                cached_tokens, cache_write_tokens = _cache_token_details(usage)
+                metadata.update(
+                    {
+                        "llm_call_count": "1",
+                        "input_tokens": str(getattr(usage, "input_tokens", "")),
+                        "cached_input_tokens": str(cached_tokens),
+                        "cache_write_input_tokens": str(cache_write_tokens),
+                        "output_tokens": str(getattr(usage, "output_tokens", "")),
+                        "total_tokens": str(getattr(usage, "total_tokens", "")),
+                    }
+                )
+            return AgentRuntimeEvent("model_completed", "", metadata)
+        if event_type == "response.output_text.delta":
             return AgentRuntimeEvent(
                 "model_output_delta",
                 str(getattr(payload, "delta", "")),
                 _message_metadata(payload, "content_index"),
             )
-        if getattr(payload, "type", "") == "response.output_text.done":
+        if event_type == "response.output_text.done":
             return AgentRuntimeEvent(
                 "model_output_completed", "", _message_metadata(payload, "content_index")
             )
-        if getattr(payload, "type", "") == "response.reasoning_summary_text.delta":
+        if event_type == "response.reasoning_summary_text.delta":
             return AgentRuntimeEvent(
                 "model_reasoning_delta",
                 str(getattr(payload, "delta", "")),
                 _message_metadata(payload, "summary_index"),
             )
-        if getattr(payload, "type", "") == "response.reasoning_summary_text.done":
+        if event_type == "response.reasoning_summary_text.done":
             return AgentRuntimeEvent(
                 "model_reasoning_completed", "", _message_metadata(payload, "summary_index")
             )
@@ -925,10 +970,11 @@ def _visible_event(event: object) -> AgentRuntimeEvent | None:
                 _tool_metadata(event.item, include_name=True),
             )
         if event.name == "tool_output":
+            content = _json_value(getattr(event.item, "output", event.item))
             return AgentRuntimeEvent(
                 "tool_result",
-                _json_value(getattr(event.item, "output", event.item)),
-                _tool_metadata(event.item),
+                content,
+                {**_tool_metadata(event.item), **outcome_metadata(classify_tool_result(content))},
             )
     return None
 
@@ -1026,7 +1072,9 @@ def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec
         "eligible_reviewer_references",
         "unavailable_reviewer_references",
     }
-    allowed = required | {"change_risk_summary", "reviewer_catalog"}
+    # The Worker attaches this trusted identity after freezing Planner input. It is
+    # stripped from model-visible context and validated separately by _host_run_id.
+    allowed = required | {"change_risk_summary", "reviewer_catalog", "_host_run_id"}
     if (
         role_context is None
         or not required.issubset(role_context)

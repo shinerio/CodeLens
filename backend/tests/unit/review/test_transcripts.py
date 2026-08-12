@@ -1,4 +1,7 @@
+import logging
 from pathlib import Path
+
+import pytest
 
 from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
@@ -215,3 +218,58 @@ async def test_worker_transcript_starts_a_new_model_event_after_an_agent_boundar
         "get_diff",
         "second response",
     ]
+
+
+async def test_worker_transcript_persists_rejected_tool_reason_to_outbox(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class RecordingOutbox:
+        def __init__(self) -> None:
+            self.records: list[tuple[str, str, dict[str, object]]] = []
+
+        async def append(
+            self, task_id: str, event_type: str, payload: dict[str, object]
+        ) -> None:
+            self.records.append((task_id, event_type, payload))
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    outbox = RecordingOutbox()
+    worker_store = WorkerTranscriptStore(durable, rejection_events=outbox)
+    task_id = "review_" + "k" * 32
+    caplog.set_level(logging.WARNING, logger="codelens.worker.transcripts")
+
+    await worker_store.append(
+        task_id,
+        "tool_result",
+        '"validation error"',
+        metadata={
+            "agent": "security:v2",
+            "tool_name": "comment",
+            "tool_call_id": "call-rejected",
+            "tool_outcome": "rejected",
+            "tool_rejection_reason_code": "invalid_tool_arguments",
+            "tool_rejection_reason": "Tool arguments failed schema validation.",
+        },
+    )
+
+    assert outbox.records == [
+        (
+            task_id,
+            "agent_tool_call.rejected",
+            {
+                "agent": "security:v2",
+                "tool_name": "comment",
+                "tool_call_id": "call-rejected",
+                "reason_code": "invalid_tool_arguments",
+                "reason": "Tool arguments failed schema validation.",
+            },
+        )
+    ]
+    rejection_record = next(
+        record
+        for record in caplog.records
+        if record.message == "Model-visible tool invocation rejected"
+    )
+    assert rejection_record.task_id == task_id
+    assert rejection_record.reason_code == "invalid_tool_arguments"

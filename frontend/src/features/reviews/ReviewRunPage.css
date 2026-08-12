@@ -404,13 +404,17 @@
 .process-report__tables section { min-width: 0; }
 .process-report__tables h3 { margin: 0 0 9px; font-size: .82rem; }
 .process-report__table { border: 1px solid var(--run-line); }
-.process-report__row { display: grid; grid-template-columns: minmax(0,1fr) 70px 70px; align-items: center; min-height: 38px; border-top: 1px solid var(--run-line); }
+.process-report__row { display: grid; grid-template-columns: minmax(0,1fr) repeat(4,70px); align-items: center; min-height: 38px; border-top: 1px solid var(--run-line); }
 .process-report__row:first-child { border-top: 0; }
 .process-report__row>* { min-width: 0; padding: 8px 10px; overflow-wrap: anywhere; }
 .process-report__row>*+* { border-left: 1px solid var(--run-line); text-align: right; }
 .process-report__row code { color: var(--run-accent); font: 700 .72rem "SFMono-Regular",Consolas,monospace; }
 .process-report__row--header { background: var(--run-paper-strong); color: var(--run-muted); font: 800 .62rem "SFMono-Regular",Consolas,monospace; text-transform: uppercase; }
 .process-report__row--agent { grid-template-columns: minmax(130px,1fr) minmax(100px,1fr) 74px 88px; }
+.process-report__row--invalid { grid-template-columns: minmax(0,1fr) 70px 70px; }
+.process-report__rejections { display: grid; gap: 8px; }
+.process-report__rejection { display: grid; grid-template-columns: minmax(110px,.7fr) minmax(150px,.8fr) minmax(220px,2fr); gap: 12px; padding: 10px 12px; border: 1px solid var(--run-line); background: var(--run-paper-strong); overflow-wrap: anywhere; }
+.process-report > .review-console__scope { margin: 0 18px 18px; }
 
 .run-reviewer-stack {
   display: grid;

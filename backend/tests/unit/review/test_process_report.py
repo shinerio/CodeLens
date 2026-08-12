@@ -8,12 +8,13 @@ def _entry(
     kind: str,
     created_at: datetime,
     *,
+    content: str = "",
     metadata: dict[str, str] | None = None,
 ) -> ProcessTranscriptEntry:
     return ProcessTranscriptEntry(
         sequence=sequence,
         kind=kind,
-        content="",
+        content=content,
         created_at=created_at,
         metadata=metadata or {},
     )
@@ -88,6 +89,64 @@ def test_process_report_aggregates_llm_tokens_agents_and_tools() -> None:
     assert report.agents[0].duration_ms == 6_000
 
 
+def test_process_report_distinguishes_rejected_tool_attempts_from_accepted_calls() -> None:
+    created_at = datetime(2026, 8, 12, 13, 8, tzinfo=UTC)
+    agent = "security:v2"
+    entries = (
+        _entry(
+            1,
+            "tool_call",
+            created_at,
+            metadata={"agent": agent, "tool_name": "comment", "tool_call_id": "call-1"},
+        ),
+        _entry(
+            2,
+            "tool_result",
+            created_at + timedelta(seconds=1),
+            content=(
+                '"An error occurred while running the tool. Please try again. Error: '
+                'Invalid JSON input for tool comment: extra inputs are not permitted"'
+            ),
+            metadata={"agent": agent, "tool_call_id": "call-1"},
+        ),
+        _entry(
+            3,
+            "tool_call",
+            created_at + timedelta(seconds=2),
+            metadata={"agent": agent, "tool_name": "comment", "tool_call_id": "call-2"},
+        ),
+        _entry(
+            4,
+            "tool_result",
+            created_at + timedelta(seconds=3),
+            content='"{\\"accepted\\":true,\\"accepted_count\\":1,\\"rejected_count\\":0}"',
+            metadata={"agent": agent, "tool_call_id": "call-2"},
+        ),
+    )
+
+    report = build_process_report(
+        task_id="review_" + "e" * 32,
+        status="completed",
+        entries=entries,
+        finding_count=1,
+    )
+
+    assert report.tool_call_count == 2
+    assert report.accepted_tool_call_count == 1
+    assert report.rejected_tool_call_count == 1
+    assert report.unclassified_tool_call_count == 0
+    assert [
+        (
+            tool.tool_name,
+            tool.call_count,
+            tool.accepted_call_count,
+            tool.rejected_call_count,
+        )
+        for tool in report.tools
+    ] == [("comment", 2, 1, 1)]
+    assert report.rejected_tool_calls[0].reason_code == "invalid_tool_arguments"
+
+
 def test_process_report_marks_usage_incomplete_for_legacy_transcripts() -> None:
     created_at = datetime(2026, 7, 25, 10, 0, tzinfo=UTC)
     entries = (
@@ -109,6 +168,104 @@ def test_process_report_marks_usage_incomplete_for_legacy_transcripts() -> None:
 
     assert report.llm_call_count == 0
     assert not report.usage_is_complete
+
+
+def test_process_report_exposes_live_provider_usage_without_agent_output() -> None:
+    created_at = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
+    agent = "correctness:v2"
+    entries = (
+        _entry(
+            1,
+            "model_started",
+            created_at,
+            metadata={"agent": agent, "response_id": "resp-1", "usage_scope": "provider_call"},
+        ),
+        _entry(
+            2,
+            "model_completed",
+            created_at + timedelta(seconds=2),
+            metadata={
+                "agent": agent,
+                "response_id": "resp-1",
+                "usage_scope": "provider_call",
+                "model_name": "gpt-5.1",
+                "llm_call_count": "1",
+                "input_tokens": "120",
+                "cached_input_tokens": "80",
+                "cache_write_input_tokens": "10",
+                "output_tokens": "30",
+                "total_tokens": "150",
+            },
+        ),
+    )
+
+    report = build_process_report(
+        task_id="review_" + "f" * 32,
+        status="reviewing",
+        entries=entries,
+        finding_count=0,
+    )
+
+    assert report.usage_is_complete
+    assert report.llm_call_count == 1
+    assert report.input_tokens == 120
+    assert report.cached_input_tokens == 80
+    assert report.cache_write_input_tokens == 10
+    assert report.output_tokens == 30
+    assert report.total_tokens == 150
+    assert report.duration_ms == 2_000
+
+
+def test_process_report_does_not_double_count_live_and_terminal_usage() -> None:
+    created_at = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
+    agent = "correctness:v2"
+    live_metadata = {
+        "agent": agent,
+        "response_id": "resp-1",
+        "usage_scope": "provider_call",
+        "model_name": "gpt-5.1",
+        "llm_call_count": "1",
+        "input_tokens": "120",
+        "cached_input_tokens": "80",
+        "cache_write_input_tokens": "10",
+        "output_tokens": "30",
+        "total_tokens": "150",
+    }
+    entries = (
+        _entry(
+            1,
+            "model_started",
+            created_at,
+            metadata={"agent": agent, "usage_scope": "provider_call"},
+        ),
+        _entry(2, "model_completed", created_at + timedelta(seconds=1), metadata=live_metadata),
+        _entry(
+            3,
+            "model_output",
+            created_at + timedelta(seconds=2),
+            metadata={
+                "agent": agent,
+                "usage_scope": "agent_run",
+                "model_name": "gpt-5.1",
+                "llm_call_count": "1",
+                "input_tokens": "120",
+                "cached_input_tokens": "80",
+                "cache_write_input_tokens": "10",
+                "output_tokens": "30",
+                "total_tokens": "150",
+            },
+        ),
+    )
+
+    report = build_process_report(
+        task_id="review_" + "0" * 32,
+        status="completed",
+        entries=entries,
+        finding_count=0,
+    )
+
+    assert report.llm_call_count == 1
+    assert report.total_tokens == 150
 
 
 def test_host_prefetched_review_scope_has_no_tool_transcript_or_usage() -> None:

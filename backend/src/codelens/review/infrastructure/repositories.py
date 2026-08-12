@@ -48,7 +48,7 @@ from codelens.review.domain.ports import (
     ReviewPlanRecord,
     ReviewRecord,
 )
-from codelens.review.domain.review_plan import ReviewPlan
+from codelens.review.domain.review_plan import ReviewPlan, ReviewPlanNode
 from codelens.review.domain.review_profile import (
     ReviewProfile,
     ReviewProfileDefaultRequiredError,
@@ -2968,6 +2968,86 @@ class SqlCheckpointStore:
                 )
                 if actual != expected:
                     raise ValueError("checkpoint conflicts with the frozen Review Plan")
+
+        await self._database.run_transaction(operation)
+
+    async def ensure_plan_node(
+        self,
+        node: ReviewPlanNode,
+        *,
+        capability_fingerprint: str | None = None,
+    ) -> None:
+        """Create one frozen Plan node before the complete adaptive Plan is known."""
+
+        timestamp = _now()
+        run = AgentRun.create(
+            task_id=node.task_id,
+            agent_version=node.agent_reference,
+            pass_index=node.pass_index.value,
+            shard_id=node.shard_id,
+            logical_attempt_group=node.logical_attempt_group,
+            node_role=cast(Any, node.node_type.value),
+            capability_fingerprint=capability_fingerprint,
+        )
+
+        async def operation(session: AsyncSession) -> None:
+            await session.execute(
+                sqlite_insert(dag_checkpoints)
+                .values(
+                    task_id=node.task_id,
+                    node_key=node.node_id,
+                    logical_attempt_group=node.logical_attempt_group,
+                    status="pending",
+                    execution_attempts=0,
+                    validation_attempts=0,
+                    run_id=run.run_id,
+                    node_role=node.node_type.value,
+                    agent_version=node.agent_reference,
+                    pass_index=node.pass_index.value,
+                    shard_id=node.shard_id,
+                    capability_fingerprint=capability_fingerprint,
+                    created_at=timestamp,
+                    updated_at=timestamp,
+                )
+                .on_conflict_do_nothing(
+                    index_elements=(dag_checkpoints.c.task_id, dag_checkpoints.c.node_key)
+                )
+            )
+            stored = (
+                (
+                    await session.execute(
+                        select(dag_checkpoints).where(
+                            dag_checkpoints.c.task_id == node.task_id,
+                            dag_checkpoints.c.node_key == node.node_id,
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            expected = (
+                run.run_id,
+                node.logical_attempt_group,
+                node.node_type.value,
+                node.agent_reference,
+                node.pass_index.value,
+                node.shard_id,
+                capability_fingerprint,
+            )
+            actual = tuple(
+                stored[name]
+                for name in (
+                    "run_id",
+                    "logical_attempt_group",
+                    "node_role",
+                    "agent_version",
+                    "pass_index",
+                    "shard_id",
+                    "capability_fingerprint",
+                )
+            )
+            if actual != expected:
+                raise ValueError("checkpoint conflicts with the frozen Review Plan node")
 
         await self._database.run_transaction(operation)
 

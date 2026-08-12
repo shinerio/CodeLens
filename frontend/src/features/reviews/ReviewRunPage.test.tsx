@@ -618,6 +618,9 @@ it("shows the process report after a review has completed", async () => {
         output_tokens: 30,
         total_tokens: 150,
         tool_call_count: 2,
+        accepted_tool_call_count: 2,
+        rejected_tool_call_count: 0,
+        unclassified_tool_call_count: 0,
         tool_result_count: 2,
         unmatched_tool_result_count: 0,
         finding_count: 0,
@@ -626,9 +629,10 @@ it("shows the process report after a review has completed", async () => {
         completed_at: "2026-07-25T00:00:06Z",
         duration_ms: 6000,
         tools: [
-          { tool_name: "get_diff", call_count: 1, result_count: 1 },
-          { tool_name: "grep", call_count: 1, result_count: 1 },
+          { tool_name: "get_diff", call_count: 1, result_count: 1, accepted_call_count: 1, rejected_call_count: 0, unclassified_call_count: 0 },
+          { tool_name: "grep", call_count: 1, result_count: 1, accepted_call_count: 1, rejected_call_count: 0, unclassified_call_count: 0 },
         ],
+        rejected_tool_calls: [],
         agents: [
           {
             agent: "correctness:v2",
@@ -638,6 +642,9 @@ it("shows the process report after a review has completed", async () => {
             output_tokens: 30,
             total_tokens: 150,
             tool_call_count: 2,
+            accepted_tool_call_count: 2,
+            rejected_tool_call_count: 0,
+            unclassified_tool_call_count: 0,
             started_at: "2026-07-25T00:00:00Z",
             completed_at: "2026-07-25T00:00:06Z",
             duration_ms: 6000,
@@ -670,11 +677,13 @@ it("shows the process report after a review has completed", async () => {
     ),
   });
 
-  await userEvent.click(await screen.findByRole("tab", { name: /Execution/ }));
+  await userEvent.click(await screen.findByRole("tab", { name: /Runtime overview/ }));
   expect(await screen.findByRole("heading", { name: "Process report" })).toBeInTheDocument();
   expect(screen.getAllByText("150")).toHaveLength(2);
   expect(screen.getByText("get_diff")).toBeInTheDocument();
   expect(screen.getByText("gpt-5.1")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: /Logs/ }));
+  expect(screen.queryByRole("heading", { name: "Process report" })).not.toBeInTheDocument();
 });
 
 it("places finding navigation above a full-width source comparison", async () => {

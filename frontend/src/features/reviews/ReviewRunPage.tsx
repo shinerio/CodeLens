@@ -211,7 +211,7 @@ export function ReviewRunPage() {
   async function refreshProgress() {
     setIsRefreshing(true);
     const start = Date.now();
-    await Promise.all([reviewQuery.refetch(), findingsQuery.refetch(), transcriptQuery.refetch()]);
+    await Promise.all([reviewQuery.refetch(), findingsQuery.refetch(), transcriptQuery.refetch(), processReportQuery.refetch()]);
     const elapsed = Date.now() - start;
     if (elapsed < 500) {
       await new Promise((resolve) => setTimeout(resolve, 500 - elapsed));
@@ -235,10 +235,8 @@ export function ReviewRunPage() {
   const processReportQuery = useQuery({
     queryKey: ["review-process-report", taskId],
     queryFn: () => getProcessReport(taskId ?? ""),
-    enabled:
-      taskId !== undefined &&
-      TERMINAL_STATUSES.has(currentStatus) &&
-      transcriptQuery.data.length > 0,
+    enabled: taskId !== undefined,
+    refetchInterval: TERMINAL_STATUSES.has(currentStatus) ? false : 1_000,
     retry: 5,
     retryDelay: 1_000,
   });
@@ -272,8 +270,9 @@ export function ReviewRunPage() {
       findingsQuery.refetch(),
       transcriptQuery.refetch(),
       exportHistoryQuery.refetch(),
+      processReportQuery.refetch(),
     ]);
-  }, [currentStatus, reviewQuery, findingsQuery, transcriptQuery, exportHistoryQuery]);
+  }, [currentStatus, reviewQuery, findingsQuery, transcriptQuery, exportHistoryQuery, processReportQuery]);
 
   useEffect(() => {
     if (findingsQuery.data.length > 0 && selectedFindingId === null) {
@@ -471,7 +470,7 @@ export function ReviewRunPage() {
                 <dd>{connectionState}</dd>
               </div>
               <div>
-                <dt>{t("run.events")}</dt>
+                <dt>{t("run.liveEventsReceived")}</dt>
                 <dd>{events.length}</dd>
               </div>
               <div>
@@ -532,12 +531,21 @@ export function ReviewRunPage() {
           </article>
 
           <article className="run-panel run-panel--wide">
-            <h2>{t("run.execution")}</h2>
+            <h2>{t("run.agentRuns")}</h2>
             <AgentRunTimeline plan={reviewQuery.data?.review_plan ?? null} />
           </article>
           {processReportQuery.data !== undefined ? (
-            <ReviewProcessReport report={processReportQuery.data} />
-          ) : null}
+            <ReviewProcessReport
+              entries={transcriptQuery.data}
+              plan={reviewQuery.data?.review_plan ?? null}
+              report={processReportQuery.data}
+              reviewerReferences={reviewQuery.data?.selected_agents ?? []}
+            />
+          ) : (
+            <article className="run-panel run-panel--wide process-report__state" role={processReportQuery.isError ? "alert" : "status"}>
+              {processReportQuery.isError ? t("run.processReportError") : t("run.processReportLoading")}
+            </article>
+          )}
         </section>
       ) : null}
 
@@ -574,11 +582,6 @@ export function ReviewRunPage() {
 
       {activeTab === "logs" ? (
         <section className="run-layout">
-          {TERMINAL_STATUSES.has(currentStatus) && transcriptQuery.data.length > 0 && processReportQuery.data === undefined ? (
-            <article className="run-panel run-panel--wide process-report__state" role={processReportQuery.isError ? "alert" : "status"}>
-              {processReportQuery.isError ? t("run.processReportError") : t("run.processReportLoading")}
-            </article>
-          ) : null}
           <article className="run-panel run-panel--wide">
             <div className="run-panel__heading">
               <div>
@@ -591,7 +594,6 @@ export function ReviewRunPage() {
               <ReviewConsole
                 entries={transcriptQuery.data}
                 plan={reviewQuery.data?.review_plan ?? null}
-                processReport={processReportQuery.data}
                 reviewerReferences={reviewQuery.data?.selected_agents ?? []}
               />
             ) : <p className="event-log__empty">{t("run.waitingEvents")}</p>}

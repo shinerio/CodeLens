@@ -120,6 +120,18 @@ def test_reset_all_restores_defaults(tmp_path: Path) -> None:
             "/api/settings/review-completion",
             json={"max_incomplete_review_retries": 10},
         )
+        client.post(
+            "/api/settings/model-gateways",
+            json={
+                "name": "Reset gateway",
+                "api_key": "sk-reset-test-secret",
+                "model": "gpt-reset",
+                "base_url": "https://reset.example/v1",
+                "agent_timeout": 900,
+                "max_agent_turns": 80,
+                "max_tool_calls": 240,
+            },
+        )
 
         # Reset all
         reset = client.post("/api/settings/reset-all", json={})
@@ -133,6 +145,10 @@ def test_reset_all_restores_defaults(tmp_path: Path) -> None:
         assert data["instruction_files"]["root_max_lines"] == 500
         assert data["instruction_files"]["nested_max_lines"] == 200
         assert data["review_completion"]["max_incomplete_review_retries"] == 3
+        reset_gateway = data["model_gateways"]["gateways"][0]
+        assert reset_gateway["agent_timeout"] == 3600
+        assert reset_gateway["max_agent_turns"] == 500
+        assert reset_gateway["max_tool_calls"] == 500
 
         # Verify persistence
         tool_limits = client.get("/api/settings/tool-limits")

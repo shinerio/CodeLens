@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import re
 import tempfile
@@ -11,6 +12,8 @@ from pathlib import Path
 from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
+
+from codelens.review.domain.tool_invocation import classify_tool_result, outcome_metadata
 
 TranscriptKind = Literal[
     "lifecycle",
@@ -32,6 +35,7 @@ StreamingTranscriptKind = Literal["model_reasoning_delta", "model_output_delta"]
 _STREAMING_TRANSCRIPT_KINDS: frozenset[str] = frozenset(
     {"model_reasoning_delta", "model_output_delta"}
 )
+_LOGGER = logging.getLogger("codelens.worker.transcripts")
 
 _SECRET_PATTERN = re.compile(
     r"(?i)(?P<prefix>"
@@ -60,6 +64,12 @@ class ModelTranscriptLogPort(Protocol):
         """Persist model exchanges outside the streaming event path."""
 
         raise NotImplementedError
+
+
+class ToolRejectionEventPort(Protocol):
+    """Persist bounded rejected-tool diagnostics without arguments or result content."""
+
+    async def append(self, task_id: str, event_type: str, payload: dict[str, object]) -> None: ...
 
 
 class ExecutionTranscriptStore:
@@ -175,9 +185,11 @@ class WorkerTranscriptStore:
         self,
         durable_store: ExecutionTranscriptStore,
         model_log: ModelTranscriptLogPort | None = None,
+        rejection_events: ToolRejectionEventPort | None = None,
     ) -> None:
         self._durable_store = durable_store
         self._model_log = model_log
+        self._rejection_events = rejection_events
         self._entries: dict[str, list[TranscriptEntry]] = {}
         self._active_streams: dict[
             str,
@@ -210,6 +222,8 @@ class WorkerTranscriptStore:
             for kind, content, metadata in entries:
                 safe_content, redacted = _redact(content)
                 safe_metadata = dict(metadata or {})
+                if kind == "tool_result" and "tool_outcome" not in safe_metadata:
+                    safe_metadata.update(outcome_metadata(classify_tool_result(safe_content)))
                 agent = safe_metadata.get("agent", "<global>")
                 if kind in _STREAMING_TRANSCRIPT_KINDS:
                     streaming_kind = _streaming_kind(kind)
@@ -250,6 +264,35 @@ class WorkerTranscriptStore:
                         metadata=safe_metadata,
                     )
                 )
+                if kind == "tool_result" and safe_metadata.get("tool_outcome") == "rejected":
+                    await self._record_tool_rejection(task_id, safe_metadata)
+
+    async def _record_tool_rejection(
+        self, task_id: str, metadata: Mapping[str, str]
+    ) -> None:
+        """Write one bounded rejection fact to logs and the durable event outbox."""
+
+        payload: dict[str, object] = {
+            "agent": metadata.get("agent", "unknown")[:128],
+            "tool_name": metadata.get("tool_name", "unknown")[:128],
+            "tool_call_id": metadata.get("tool_call_id", "")[:128],
+            "reason_code": metadata.get(
+                "tool_rejection_reason_code", "tool_result_rejected"
+            )[:128],
+            "reason": metadata.get(
+                "tool_rejection_reason", "Tool invocation was rejected."
+            )[:500],
+        }
+        _LOGGER.warning(
+            "Model-visible tool invocation rejected",
+            extra={"task_id": task_id, **payload},
+        )
+        if self._rejection_events is not None:
+            await self._rejection_events.append(
+                task_id,
+                "agent_tool_call.rejected",
+                payload,
+            )
 
     async def list(self, task_id: str) -> tuple[TranscriptEntry, ...]:
         lock = self._locks.setdefault(task_id, asyncio.Lock())

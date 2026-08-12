@@ -2,6 +2,72 @@ import { fireEvent, render, screen, within } from "@testing-library/react";
 import { expect, it } from "vitest";
 
 import { ReviewConsole } from "./ReviewConsole";
+import { ReviewProcessReport } from "./ReviewProcessReport";
+
+it("shows global lifecycle entries by default and excludes them from a selected stage", () => {
+  render(
+    <ReviewConsole
+      entries={[
+        {
+          sequence: 1,
+          kind: "lifecycle",
+          content: "Review execution started",
+          created_at: "2026-08-12T00:00:00Z",
+          redacted: false,
+          truncated: false,
+          metadata: {},
+        },
+        {
+          sequence: 2,
+          kind: "prompt",
+          content: "planner prompt",
+          created_at: "2026-08-12T00:00:01Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "review-planner:v2" },
+        },
+      ]}
+      plan={{
+        selection_mode: "adaptive",
+        reviewer_references: ["correctness:v2"],
+        plan_hash: "1".repeat(64),
+        planner_reason: "adaptive",
+        nodes: [
+          { node_id: "planner", node_type: "planner", agent_reference: "review-planner:v2", depends_on: [], pass_index: 0, shard_id: "root", logical_attempt_group: "primary", task_id: "review-1" },
+          { node_id: "reviewer", node_type: "reviewer", agent_reference: "correctness:v2", depends_on: ["planner"], pass_index: 1, shard_id: "root", logical_attempt_group: "primary", task_id: "review-1" },
+        ],
+      }}
+    />,
+  );
+
+  expect(screen.getByText("Review execution started")).toBeInTheDocument();
+  expect(screen.getByRole("checkbox", { name: "System / lifecycle" })).toBeChecked();
+  fireEvent.click(screen.getByRole("button", { name: /Planner/ }));
+  expect(screen.queryByText("Review execution started")).not.toBeInTheDocument();
+  expect(screen.getByText("planner prompt")).toBeInTheDocument();
+});
+
+it("uses visible transcript records for stage and reviewer counts", () => {
+  render(
+    <ReviewConsole
+      entries={[
+        { sequence: 1, kind: "tool_call", content: "hidden tool", created_at: "2026-08-12T00:00:00Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2" } },
+        { sequence: 2, kind: "lifecycle", content: "reviewer lifecycle", created_at: "2026-08-12T00:00:01Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2" } },
+      ]}
+      plan={{
+        selection_mode: "fixed",
+        reviewer_references: ["correctness:v2"],
+        plan_hash: "1".repeat(64),
+        planner_reason: null,
+        nodes: [{ node_id: "reviewer", node_type: "reviewer", agent_reference: "correctness:v2", depends_on: [], pass_index: 1, shard_id: "root", logical_attempt_group: "primary", task_id: "review-1" }],
+      }}
+    />,
+  );
+
+  expect(within(screen.getByRole("button", { name: /Reviewers/ })).getByText("1")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("checkbox", { name: "System / lifecycle" }));
+  expect(within(screen.getByRole("button", { name: /Reviewers/ })).getByText("0")).toBeInTheDocument();
+});
 
 it("renders final model output as Markdown after streaming completes", () => {
   render(
@@ -385,8 +451,8 @@ it("selects reviewers for a fixed team whose legacy execution has no persisted p
 
 it("restores usage metrics and filters tokens and tools with the selected stage and reviewer", () => {
   render(
-    <ReviewConsole
-      processReport={{
+    <ReviewProcessReport
+      report={{
         task_id: "review-1",
         status: "completed",
         usage_is_complete: true,
@@ -402,6 +468,9 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         output_tokens: 120,
         total_tokens: 600,
         tool_call_count: 3,
+        accepted_tool_call_count: 3,
+        rejected_tool_call_count: 0,
+        unclassified_tool_call_count: 0,
         invalid_tool_call_count: 1,
         tool_result_count: 3,
         unmatched_tool_result_count: 0,
@@ -411,15 +480,16 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         completed_at: "2026-08-03T00:00:06Z",
         duration_ms: 6_000,
         tools: [
-          { tool_name: "read_file", call_count: 1, result_count: 1 },
-          { tool_name: "get_diff", call_count: 1, result_count: 1 },
-          { tool_name: "verdict", call_count: 1, result_count: 1 },
+          { tool_name: "read_file", call_count: 1, result_count: 1, accepted_call_count: 1, rejected_call_count: 0, unclassified_call_count: 0 },
+          { tool_name: "get_diff", call_count: 1, result_count: 1, accepted_call_count: 1, rejected_call_count: 0, unclassified_call_count: 0 },
+          { tool_name: "verdict", call_count: 1, result_count: 1, accepted_call_count: 1, rejected_call_count: 0, unclassified_call_count: 0 },
         ],
+        rejected_tool_calls: [],
         invalid_tools: [{ tool_name: "grep_create_triggered", call_count: 1 }],
         agents: [
-          { agent: "security:v2", model_name: "model", llm_call_count: 2, input_tokens: 80, cached_input_tokens: 20, cache_write_input_tokens: 5, output_tokens: 20, total_tokens: 100, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
-          { agent: "performance:v2", model_name: "model", llm_call_count: 3, input_tokens: 160, cached_input_tokens: 40, cache_write_input_tokens: 10, output_tokens: 40, total_tokens: 200, tool_call_count: 1, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
-          { agent: "review-verifier:v2", model_name: "model", llm_call_count: 4, input_tokens: 240, cached_input_tokens: 60, cache_write_input_tokens: 15, output_tokens: 60, total_tokens: 300, tool_call_count: 1, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
+          { agent: "security:v2", model_name: "model", llm_call_count: 2, input_tokens: 80, cached_input_tokens: 20, cache_write_input_tokens: 5, output_tokens: 20, total_tokens: 100, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
+          { agent: "performance:v2", model_name: "model", llm_call_count: 3, input_tokens: 160, cached_input_tokens: 40, cache_write_input_tokens: 10, output_tokens: 40, total_tokens: 200, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
+          { agent: "review-verifier:v2", model_name: "model", llm_call_count: 4, input_tokens: 240, cached_input_tokens: 60, cache_write_input_tokens: 15, output_tokens: 60, total_tokens: 300, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
         ],
       }}
       plan={{
@@ -488,7 +558,7 @@ it("coalesces interleaved streaming deltas independently for each reviewer", () 
   expect(screen.getByText("Security complete")).toBeInTheDocument();
   expect(screen.getByText("Correctness complete")).toBeInTheDocument();
   expect(screen.getAllByText("AI output")).toHaveLength(2);
-  expect(screen.getByText("2 of 2 events")).toBeInTheDocument();
+  expect(screen.getByText("2 of 2 transcript records")).toBeInTheDocument();
 });
 
 it("shows first 10 and last 10 events with a load-more gap in between", () => {
@@ -510,7 +580,7 @@ it("shows first 10 and last 10 events with a load-more gap in between", () => {
   expect(screen.queryByText("Event 15")).not.toBeInTheDocument();
   expect(screen.getByText("Event 16")).toBeInTheDocument();
   expect(screen.getByText("Event 25")).toBeInTheDocument();
-  expect(screen.getByText("5 events hidden")).toBeInTheDocument();
+  expect(screen.getByText("5 transcript records hidden")).toBeInTheDocument();
 });
 
 it("loads more events from start and end independently", () => {

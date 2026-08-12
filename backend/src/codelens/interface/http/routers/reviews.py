@@ -219,22 +219,15 @@ async def get_process_report(
     task_id: TaskId,
     components: Annotated[HttpComponents, Depends(get_components)],
 ) -> ReviewProcessReportResponse:
-    """Return deterministic usage and tool metrics after one Review reaches a terminal state."""
+    """Return live usage and tool metrics from the active or durable transcript."""
 
     review = await components.get_review.handle(task_id)
-    if review.status not in _TERMINAL_STATUSES:
-        raise HttpProblem(
-            409,
-            "process_report_not_ready",
-            "The review process report is available after execution finishes.",
-        )
-    entries = await components.transcripts.list(task_id)
-    if not entries:
-        raise HttpProblem(
-            409,
-            "process_report_not_ready",
-            "The terminal review transcript has not been persisted yet.",
-        )
+    if review.status in _TERMINAL_STATUSES:
+        entries = await components.transcripts.list(task_id)
+        if not entries:
+            entries = await components.worker_transcripts.list(task_id)
+    else:
+        entries = await components.worker_transcripts.list(task_id)
     findings = await components.review_store.list_findings(task_id)
     report = build_process_report(
         task_id=task_id,

@@ -79,6 +79,17 @@ export interface ToolUsageSummary {
   tool_name: string;
   call_count: number;
   result_count: number;
+  accepted_call_count: number;
+  rejected_call_count: number;
+  unclassified_call_count: number;
+}
+
+export interface RejectedToolCallSummary {
+  agent: string;
+  tool_name: string;
+  tool_call_id: string | null;
+  reason_code: string;
+  reason: string;
 }
 
 export interface InvalidToolUsageSummary {
@@ -100,6 +111,9 @@ export interface AgentProcessSummary {
   output_tokens: number;
   total_tokens: number;
   tool_call_count: number;
+  accepted_tool_call_count: number;
+  rejected_tool_call_count: number;
+  unclassified_tool_call_count: number;
   started_at: string | null;
   completed_at: string | null;
   duration_ms: number | null;
@@ -121,6 +135,9 @@ export interface ReviewProcessReport {
   output_tokens: number;
   total_tokens: number;
   tool_call_count: number;
+  accepted_tool_call_count: number;
+  rejected_tool_call_count: number;
+  unclassified_tool_call_count: number;
   invalid_tool_call_count: number;
   tool_result_count: number;
   unmatched_tool_result_count: number;
@@ -130,6 +147,7 @@ export interface ReviewProcessReport {
   completed_at: string | null;
   duration_ms: number | null;
   tools: ToolUsageSummary[];
+  rejected_tool_calls: RejectedToolCallSummary[];
   invalid_tools: InvalidToolUsageSummary[];
   agents: AgentProcessSummary[];
 }

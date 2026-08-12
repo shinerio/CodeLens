@@ -66,6 +66,10 @@ def test_multiple_model_gateways_are_redacted_switchable_and_persistent(
     assert empty.json() == {"active_gateway_id": None, "gateways": []}
     assert primary.status_code == 201, primary.text
     assert primary_id.startswith("gateway_")
+    primary_gateway = primary.json()["gateways"][0]
+    assert primary_gateway["agent_timeout"] == 3600
+    assert primary_gateway["max_agent_turns"] == 500
+    assert primary_gateway["max_tool_calls"] == 500
     assert secondary.status_code == 201, secondary.text
     assert secondary.json()["active_gateway_id"] == primary_id
     assert activated.status_code == 200, activated.text

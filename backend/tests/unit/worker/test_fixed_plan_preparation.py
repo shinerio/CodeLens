@@ -6,6 +6,8 @@ from types import SimpleNamespace
 from typing import Any
 from unittest.mock import AsyncMock
 
+import pytest
+
 from codelens.capabilities.application.resolve import CapabilityResolver
 from codelens.capabilities.domain.models import (
     AgentExecutionLimits,
@@ -14,6 +16,7 @@ from codelens.capabilities.domain.models import (
 from codelens.capabilities.domain.skills import SkillActivationFacts
 from codelens.review.domain.ports import (
     AgentExecutionSpecRecord,
+    AgentRuntimeEvent,
     ReviewExecutionRecord,
     RunOutputArtifact,
     UnvalidatedAgentOutput,
@@ -121,6 +124,9 @@ class _Checkpoints:
         )
 
     async def ensure(self, *_args: Any) -> None:
+        return None
+
+    async def ensure_plan_node(self, *_args: Any, **_kwargs: Any) -> None:
         return None
 
     async def get(self, *_args: Any) -> Any:
@@ -308,17 +314,28 @@ async def test_prepare_runs_and_persists_adaptive_planner_before_reviewers(
     plan_store = _PlanStore()
     spec_store = _ExecutionSpecStore()
     artifacts = _Artifacts()
+    planner_output = UnvalidatedAgentOutput(
+        b'{"reviewer_references":["general:v2"],"schema_version":"2"}',
+        (),
+        "fake",
+        11,
+        7,
+        (),
+    )
+
+    async def invoke_stream(*args: Any) -> UnvalidatedAgentOutput:
+        sink = args[-1]
+        await sink(AgentRuntimeEvent("prompt", "planner prompt", {"model_name": "fake"}))
+        await sink(AgentRuntimeEvent("model_started", "", {}))
+        await sink(AgentRuntimeEvent("tool_call", "{}", {"tool_name": "finalize_plan"}))
+        await sink(AgentRuntimeEvent("tool_result", '{"accepted":true}', {}))
+        await sink(AgentRuntimeEvent("model_raw_output", "raw planner response", {}))
+        await sink(AgentRuntimeEvent("model_completed", "", {}))
+        return planner_output
+
     runtime = SimpleNamespace(
-        invoke=AsyncMock(
-            return_value=UnvalidatedAgentOutput(
-                b'{"reviewer_references":["general:v2"],"schema_version":"2"}',
-                (),
-                "fake",
-                0,
-                0,
-                (),
-            )
-        )
+        invoke=AsyncMock(),
+        invoke_stream=AsyncMock(side_effect=invoke_stream),
     )
     executor = object.__new__(WorkerReviewExecutor)
     executor._review_store = review_store
@@ -378,11 +395,82 @@ async def test_prepare_runs_and_persists_adaptive_planner_before_reviewers(
     assert prepared.plan is not None
     assert prepared.plan.reviewer_references == ("general:v2",)
     assert prepared.plan.nodes[0].node_type is ReviewPlanNodeType.PLANNER
-    assert runtime.invoke.await_count == 1
+    assert runtime.invoke.await_count == 0
+    assert runtime.invoke_stream.await_count == 1
+    planner_records = executor._transcripts.append.await_args_list
+    assert {call.args[1] for call in planner_records} >= {
+        "prompt",
+        "model_started",
+        "tool_call",
+        "tool_result",
+        "model_raw_output",
+        "model_completed",
+        "model_output",
+    }
+    for call in planner_records:
+        metadata = call.kwargs["metadata"]
+        assert metadata["agent"] == "review-planner:v2"
+        assert metadata["node_id"] == prepared.plan.nodes[0].node_id
+        assert metadata["run_id"] == checkpoints.record.run_id
     assert review_store.planner_selection == ("general:v2",)
     assert set(spec_store.records) == {node.node_id for node in prepared.plan.nodes}
 
     recovered = await executor.prepare("review-adaptive")
 
     assert recovered.plan == prepared.plan
-    assert runtime.invoke.await_count == 1
+    assert runtime.invoke_stream.await_count == 1
+
+    plan_store.record = None
+    checkpoints.record.status = "output_saved"
+    resumed = await executor.prepare("review-adaptive")
+
+    assert resumed.plan == prepared.plan
+    assert runtime.invoke_stream.await_count == 1
+
+
+async def test_adaptive_planner_failure_retains_observable_events(tmp_path: Path) -> None:
+    catalog = builtin_agent_catalog()
+    planner_spec = CapabilityResolver.testing().resolve(
+        agent=catalog["review-planner:v2"],
+        prompt_content_hash=hashlib.sha256(
+            catalog["review-planner:v2"].prompt_template.encode()
+        ).hexdigest(),
+        facts=SkillActivationFacts.empty(),
+        execution_limits=AgentExecutionLimits.default(),
+    )
+
+    async def invoke_stream(*args: Any) -> UnvalidatedAgentOutput:
+        sink = args[-1]
+        await sink(AgentRuntimeEvent("prompt", "safe planner prompt", {"model_name": "fake"}))
+        await sink(AgentRuntimeEvent("model_started", "", {}))
+        raise RuntimeError("provider failed")
+
+    transcripts = SimpleNamespace(append=AsyncMock())
+    executor = object.__new__(WorkerReviewExecutor)
+    executor._runtime = SimpleNamespace(invoke_stream=invoke_stream)
+    executor._transcripts = transcripts
+
+    with pytest.raises(RuntimeError, match="provider failed"):
+        await executor._invoke_planner_observably(
+            task_id="review-adaptive",
+            node_id="node-planner",
+            run_id="run_" + "1" * 64,
+            execution_spec=planner_spec,
+            input_payload=b"{}",
+            snapshot=_snapshot(tmp_path),
+            prompt_locale="en",
+        )
+
+    assert [call.args[1] for call in transcripts.append.await_args_list] == [
+        "prompt",
+        "model_started",
+    ]
+    assert all(
+        call.kwargs["metadata"] == {
+            "agent": "review-planner:v2",
+            "node_id": "node-planner",
+            "run_id": "run_" + "1" * 64,
+            **({"model_name": "fake"} if call.args[1] == "prompt" else {}),
+        }
+        for call in transcripts.append.await_args_list
+    )

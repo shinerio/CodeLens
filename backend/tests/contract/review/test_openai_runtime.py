@@ -451,15 +451,18 @@ async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() 
     assert filtered.instructions == "stable-system-prompt"
 
 
-def _planner_runtime_input() -> bytes:
+def _planner_runtime_input(*, host_run_id: str | None = None) -> bytes:
+    role_context: dict[str, object] = {
+        "eligible_reviewer_references": ["general:v2"],
+        "unavailable_reviewer_references": [],
+    }
+    if host_run_id is not None:
+        role_context["_host_run_id"] = host_run_id
     return json.dumps(
         {
             "repository_instructions": [],
             "review_files": [],
-            "role_context": {
-                "eligible_reviewer_references": ["general:v2"],
-                "unavailable_reviewer_references": [],
-            },
+            "role_context": role_context,
         },
         sort_keys=True,
         separators=(",", ":"),
@@ -529,6 +532,32 @@ async def test_planner_runtime_uses_typed_submission_as_its_completion_signal() 
     }
     assert runner.starting_agent is not None
     assert tuple(tool.name for tool in runner.starting_agent.tools)[-1] == "finalize_plan"
+
+
+async def test_planner_runtime_accepts_a_trusted_host_run_identity() -> None:
+    runner = PlannerRunner(
+        FakeResult(
+            final_output=None,
+            raw_responses=(FakeResponse("resp-plan", "req-plan", FakeUsage(3, 2), ()),),
+        )
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+    host_run_id = "run_" + "a" * 64
+
+    output = await runtime.invoke(
+        _planner_spec(),
+        _planner_runtime_input(host_run_id=host_run_id),
+        _snapshot(),
+        "en",
+    )
+
+    assert json.loads(output.canonical_bytes)["reviewer_references"] == ["general:v2"]
+    assert runner.starting_agent is not None
 
 
 async def test_verifier_runtime_uses_verdict_then_finalize_to_complete() -> None:

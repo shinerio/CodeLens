@@ -6,8 +6,10 @@ type ReviewStatus =
   | "provisioning_worktree"
   | "snapshotting"
   | "preparing"
+  | "planning"
   | "reviewing"
   | "validating"
+  | "verifying"
   | "synthesizing"
   | "completed"
   | "partial"
@@ -27,8 +29,10 @@ const STATUS_BY_EVENT: Record<string, ReviewStatus> = {
   "review.provisioning_worktree": "provisioning_worktree",
   "review.snapshotting": "snapshotting",
   "review.preparing": "preparing",
+  "review.planning": "planning",
   "review.reviewing": "reviewing",
   "review.validating": "validating",
+  "review.verifying": "verifying",
   "review.synthesizing": "synthesizing",
   "review.completed": "completed",
   "review.partial": "partial",
@@ -36,7 +40,25 @@ const STATUS_BY_EVENT: Record<string, ReviewStatus> = {
   "review.canceled": "canceled",
 };
 
-const NON_STATUS_EVENT_TYPES = ["review.plan_created"] as const;
+/**
+ * Persisted event contract emitted by the review SSE endpoint. Keep this list exhaustive:
+ * named SSE events do not reach EventSource.onmessage, so every non-status audit event must
+ * be registered here and covered by the hook contract test.
+ */
+const NON_STATUS_EVENT_TYPES = [
+  "review.plan_created",
+  "review.ready",
+  "review.scope_empty",
+  "review.cancel_requested",
+  "review.superseded",
+  "review.verdict_completed",
+  "agent_run.started",
+  "agent_run.completed",
+  "agent_run.failed",
+  "agent.succeeded",
+  "agent_tool_call.rejected",
+  "finding.published",
+] as const;
 
 const TERMINAL_STATUSES = new Set<ReviewStatus>([
   "completed",

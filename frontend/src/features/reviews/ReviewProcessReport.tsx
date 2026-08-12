@@ -1,31 +1,62 @@
 import { Bot, Clock3, Coins, Wrench } from "lucide-react";
+import { useMemo, useState } from "react";
 
-import { useI18n } from "../../shared/i18n/i18n";
+import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import type {
   AgentProcessSummary,
   ReviewProcessReport as ProcessReport,
   ToolUsageSummary,
   TranscriptEntry,
 } from "./api";
+import type { ReviewPlanNodeRole, ReviewPlanProjection } from "./types";
 
-/** Present terminal execution metrics in a compact, comparison-oriented report. */
+type StageSelection = "all" | ReviewPlanNodeRole;
+
+const STAGE_OPTIONS: ReadonlyArray<{ id: ReviewPlanNodeRole; labelKey: TranslationKey }> = [
+  { id: "planner", labelKey: "logs.stagePlanner" },
+  { id: "reviewer", labelKey: "logs.stageReviewers" },
+  { id: "verifier", labelKey: "logs.stageVerifier" },
+];
+
+/** Present live execution metrics in a compact, comparison-oriented report. */
 export function ReviewProcessReport({
   report,
-  agentReferences,
   entries = [],
-  scopeLabel,
-  isEmbedded = false,
+  plan,
+  reviewerReferences: fallbackReviewerReferences = [],
 }: {
   report: ProcessReport;
-  agentReferences?: readonly string[];
   entries?: readonly TranscriptEntry[];
-  scopeLabel?: string;
-  isEmbedded?: boolean;
+  plan?: ReviewPlanProjection | null;
+  reviewerReferences?: readonly string[];
 }) {
   const { locale, t } = useI18n();
+  const [selectedStage, setSelectedStage] = useState<StageSelection>("all");
+  const [selectedReviewer, setSelectedReviewer] = useState("all");
   const number = new Intl.NumberFormat(locale);
-  const isFiltered = agentReferences !== undefined;
-  const selectedAgents = new Set(agentReferences);
+  const nodes = plan?.nodes ?? [];
+  const reviewerReferences = Array.from(new Set([
+    ...nodes.filter((node) => node.node_type === "reviewer").map((node) => node.agent_reference),
+    ...(plan === null || plan === undefined ? fallbackReviewerReferences : []),
+  ]));
+  const nodeRoleByAgent = useMemo(
+    () => new Map<string, ReviewPlanNodeRole>([
+      ...nodes.map((node): [string, ReviewPlanNodeRole] => [node.agent_reference, node.node_type]),
+      ...(plan === null || plan === undefined
+        ? fallbackReviewerReferences.map((reference): [string, ReviewPlanNodeRole] => [reference, "reviewer"])
+        : []),
+    ]),
+    [fallbackReviewerReferences, nodes, plan],
+  );
+  const selectedAgentReferences = selectedStage === "all"
+    ? undefined
+    : selectedStage === "reviewer" && selectedReviewer !== "all"
+      ? [selectedReviewer]
+      : Array.from(nodeRoleByAgent.entries())
+        .filter(([, role]) => role === selectedStage)
+        .map(([reference]) => reference);
+  const isFiltered = selectedAgentReferences !== undefined;
+  const selectedAgents = new Set(selectedAgentReferences);
   const agents = isFiltered
     ? report.agents.filter((agent) => selectedAgents.has(agent.agent))
     : report.agents;
@@ -35,19 +66,56 @@ export function ReviewProcessReport({
     ? countCandidates(entries, selectedAgents)
     : report.finding_count;
   const invalidTools = report.invalid_tools ?? [];
+  const rejectedToolCalls = isFiltered
+    ? report.rejected_tool_calls.filter((call) => selectedAgents.has(call.agent))
+    : report.rejected_tool_calls;
+  const scopeLabel = selectedStage === "all"
+    ? t("logs.allStages")
+    : selectedStage === "reviewer" && selectedReviewer !== "all"
+      ? reviewerDisplayName(selectedReviewer, t)
+      : t(STAGE_OPTIONS.find((stage) => stage.id === selectedStage)?.labelKey ?? "logs.allStages");
+  const availableStages = STAGE_OPTIONS.filter((stage) =>
+    nodes.some((node) => node.node_type === stage.id)
+      || (stage.id === "reviewer" && reviewerReferences.length > 0),
+  );
 
   return (
     <article
       aria-label={t("run.processReport")}
-      className={`run-panel run-panel--wide process-report${isEmbedded ? " process-report--embedded" : ""}`}
+      className="run-panel run-panel--wide process-report"
     >
       <div className="run-panel__heading">
         <div>
           <p className="run-panel__eyebrow">{t("run.processReportNote")}</p>
           <h2>{t("run.processReport")}</h2>
         </div>
-        <span className="run-panel__status">{scopeLabel ?? report.status}</span>
+        <span className="run-panel__status">{scopeLabel}</span>
       </div>
+
+      {availableStages.length > 0 ? (
+        <div className="review-console__scope">
+          <nav className="review-console__stage-nav" aria-label={t("logs.stageNavigator")}>
+            <ScopeButton isActive={selectedStage === "all"} label={t("logs.allStages")} onClick={() => {
+              setSelectedStage("all");
+              setSelectedReviewer("all");
+            }} />
+            {availableStages.map((stage) => (
+              <ScopeButton isActive={selectedStage === stage.id} key={stage.id} label={t(stage.labelKey)} onClick={() => {
+                setSelectedStage(stage.id);
+                setSelectedReviewer("all");
+              }} />
+            ))}
+          </nav>
+          {selectedStage === "reviewer" && reviewerReferences.length > 1 ? (
+            <nav className="review-console__reviewer-nav" aria-label={t("logs.reviewerNavigator")}>
+              <ScopeButton isActive={selectedReviewer === "all"} label={t("logs.allReviewers")} onClick={() => setSelectedReviewer("all")} />
+              {reviewerReferences.map((reference) => (
+                <ScopeButton isActive={selectedReviewer === reference} key={reference} label={reviewerDisplayName(reference, t)} onClick={() => setSelectedReviewer(reference)} />
+              ))}
+            </nav>
+          ) : null}
+        </div>
+      ) : null}
 
       {!report.usage_is_complete ? (
         <p className="process-report__warning">{t("run.usageIncomplete")}</p>
@@ -57,6 +125,9 @@ export function ReviewProcessReport({
         <Metric icon={Bot} label={t("run.llmCalls")} value={number.format(totals.llm_call_count)} />
         <Metric icon={Coins} label={t("run.totalTokens")} value={number.format(totals.total_tokens)} />
         <Metric icon={Wrench} label={t("run.toolCalls")} value={number.format(totals.tool_call_count)} />
+        <Metric icon={Wrench} label={t("run.acceptedToolCalls")} value={number.format(totals.accepted_tool_call_count)} />
+        <Metric icon={Wrench} label={t("run.rejectedToolCalls")} value={number.format(totals.rejected_tool_call_count)} />
+        <Metric icon={Wrench} label={t("run.unclassifiedToolCalls")} value={number.format(totals.unclassified_tool_call_count)} />
         <Metric icon={Clock3} label={t("run.duration")} value={formatDuration(totals.duration_ms, locale)} />
         <Metric icon={Coins} label={t("run.inputTokens")} value={number.format(totals.input_tokens)} />
         <Metric icon={Coins} label={t("run.cachedInputTokens")} value={number.format(totals.cached_input_tokens ?? 0)} />
@@ -75,13 +146,13 @@ export function ReviewProcessReport({
           <h3 id="invalid-tool-usage-heading">{t("run.invalidToolUsage")}</h3>
           <p className="process-report__warning">{t("run.invalidToolUsageNote")}</p>
           <div className="process-report__table">
-            <div className="process-report__row process-report__row--header">
+            <div className="process-report__row process-report__row--invalid process-report__row--header">
               <span>{t("run.invalidToolName")}</span>
               <span>{t("run.calls")}</span>
               <span>{t("run.results")}</span>
             </div>
             {invalidTools.map((tool) => (
-              <div className="process-report__row" key={tool.tool_name}>
+              <div className="process-report__row process-report__row--invalid" key={tool.tool_name}>
                 <code>{tool.tool_name}</code>
                 <span>{number.format(tool.call_count)}</span>
                 <span>0</span>
@@ -98,14 +169,18 @@ export function ReviewProcessReport({
             <div className="process-report__table">
               <div className="process-report__row process-report__row--header">
                 <span>{t("run.tool")}</span>
-                <span>{t("run.calls")}</span>
-                <span>{t("run.results")}</span>
+                <span>{t("run.attempts")}</span>
+                <span>{t("run.accepted")}</span>
+                <span>{t("run.rejected")}</span>
+                <span>{t("run.unclassified")}</span>
               </div>
               {tools.map((tool) => (
                 <div className="process-report__row" key={tool.tool_name}>
                   <code>{tool.tool_name}</code>
                   <span>{number.format(tool.call_count)}</span>
-                  <span>{number.format(tool.result_count)}</span>
+                  <span>{number.format(tool.accepted_call_count)}</span>
+                  <span>{number.format(tool.rejected_call_count)}</span>
+                  <span>{number.format(tool.unclassified_call_count)}</span>
                 </div>
               ))}
             </div>
@@ -132,13 +207,28 @@ export function ReviewProcessReport({
           </div>
         </section>
       </div>
+
+      {rejectedToolCalls.length > 0 ? (
+        <section aria-labelledby="rejected-tool-calls-heading">
+          <h3 id="rejected-tool-calls-heading">{t("run.rejectedToolCallReasons")}</h3>
+          <div className="process-report__rejections">
+            {rejectedToolCalls.map((call, index) => (
+              <div className="process-report__rejection" key={`${call.agent}:${call.tool_call_id ?? index}`}>
+                <code>{call.tool_name}</code>
+                <strong>{call.reason_code}</strong>
+                <span>{call.reason}</span>
+              </div>
+            ))}
+          </div>
+        </section>
+      ) : null}
     </article>
   );
 }
 
 type UsageTotals = Pick<
   ProcessReport,
-  "llm_call_count" | "input_tokens" | "cached_input_tokens" | "cache_write_input_tokens" | "context_compaction_count" | "context_compacted_result_count" | "context_compaction_original_bytes" | "context_compaction_compressed_bytes" | "output_tokens" | "total_tokens" | "tool_call_count" | "duration_ms"
+  "llm_call_count" | "input_tokens" | "cached_input_tokens" | "cache_write_input_tokens" | "context_compaction_count" | "context_compacted_result_count" | "context_compaction_original_bytes" | "context_compaction_compressed_bytes" | "output_tokens" | "total_tokens" | "tool_call_count" | "accepted_tool_call_count" | "rejected_tool_call_count" | "unclassified_tool_call_count" | "duration_ms"
 >;
 
 function summarizeAgents(agents: readonly AgentProcessSummary[]): UsageTotals {
@@ -163,6 +253,9 @@ function summarizeAgents(agents: readonly AgentProcessSummary[]): UsageTotals {
     output_tokens: agents.reduce((total, agent) => total + agent.output_tokens, 0),
     total_tokens: agents.reduce((total, agent) => total + agent.total_tokens, 0),
     tool_call_count: agents.reduce((total, agent) => total + agent.tool_call_count, 0),
+    accepted_tool_call_count: agents.reduce((total, agent) => total + agent.accepted_tool_call_count, 0),
+    rejected_tool_call_count: agents.reduce((total, agent) => total + agent.rejected_tool_call_count, 0),
+    unclassified_tool_call_count: agents.reduce((total, agent) => total + agent.unclassified_tool_call_count, 0),
     duration_ms: startedAt === undefined || completedAt === undefined
       ? null
       : Math.max(0, Date.parse(completedAt) - Date.parse(startedAt)),
@@ -181,7 +274,7 @@ function summarizeTools(
     if (entry.kind !== "tool_call" || !selectedAgents.has(agent)) continue;
     const toolName = entry.metadata.tool_name;
     if (toolName === undefined) continue;
-    const current = totals.get(toolName) ?? { tool_name: toolName, call_count: 0, result_count: 0 };
+    const current = totals.get(toolName) ?? { tool_name: toolName, call_count: 0, result_count: 0, accepted_call_count: 0, rejected_call_count: 0, unclassified_call_count: 0 };
     current.call_count += 1;
     totals.set(toolName, current);
     pendingCalls.set(agent, [...(pendingCalls.get(agent) ?? []), toolName]);
@@ -204,11 +297,54 @@ function summarizeTools(
     }
     if (toolName === undefined) continue;
     const current = totals.get(toolName);
-    if (current !== undefined) current.result_count += 1;
+    if (current !== undefined) {
+      current.result_count += 1;
+      const outcome = toolOutcome(entry);
+      if (outcome === "accepted") current.accepted_call_count += 1;
+      else if (outcome === "rejected") current.rejected_call_count += 1;
+      else current.unclassified_call_count += 1;
+    }
   }
   return Array.from(totals.values()).sort((left, right) =>
     right.call_count - left.call_count || left.tool_name.localeCompare(right.tool_name),
   );
+}
+
+function toolOutcome(entry: TranscriptEntry): "accepted" | "rejected" | undefined {
+  const recordedOutcome = entry.metadata.tool_outcome;
+  if (recordedOutcome === "accepted" || recordedOutcome === "rejected") return recordedOutcome;
+  let value: unknown = entry.content;
+  for (let depth = 0; depth < 2 && typeof value === "string"; depth += 1) {
+    try {
+      value = JSON.parse(value) as unknown;
+    } catch {
+      break;
+    }
+  }
+  if (typeof value === "string") {
+    const normalized = value.toLocaleLowerCase();
+    if (normalized.includes("invalid json input for tool") || normalized.includes("validation error for") || normalized.includes("an error occurred while running the tool")) return "rejected";
+    return "accepted";
+  }
+  if (typeof value === "object" && value !== null) {
+    const result = value as Record<string, unknown>;
+    if (result.accepted === false || result.success === false || result.ok === false) return "rejected";
+  }
+  return "accepted";
+}
+
+function ScopeButton({ isActive, label, onClick }: { isActive: boolean; label: string; onClick: () => void }) {
+  return <button aria-pressed={isActive} className={isActive ? "review-console__scope-button review-console__scope-button--active" : "review-console__scope-button"} onClick={onClick} type="button"><span>{label}</span></button>;
+}
+
+function reviewerDisplayName(
+  reference: string,
+  t: (key: TranslationKey, values?: Record<string, string>) => string,
+): string {
+  const [agentId] = reference.split(":");
+  if (agentId.length === 0) return reference;
+  const name = `${agentId[0].toUpperCase()}${agentId.slice(1)}`;
+  return t("run.reviewer", { name });
 }
 
 /** Count model-output candidates emitted by the selected agents. */

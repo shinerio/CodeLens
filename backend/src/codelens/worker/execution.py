@@ -42,6 +42,7 @@ from codelens.review.domain.agent_run import AgentRun, InvalidAgentRunStateError
 from codelens.review.domain.errors import AgentRuntimeError
 from codelens.review.domain.ports import (
     AgentReviewCompletionStatus,
+    AgentRuntimeEvent,
     AgentRuntimeEventSink,
     AgentRuntimePort,
     ArtifactIdentity,
@@ -49,7 +50,7 @@ from codelens.review.domain.ports import (
     SnapshotFileReaderPort,
     UnvalidatedAgentOutput,
 )
-from codelens.review.domain.review_plan import ReviewPlan, ReviewPlanNodeType
+from codelens.review.domain.review_plan import ReviewPlan, ReviewPlanNode, ReviewPlanNodeType
 from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
     FixedReviewerSelection,
@@ -316,6 +317,17 @@ class SqlCheckpointPortAdapter:
     ) -> None:
         await self._checkpoints.ensure_plan_nodes(
             plan, capability_fingerprints=capability_fingerprints
+        )
+
+    async def ensure_plan_node(
+        self,
+        node: ReviewPlanNode,
+        *,
+        capability_fingerprint: str | None = None,
+    ) -> None:
+        await self._checkpoints.ensure_plan_node(
+            node,
+            capability_fingerprint=capability_fingerprint,
         )
 
     async def list_for_task(self, task_id: str) -> tuple[CheckpointRecord, ...]:
@@ -683,17 +695,23 @@ class WorkerReviewExecutor:
         await self._persist_execution_spec(
             record.task_id, planner_node.node_id, planner_spec, stored_specs
         )
-        await self._checkpoints.ensure(record.task_id, planner_node.node_id, "primary")
+        await self._checkpoints.ensure_plan_node(
+            planner_node,
+            capability_fingerprint=planner_spec.fingerprint,
+        )
         checkpoint = await self._checkpoints.get(record.task_id, planner_node.node_id)
         if checkpoint.status == "pending":
             if checkpoint.run_id is None:
                 raise RuntimeError("Adaptive Planner checkpoint has no stable run identity")
             await self._checkpoints.mark_running(record.task_id, planner_node.node_id)
-            output = await self._runtime.invoke(
-                planner_spec,
-                add_host_run_identity(planner_input, checkpoint.run_id),
-                snapshot,
-                record.prompt_locale,
+            output = await self._invoke_planner_observably(
+                task_id=record.task_id,
+                node_id=planner_node.node_id,
+                run_id=checkpoint.run_id,
+                execution_spec=planner_spec,
+                input_payload=add_host_run_identity(planner_input, checkpoint.run_id),
+                snapshot=snapshot,
+                prompt_locale=record.prompt_locale,
             )
             artifact = await self._output_artifacts.write_output(
                 planner_node.node_id, output.canonical_bytes
@@ -772,6 +790,68 @@ class WorkerReviewExecutor:
             plan=plan,
             execution_specs_by_node=specs_by_node,
         )
+
+    async def _invoke_planner_observably(
+        self,
+        *,
+        task_id: str,
+        node_id: str,
+        run_id: str,
+        execution_spec: FrozenAgentExecutionSpec,
+        input_payload: bytes,
+        snapshot: ReviewSnapshot,
+        prompt_locale: str,
+    ) -> UnvalidatedAgentOutput:
+        """Stream one Planner invocation into the task transcript with durable run identity."""
+
+        identity = {
+            "agent": execution_spec.agent.reference,
+            "node_id": node_id,
+            "run_id": run_id,
+        }
+
+        async def record_event(event: AgentRuntimeEvent) -> None:
+            await self._transcripts.append(
+                task_id,
+                event.kind,
+                event.content,
+                metadata={**event.metadata, **identity},
+            )
+
+        output = await self._runtime.invoke_stream(
+            execution_spec,
+            input_payload,
+            snapshot,
+            prompt_locale,
+            record_event,
+        )
+        await self._transcripts.append(
+            task_id,
+            "model_output",
+            output.canonical_bytes.decode("utf-8", errors="replace"),
+            metadata={
+                **identity,
+                "usage_scope": "agent_run",
+                "model_name": output.model_name,
+                "llm_call_count": str(len(output.diagnostics)),
+                "input_tokens": str(output.input_tokens),
+                "cached_input_tokens": str(output.cached_input_tokens),
+                "cache_write_input_tokens": str(output.cache_write_input_tokens),
+                "context_compaction_count": str(output.context_compaction_count),
+                "context_compacted_result_count": str(
+                    output.context_compacted_result_count
+                ),
+                "context_compaction_original_bytes": str(
+                    output.context_compaction_original_bytes
+                ),
+                "context_compaction_compressed_bytes": str(
+                    output.context_compaction_compressed_bytes
+                ),
+                "output_tokens": str(output.output_tokens),
+                "total_tokens": str(output.input_tokens + output.output_tokens),
+            },
+        )
+        return output
 
     async def _persist_execution_spec(
         self,

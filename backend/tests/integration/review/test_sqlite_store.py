@@ -153,6 +153,62 @@ def _multi_plan(task_id: str) -> ReviewPlan:
     )
 
 
+def _adaptive_plan(task_id: str) -> ReviewPlan:
+    planner = ReviewPlanNode.create(
+        task_id=task_id,
+        node_type=ReviewPlanNodeType.PLANNER,
+        agent_reference="review-planner:v2",
+        pass_index=ReviewPass.PLANNER,
+        shard_id="root",
+        logical_attempt_group="primary",
+        depends_on=(),
+    )
+    reviewer = ReviewPlanNode.create(
+        task_id=task_id,
+        node_type=ReviewPlanNodeType.REVIEWER,
+        agent_reference="correctness:v2",
+        pass_index=ReviewPass.REVIEWER,
+        shard_id="root",
+        logical_attempt_group="primary",
+        depends_on=(planner.node_id,),
+    )
+    return ReviewPlan.create(
+        task_id=task_id,
+        selection_mode="adaptive",
+        reviewer_references=("correctness:v2",),
+        nodes=(planner, reviewer),
+        planner_reason="planner-selection:v2",
+    )
+
+
+async def test_adaptive_planner_checkpoint_matches_the_frozen_plan(tmp_path: Path) -> None:
+    database = await _database(tmp_path)
+    task_id = "review-adaptive-checkpoint"
+    plan = _adaptive_plan(task_id)
+    planner = next(node for node in plan.nodes if node.node_type is ReviewPlanNodeType.PLANNER)
+    fingerprint = "a" * 64
+    try:
+        await SqlReviewStore(database).create_with_job(
+            _task(task_id, review_profile=ReviewProfileSnapshot(AdaptiveReviewerSelection()))
+        )
+        checkpoints = SqlCheckpointStore(database)
+
+        await checkpoints.ensure_plan_node(planner, capability_fingerprint=fingerprint)
+        planner_run_id = (await checkpoints.get(task_id, planner.node_id)).run_id
+        await checkpoints.ensure_plan_nodes(
+            plan,
+            capability_fingerprints={planner.node_id: fingerprint},
+        )
+
+        stored = await checkpoints.get(task_id, planner.node_id)
+        assert stored.run_id == planner_run_id
+        assert stored.node_role == "planner"
+        assert stored.agent_version == "review-planner:v2"
+        assert stored.capability_fingerprint == fingerprint
+    finally:
+        await database.dispose()
+
+
 def _candidate(task_id: str, run_id: str, candidate_id: str) -> CandidateFinding:
     location = SourceLocation("src/state.py", 2, 2, "new", "a" * 64, False)
     return CandidateFinding(

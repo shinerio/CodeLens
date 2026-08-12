@@ -183,6 +183,7 @@ def build_unified_backend(
 
     # Shared infrastructure
     review_store = SqlReviewStore(database, event_bus=event_bus)
+    event_outbox = SqlEventOutbox(database, event_bus=event_bus)
     recent_repository_store = SqlRecentRepositoryStore(database)
     review_profile_repository = SqlReviewProfileRepository(database)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
@@ -191,6 +192,7 @@ def build_unified_backend(
     worker_transcripts = WorkerTranscriptStore(
         transcripts_store,
         model_log=ModelTranscriptLogWriter(),
+        rejection_events=event_outbox,
     )
     instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
     review_completion_settings = ReviewCompletionSettingsService(
@@ -439,7 +441,7 @@ def build_unified_backend(
         ),
         cancel_review=CancelReviewHandler(review_store, cancel_task=scheduler.cancel_task),
         retry_review=RetryReviewHandler(review_store),
-        events=SqlEventOutbox(database, event_bus=event_bus),
+        events=event_outbox,
         event_bus=event_bus,
         review_store=review_store,
         review_plan_store=SqlReviewPlanStore(database),

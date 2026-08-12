@@ -542,6 +542,19 @@ class ToolUsageResponse(StrictDto):
     tool_name: str
     call_count: Annotated[int, Field(ge=0)]
     result_count: Annotated[int, Field(ge=0)]
+    accepted_call_count: Annotated[int, Field(ge=0)]
+    rejected_call_count: Annotated[int, Field(ge=0)]
+    unclassified_call_count: Annotated[int, Field(ge=0)]
+
+
+class RejectedToolCallResponse(StrictDto):
+    """Expose one safe rejected invocation reason without tool arguments or result text."""
+
+    agent: str
+    tool_name: str
+    tool_call_id: str | None
+    reason_code: str
+    reason: str
 
 
 class InvalidToolUsageResponse(StrictDto):
@@ -567,13 +580,16 @@ class AgentProcessResponse(StrictDto):
     output_tokens: Annotated[int, Field(ge=0)]
     total_tokens: Annotated[int, Field(ge=0)]
     tool_call_count: Annotated[int, Field(ge=0)]
+    accepted_tool_call_count: Annotated[int, Field(ge=0)]
+    rejected_tool_call_count: Annotated[int, Field(ge=0)]
+    unclassified_tool_call_count: Annotated[int, Field(ge=0)]
     started_at: datetime | None
     completed_at: datetime | None
     duration_ms: Annotated[int, Field(ge=0)] | None
 
 
 class ReviewProcessReportResponse(StrictDto):
-    """Expose terminal Review metrics derived from its credential-safe transcript."""
+    """Expose live Review metrics derived from its credential-safe transcript."""
 
     task_id: str
     status: str
@@ -590,6 +606,9 @@ class ReviewProcessReportResponse(StrictDto):
     output_tokens: Annotated[int, Field(ge=0)]
     total_tokens: Annotated[int, Field(ge=0)]
     tool_call_count: Annotated[int, Field(ge=0)]
+    accepted_tool_call_count: Annotated[int, Field(ge=0)]
+    rejected_tool_call_count: Annotated[int, Field(ge=0)]
+    unclassified_tool_call_count: Annotated[int, Field(ge=0)]
     invalid_tool_call_count: Annotated[int, Field(ge=0)]
     tool_result_count: Annotated[int, Field(ge=0)]
     unmatched_tool_result_count: Annotated[int, Field(ge=0)]
@@ -600,6 +619,7 @@ class ReviewProcessReportResponse(StrictDto):
     duration_ms: Annotated[int, Field(ge=0)] | None
     tools: list[ToolUsageResponse]
     invalid_tools: list[InvalidToolUsageResponse]
+    rejected_tool_calls: list[RejectedToolCallResponse]
     agents: list[AgentProcessResponse]
 
     @classmethod
@@ -646,9 +666,9 @@ class CreateModelGatewayRequest(StrictDto):
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
-    agent_timeout: AgentTimeoutSeconds = 1800
-    max_agent_turns: MaxAgentTurns = 100
-    max_tool_calls: MaxToolCalls = 300
+    agent_timeout: AgentTimeoutSeconds = 3600
+    max_agent_turns: MaxAgentTurns = 500
+    max_tool_calls: MaxToolCalls = 500
     max_identical_tool_results: MaxIdenticalToolResults = 3
     tool_timeout_seconds: ToolTimeoutSeconds = 30
     max_retries: MaxRetries = 10
@@ -675,9 +695,9 @@ class UpdateModelGatewayRequest(StrictDto):
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
-    agent_timeout: AgentTimeoutSeconds = 1800
-    max_agent_turns: MaxAgentTurns = 100
-    max_tool_calls: MaxToolCalls = 300
+    agent_timeout: AgentTimeoutSeconds = 3600
+    max_agent_turns: MaxAgentTurns = 500
+    max_tool_calls: MaxToolCalls = 500
     max_identical_tool_results: MaxIdenticalToolResults = 3
     tool_timeout_seconds: ToolTimeoutSeconds = 30
     max_retries: MaxRetries = 10
