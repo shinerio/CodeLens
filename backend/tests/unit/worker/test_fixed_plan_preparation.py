@@ -16,9 +16,11 @@ from codelens.review.domain.ports import (
     AgentExecutionSpecRecord,
     ReviewExecutionRecord,
     RunOutputArtifact,
+    UnvalidatedAgentOutput,
 )
 from codelens.review.domain.review_plan import ReviewPlanNodeType
 from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
     FixedReviewerSelection,
     ReviewProfileSnapshot,
 )
@@ -36,11 +38,19 @@ from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
 class _ReviewStore:
-    def __init__(self, record: ReviewExecutionRecord) -> None:
+    def __init__(self, record: ReviewExecutionRecord, checkpoints: Any | None = None) -> None:
         self._record = record
+        self._checkpoints = checkpoints
 
     async def get_execution(self, _task_id: str) -> ReviewExecutionRecord:
         return self._record
+
+    async def complete_planner_run(
+        self, _task_id: str, _node_key: str, selection: tuple[str, ...]
+    ) -> None:
+        self.planner_selection = selection
+        if self._checkpoints is not None:
+            self._checkpoints.record.status = "succeeded"
 
 
 class _PlanStore:
@@ -99,6 +109,40 @@ class _Artifacts:
         payload = self.payloads[reference]
         assert hashlib.sha256(payload).hexdigest() == expected_hash
         return payload
+
+
+class _Checkpoints:
+    def __init__(self) -> None:
+        self.record = SimpleNamespace(
+            status="pending",
+            artifact_ref=None,
+            artifact_hash=None,
+            run_id="run_" + "1" * 64,
+        )
+
+    async def ensure(self, *_args: Any) -> None:
+        return None
+
+    async def get(self, *_args: Any) -> Any:
+        return self.record
+
+    async def mark_running(self, *_args: Any) -> None:
+        self.record.status = "running"
+
+    async def mark_output_saved(
+        self,
+        _task_id: str,
+        _node_key: str,
+        reference: str,
+        content_hash: str,
+        _review_completion_status: str,
+    ) -> None:
+        self.record.status = "output_saved"
+        self.record.artifact_ref = reference
+        self.record.artifact_hash = content_hash
+
+    async def mark_validating(self, *_args: Any) -> None:
+        self.record.status = "validating"
 
 
 def _snapshot(tmp_path: Path) -> ReviewSnapshot:
@@ -229,3 +273,116 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
     assert recovered.plan == prepared.plan
     assert recovered.input_payloads == first_payloads
     assert len(artifacts.payloads) == artifact_count
+
+
+async def test_prepare_runs_and_persists_adaptive_planner_before_reviewers(
+    tmp_path: Path, monkeypatch: Any
+) -> None:
+    profile = ReviewProfileSnapshot(AdaptiveReviewerSelection())
+    record = ReviewExecutionRecord(
+        task_id="review-adaptive",
+        repository_path=tmp_path,
+        repository_realpath_hash="c" * 64,
+        git_common_dir_hash="d" * 64,
+        base_oid="a" * 40,
+        head_oid="b" * 40,
+        scope_type="branch",
+        base_ref="main",
+        target_ref="feature",
+        overlay_hash=None,
+        overlay_artifact_ref=None,
+        candidate_paths=("src/review.py",),
+        file_exclusion_policy_json=('{"exclude_binary":true,"path_regexes":[],"suffixes":[]}'),
+        file_exclusion_policy_hash=(
+            "f135f14995e69bb776fd5c18af7fa0d19e45f867501b3274e9cb38cfbc7676c3"
+        ),
+        selected_agent_versions=(),
+        prompt_locale="en",
+        status="provisioning_worktree",
+        cancellation_requested=False,
+        review_profile=profile,
+    )
+    snapshot = _snapshot(tmp_path)
+    checkpoints = _Checkpoints()
+    review_store = _ReviewStore(record, checkpoints)
+    plan_store = _PlanStore()
+    spec_store = _ExecutionSpecStore()
+    artifacts = _Artifacts()
+    runtime = SimpleNamespace(
+        invoke=AsyncMock(
+            return_value=UnvalidatedAgentOutput(
+                b'{"reviewer_references":["general:v2"],"schema_version":"2"}',
+                (),
+                "fake",
+                0,
+                0,
+                (),
+            )
+        )
+    )
+    executor = object.__new__(WorkerReviewExecutor)
+    executor._review_store = review_store
+    executor._repository_inspector = SimpleNamespace(inspect=AsyncMock())
+    executor._worktree_registry = SimpleNamespace(get=AsyncMock(return_value=snapshot.worktree))
+    executor._worktree_lifecycle = SimpleNamespace(verify_ownership=AsyncMock())
+    executor._snapshot_service = SimpleNamespace(
+        resolve_instructions=AsyncMock(return_value=()), freeze=AsyncMock(return_value=snapshot)
+    )
+    executor._provider_config = SimpleNamespace(
+        load=AsyncMock(
+            return_value=SimpleNamespace(
+                max_agent_turns=20,
+                max_tool_calls=120,
+                max_tokens=16_000,
+                agent_timeout=600.0,
+            )
+        )
+    )
+    executor._tool_limits_service = SimpleNamespace(
+        get=AsyncMock(return_value=SimpleNamespace(max_read_bytes=65_536))
+    )
+    executor._review_plan_store = plan_store
+    executor._execution_spec_store = spec_store
+    executor._output_artifacts = artifacts
+    executor._checkpoints = checkpoints
+    executor._runtime = runtime
+    executor._transcripts = SimpleNamespace(append=AsyncMock())
+    executor._context_builder = SimpleNamespace(
+        build=lambda *_args: SimpleNamespace(
+            canonical_bytes=lambda: b'{"repository_instructions":[],"review_files":[]}'
+        )
+    )
+
+    async def no_repository_check(_record: ReviewExecutionRecord) -> None:
+        return None
+
+    async def execution_specs(references: tuple[str, ...], *_args: Any) -> tuple[Any, ...]:
+        catalog = builtin_agent_catalog()
+        return tuple(
+            CapabilityResolver.testing().resolve(
+                agent=catalog[reference],
+                prompt_content_hash=hashlib.sha256(
+                    catalog[reference].prompt_template.encode()
+                ).hexdigest(),
+                facts=SkillActivationFacts.empty(),
+                execution_limits=AgentExecutionLimits.default(),
+            )
+            for reference in references
+        )
+
+    monkeypatch.setattr(executor, "_validate_repository", no_repository_check)
+    monkeypatch.setattr(executor, "_execution_specs", execution_specs)
+
+    prepared = await executor.prepare("review-adaptive")
+
+    assert prepared.plan is not None
+    assert prepared.plan.reviewer_references == ("general:v2",)
+    assert prepared.plan.nodes[0].node_type is ReviewPlanNodeType.PLANNER
+    assert runtime.invoke.await_count == 1
+    assert review_store.planner_selection == ("general:v2",)
+    assert set(spec_store.records) == {node.node_id for node in prepared.plan.nodes}
+
+    recovered = await executor.prepare("review-adaptive")
+
+    assert recovered.plan == prepared.plan
+    assert runtime.invoke.await_count == 1

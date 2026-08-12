@@ -22,6 +22,7 @@ from codelens.findings.application.publish_findings import FindingPublisher
 from codelens.findings.application.resolve_clusters import ClusterService, publish_all_verdicts
 from codelens.findings.application.validate_candidates import CandidateValidator
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
+from codelens.instruction_policy.domain.models import ResolvedInstructionSet
 from codelens.review.application.context_builder import ContextBuilder
 from codelens.review.application.orchestrator import (
     CheckpointView,
@@ -34,6 +35,7 @@ from codelens.review.application.planning import (
     PlannerSelection,
     ReviewPlanCompiler,
     ReviewPlanningService,
+    build_planner_input_payload,
 )
 from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.domain.agent_run import AgentRun, InvalidAgentRunStateError
@@ -47,9 +49,13 @@ from codelens.review.domain.ports import (
     SnapshotFileReaderPort,
     UnvalidatedAgentOutput,
 )
-from codelens.review.domain.review_plan import ReviewPlan
-from codelens.review.domain.review_strategy import FixedReviewerSelection
+from codelens.review.domain.review_plan import ReviewPlan, ReviewPlanNodeType
+from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
+    FixedReviewerSelection,
+)
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
+from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.repositories import (
     CheckpointRecord,
     SqlAgentExecutionSpecStore,
@@ -116,6 +122,24 @@ class _RejectAdaptivePlanning:
         risk_summary: ChangeRiskSummary | None,
     ) -> PlannerSelection:
         raise RuntimeError("Fixed Review Plan must not invoke the Planner")
+
+
+class _SelectedAdaptivePlanning:
+    """Return the already validated, durable Planner selection exactly once."""
+
+    def __init__(self, selection: PlannerSelection) -> None:
+        self._selection = selection
+
+    async def select(
+        self,
+        *,
+        task_id: str,
+        candidate_paths: tuple[str, ...],
+        readiness: Mapping[str, CapabilityReadiness],
+        risk_summary: ChangeRiskSummary | None,
+    ) -> PlannerSelection:
+        del task_id, candidate_paths, readiness, risk_summary
+        return self._selection
 
 
 async def load_frozen_execution_specs(
@@ -523,6 +547,20 @@ class WorkerReviewExecutor:
                 plan=plan,
                 execution_specs_by_node=execution_specs_by_node,
             )
+        if (
+            plan_record is None
+            and self._review_plan_store is not None
+            and self._execution_spec_store is not None
+            and isinstance(record.review_profile.reviewer_selection, AdaptiveReviewerSelection)
+        ):
+            return await self._persist_adaptive_plan(
+                record,
+                snapshot,
+                instructions,
+                provider_config,
+                tool_limits.max_read_bytes,
+                stored_specs,
+            )
         if plan_record is not None:
             plan = plan_record.plan
             if set(stored_specs) != {node.node_id for node in plan.nodes}:
@@ -570,6 +608,203 @@ class WorkerReviewExecutor:
             execution_specs=execution_specs,
             input_payloads=payloads,
             prompt_locale=record.prompt_locale,
+        )
+
+    async def _persist_adaptive_plan(
+        self,
+        record: ReviewExecutionRecord,
+        snapshot: ReviewSnapshot,
+        instructions: ResolvedInstructionSet,
+        provider_config: ModelProviderConfig,
+        max_tool_result_bytes: int,
+        stored_specs: dict[str, FrozenAgentExecutionSpec],
+    ) -> PreparedReview:
+        """Run the Planner durably, then freeze its exact reviewer DAG before fan-out."""
+
+        execution_spec_store = self._execution_spec_store
+        review_plan_store = self._review_plan_store
+        if execution_spec_store is None or review_plan_store is None:
+            raise ValueError("Adaptive Review Plan persistence is unavailable")
+        catalog = builtin_agent_catalog()
+        eligible = tuple(
+            reference
+            for reference, agent in catalog.items()
+            if agent.is_public and agent.planner_eligible
+        )
+        required_references = (*eligible, "review-planner:v2", "review-verifier:v2")
+        specs_by_reference = {spec.agent.reference: spec for spec in stored_specs.values()}
+        missing = tuple(
+            reference for reference in required_references if reference not in specs_by_reference
+        )
+        if missing:
+            generated = await self._execution_specs(
+                missing,
+                record.prompt_locale,
+                snapshot,
+                AgentExecutionLimits(
+                    max_turns=provider_config.max_agent_turns,
+                    max_tool_calls=provider_config.max_tool_calls,
+                    max_input_tokens=provider_config.max_tokens,
+                    max_output_tokens=provider_config.max_tokens,
+                    timeout_seconds=provider_config.agent_timeout,
+                    max_tool_result_bytes=max_tool_result_bytes,
+                ),
+            )
+            specs_by_reference.update((spec.agent.reference, spec) for spec in generated)
+        readiness = {reference: CapabilityReadiness("ready", ()) for reference in eligible}
+        base_input = self._context_builder.build(snapshot, instructions).canonical_bytes()
+        risk_summary = ChangeRiskSummary.from_snapshot(snapshot)
+        planner_input = build_planner_input_payload(
+            base_input,
+            eligible_reviewer_references=eligible,
+            readiness=readiness,
+            risk_summary=risk_summary,
+            reviewer_catalog=tuple(
+                {
+                    "reference": reference,
+                    "dimensions": list(catalog[reference].dimensions),
+                }
+                for reference in eligible
+            ),
+        )
+        compiler = ReviewPlanCompiler(catalog)
+        draft = compiler.compile(
+            task_id=record.task_id,
+            selection_mode="adaptive",
+            reviewer_references=("general:v2",),
+            planner_selection=PlannerSelection("2", ("general:v2",)),
+            execution_specs=specs_by_reference,
+            readiness=readiness,
+        )
+        planner_node = next(
+            node for node in draft.nodes if node.node_type is ReviewPlanNodeType.PLANNER
+        )
+        planner_spec = specs_by_reference["review-planner:v2"]
+        await self._persist_execution_spec(
+            record.task_id, planner_node.node_id, planner_spec, stored_specs
+        )
+        await self._checkpoints.ensure(record.task_id, planner_node.node_id, "primary")
+        checkpoint = await self._checkpoints.get(record.task_id, planner_node.node_id)
+        if checkpoint.status == "pending":
+            if checkpoint.run_id is None:
+                raise RuntimeError("Adaptive Planner checkpoint has no stable run identity")
+            await self._checkpoints.mark_running(record.task_id, planner_node.node_id)
+            output = await self._runtime.invoke(
+                planner_spec,
+                add_host_run_identity(planner_input, checkpoint.run_id),
+                snapshot,
+                record.prompt_locale,
+            )
+            artifact = await self._output_artifacts.write_output(
+                planner_node.node_id, output.canonical_bytes
+            )
+            await self._checkpoints.mark_output_saved(
+                record.task_id,
+                planner_node.node_id,
+                artifact.reference,
+                artifact.content_hash,
+                output.review_completion_status,
+            )
+            checkpoint = await self._checkpoints.get(record.task_id, planner_node.node_id)
+        if checkpoint.status == "output_saved":
+            await self._checkpoints.mark_validating(record.task_id, planner_node.node_id)
+            checkpoint = await self._checkpoints.get(record.task_id, planner_node.node_id)
+        if checkpoint.status not in {"validating", "succeeded"}:
+            raise RuntimeError("Adaptive Planner checkpoint cannot be resumed")
+        if checkpoint.artifact_ref is None or checkpoint.artifact_hash is None:
+            raise RuntimeError("Adaptive Planner checkpoint has no durable output")
+        planner_bytes = await self._output_artifacts.read_output(
+            checkpoint.artifact_ref, checkpoint.artifact_hash
+        )
+        try:
+            planner_payload = json.loads(planner_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as error:
+            raise ValueError("Adaptive Planner output is not canonical JSON") from error
+        selection = PlannerOutputCodec(
+            eligible_reviewer_references=eligible,
+            unavailable_reviewer_references=(),
+        ).decode(planner_payload)
+        if checkpoint.status == "validating":
+            await self._review_store.complete_planner_run(
+                record.task_id, planner_node.node_id, selection.reviewer_references
+            )
+        compiled_plan = compiler.compile(
+            task_id=record.task_id,
+            selection_mode="adaptive",
+            reviewer_references=selection.reviewer_references,
+            planner_selection=selection,
+            execution_specs=specs_by_reference,
+            readiness=readiness,
+        )
+        specs_by_node = {
+            node.node_id: specs_by_reference[node.agent_reference]
+            for node in compiled_plan.nodes
+        }
+        for node_id, execution_spec in specs_by_node.items():
+            if node_id == planner_node.node_id:
+                continue
+            await self._persist_execution_spec(
+                record.task_id, node_id, execution_spec, stored_specs
+            )
+        plan = await ReviewPlanningService(
+            compiler=compiler,
+            planner=_SelectedAdaptivePlanning(selection),
+            plan_store=review_plan_store,
+        ).plan(
+            task_id=record.task_id,
+            profile=record.review_profile,
+            execution_specs=specs_by_reference,
+            readiness=readiness,
+            candidate_paths=record.candidate_paths,
+            catalog_version="builtin:v2",
+            capability_fingerprint=hashlib.sha256(
+                "".join(sorted(spec.fingerprint for spec in specs_by_reference.values())).encode()
+            ).hexdigest(),
+            risk_summary=risk_summary,
+        )
+        if plan != compiled_plan:
+            raise ValueError("persisted Adaptive Review Plan changed during preparation")
+        return PreparedReview(
+            snapshot=snapshot,
+            execution_specs=tuple(specs_by_node.values()),
+            input_payloads=self._plan_payloads(record.task_id, plan, specs_by_node, base_input),
+            prompt_locale=record.prompt_locale,
+            plan=plan,
+            execution_specs_by_node=specs_by_node,
+        )
+
+    async def _persist_execution_spec(
+        self,
+        task_id: str,
+        node_id: str,
+        execution_spec: FrozenAgentExecutionSpec,
+        stored_specs: Mapping[str, FrozenAgentExecutionSpec],
+    ) -> None:
+        """Persist one immutable node specification without rewriting recovered artifacts."""
+
+        if node_id in stored_specs:
+            if stored_specs[node_id] != execution_spec:
+                raise ValueError("frozen Plan execution spec conflicts with stored data")
+            return
+        execution_spec_store = self._execution_spec_store
+        if execution_spec_store is None:
+            raise ValueError("Review Plan execution spec persistence is unavailable")
+        prompt_artifact = await self._output_artifacts.write_output(
+            f"spec-prompt:{task_id}:{node_id}", execution_spec.agent.prompt_template.encode()
+        )
+        skill_artifacts: list[ArtifactIdentity] = []
+        for ordinal, skill in enumerate(execution_spec.skills):
+            artifact = await self._output_artifacts.write_output(
+                f"spec-skill:{task_id}:{node_id}:{ordinal}", skill.instruction_text.encode()
+            )
+            skill_artifacts.append(ArtifactIdentity(artifact.reference, artifact.content_hash))
+        await execution_spec_store.save(
+            task_id=task_id,
+            logical_node_id=node_id,
+            execution_spec=execution_spec,
+            prompt_artifact_ref=prompt_artifact.reference,
+            prompt_artifact_hash=prompt_artifact.content_hash,
+            skill_artifacts=tuple(skill_artifacts),
         )
 
     async def _persist_fixed_plan(

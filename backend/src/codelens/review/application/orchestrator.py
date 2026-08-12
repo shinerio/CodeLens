@@ -205,6 +205,12 @@ class ReviewOrchestrator:
             if status == "canceled":
                 return
             prepared = await self._prepare(task_id)
+            if (
+                prepared.snapshot.manifest.review_paths
+                and prepared.plan is None
+                and not prepared.execution_specs
+            ):
+                raise RuntimeError("non-empty Review scope produced no executable Agent nodes")
             for expected, target in (
                 ("provisioning_worktree", "snapshotting"),
                 ("snapshotting", "preparing"),

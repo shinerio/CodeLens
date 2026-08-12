@@ -423,6 +423,7 @@ export function ReviewRunPage() {
           <ReviewPlanSummary
             plan={reviewQuery.data.review_plan}
             selection={reviewQuery.data.selection_request}
+            status={currentStatus}
           />
           <CoverageSummary coverage={reviewQuery.data.coverage} status={currentStatus} />
         </div>

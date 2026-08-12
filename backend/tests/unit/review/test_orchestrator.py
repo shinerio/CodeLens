@@ -339,6 +339,46 @@ def _orchestrator(
     )
 
 
+async def test_non_empty_scope_cannot_complete_without_executable_nodes() -> None:
+    prepared = _prepared()
+    prepared = PreparedReview(
+        snapshot=ReviewSnapshot(
+            prepared.snapshot.snapshot_id,
+            prepared.snapshot.worktree,
+            prepared.snapshot.target,
+            prepared.snapshot.fingerprint,
+            SnapshotManifest(ReviewFileScope.include_all(("src/review.py",))),
+            prepared.snapshot.change_index,
+        ),
+        execution_specs=(),
+        input_payloads={},
+        prompt_locale="en",
+    )
+    workflow = MemoryWorkflow()
+    checkpoints = MemoryCheckpoints()
+
+    async def prepare(_task_id: str) -> PreparedReview:
+        return prepared
+
+    orchestrator = ReviewOrchestrator(
+        workflow=workflow,
+        prepare=prepare,
+        runtime=RecordingRuntime(b"{}"),
+        artifacts=MemoryArtifacts(),
+        checkpoints=checkpoints,
+        validator_factory=lambda *_args: EmptyValidator(),
+        completion=RecordingCompletion(checkpoints),
+        agent_semaphore=asyncio.Semaphore(1),
+        max_agent_runs_per_review=1,
+    )
+
+    with pytest.raises(RuntimeError, match="no executable Agent nodes"):
+        await orchestrator.execute("review-1")
+
+    assert workflow.status == "provisioning_worktree"
+    assert not workflow.job_completed
+
+
 async def test_happy_path_persists_the_complete_state_sequence() -> None:
     workflow = MemoryWorkflow()
     checkpoints = MemoryCheckpoints()

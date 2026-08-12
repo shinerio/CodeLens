@@ -2487,6 +2487,63 @@ class SqlReviewStore:
         if event is not None:
             await self._publish_events([event])
 
+    async def complete_planner_run(
+        self,
+        task_id: str,
+        node_key: str,
+        reviewer_references: tuple[str, ...],
+    ) -> None:
+        """Atomically accept one Planner selection and expose the actual reviewer team."""
+
+        if not reviewer_references:
+            raise ValueError("Planner completion requires a non-empty reviewer team")
+        timestamp = _now()
+        event_payload: dict[str, object] = {
+            "node_key": node_key,
+            "reviewer_references": list(reviewer_references),
+        }
+
+        async def operation(session: AsyncSession) -> ReviewEvent:
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status == "validating",
+                    )
+                    .values(
+                        status="succeeded",
+                        result_summary_json=_json(event_payload),
+                        updated_at=timestamp,
+                    )
+                ),
+            )
+            if result.rowcount != 1:
+                raise InvalidAgentRunStateError("Planner completion lost its expected state")
+            await session.execute(
+                update(review_tasks)
+                .where(review_tasks.c.task_id == task_id)
+                .values(
+                    selected_agent_versions_json=_json(reviewer_references),
+                    updated_at=timestamp,
+                )
+            )
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, "agent.succeeded", event_payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is None:
+                raise RuntimeError("Planner completion event was not persisted")
+            return ReviewEvent(
+                int(event_id), task_id, "agent.succeeded", event_payload
+            )
+
+        event = await self._database.run_transaction(operation)
+        await self._publish_events([event])
+
     async def complete_with_candidates(
         self,
         task_id: str,
