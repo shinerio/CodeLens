@@ -19,10 +19,9 @@ def test_file_exclusion_settings_manage_the_web_overlay(tmp_path: Path) -> None:
         persisted = client.get("/api/settings/file-exclusions")
 
     assert initial.status_code == 200
-    assert initial.json() == {"exclude_binary": True, "path_regexes": [], "suffixes": []}
+    assert initial.json() == {"path_regexes": [], "suffixes": []}
     assert updated.status_code == 200
     assert persisted.json() == {
-        "exclude_binary": True,
         "path_regexes": ["^generated/"],
         "suffixes": [".custom"],
     }

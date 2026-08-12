@@ -71,6 +71,47 @@ class FailingHookInstaller:
         return {event: event in events for event in HookEvent}
 
 
+class BlockingFirstInstallHookInstaller(FailingHookInstaller):
+    def __init__(self) -> None:
+        super().__init__(Path("/never-fails"))
+        self.first_install_started = asyncio.Event()
+        self.resume_first_install = asyncio.Event()
+        self._install_count = 0
+
+    async def install_hooks(
+        self,
+        repository_path: Path,
+        events: tuple[HookEvent, ...],
+        port: int,
+    ) -> None:
+        del port
+        self._install_count += 1
+        if self._install_count == 1:
+            self.first_install_started.set()
+            await self.resume_first_install.wait()
+        self.installed[repository_path] = events
+
+
+class RestoreFailingHookInstaller(FailingHookInstaller):
+    def __init__(self, first_repository: Path, second_repository: Path) -> None:
+        super().__init__(Path("/never-fails"))
+        self._first_repository = first_repository
+        self._second_repository = second_repository
+
+    async def install_hooks(
+        self,
+        repository_path: Path,
+        events: tuple[HookEvent, ...],
+        port: int,
+    ) -> None:
+        del port
+        if repository_path == self._second_repository and events == (HookEvent.POST_COMMIT,):
+            raise OSError("apply failed")
+        if repository_path == self._first_repository and events == (HookEvent.PRE_PUSH,):
+            raise OSError("first restore failed")
+        self.installed[repository_path] = events
+
+
 def _record(repositories: tuple[Path, ...]) -> PluginRecord:
     manifest = PluginManifest(
         plugin_id="local",
@@ -86,6 +127,7 @@ def _record(repositories: tuple[Path, ...]) -> PluginRecord:
                 entry_point="local_hook_trigger:LocalHookTriggerAdapter",
                 config_schema={
                     "type": "object",
+                    "additionalProperties": True,
                     "properties": {
                         "repository_paths": {
                             "type": "array",
@@ -111,6 +153,16 @@ def _record(repositories: tuple[Path, ...]) -> PluginRecord:
         trigger_config={
             "repository_paths": [str(repository) for repository in repositories],
             "events": ["post-commit"],
+            "scope_type": "commit",
+            "base_ref": None,
+            "target_ref": None,
+            "reviewer_selection": {
+                "mode": "fixed",
+                "reviewer_versions": ["correctness:v2"],
+            },
+            "supersede_policy": "latest_snapshot",
+            "prompt_locale": "en",
+            "debounce_seconds": 0,
         },
     )
 
@@ -165,3 +217,64 @@ async def test_disabling_trigger_removes_hooks_before_persisting_state(
     assert result is not None
     assert result.trigger_enabled is False
     assert installer.installed == {}
+
+
+async def test_concurrent_enable_and_config_update_keep_hooks_in_sync(
+    tmp_path: Path,
+) -> None:
+    repository = (tmp_path / "repository").resolve()
+    store = MemoryPluginStore(_record((repository,)))
+    installer = BlockingFirstInstallHookInstaller()
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, object()),
+        tmp_path / "plugins",
+    )
+    service = TriggerHookService(
+        manager,
+        cast(HookInstallerPort, installer),
+        CanonicalRepositoryValidator(),
+        8765,
+    )
+
+    enable_task = asyncio.create_task(service.enable_trigger("local"))
+    await installer.first_install_started.wait()
+    update_task = asyncio.create_task(
+        service.update_config("local", {"events": ["pre-push"]})
+    )
+    await asyncio.sleep(0)
+    installer.resume_first_install.set()
+    await asyncio.gather(enable_task, update_task)
+
+    assert store.record.trigger_enabled is True
+    assert store.record.trigger_config["events"] == ["pre-push"]
+    assert installer.installed[repository] == (HookEvent.PRE_PUSH,)
+
+
+async def test_rollback_attempts_every_repository_after_a_restore_failure(
+    tmp_path: Path,
+) -> None:
+    first_repository = (tmp_path / "first").resolve()
+    second_repository = (tmp_path / "second").resolve()
+    store = MemoryPluginStore(_record((first_repository, second_repository)))
+    installer = RestoreFailingHookInstaller(first_repository, second_repository)
+    installer.installed = {
+        first_repository: (HookEvent.PRE_PUSH,),
+        second_repository: (HookEvent.PRE_PUSH,),
+    }
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, object()),
+        tmp_path / "plugins",
+    )
+    service = TriggerHookService(
+        manager,
+        cast(HookInstallerPort, installer),
+        CanonicalRepositoryValidator(),
+        8765,
+    )
+
+    with pytest.raises(HookInstallationError, match="previous state could not be restored"):
+        await service.enable_trigger("local")
+
+    assert installer.installed.get(second_repository) == (HookEvent.PRE_PUSH,)

@@ -2,8 +2,6 @@
 # repository-relative POSIX paths. Suffix matching is case-insensitive; regular
 # expressions use Python syntax and search the complete relative path.
 
-exclude_binary = true
-
 suffixes = [
   "~",
   ".bak",

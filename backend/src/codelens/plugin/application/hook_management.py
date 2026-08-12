@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -61,9 +62,16 @@ class TriggerHookService:
         self._hook_installer = hook_installer
         self._repository_validator = repository_validator
         self._port = port
+        self._mutation_lock = asyncio.Lock()
 
     async def enable_trigger(self, plugin_id: str) -> PluginRecord | None:
         """Enable a trigger and synchronize hooks already present in its config."""
+
+        async with self._mutation_lock:
+            return await self._enable_trigger(plugin_id)
+
+    async def _enable_trigger(self, plugin_id: str) -> PluginRecord | None:
+        """Execute one serialized trigger enable operation."""
 
         current = await self._plugin_manager.get_plugin(plugin_id)
         if current is None:
@@ -84,6 +92,12 @@ class TriggerHookService:
 
     async def disable_trigger(self, plugin_id: str) -> PluginRecord | None:
         """Remove configured local hooks before persisting the disabled state."""
+
+        async with self._mutation_lock:
+            return await self._disable_trigger(plugin_id)
+
+    async def _disable_trigger(self, plugin_id: str) -> PluginRecord | None:
+        """Execute one serialized trigger disable operation."""
 
         current = await self._plugin_manager.get_plugin(plugin_id)
         if current is None:
@@ -109,6 +123,24 @@ class TriggerHookService:
     ) -> PluginRecord | None:
         """Validate, persist, and synchronize a trigger configuration update."""
 
+        async with self._mutation_lock:
+            return await self._update_config(
+                plugin_id,
+                config,
+                profile_source=profile_source,
+                should_replace_profile_source=should_replace_profile_source,
+            )
+
+    async def _update_config(
+        self,
+        plugin_id: str,
+        config: dict[str, Any],
+        *,
+        profile_source: PluginProfileSource | None,
+        should_replace_profile_source: bool,
+    ) -> PluginRecord | None:
+        """Execute one serialized trigger configuration update."""
+
         current = await self._plugin_manager.get_plugin(plugin_id)
         if current is None:
             return None
@@ -125,7 +157,7 @@ class TriggerHookService:
         repositories = await self._validated_repositories(merged)
         old_repositories = await self._validated_repositories(current.trigger_config)
         canonical_config = {
-            **config,
+            **merged,
             "repository_paths": [str(repository) for repository in repositories],
         }
         events = self._events(current, merged)
@@ -288,12 +320,16 @@ class TriggerHookService:
         self,
         previous: dict[Path, tuple[HookEvent, ...]],
     ) -> None:
-        try:
-            for repository, events in previous.items():
+        first_error: OSError | UnicodeError | ValueError | None = None
+        for repository, events in previous.items():
+            try:
                 await self._hook_installer.uninstall_hooks(repository)
                 if events:
                     await self._hook_installer.install_hooks(repository, events, self._port)
-        except (OSError, UnicodeError, ValueError) as error:
+            except (OSError, UnicodeError, ValueError) as error:
+                if first_error is None:
+                    first_error = error
+        if first_error is not None:
             raise HookInstallationError(
                 "Git hook synchronization failed and the previous state could not be restored"
-            ) from error
+            ) from first_error

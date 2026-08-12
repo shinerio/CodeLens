@@ -17,7 +17,6 @@ def test_file_exclusion_config_loads_and_normalizes_policy(tmp_path: Path) -> No
     config_path = tmp_path / "file-exclusions.toml"
     config_path.write_text(
         """
-exclude_binary = true
 suffixes = [".LOG", ".log", "~"]
 path_regexes = ['(?:^|/)__pycache__(?:/|$)']
 """.strip(),
@@ -34,10 +33,10 @@ path_regexes = ['(?:^|/)__pycache__(?:/|$)']
 @pytest.mark.parametrize(
     ("content", "message"),
     [
-        ('exclude_binary = true\nsuffixes = []\npath_regexes = []\nextra = 1', "unknown"),
-        ('exclude_binary = "yes"\nsuffixes = []\npath_regexes = []', "invalid"),
-        ('exclude_binary = true\nsuffixes = ".log"\npath_regexes = []', "invalid"),
-        ('exclude_binary = true\nsuffixes = []\npath_regexes = ["["]', "invalid"),
+        ('suffixes = []\npath_regexes = []\nextra = 1', "unknown"),
+        ('exclude_binary = true\nsuffixes = []\npath_regexes = []', "unknown"),
+        ('suffixes = ".log"\npath_regexes = []', "invalid"),
+        ('suffixes = []\npath_regexes = ["["]', "invalid"),
     ],
 )
 def test_file_exclusion_config_rejects_invalid_documents(
@@ -71,7 +70,7 @@ async def test_file_exclusion_service_reloads_configuration_for_each_review(
 ) -> None:
     config_path = tmp_path / "file-exclusions.toml"
     config_path.write_text(
-        "exclude_binary = true\nsuffixes = [\".log\"]\npath_regexes = []",
+        "suffixes = [\".log\"]\npath_regexes = []",
         encoding="utf-8",
     )
     service = FileExclusionPolicyService(
@@ -81,7 +80,7 @@ async def test_file_exclusion_service_reloads_configuration_for_each_review(
 
     initial = await service.get()
     config_path.write_text(
-        "exclude_binary = true\nsuffixes = [\".trace\"]\npath_regexes = []",
+        "suffixes = [\".trace\"]\npath_regexes = []",
         encoding="utf-8",
     )
     updated = await service.get()
@@ -90,12 +89,34 @@ async def test_file_exclusion_service_reloads_configuration_for_each_review(
     assert updated.suffixes == (".trace",)
 
 
+async def test_web_update_rejects_an_effective_policy_over_the_rule_limit(
+    tmp_path: Path,
+) -> None:
+    config_path = tmp_path / "file-exclusions.toml"
+    configured_suffixes = ", ".join(f'".configured-{index}"' for index in range(18))
+    config_path.write_text(
+        f"suffixes = [{configured_suffixes}]\npath_regexes = []",
+        encoding="utf-8",
+    )
+    web_store = FilesystemFileExclusionPolicyStore(tmp_path / "data")
+    service = FileExclusionPolicyService(
+        FilesystemFileExclusionPolicySource(config_path),
+        web_store,
+    )
+    web_suffixes = tuple(f".web-{index}" for index in range(111))
+
+    with pytest.raises(ValueError, match="too many file exclusion suffixes"):
+        await service.update_web(suffixes=web_suffixes)
+
+    assert web_store.get_policy().suffixes == ()
+
+
 async def test_file_exclusion_service_merges_config_and_web_rules(
     tmp_path: Path,
 ) -> None:
     config_path = tmp_path / "file-exclusions.toml"
     config_path.write_text(
-        "exclude_binary = false\nsuffixes = [\".log\"]\npath_regexes = [\"^cache/\"]",
+        "suffixes = [\".log\"]\npath_regexes = [\"^cache/\"]",
         encoding="utf-8",
     )
     web_store = FilesystemFileExclusionPolicyStore(tmp_path / "data")
@@ -103,7 +124,6 @@ async def test_file_exclusion_service_merges_config_and_web_rules(
         ReviewFileExclusionPolicy(
             suffixes=(".trace", ".LOG"),
             path_regexes=(r"^generated/",),
-            exclude_binary=True,
         )
     )
     service = FileExclusionPolicyService(
@@ -124,7 +144,7 @@ async def test_file_exclusion_service_merges_config_and_web_rules(
 async def test_web_update_takes_effect_without_restarting_service(tmp_path: Path) -> None:
     config_path = tmp_path / "file-exclusions.toml"
     config_path.write_text(
-        "exclude_binary = true\nsuffixes = []\npath_regexes = []",
+        "suffixes = []\npath_regexes = []",
         encoding="utf-8",
     )
     service = FileExclusionPolicyService(
@@ -132,7 +152,7 @@ async def test_web_update_takes_effect_without_restarting_service(tmp_path: Path
         FilesystemFileExclusionPolicyStore(tmp_path / "data"),
     )
 
-    await service.update_web(suffixes=(".custom",), path_regexes=(), exclude_binary=False)
+    await service.update_web(suffixes=(".custom",), path_regexes=())
 
     effective = await service.get()
     assert effective.suffixes == (".custom",)

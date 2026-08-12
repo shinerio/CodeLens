@@ -36,12 +36,10 @@ function triggerIdempotencySettingsResponse(enabled = false) {
 function fileExclusionSettingsResponse(
   suffixes: string[] = [],
   pathRegexes: string[] = [],
-  excludeBinary = true,
 ) {
   return new Response(JSON.stringify({
     suffixes,
     path_regexes: pathRegexes,
-    exclude_binary: excludeBinary,
   }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
@@ -206,7 +204,7 @@ it("creates the first persistent model gateway without retaining its API key", a
 it("edits, deduplicates, validates, and saves Web file exclusion rules", async () => {
   fetchMock.mockImplementation((url: string, init?: RequestInit) => {
     if (url === "/api/settings/file-exclusions" && init?.method === "PUT") {
-      return Promise.resolve(fileExclusionSettingsResponse([".map"], ["^generated/"], false));
+      return Promise.resolve(fileExclusionSettingsResponse([".map"], ["^generated/"]));
     }
     if (url === "/api/settings/file-exclusions") {
       return Promise.resolve(fileExclusionSettingsResponse());
@@ -243,7 +241,6 @@ it("edits, deduplicates, validates, and saves Web file exclusion rules", async (
   );
   await user.clear(regexes);
   await user.type(regexes, "^generated/");
-  await user.click(screen.getByRole("checkbox", { name: "Exclude binary files" }));
   await user.click(screen.getByRole("button", { name: "Save file exclusions" }));
 
   await waitFor(() => {
@@ -253,7 +250,6 @@ it("edits, deduplicates, validates, and saves Web file exclusion rules", async (
     expect(JSON.parse(String(updateCall?.[1]?.body))).toEqual({
       suffixes: [".map"],
       path_regexes: ["^generated/"],
-      exclude_binary: false,
     });
   });
 });

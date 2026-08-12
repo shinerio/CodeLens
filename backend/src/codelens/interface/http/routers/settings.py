@@ -111,7 +111,6 @@ def _file_exclusion_response(
     return FileExclusionSettingsResponse(
         suffixes=list(policy.suffixes),
         path_regexes=list(policy.path_regexes),
-        exclude_binary=policy.exclude_binary,
     )
 
 
@@ -135,7 +134,6 @@ async def update_file_exclusions(
         policy = await components.file_exclusion_settings.update_web(
             suffixes=None if request.suffixes is None else tuple(request.suffixes),
             path_regexes=(None if request.path_regexes is None else tuple(request.path_regexes)),
-            exclude_binary=request.exclude_binary,
         )
     except ValueError as error:
         raise HttpProblem(422, "invalid_file_exclusion_policy", str(error)) from error
@@ -459,7 +457,6 @@ async def reset_all_settings(
     file_exclusions = await components.file_exclusion_settings.update_web(
         suffixes=(),
         path_regexes=(),
-        exclude_binary=True,
     )
 
     # Reset review completion settings

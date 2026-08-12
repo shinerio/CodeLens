@@ -8,7 +8,7 @@ from typing import cast
 
 from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
-_EXPECTED_KEYS = {"exclude_binary", "path_regexes", "suffixes"}
+_EXPECTED_KEYS = {"path_regexes", "suffixes"}
 
 
 class FilesystemFileExclusionPolicyStore:
@@ -18,7 +18,7 @@ class FilesystemFileExclusionPolicyStore:
         self._path = data_dir.expanduser().resolve() / "file-exclusions.json"
 
     def get_policy(self) -> ReviewFileExclusionPolicy:
-        """Load the Web overlay, using the historical UI defaults before first save."""
+        """Load the Web overlay, using a neutral policy before first save."""
 
         if not self._path.exists():
             return ReviewFileExclusionPolicy()
@@ -78,20 +78,17 @@ class FilesystemFileExclusionPolicySource:
             raise ValueError("file exclusion configuration is invalid")
         suffixes = raw["suffixes"]
         path_regexes = raw["path_regexes"]
-        exclude_binary = raw["exclude_binary"]
         if (
             not isinstance(suffixes, list)
             or not all(isinstance(item, str) for item in suffixes)
             or not isinstance(path_regexes, list)
             or not all(isinstance(item, str) for item in path_regexes)
-            or type(exclude_binary) is not bool
         ):
             raise ValueError("file exclusion configuration is invalid")
         try:
             return ReviewFileExclusionPolicy(
                 tuple(cast(list[str], suffixes)),
                 tuple(cast(list[str], path_regexes)),
-                cast(bool, exclude_binary),
             )
         except ValueError as error:
             raise ValueError("file exclusion configuration is invalid") from error

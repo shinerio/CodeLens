@@ -267,7 +267,6 @@ class ExportOrchestrator:
         """
         try:
             sink = self._load_sink(plugin_record)
-            execution = await self._review_store.get_execution(envelope.review.task_id)
         except Exception:
             _LOGGER.exception("Plugin %s could not be loaded", plugin_record.plugin_id)
             return ExportResult(
@@ -276,6 +275,22 @@ class ExportOrchestrator:
                 success=False,
                 output_path=None,
                 error="Plugin could not be loaded",
+                exported_at=datetime.now(UTC),
+            )
+
+        try:
+            execution = await self._review_store.get_execution(envelope.review.task_id)
+        except Exception:
+            _LOGGER.exception(
+                "Review execution record for task %s could not be loaded",
+                envelope.review.task_id,
+            )
+            return ExportResult(
+                plugin_id=plugin_record.plugin_id,
+                task_id=envelope.review.task_id,
+                success=False,
+                output_path=None,
+                error="Review execution record could not be loaded",
                 exported_at=datetime.now(UTC),
             )
 

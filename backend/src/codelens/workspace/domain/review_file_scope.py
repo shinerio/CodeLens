@@ -23,11 +23,10 @@ def _normalized_path(path: str) -> str:
 
 @dataclass(frozen=True)
 class ReviewFileExclusionPolicy:
-    """Freeze user-configurable file exclusions with deterministic identity."""
+    """Freeze user-configurable suffix and path exclusions with deterministic identity."""
 
     suffixes: tuple[str, ...] = ()
     path_regexes: tuple[str, ...] = ()
-    exclude_binary: bool = True
 
     def __post_init__(self) -> None:
         if len(self.suffixes) > MAX_FILE_EXCLUSION_RULES:
@@ -61,7 +60,7 @@ class ReviewFileExclusionPolicy:
 
         return json.dumps(
             {
-                "exclude_binary": self.exclude_binary,
+                "exclude_binary": True,
                 "path_regexes": list(self.path_regexes),
                 "suffixes": list(self.suffixes),
             },
@@ -89,13 +88,19 @@ class ReviewFileExclusionPolicy:
             or not all(isinstance(item, str) for item in suffixes)
             or not isinstance(path_regexes, list)
             or not all(isinstance(item, str) for item in path_regexes)
-            or not isinstance(exclude_binary, bool)
+            or exclude_binary is not True
         ):
             raise ValueError("frozen file exclusion policy is invalid")
-        policy = cls(tuple(suffixes), tuple(path_regexes), exclude_binary)
+        policy = cls(tuple(suffixes), tuple(path_regexes))
         if policy.canonical_json() != value:
             raise ValueError("frozen file exclusion policy is not canonical")
         return policy
+
+    @property
+    def exclude_binary(self) -> bool:
+        """Return the non-configurable binary exclusion invariant."""
+
+        return True
 
     @property
     def policy_hash(self) -> str:
@@ -262,7 +267,7 @@ class ReviewFileScopeResolver:
                 reasons.append(ReviewFileExclusionReason.USER_SUFFIX)
             if any(pattern.search(path) is not None for pattern in compiled_regexes):
                 reasons.append(ReviewFileExclusionReason.USER_REGEX)
-            if policy.exclude_binary and path in binary:
+            if path in binary:
                 reasons.append(ReviewFileExclusionReason.BINARY)
             if reasons:
                 exclusions.append(

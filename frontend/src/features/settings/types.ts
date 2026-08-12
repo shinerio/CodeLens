@@ -45,7 +45,6 @@ export type InstructionFileSettings = {
 export type FileExclusionSettings = {
   suffixes: string[];
   path_regexes: string[];
-  exclude_binary: boolean;
 };
 
 export type ReviewCompletionSettings = {

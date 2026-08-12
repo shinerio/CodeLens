@@ -70,13 +70,13 @@ def test_resolver_uses_all_exclusion_facts_for_review_and_context() -> None:
     assert len(scope.scope_hash) == 64
 
 
-def test_binary_fact_is_ignored_when_binary_exclusion_is_disabled() -> None:
+def test_binary_fact_is_always_excluded() -> None:
     scope = ReviewFileScopeResolver().resolve(
         candidate_review_paths=("asset.bin",),
         candidate_context_paths=(),
-        policy=ReviewFileExclusionPolicy(exclude_binary=False),
+        policy=ReviewFileExclusionPolicy(),
         binary_paths=("asset.bin",),
     )
 
-    assert scope.review_paths == ("asset.bin",)
-    assert scope.exclusions == ()
+    assert scope.review_paths == ()
+    assert scope.exclusions[0].reasons == (ReviewFileExclusionReason.BINARY,)

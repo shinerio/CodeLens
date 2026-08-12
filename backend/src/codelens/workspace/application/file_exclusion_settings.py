@@ -42,11 +42,7 @@ class FileExclusionPolicyService:
             asyncio.to_thread(self._source.get_policy),
             asyncio.to_thread(self._web_store.get_policy),
         )
-        return ReviewFileExclusionPolicy(
-            suffixes=configured.suffixes + web.suffixes,
-            path_regexes=configured.path_regexes + web.path_regexes,
-            exclude_binary=configured.exclude_binary or web.exclude_binary,
-        )
+        return self._merge(configured, web)
 
     async def get_web(self) -> ReviewFileExclusionPolicy:
         """Return only the Web-managed overlay shown in the settings page."""
@@ -58,7 +54,6 @@ class FileExclusionPolicyService:
         *,
         suffixes: tuple[str, ...] | None = None,
         path_regexes: tuple[str, ...] | None = None,
-        exclude_binary: bool | None = None,
     ) -> ReviewFileExclusionPolicy:
         """Validate and atomically persist a partial Web overlay update."""
 
@@ -66,7 +61,22 @@ class FileExclusionPolicyService:
         policy = ReviewFileExclusionPolicy(
             suffixes=current.suffixes if suffixes is None else suffixes,
             path_regexes=current.path_regexes if path_regexes is None else path_regexes,
-            exclude_binary=current.exclude_binary if exclude_binary is None else exclude_binary,
         )
+        configured = await asyncio.to_thread(self._source.get_policy)
+        self._merge(configured, policy)
         await asyncio.to_thread(self._web_store.save_policy, policy)
         return policy
+
+    @staticmethod
+    def _merge(
+        configured: ReviewFileExclusionPolicy,
+        web: ReviewFileExclusionPolicy,
+    ) -> ReviewFileExclusionPolicy:
+        """Build and validate the normalized effective policy."""
+
+        return ReviewFileExclusionPolicy(
+            suffixes=tuple(sorted(set(configured.suffixes) | set(web.suffixes))),
+            path_regexes=tuple(
+                sorted(set(configured.path_regexes) | set(web.path_regexes))
+            ),
+        )

@@ -523,7 +523,6 @@ export function SettingsPage() {
     fileExclusionsDraft === null
       ? null
       : {
-          exclude_binary: fileExclusionsDraft.exclude_binary,
           suffixes: [...new Set(fileExclusionsDraft.suffixes.map((item) => item.trim()))].filter(
             Boolean,
           ),
@@ -1092,23 +1091,6 @@ export function SettingsPage() {
                     }
                   />
                   <small>{t("settings.excludedPathRegexesHint")}</small>
-                </label>
-                <label className="settings-field settings-field--checkbox">
-                  <span>
-                    <input
-                      aria-label={t("settings.excludeBinary")}
-                      checked={fileExclusionsDraft.exclude_binary}
-                      type="checkbox"
-                      onChange={(event) =>
-                        setFileExclusionsDraft({
-                          ...fileExclusionsDraft,
-                          exclude_binary: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    {t("settings.excludeBinary")}
-                  </span>
-                  <small>{t("settings.excludeBinaryHint")}</small>
                 </label>
               </div>
               {!areFileExclusionsValid ? (
