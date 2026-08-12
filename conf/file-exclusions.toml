@@ -1,0 +1,38 @@
+# Review file exclusions are loaded for each newly created Review. Paths are
+# repository-relative POSIX paths. Suffix matching is case-insensitive; regular
+# expressions use Python syntax and search the complete relative path.
+
+exclude_binary = true
+
+suffixes = [
+  "~",
+  ".bak",
+  ".css.map",
+  ".js.map",
+  ".lcov",
+  ".log",
+  ".min.css",
+  ".min.js",
+  ".orig",
+  ".pprof",
+  ".prof",
+  ".rej",
+  ".stackdump",
+  ".swo",
+  ".swp",
+  ".temp",
+  ".tmp",
+  ".trace",
+]
+
+path_regexes = [
+  '(?:^|/)(?:\.DS_Store|Thumbs\.db|Desktop\.ini|\.directory)$',
+  '(?:^|/)(?:#.*#|\.\#.*)$',
+  '(?:^|/)(?:__pycache__|\.pytest_cache|\.mypy_cache|\.ruff_cache|\.pytype|\.pyre|\.hypothesis|\.tox|\.nox)(?:/|$)',
+  '(?:^|/)(?:node_modules|bower_components|\.pnpm-store|\.npm|\.yarn/cache)(?:/|$)',
+  '(?:^|/)(?:\.eslintcache|\.stylelintcache)$',
+  '(?:^|/)(?:htmlcov|\.nyc_output|playwright-report|allure-results|allure-report|TestResults)(?:/|$)',
+  '(?:^|/)(?:\.parcel-cache|\.turbo|\.vite|\.angular/cache)(?:/|$)',
+  '(?:^|/)(?:\.gradle|\.dart_tool|\.pub-cache|\.stack-work|CMakeFiles|DerivedData|\.ccache)(?:/|$)',
+  '(?:^|/)(?:\.sass-cache|\.jekyll-cache|\.jekyll-metadata)(?:/|$)',
+]

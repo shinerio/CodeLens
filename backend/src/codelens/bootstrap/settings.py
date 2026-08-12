@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     data_dir: Path = Path()
     prompt_dir: Path = Path()
+    file_exclusion_config: Path = Path()
     host: str = "127.0.0.1"
     port: int = 8800
     auth: Literal["none"] = "none"
@@ -26,13 +27,15 @@ class Settings(BaseSettings):
     @model_validator(mode="before")
     @classmethod
     def resolve_default_paths(cls, data: dict) -> dict:
-        """Resolve data_dir and prompt_dir relative to the project root."""
+        """Resolve repository-owned defaults relative to the project root."""
         # Project root = parent of backend/
         project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
         if "data_dir" not in data or data["data_dir"] is None:
             data["data_dir"] = project_root / "data"
         if "prompt_dir" not in data or data["prompt_dir"] is None:
             data["prompt_dir"] = project_root / "prompts"
+        if "file_exclusion_config" not in data or data["file_exclusion_config"] is None:
+            data["file_exclusion_config"] = project_root / "conf" / "file-exclusions.toml"
         return data
 
     @field_validator("repository_roots")

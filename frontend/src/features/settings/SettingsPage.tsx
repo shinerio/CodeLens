@@ -21,7 +21,6 @@ import {
   activateModelGateway,
   createModelGateway,
   deleteModelGateway,
-  getFileExclusionSettings,
   getInstructionFileSettings,
   getRecentRepositorySettings,
   getReviewCompletionSettings,
@@ -33,7 +32,6 @@ import {
   testGatewayAvailability,
   testGatewayConnectivity,
   updateRuntimeLogLevel,
-  updateFileExclusionSettings,
   updateInstructionFileSettings,
   updateRecentRepositoryLimit,
   updateReviewCompletionSettings,
@@ -41,10 +39,7 @@ import {
   updateToolLimits,
   updateTriggerIdempotencySettings,
 } from "./api";
-import type {
-  FileExclusionSettings,
-  ToolLimits as ToolLimitsType,
-} from "./types";
+import type { ToolLimits as ToolLimitsType } from "./types";
 import type {
   GatewayApiType,
   GatewayTestResult,
@@ -62,7 +57,6 @@ const RECENT_REPOSITORY_SETTINGS_QUERY_KEY = ["recent-repository-settings"] as c
 const INSTRUCTION_FILE_SETTINGS_QUERY_KEY = ["instruction-file-settings"] as const;
 const REVIEW_COMPLETION_SETTINGS_QUERY_KEY = ["review-completion-settings"] as const;
 const TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY = ["trigger-idempotency-settings"] as const;
-const FILE_EXCLUSION_SETTINGS_QUERY_KEY = ["file-exclusion-settings"] as const;
 const DEFAULT_AGENT_TIMEOUT = 1800;
 const DEFAULT_MAX_AGENT_TURNS = 100;
 const DEFAULT_MAX_TOOL_CALLS = 300;
@@ -101,8 +95,6 @@ export function SettingsPage() {
   const [incompleteReviewRetryLimitDraft, setIncompleteReviewRetryLimitDraft] = useState("3");
   const [triggerIdempotencyEnabledDraft, setTriggerIdempotencyEnabledDraft] = useState(false);
   const [toolLimitsDraft, setToolLimitsDraft] = useState<ToolLimitsType | null>(null);
-  const [fileExclusionsDraft, setFileExclusionsDraft] =
-    useState<FileExclusionSettings | null>(null);
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
     queryFn: listModelGateways,
@@ -185,22 +177,10 @@ export function SettingsPage() {
       setToolLimitsDraft(limits);
     },
   });
-  const fileExclusionsQuery = useQuery({
-    queryKey: FILE_EXCLUSION_SETTINGS_QUERY_KEY,
-    queryFn: getFileExclusionSettings,
-  });
-  const fileExclusionsMutation = useMutation({
-    mutationFn: updateFileExclusionSettings,
-    onSuccess: (settings) => {
-      queryClient.setQueryData(FILE_EXCLUSION_SETTINGS_QUERY_KEY, settings);
-      setFileExclusionsDraft(settings);
-    },
-  });
   const resetAllMutation = useMutation({
     mutationFn: resetAllSettings,
     onSuccess: (response) => {
       queryClient.setQueryData(INSTRUCTION_FILE_SETTINGS_QUERY_KEY, response.instruction_files);
-      queryClient.setQueryData(FILE_EXCLUSION_SETTINGS_QUERY_KEY, response.file_exclusions);
       queryClient.setQueryData(REVIEW_COMPLETION_SETTINGS_QUERY_KEY, response.review_completion);
       queryClient.setQueryData(TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY, response.trigger_idempotency);
       queryClient.setQueryData(RECENT_REPOSITORY_SETTINGS_QUERY_KEY, response.recent_repositories);
@@ -208,7 +188,6 @@ export function SettingsPage() {
       queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, response.logging);
       queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, response.model_gateways);
       setToolLimitsDraft(response.tool_limits);
-      setFileExclusionsDraft(response.file_exclusions);
       setRootInstructionLimitDraft(String(response.instruction_files.root_max_lines));
       setNestedInstructionLimitDraft(String(response.instruction_files.nested_max_lines));
       setIncompleteReviewRetryLimitDraft(String(response.review_completion.max_incomplete_review_retries));
@@ -278,12 +257,6 @@ export function SettingsPage() {
       setToolLimitsDraft(toolLimitsQuery.data);
     }
   }, [toolLimitsQuery.data]);
-
-  useEffect(() => {
-    if (fileExclusionsQuery.data !== undefined) {
-      setFileExclusionsDraft(fileExclusionsQuery.data);
-    }
-  }, [fileExclusionsQuery.data]);
 
   const updateCatalog = (catalog: ModelGatewayCatalog) => {
     queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, catalog);
@@ -522,30 +495,6 @@ export function SettingsPage() {
   const areToolLimitsUnchanged =
     toolLimitsDraft === null ||
     JSON.stringify(toolLimitsDraft) === JSON.stringify(toolLimitsQuery.data);
-  const normalizedFileExclusions =
-    fileExclusionsDraft === null
-      ? null
-      : {
-          exclude_binary: fileExclusionsDraft.exclude_binary,
-          suffixes: [...new Set(fileExclusionsDraft.suffixes.map((item) => item.trim()))].filter(
-            Boolean,
-          ),
-          path_regexes: [
-            ...new Set(fileExclusionsDraft.path_regexes.map((item) => item.trim())),
-          ].filter(Boolean),
-        };
-  let areFileExclusionsValid = normalizedFileExclusions !== null;
-  if (normalizedFileExclusions !== null) {
-    try {
-      normalizedFileExclusions.path_regexes.forEach((pattern) => new RegExp(pattern));
-    } catch {
-      areFileExclusionsValid = false;
-    }
-  }
-  const areFileExclusionsUnchanged =
-    normalizedFileExclusions === null ||
-    JSON.stringify(normalizedFileExclusions) === JSON.stringify(fileExclusionsQuery.data);
-
   function handleEdit(gateway: ModelGateway) {
     setEditingGatewayId(gateway.gateway_id);
     setName(gateway.name);
@@ -1059,89 +1008,6 @@ export function SettingsPage() {
               </button>
             </div>
           </section>
-
-          {fileExclusionsDraft !== null && (
-            <section className="settings-panel">
-              <header className="settings-panel__header">
-                <SlidersHorizontal className="settings-panel__icon" aria-hidden="true" />
-                <h2 className="settings-panel__title">{t("settings.fileExclusions")}</h2>
-              </header>
-              <div className="settings-panel__grid">
-                <label className="settings-field">
-                  <span className="settings-field__label">{t("settings.excludedSuffixes")}</span>
-                  <textarea
-                    aria-label={t("settings.excludedSuffixes")}
-                    rows={5}
-                    value={fileExclusionsDraft.suffixes.join("\n")}
-                    onChange={(event) =>
-                      setFileExclusionsDraft({
-                        ...fileExclusionsDraft,
-                        suffixes: event.currentTarget.value.split("\n"),
-                      })
-                    }
-                  />
-                  <small>{t("settings.excludedSuffixesHint")}</small>
-                </label>
-                <label className="settings-field">
-                  <span className="settings-field__label">{t("settings.excludedPathRegexes")}</span>
-                  <textarea
-                    aria-label={t("settings.excludedPathRegexes")}
-                    rows={5}
-                    value={fileExclusionsDraft.path_regexes.join("\n")}
-                    onChange={(event) =>
-                      setFileExclusionsDraft({
-                        ...fileExclusionsDraft,
-                        path_regexes: event.currentTarget.value.split("\n"),
-                      })
-                    }
-                  />
-                  <small>{t("settings.excludedPathRegexesHint")}</small>
-                </label>
-                <label className="settings-field settings-field--checkbox">
-                  <span>
-                    <input
-                      aria-label={t("settings.excludeBinary")}
-                      checked={fileExclusionsDraft.exclude_binary}
-                      type="checkbox"
-                      onChange={(event) =>
-                        setFileExclusionsDraft({
-                          ...fileExclusionsDraft,
-                          exclude_binary: event.currentTarget.checked,
-                        })
-                      }
-                    />
-                    {t("settings.excludeBinary")}
-                  </span>
-                  <small>{t("settings.excludeBinaryHint")}</small>
-                </label>
-              </div>
-              {!areFileExclusionsValid ? (
-                <p role="alert">{t("settings.invalidFileExclusionRegex")}</p>
-              ) : null}
-              {fileExclusionsMutation.error !== null ? (
-                <p role="alert">{fileExclusionsMutation.error.message}</p>
-              ) : null}
-              <div className="settings-panel__actions">
-                <button
-                  className="settings-panel__save-button"
-                  disabled={
-                    fileExclusionsMutation.isPending ||
-                    !areFileExclusionsValid ||
-                    areFileExclusionsUnchanged
-                  }
-                  type="button"
-                  onClick={() => {
-                    if (normalizedFileExclusions !== null) {
-                      fileExclusionsMutation.mutate(normalizedFileExclusions);
-                    }
-                  }}
-                >
-                  <Check aria-hidden="true" />
-                  {t("settings.saveFileExclusions")}
-                </button>
-              </div>
-            </section>
-          )}
 
           {/* Tool Limits Panel */}
           {toolLimitsDraft !== null && (

@@ -25,6 +25,7 @@ from codelens.workspace.domain.models import (
     TaskWorktree,
 )
 from codelens.workspace.domain.ports import RepositoryInfo, ScopePlan
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
 
 class FixedPlanner:
@@ -109,6 +110,14 @@ class EnabledIdempotencySettings:
         return SimpleNamespace(enabled=True)
 
 
+class ConfiguredFileExclusionPolicy:
+    async def get(self) -> ReviewFileExclusionPolicy:
+        return ReviewFileExclusionPolicy(
+            suffixes=(".log",),
+            path_regexes=(r"(?:^|/)generated(?:/|$)",),
+        )
+
+
 class DeletingStore:
     async def soft_delete_review(self, _task_id: str) -> bool:
         return True
@@ -164,6 +173,30 @@ async def test_create_failure_discards_the_just_captured_overlay(tmp_path: Path)
 
     assert len(store.created) == 1
     assert artifacts.discarded == ["input_00000000000000000000000000000001.json"]
+
+
+async def test_create_freezes_the_current_configured_file_exclusion_policy(
+    tmp_path: Path,
+) -> None:
+    artifacts = RecordingArtifacts()
+    store = FailingStore(fail_create=False)
+    handler = CreateReviewHandler(
+        ScopePlanner(FixedPlanner()),
+        ReviewInputCaptureService(StableCaptureSource(), artifacts),
+        store,
+        artifacts,
+        file_exclusion_settings=ConfiguredFileExclusionPolicy(),
+    )
+
+    with pytest.raises(RuntimeError, match="could not be reloaded"):
+        await handler.handle(_command(tmp_path))
+
+    assert len(store.created) == 1
+    frozen_policy = ReviewFileExclusionPolicy.from_json(
+        store.created[0].file_exclusion_policy_json
+    )
+    assert frozen_policy.suffixes == (".log",)
+    assert frozen_policy.path_regexes == (r"(?:^|/)generated(?:/|$)",)
 
 
 async def test_stale_capture_never_creates_a_durable_command(tmp_path: Path) -> None:

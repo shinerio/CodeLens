@@ -12,6 +12,13 @@ def test_local_settings_allow_empty_repository_roots(tmp_path: Path) -> None:
     assert settings.repository_roots == ()
 
 
+def test_file_exclusion_config_defaults_to_project_conf_directory() -> None:
+    settings = Settings()
+
+    assert settings.file_exclusion_config.name == "file-exclusions.toml"
+    assert settings.file_exclusion_config.parent.name == "conf"
+
+
 def test_unauthenticated_remote_bind_is_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="loopback"):
         Settings(data_dir=tmp_path, host="192.0.2.1", repository_roots=(tmp_path,))

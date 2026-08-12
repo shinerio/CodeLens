@@ -232,22 +232,6 @@ class UpdateToolLimitsRequest(StrictDto):
     ] = None
 
 
-class FileExclusionSettingsResponse(StrictDto):
-    """Expose the policy frozen by subsequently created Review tasks."""
-
-    suffixes: Annotated[list[str], Field(max_length=128)]
-    path_regexes: Annotated[list[str], Field(max_length=128)]
-    exclude_binary: bool
-
-
-class UpdateFileExclusionSettingsRequest(StrictDto):
-    """Accept an atomic partial replacement of file exclusion rules."""
-
-    suffixes: Annotated[list[str] | None, Field(max_length=128)] = None
-    path_regexes: Annotated[list[str] | None, Field(max_length=128)] = None
-    exclude_binary: bool | None = None
-
-
 RefLabel = Annotated[str, StringConstraints(min_length=1, max_length=512)]
 AgentReference = Annotated[
     str,
@@ -755,7 +739,6 @@ class ResetAllSettingsResponse(StrictDto):
     """Aggregate response after resetting all user-facing settings to defaults."""
 
     instruction_files: InstructionFileSettingsResponse
-    file_exclusions: FileExclusionSettingsResponse
     review_completion: ReviewCompletionSettingsResponse
     trigger_idempotency: TriggerIdempotencySettingsResponse
     recent_repositories: RecentRepositorySettingsResponse

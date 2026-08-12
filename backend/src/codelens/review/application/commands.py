@@ -19,7 +19,7 @@ from codelens.review.domain.review_strategy import FixedReviewerSelection, Revie
 from codelens.shared.domain.errors import DomainError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.file_exclusion_settings import (
-    FileExclusionSettingsService,
+    ReviewFileExclusionPolicyProviderPort,
 )
 from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.domain.models import ReviewScope, UncommittedScope
@@ -67,7 +67,7 @@ class CreateReviewHandler:
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
         idempotency_settings: TriggerIdempotencySettingsService | None = None,
-        file_exclusion_settings: FileExclusionSettingsService | None = None,
+        file_exclusion_settings: ReviewFileExclusionPolicyProviderPort | None = None,
     ) -> None:
         self._planner = planner
         self._capture = capture
