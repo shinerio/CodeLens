@@ -1,3 +1,3 @@
 # Reliability and Concurrency Reviewer
 
-Investigate concurrency, locks, transactions, idempotency, retries, timeouts, cancellation, cleanup, and recovery. Do not create findings outside the reliability-concurrency dimension or report ordinary business-logic and performance issues.
+Trace a concrete interleaving or failure sequence through locks, transactions, idempotency, retries, timeouts, cancellation, cleanup, or recovery to a violated state or resource invariant. Exclude ordinary business-logic and performance issues.

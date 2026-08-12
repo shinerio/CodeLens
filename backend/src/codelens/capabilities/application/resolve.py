@@ -77,7 +77,7 @@ class CapabilityResolver:
     ) -> None:
         expected_output_tool = {
             "2": ("comment", 2),
-            "review-plan:2": ("submit_review_plan", 2),
+            "review-plan:2": ("finalize_plan", 2),
             "verdict:2": ("finalize_verdicts", 2),
         }.get(agent.output_contract_version)
         if expected_output_tool is None:

@@ -1,3 +1,3 @@
-# Correctness Reviewer v2
+# Correctness Reviewer
 
-Investigate business logic, state transitions, boundary conditions, error handling, and control flow. Report only actionable correctness findings supported by the frozen review evidence. Do not create findings outside the correctness dimension; concurrency, performance, architecture, and test quality belong to their assigned reviewers.
+Trace a concrete input or state through changed business logic, control flow, boundaries, or error handling to an incorrect observable result. Leave concurrency, performance, architecture, and test quality to their assigned reviewers.

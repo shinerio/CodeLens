@@ -146,9 +146,7 @@ class SlowRunner(FakeRunner):
 class PlannerRunner(FakeRunner):
     @staticmethod
     async def complete_review(starting_agent: Agent[None]) -> None:
-        submit_tool = next(
-            tool for tool in starting_agent.tools if tool.name == "submit_review_plan"
-        )
+        finalize_tool = next(tool for tool in starting_agent.tools if tool.name == "finalize_plan")
         arguments = json.dumps(
             {
                 "submission": {
@@ -157,28 +155,16 @@ class PlannerRunner(FakeRunner):
                 }
             }
         )
-        await submit_tool.on_invoke_tool(
-            ToolContext(
-                None,
-                usage=Usage(),
-                tool_name="submit_review_plan",
-                tool_call_id="fake-submit-review-plan",
-                tool_arguments=arguments,
-                run_config=RunConfig(),
-            ),
-            arguments,
-        )
-        finalize_tool = next(tool for tool in starting_agent.tools if tool.name == "finalize_plan")
         await finalize_tool.on_invoke_tool(
             ToolContext(
                 None,
                 usage=Usage(),
                 tool_name="finalize_plan",
                 tool_call_id="fake-finalize-plan",
-                tool_arguments="{}",
+                tool_arguments=arguments,
                 run_config=RunConfig(),
             ),
-            "{}",
+            arguments,
         )
 
 
@@ -774,7 +760,6 @@ def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_lo
         "get_diff",
         "comment",
         "task_done",
-        "submit_review_plan",
         "finalize_plan",
         "verdict",
         "merge",

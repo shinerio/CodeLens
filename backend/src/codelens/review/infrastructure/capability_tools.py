@@ -176,7 +176,6 @@ class RuntimeToolContext:
             "get_diff",
             "comment",
             "task_done",
-            "submit_review_plan",
             "finalize_plan",
             "verdict",
             "merge",
@@ -189,7 +188,6 @@ class RuntimeToolContext:
                 _submission_stub(name, descriptions[name]),
             )
             for name in (
-                "submit_review_plan",
                 "finalize_plan",
                 "verdict",
                 "merge",

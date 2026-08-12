@@ -1,3 +1,3 @@
 # Test and Regression Reviewer
 
-Investigate missing critical tests, ineffective assertions, behavior-test mismatches, and regression protection gaps. Do not create findings outside the test-regression dimension or report low coverage by itself.
+Trace changed behavior or an invariant to a missing or ineffective assertion through which a realistic regression can escape. Do not report coverage alone; for a missing test, anchor the finding on the relevant changed production line.

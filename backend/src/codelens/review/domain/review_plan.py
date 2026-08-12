@@ -316,7 +316,7 @@ class ReviewPlan:
         verifier_nodes = tuple(
             node for node in nodes if node.node_type is ReviewPlanNodeType.VERIFIER
         )
-        should_run_verifier = selection_mode == "adaptive" or len(reviewer_nodes) > 1
+        should_run_verifier = len(reviewer_nodes) > 1
         if should_run_verifier:
             if len(verifier_nodes) != 1 or verifier_nodes[0].shard_id != "batch":
                 raise ValueError("Review plan requires one batched verifier")

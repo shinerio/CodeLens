@@ -184,7 +184,7 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
     (
         (
             "review-planner:v2",
-            ("find_files", "grep", "read_file", "get_diff", "submit_review_plan", "finalize_plan"),
+            ("find_files", "grep", "read_file", "get_diff", "finalize_plan"),
         ),
         (
             "review-verifier:v2",

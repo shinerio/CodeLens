@@ -16,7 +16,6 @@ def test_builtin_profiles_expose_only_the_approved_tools() -> None:
         "grep",
         "read_file",
         "get_diff",
-        "submit_review_plan",
         "finalize_plan",
     )
     assert _tool_names("reviewer:v2") == (

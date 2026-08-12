@@ -20,3 +20,5 @@ def test_catalog_exposes_only_public_reviewer_versions(tmp_path: Path) -> None:
     assert "correctness:v2" in references
     assert "review-planner:v2" not in references
     assert all(item["capability_readiness"] == "ready" for item in entries)
+    general = next(item for item in entries if item["reference"] == "general:v2")
+    assert general["planner_eligible"] is True

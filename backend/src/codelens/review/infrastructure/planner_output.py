@@ -17,12 +17,7 @@ class PlannerSelectionDto(_StrictModel):
 
 
 class PlannerOutputCodec:
-    """Validate Planner selections against frozen host-owned inputs.
-
-    Supports batch submission: each call to `decode_batch` validates a partial
-    set of reviewer references, while `decode_final` validates that the
-    accumulated set exactly matches the eligible reviewers.
-    """
+    """Validate one focused Planner selection against frozen host-owned inputs."""
 
     def __init__(
         self,
@@ -37,50 +32,24 @@ class PlannerOutputCodec:
         if not self._unavailable.issubset(self._eligible):
             raise ValueError("unavailable Reviewers must belong to the eligible Catalog")
 
-    def decode_batch(self, payload: object) -> tuple[str, ...]:
-        """Validate one batch of reviewer references.
-
-        Each reference must belong to the eligible set and must not be
-        unavailable. Duplicates within the batch are rejected.
-        """
-        value = self._parse_dto(payload)
-        references = tuple(value.reviewer_references)
-        if len(references) != len(set(references)):
-            raise ValueError("Planner reviewer references must be unique within a batch")
-        unknown = set(references) - self._eligible
-        if unknown:
-            raise ValueError(f"Planner selected unknown Reviewers: {sorted(unknown)}")
-        unavailable = set(references) & self._unavailable
-        if unavailable:
-            raise ValueError(f"Planner selected unavailable Reviewers: {sorted(unavailable)}")
-        return references
-
-    def decode_final(self, accumulated: frozenset[str]) -> PlannerSelection:
-        """Validate that the accumulated set exactly matches eligible reviewers."""
-        if accumulated != self._eligible:
-            missing = self._eligible - accumulated
-            extra = accumulated - self._eligible
-            parts = []
-            if missing:
-                parts.append(f"missing: {sorted(missing)}")
-            if extra:
-                parts.append(f"extra: {sorted(extra)}")
-            raise ValueError(f"Planner selection incomplete: {', '.join(parts)}")
-        return PlannerSelection(
-            schema_version="2",
-            reviewer_references=tuple(sorted(accumulated)),
-        )
-
     def decode(self, payload: object) -> PlannerSelection:
-        """Validate a complete one-shot v2 selection."""
+        """Validate General alone or a team of at least two specialists."""
+
         value = self._parse_dto(payload)
         references = tuple(value.reviewer_references)
         if len(references) != len(set(references)):
             raise ValueError("Planner reviewer references must be unique")
-        if set(references) != self._eligible:
-            raise ValueError("Planner must decide exactly once for every eligible Reviewer")
-        if any(reference in self._unavailable for reference in references):
-            raise ValueError("Planner selected an unavailable Reviewer")
+        selected = set(references)
+        unknown = selected - self._eligible
+        if unknown:
+            raise ValueError(f"Planner selected unknown Reviewers: {sorted(unknown)}")
+        unavailable = selected & self._unavailable
+        if unavailable:
+            raise ValueError(f"Planner selected unavailable Reviewers: {sorted(unavailable)}")
+        if "general:v2" in selected and selected != {"general:v2"}:
+            raise ValueError("General reviewer must run alone")
+        if "general:v2" not in selected and len(selected) < 2:
+            raise ValueError("Planner specialist team requires at least two Reviewers")
         return PlannerSelection(
             schema_version="2",
             reviewer_references=references,

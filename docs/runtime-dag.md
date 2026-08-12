@@ -27,7 +27,7 @@ freeze candidate input
 
 | 角色 | 证据工具 | 输出工具 |
 | --- | --- | --- |
-| Planner | `find_files:v2`、`grep:v2`、`read_file:v2`、`get_diff:v2` | `submit_review_plan:v2`、`finalize_plan:v2` |
+| Planner | `find_files:v2`、`grep:v2`、`read_file:v2`、`get_diff:v2` | `finalize_plan:v2` |
 | Reviewer | `find_files:v2`、`grep:v2`、`read_file:v2`、`get_diff:v2` | `comment:v2`、`task_done:v2` |
 | Verifier | `read_file:v2`、`get_diff:v2` | `verdict:v2`、`merge:v2`、`finalize_verdicts:v2` |
 

@@ -51,7 +51,7 @@ def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
         ),
         _profile(
             "planner",
-            _tools(*evidence, ("submit_review_plan", 2), ("finalize_plan", 2)),
+            _tools(*evidence, ("finalize_plan", 2)),
         ),
         _profile(
             "verifier",

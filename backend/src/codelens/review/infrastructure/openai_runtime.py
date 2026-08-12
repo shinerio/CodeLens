@@ -413,9 +413,8 @@ class OpenAIAgentRuntime:
         if agent.role is AgentRole.PLANNER:
             planner_codec = _planner_codec(role_context)
             planner_collector = ReviewPlanSubmissionCollector(planner_codec)
-            submit_description = prompts.tools["submit_review_plan"].description
             finalize_description = prompts.tools["finalize_plan"].description
-            role_output_tools = planner_collector.bindings(submit_description, finalize_description)
+            role_output_tools = planner_collector.bindings(finalize_description)
         elif agent.role is AgentRole.VERIFIER:
             verdict_codec = _verdict_codec(role_context)
             verdict_evidence = FilesystemReviewTools(

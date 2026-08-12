@@ -32,11 +32,18 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "repository_instructions" in chinese.review_policy
     assert "完整冻结仓库规则" in chinese.review_policy
     assert "Apply the rules mapped to each file" in english.review_workflow
-    assert "直接应用映射到每个文件的规则" in chinese.review_workflow
+    assert "直接应用映射到每个文件的 `repository_instructions`" in chinese.review_workflow
     assert "never request a shell or invent another tool" in english.review_workflow
     assert "不得请求 Shell，也不得发明其他工具" in chinese.review_workflow
     assert "missing_review_files" in english.review_workflow
     assert "missing_review_files" in chinese.review_workflow
+    assert (
+        "trigger -> changed-code mechanism -> concrete harmful outcome"
+        in english.review_workflow
+    )
+    assert "触发条件 → 变更代码的错误机制 → 具体危害" in chinese.review_workflow
+    assert "do not report" in english.review_workflow
+    assert "不要上报" in chinese.review_workflow
     assert "without diff markers or unchanged context" in english.tools["comment"].description
     assert "side=old" in english.tools["comment"].description
     assert "不含 diff 标记和未变更上下文" in chinese.tools["comment"].description
@@ -53,3 +60,29 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "缩小 pattern、path 或细化 file_pattern" in chinese.tools["grep"].description
     assert "may both be omitted" in english.tools["read_file"].description
     assert "可以同时省略" in chinese.tools["read_file"].description
+
+
+def test_planner_and_verifier_prompts_define_focused_decision_boundaries() -> None:
+    loader = I18nPromptLoader.load(PROMPT_ROOT)
+    english = loader.get("en")
+    chinese = loader.get("zh-CN")
+
+    assert "submit_review_plan" not in english.tools
+    assert "submit_review_plan" not in chinese.tools
+    assert "General alone or at least two specialists" in english.tools["finalize_plan"].description
+    assert "General 单独运行或至少两个专项 Reviewer" in chinese.tools["finalize_plan"].description
+
+    for locale in ("en", "zh-CN"):
+        verifier = (PROMPT_ROOT / "review-verdict" / f"{locale}.md").read_text(
+            encoding="utf-8"
+        )
+        assert "weak" in verifier
+        assert "inferred" in verifier
+    english_verifier = (PROMPT_ROOT / "review-verdict" / "en.md").read_text(
+        encoding="utf-8"
+    )
+    chinese_verifier = (PROMPT_ROOT / "review-verdict" / "zh-CN.md").read_text(
+        encoding="utf-8"
+    )
+    assert "cannot establish that a defect exists" in english_verifier
+    assert "无法建立缺陷确实存在" in chinese_verifier

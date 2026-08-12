@@ -207,7 +207,7 @@ class ReviewPlanCompiler:
             required = list(reviewers)
             if selection_mode == "adaptive":
                 required.append("review-planner:v2")
-            should_run_verifier = selection_mode == "adaptive" or len(reviewers) > 1
+            should_run_verifier = len(reviewers) > 1
             if should_run_verifier:
                 required.append("review-verifier:v2")
             missing = [reference for reference in required if reference not in execution_specs]
@@ -314,7 +314,7 @@ class ReviewPlanCompiler:
         if planner_node:
             nodes.append(planner_node)
         nodes.extend(reviewer_nodes)
-        if selection_mode == "adaptive" or len(reviewers) > 1:
+        if len(reviewers) > 1:
             verifier = self._node(
                 task_id,
                 ReviewPlanNodeType.VERIFIER,

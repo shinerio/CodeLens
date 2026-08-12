@@ -84,13 +84,32 @@ def test_fixed_single_reviewer_plan_omits_verifier() -> None:
     assert [node.agent_reference for node in plan.nodes] == ["general:v2"]
 
 
+def test_adaptive_accepts_general_alone_without_verifier() -> None:
+    selection = PlannerSelection(schema_version="2", reviewer_references=("general:v2",))
+
+    plan = _compiler().compile(
+        task_id=TASK_ID,
+        selection_mode="adaptive",
+        reviewer_references=selection.reviewer_references,
+        planner_selection=selection,
+        execution_specs=_specs("review-planner:v2", "general:v2"),
+        readiness=_ready(),
+    )
+
+    assert {node.agent_reference for node in plan.nodes} == {
+        "review-planner:v2",
+        "general:v2",
+    }
+    assert all(node.node_type.value != "verifier" for node in plan.nodes)
+
+
 def test_adaptive_rejects_general_plus_specialists() -> None:
     selection = PlannerSelection(
         schema_version="2",
         reviewer_references=("general:v2", "security:v2"),
     )
 
-    with pytest.raises(InvalidReviewPlanError, match="not Planner eligible"):
+    with pytest.raises(InvalidReviewPlanError, match="General reviewer must run alone"):
         _compiler().compile(
             task_id=TASK_ID,
             selection_mode="adaptive",
