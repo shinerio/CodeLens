@@ -8,6 +8,7 @@ EXPECTED_BUNDLE_FILES = {
     "review-policy.md",
     "review-workflow.md",
     "review-feedback.md",
+    "tool-not-found.md",
     "tool-loop-warning.md",
     "tools.json",
 }
@@ -52,6 +53,10 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "没有落在本次实际变更的 diff 行" in chinese.review_feedback
     assert "not evidence" in english.context_compaction_notice
     assert "不能作为证据" in chinese.context_compaction_notice
+    assert "{tool_name}" in english.tool_not_found
+    assert "{available_tools}" in english.tool_not_found
+    assert "{tool_name}" in chinese.tool_not_found
+    assert "{available_tools}" in chinese.tool_not_found
     assert "narrow path or pattern" in english.tools["find_files"].description
     assert "缩小 path 或细化 pattern" in chinese.tools["find_files"].description
     assert "file_pattern" in english.tools["grep"].description

@@ -101,6 +101,13 @@ class I18nPromptLoader(I18nPromptLoaderPort):
             raise SystemPromptLoadError(
                 "system tool prompts must define the complete stable tool set"
             )
+        tool_not_found = read_markdown("tool-not-found.md")
+        try:
+            tool_not_found.format(tool_name="example", available_tools="read_file")
+        except (KeyError, ValueError) as error:
+            raise SystemPromptLoadError(
+                f"invalid tool-not-found template: {directory / 'tool-not-found.md'}"
+            ) from error
         return LocalizedSystemPrompts(
             locale=directory.name,
             review_policy=read_markdown("review-policy.md"),
@@ -109,4 +116,5 @@ class I18nPromptLoader(I18nPromptLoaderPort):
             tools=MappingProxyType(tools),
             review_feedback=read_markdown("review-feedback.md"),
             context_compaction_notice=read_markdown("context-compaction.md"),
+            tool_not_found=tool_not_found,
         )

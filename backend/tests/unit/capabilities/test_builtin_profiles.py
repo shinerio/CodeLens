@@ -27,6 +27,8 @@ def test_builtin_profiles_expose_only_the_approved_tools() -> None:
         "task_done",
     )
     assert _tool_names("verifier:v2") == (
+        "find_files",
+        "grep",
         "read_file",
         "get_diff",
         "verdict",

@@ -24,6 +24,7 @@ class LocalizedSystemPrompts:
     tools: Mapping[str, SystemToolPrompt]
     review_feedback: str
     context_compaction_notice: str
+    tool_not_found: str
 
 
 class I18nPromptLoaderPort(Protocol):

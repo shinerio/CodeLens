@@ -29,6 +29,8 @@ def test_resolver_uses_only_the_profile_statically_bound_to_the_agent() -> None:
     assert spec.agent is agent
     assert spec.capability_profile.reference == "verifier:v2"
     assert tuple(tool.name for tool in spec.capability_profile.builtin_tools) == (
+        "find_files",
+        "grep",
         "read_file",
         "get_diff",
         "verdict",

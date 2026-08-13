@@ -132,15 +132,6 @@ def upgrade() -> None:
         sa.Column("has_partial_coverage", sa.Boolean(), server_default="0", nullable=False),
         sa.Column("prompt_locale", sa.String(length=8), nullable=False),
         sa.Column("external_context_json", sa.Text(), nullable=True),
-        sa.Column(
-            "existing_findings_json", sa.Text(), server_default="[]", nullable=False
-        ),
-        sa.Column(
-            "existing_findings_hash",
-            sa.String(length=64),
-            server_default="4f53cda18c2baa0c0354bb5f9a3ecbe5ed12ab4d8e4d8e80efc93a6c2e61e7e7",
-            nullable=False,
-        ),
         sa.Column("worktree_id", sa.String(length=128), nullable=True),
         sa.Column("snapshot_id", sa.String(length=128), nullable=True),
         sa.Column("cancellation_requested", sa.Boolean(), nullable=False),

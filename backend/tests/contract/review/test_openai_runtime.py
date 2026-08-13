@@ -4,6 +4,7 @@ import json
 import traceback
 from dataclasses import dataclass, replace
 from pathlib import Path
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -22,6 +23,7 @@ from codelens.capabilities.domain.models import (
 from codelens.capabilities.domain.skills import SkillActivationFacts
 from codelens.review.domain.errors import (
     PermanentAgentOutputError,
+    ToolLoopDetectedError,
     TransientAgentRuntimeError,
 )
 from codelens.review.domain.tool_limits import ToolLimits
@@ -451,6 +453,68 @@ async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() 
     assert filtered.instructions == "stable-system-prompt"
 
 
+async def test_runtime_returns_unknown_tool_errors_to_the_same_model_run() -> None:
+    runner = FakeRunner(FakeResult(None, ()))
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
+
+    assert runner.run_config is not None
+    assert runner.run_config.tool_not_found_behavior == "return_error_to_model"
+    formatter = runner.run_config.tool_error_formatter
+    assert formatter is not None
+    message = formatter(
+        SimpleNamespace(
+            kind="tool_not_found",
+            tool_name="bash",
+        )
+    )
+    assert isinstance(message, str)
+    assert "bash" in message
+    assert "find_files, grep, read_file, get_diff, comment, task_done" in message
+    assert "continue the current task" in message
+
+
+async def test_runtime_does_not_retry_a_wrapped_permanent_tool_failure() -> None:
+    permanent = ToolLoopDetectedError(
+        "The model repeated an identical tool call without making progress.",
+        phase="investigation",
+        reason_code="identical_tool_result_loop",
+        retryable=False,
+    )
+    try:
+        raise permanent
+    except ToolLoopDetectedError as error:
+        try:
+            raise ModelBehaviorError("Error running tool get_diff") from error
+        except ModelBehaviorError as wrapped:
+            failure = wrapped
+    config = replace(
+        _provider_config(),
+        max_retries=1,
+        retry_backoff_base=0.1,
+        retry_max_delay=1.0,
+    )
+    runner = FakeRunner(failure)
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(config),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    with pytest.raises(ToolLoopDetectedError) as captured:
+        await runtime.invoke(_spec(config), _runtime_input(), _snapshot(), "en")
+
+    assert captured.value.reason_code == "identical_tool_result_loop"
+    assert len(runner.calls) == 1
+
+
 def _planner_runtime_input(*, host_run_id: str | None = None) -> bytes:
     role_context: dict[str, object] = {
         "eligible_reviewer_references": ["general:v2"],
@@ -577,6 +641,16 @@ async def test_verifier_runtime_uses_verdict_then_finalize_to_complete() -> None
     output = await runtime.invoke(_verifier_spec(), _verifier_runtime_input(), _snapshot(), "en")
 
     payload = json.loads(output.canonical_bytes)
+    assert runner.starting_agent is not None
+    assert tuple(tool.name for tool in runner.starting_agent.tools) == (
+        "find_files",
+        "grep",
+        "read_file",
+        "get_diff",
+        "verdict",
+        "merge",
+        "finalize_verdicts",
+    )
     assert payload["schema_version"] == "2"
     assert payload["decisions"] == [
         {

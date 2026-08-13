@@ -56,8 +56,7 @@ def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
         _profile(
             "verifier",
             _tools(
-                ("read_file", 2),
-                ("get_diff", 2),
+                *evidence,
                 ("verdict", 2),
                 ("merge", 2),
                 ("finalize_verdicts", 2),

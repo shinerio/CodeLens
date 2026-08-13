@@ -427,6 +427,7 @@ class Supervisor:
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 env=env,
+                start_new_session=True,
             )
         finally:
             log_file.close()
@@ -464,6 +465,7 @@ class Supervisor:
                 stdout=log_file,
                 stderr=subprocess.STDOUT,
                 env=env,
+                start_new_session=True,
             )
         finally:
             log_file.close()

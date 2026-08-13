@@ -16,7 +16,7 @@
 - SQLite 使用 WAL 模式；大对象写入 Artifact Store，数据库仅保存元数据、内容哈希和不透明引用。
 - OpenAI Agents SDK、Git、文件系统和 Secret Store 作为外部能力，通过 Port/Adapter 接入。`capabilities` 上下文以供应商无关的版本化 Tool Contract、Capability Profile、Skill Policy 和冻结执行规格约束模型可见能力；当前代码检索仍只由 CodeLens 内置、只读的 Snapshot 工具提供，不依赖本机预装的第三方 CodeGraph、LSP 或 MCP 工具。MCP Binding 与文本 Skill 已有声明式冻结契约，但当前没有 live MCP Adapter、MCP 进程或网络连接，也不支持可执行 Skill。
 - Git 是内置 Snapshot 工具唯一需要的外部可执行文件；macOS、Linux 和 Windows 启动入口都必须在服务就绪前验证 Git 可执行文件及版本响应。`find_files`、`grep` 和文件读取不得依赖操作系统提供的 `find`、`grep`、`glob` 或 Shell。
-- 所有静态的平台系统提示词、仓库规则优先级、通用 Review 工作流、输出约束与工具说明必须存放在 `prompts/sys/<locale>/`；每个语言包固定包含合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md`、运行时纠偏文本 `review-feedback.md`、工具循环告警模板 `tool-loop-warning.md` 和结构化工具说明 `tools.json`，避免跨文件重复约束。组合根在启动时通过 `I18nPromptLoader` 完整校验并加载为不可变语言包。Context Builder 产生包含完整 `review_files` 与冻结 `repository_instructions` 的确定性内部信封；Review Runtime 在供应商边界拆分该信封，并按“平台边界与仓库规则策略、可信 `repository_instructions`、通用工作流与输出契约、Agent 专属策略”的固定顺序组成系统指令，首次用户输入只保留 `review_files`。宿主拒绝未落在实际 diff 行的评论后，必须在对应 `comment` 工具结果中返回稳定的 `reason_code` 和来自 `review-feedback.md` 的本地化纠偏文本，不得把纠偏文本混入工具定义或在工具实现中硬编码。设置页面只能覆盖 `prompts/<agent_id>/<locale>.md` 对应的 Agent 专属策略，不能覆盖通用系统层或仓库规则。Review 运行时只按任务 `prompt_locale` 读取已加载语言包，未知语言回退至配置的默认语言；新增语言不得要求在模型 Runtime 中拼接或硬编码自然语言提示词。
+- 所有静态的平台系统提示词、仓库规则优先级、通用 Review 工作流、输出约束与工具说明必须存放在 `prompts/sys/<locale>/`；每个语言包固定包含合并平台边界与仓库规则策略的 `review-policy.md`、合并通用工作流与输出契约的 `review-workflow.md`、运行时纠偏文本 `review-feedback.md`、非法工具纠偏模板 `tool-not-found.md`、工具循环告警模板 `tool-loop-warning.md` 和结构化工具说明 `tools.json`，避免跨文件重复约束。组合根在启动时通过 `I18nPromptLoader` 完整校验并加载为不可变语言包。Context Builder 产生包含完整 `review_files` 与冻结 `repository_instructions` 的确定性内部信封；Review Runtime 在供应商边界拆分该信封，并按“平台边界与仓库规则策略、可信 `repository_instructions`、通用工作流与输出契约、Agent 专属策略”的固定顺序组成系统指令，首次用户输入只保留 `review_files`。宿主拒绝未落在实际 diff 行的评论后，必须在对应 `comment` 工具结果中返回稳定的 `reason_code` 和来自 `review-feedback.md` 的本地化纠偏文本；模型调用冻结 Profile 以外的工具时，必须在同一 Agent 对话内返回来自 `tool-not-found.md` 的本地化纠偏结果并允许模型改用可用工具继续，不得因此重启整轮调查。纠偏文本不得混入工具定义或在工具实现中硬编码。设置页面只能覆盖 `prompts/<agent_id>/<locale>.md` 对应的 Agent 专属策略，不能覆盖通用系统层或仓库规则。Review 运行时只按任务 `prompt_locale` 读取已加载语言包，未知语言回退至配置的默认语言；新增语言不得要求在模型 Runtime 中拼接或硬编码自然语言提示词。
 - 模型 Provider 配置由本机 Web Settings API 在运行期写入 Secret Store；API Key 是只写字段，不进入普通配置、数据库、日志、事件或 API 响应。
 - 后端运行日志统一写入项目根目录 `logs/` 并由 `.gitignore` 排除。统一后端进程按职责拆分：HTTP、Uvicorn 和 API 应用日志写入 `logs/api.log`，Worker 调度和模型 Runtime 诊断写入 `logs/worker.log`；Supervisor 使用独立的 `logs/supervisor.log`。拆分由 logger 命名空间和独立 Handler 完成，不得依赖消息正文分类；各日志独立限量轮转，互不传播和重复写入。
 - 运行日志和日志级别变更使用结构化字段。日志级别只使用 `debug`、`info`、`warning`、`error`；默认级别和当前级别必须明确。未处理异常记录异常堆栈和最小必要的任务或请求标识，不得记录密钥等敏感信息。当前级别通过稳定的 Settings HTTP/JSON 契约读取和更新，持久化到项目 `data/` 目录；API、Worker 和 Supervisor 必须无需重启即可采用新级别。前端不得直接读写日志文件或数据目录。
@@ -177,7 +177,7 @@ Verifier 在多 Specialist 场景下运行，并且每个任务至多运行一�
 | --- | --- | --- |
 | `review-planner:v2` | `find_files:v2`、`grep:v2`、`read_file:v2`、`get_diff:v2` | `finalize_plan:v2` |
 | v2 Reviewer | `find_files:v2`、`grep:v2`、`read_file:v2`、`get_diff:v2` | `comment:v2`、`task_done:v2` |
-| `review-verifier:v2` | `read_file:v2`、`get_diff:v2` | `verdict:v2`、`merge:v2`、`finalize_verdicts:v2` |
+| `review-verifier:v2` | `find_files:v2`、`grep:v2`、`read_file:v2`、`get_diff:v2` | `verdict:v2`、`merge:v2`、`finalize_verdicts:v2` |
 
 Profile 只允许只读工具契约，明确禁止 Shell、文件写入、任意 Git、网络、`load_skill` 和动态工具发现。当前内置 Profile 的 MCP 工具集合为空，内置 Skill Policy 也不激活任何 Skill；现有 MCP 与 Skill 模块只提供未来 Adapter 可消费的不可变声明、Schema/内容哈希和安全校验。Skill 仅是低优先级、不可信的文本指令，不能注册工具、提升 Profile 权限、启动进程或执行脚本。
 
@@ -234,7 +234,7 @@ frontend/src/
 - Review 工作空间删除使用数据库 tombstone，不级联删除 Finding、事件、快照或审计数据；读取单个已删除 Review 与列表查询都不得重新暴露 tombstone 记录。
 - 最近 Review 仓库目录拥有独立于 Review 工作空间 tombstone 的持久化生命周期；删除 Review 不得改变该目录，目录只在新仓库使用或容量设置更新导致 LRU 超出当前配置时淘汰。
 - 非 HTTPS 的远程模型 Base URL 会明文传输凭证和 Review 内容，界面必须显式警告；是否使用该受信任网络边界由本机操作者决定。
-- 数据库结构只能通过 Alembic migration 演进；v2 初始版本只保留 `0001_codelens_v2` 一个 `down_revision = None` 的基线 revision，从空数据库直接创建最终 v2 Schema。系统不识别或升级任何 v1 revision，也不包含 backfill、旧列改名或旧表搬运脚本。持久化任务和事件必须支持幂等、重启恢复及部分失败。
+- 数据库结构只能通过 Alembic migration 演进；`0001_codelens_v2` 是唯一 `down_revision = None` 的 v2 基线，后续 v2 Schema 变更必须追加线性增量 revision，使已有 v2 数据库能够原地升级。系统不识别或升级任何 v1 revision，也不包含从 v1 backfill、旧列改名或旧表搬运的兼容脚本。持久化任务和事件必须支持幂等、重启恢复及部分失败。
 
 ### 6.1 运行期成本与诊断契约
 

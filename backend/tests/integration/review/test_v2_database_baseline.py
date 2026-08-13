@@ -19,15 +19,19 @@ def _alembic_config(database_path: Path) -> Config:
     return config
 
 
-def test_v2_database_has_one_initial_revision(tmp_path: Path) -> None:
+def test_v2_database_keeps_one_initial_revision_and_linear_upgrades(tmp_path: Path) -> None:
     config = _alembic_config(tmp_path / "unused.sqlite3")
     scripts = ScriptDirectory.from_config(config)
 
-    assert scripts.get_heads() == ["0001_codelens_v2"]
-    revision = scripts.get_revision("0001_codelens_v2")
-    assert revision is not None
-    assert revision.down_revision is None
-    assert [item.revision for item in scripts.walk_revisions()] == ["0001_codelens_v2"]
+    assert scripts.get_heads() == ["0003_correct_empty_findings_hash"]
+    baseline = scripts.get_revision("0001_codelens_v2")
+    assert baseline is not None
+    assert baseline.down_revision is None
+    assert [item.revision for item in scripts.walk_revisions()] == [
+        "0003_correct_empty_findings_hash",
+        "0002_add_existing_findings",
+        "0001_codelens_v2",
+    ]
 
 
 async def test_v2_database_initializes_complete_metadata_from_empty_file(
@@ -53,7 +57,7 @@ async def test_v2_database_initializes_complete_metadata_from_empty_file(
         }
 
     assert actual_tables == set(metadata.tables)
-    assert revision == ("0001_codelens_v2",)
+    assert revision == ("0003_correct_empty_findings_hash",)
     assert "candidate_paths_json" in task_columns
     assert "target_paths_json" not in task_columns
     assert "verdict_decision_id" in finding_columns

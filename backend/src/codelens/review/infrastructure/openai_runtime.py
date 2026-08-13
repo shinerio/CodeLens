@@ -33,7 +33,7 @@ from agents.exceptions import (
 )
 from agents.items import TResponseInputItem
 from agents.result import RunResult
-from agents.run_config import CallModelData, ModelInputData
+from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterArgs
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -255,6 +255,41 @@ def _context_compaction_filter(
     return compact
 
 
+def _tool_error_formatter(
+    template: str,
+    available_tool_names: tuple[str, ...],
+) -> Callable[[ToolErrorFormatterArgs[Any]], str | None]:
+    """Return localized recovery text for model-invented function tools."""
+
+    available_tools = ", ".join(available_tool_names)
+
+    def format_error(arguments: ToolErrorFormatterArgs[Any]) -> str | None:
+        if arguments.kind != "tool_not_found":
+            return None
+        return template.format(
+            tool_name=arguments.tool_name,
+            available_tools=available_tools,
+        )
+
+    return format_error
+
+
+def _wrapped_agent_failure(error: BaseException) -> _AgentFailure | None:
+    """Recover provider-neutral tool failures wrapped by the Agents SDK."""
+
+    current: BaseException | None = error.__cause__ or error.__context__
+    visited: set[int] = set()
+    while current is not None and id(current) not in visited:
+        visited.add(id(current))
+        if isinstance(
+            current,
+            (AgentMaxTurnsExceededError, TransientAgentRuntimeError, PermanentAgentOutputError),
+        ):
+            return current
+        current = current.__cause__ or current.__context__
+    return None
+
+
 def _cache_token_details(usage: object) -> tuple[int, int]:
     """Read optional provider cache counters without treating omission as an error."""
 
@@ -469,6 +504,11 @@ class OpenAIAgentRuntime:
                 notice=prompts.context_compaction_notice,
                 tracker=compaction_tracker,
             ),
+            tool_not_found_behavior="return_error_to_model",
+            tool_error_formatter=_tool_error_formatter(
+                prompts.tool_not_found,
+                tuple(str(getattr(tool, "name", "")) for tool in model_tools),
+            ),
         )
         investigation: object | None = None
         failure: _AgentFailure | None = None
@@ -585,7 +625,7 @@ class OpenAIAgentRuntime:
                         "Model produced invalid structured output",
                         extra={"phase": phase, "error": str(model_error)[:500]},
                     )
-                    attempt_failure = self._failure(
+                    attempt_failure = _wrapped_agent_failure(model_error) or self._failure(
                         phase,
                         "invalid_model_output",
                         "model returned unusable output",
@@ -868,6 +908,7 @@ class OpenAIAgentRuntime:
         # Track call_id -> tool_name so tool_result entries carry the name of the
         # tool that produced them (the SDK's tool_output item has no name field).
         tool_names: dict[str, str] = {}
+        invalid_tool_names: dict[str, str] = {}
         allowed_tool_names = {
             str(getattr(tool, "name", "")) for tool in agent.tools if getattr(tool, "name", "")
         }
@@ -880,6 +921,8 @@ class OpenAIAgentRuntime:
                     call_id = emitted.metadata.get("tool_call_id")
                     name = emitted.metadata.get("tool_name")
                     if name and name not in allowed_tool_names:
+                        if call_id:
+                            invalid_tool_names[call_id] = name
                         emitted = AgentRuntimeEvent(
                             "invalid_tool_call",
                             emitted.content,
@@ -891,7 +934,13 @@ class OpenAIAgentRuntime:
                         tool_names[call_id] = name
                 elif emitted.kind == "tool_result":
                     call_id = emitted.metadata.get("tool_call_id")
-                    if call_id and call_id in tool_names and "tool_name" not in emitted.metadata:
+                    if call_id and call_id in invalid_tool_names:
+                        emitted = AgentRuntimeEvent(
+                            "invalid_tool_result",
+                            emitted.content,
+                            {**emitted.metadata, "tool_name": invalid_tool_names[call_id]},
+                        )
+                    elif call_id and call_id in tool_names and "tool_name" not in emitted.metadata:
                         emitted.metadata["tool_name"] = tool_names[call_id]
                 await sink(emitted)
         await sink(
