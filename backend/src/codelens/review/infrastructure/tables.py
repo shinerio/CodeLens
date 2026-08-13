@@ -1,3 +1,5 @@
+import hashlib
+
 from sqlalchemy import (
     Boolean,
     CheckConstraint,
@@ -79,6 +81,14 @@ review_tasks = Table(
     Column("has_partial_coverage", Boolean, nullable=False, default=False, server_default="0"),
     Column("prompt_locale", String(8), nullable=False, default="en"),
     Column("external_context_json", Text),
+    Column("existing_findings_json", Text, nullable=False, default="[]", server_default="[]"),
+    Column(
+        "existing_findings_hash",
+        String(64),
+        nullable=False,
+        default=hashlib.sha256(b"[]").hexdigest(),
+        server_default=hashlib.sha256(b"[]").hexdigest(),
+    ),
     Column("worktree_id", String(128)),
     Column("snapshot_id", String(128)),
     Column("cancellation_requested", Boolean, nullable=False, default=False),

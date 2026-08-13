@@ -8,6 +8,7 @@ from codelens.plugin.api.v2 import (
     AdaptiveReviewerSelection as PluginAdaptiveReviewerSelection,
 )
 from codelens.plugin.api.v2 import (
+    ExistingFindingV2,
     TriggerReviewPolicy,
 )
 from codelens.plugin.domain.ports import ReviewCreatorPort, TriggerRepositoryValidatorPort
@@ -94,6 +95,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
         scope_params: dict[str, str | None],
         review_policy: TriggerReviewPolicy,
         external_context: dict | None = None,
+        existing_findings: tuple[ExistingFindingV2, ...] = (),
     ) -> str:
         """Create a review from a trigger event.
 
@@ -109,6 +111,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
                 - For 'uncommitted': (no parameters needed)
             review_policy: Frozen v2 reviewer selection and trigger behavior.
             external_context: Platform-specific context for export routing.
+            existing_findings: Structured, untrusted prior issues for duplicate detection.
 
         Returns:
             Task ID of the created review.
@@ -142,6 +145,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             supersede_policy=review_policy.supersede_policy.value,
             prompt_locale=review_policy.prompt_locale,
             external_context=external_context,
+            existing_findings=existing_findings,
             skip_if_duplicate=True,
         )
 

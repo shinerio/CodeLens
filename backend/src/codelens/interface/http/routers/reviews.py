@@ -107,6 +107,9 @@ async def create_review(
                 review_profile=request.review_profile_snapshot(),
                 prompt_locale=request.prompt_locale,
                 external_context=request.external_context,
+                existing_findings=tuple(
+                    finding.to_domain() for finding in request.existing_findings
+                ),
             )
         )
     except ValueError as error:

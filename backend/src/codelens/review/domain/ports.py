@@ -1,3 +1,4 @@
+import hashlib
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
@@ -198,6 +199,7 @@ class ReviewRecord:
     finding_count: int = 0
     external_context: dict | None = None
     has_partial_coverage: bool = False
+    existing_finding_count: int = 0
 
 
 @dataclass(frozen=True)
@@ -237,6 +239,8 @@ class ReviewExecutionRecord:
     planning_context_json: str | None = None
     planning_context_hash: str | None = None
     has_partial_coverage: bool = False
+    existing_findings_json: str = "[]"
+    existing_findings_hash: str = hashlib.sha256(b"[]").hexdigest()
 
 
 @dataclass(frozen=True)

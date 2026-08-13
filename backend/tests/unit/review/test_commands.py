@@ -4,6 +4,7 @@ from types import SimpleNamespace
 
 import pytest
 
+from codelens.findings.domain.existing_findings import ExistingFinding
 from codelens.review.application.commands import (
     CreateReviewCommand,
     CreateReviewHandler,
@@ -118,6 +119,11 @@ class ConfiguredFileExclusionPolicy:
         )
 
 
+class FailingExistingFindingsProvider:
+    async def load(self, _repository_path: Path) -> tuple[ExistingFinding, ...]:
+        raise ValueError("historical report is invalid")
+
+
 class DeletingStore:
     async def soft_delete_review(self, _task_id: str) -> bool:
         return True
@@ -172,6 +178,24 @@ async def test_create_failure_discards_the_just_captured_overlay(tmp_path: Path)
         await handler.handle(_command(tmp_path))
 
     assert len(store.created) == 1
+    assert artifacts.discarded == ["input_00000000000000000000000000000001.json"]
+
+
+async def test_existing_findings_load_failure_discards_captured_overlay(tmp_path: Path) -> None:
+    artifacts = RecordingArtifacts()
+    store = FailingStore(fail_create=False)
+    handler = CreateReviewHandler(
+        ScopePlanner(FixedPlanner()),
+        ReviewInputCaptureService(StableCaptureSource(), artifacts),
+        store,
+        artifacts,
+        existing_findings_provider=FailingExistingFindingsProvider(),
+    )
+
+    with pytest.raises(ValueError, match="historical report is invalid"):
+        await handler.handle(_command(tmp_path))
+
+    assert store.created == []
     assert artifacts.discarded == ["input_00000000000000000000000000000001.json"]
 
 

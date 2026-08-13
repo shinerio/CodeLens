@@ -14,6 +14,7 @@ from pydantic import (
     model_validator,
 )
 
+from codelens.findings.domain.existing_findings import ExistingFinding, ExistingFindingSet
 from codelens.review.application.process_report import ReviewProcessReport
 from codelens.review.domain.ports import RecentRepositoryRecord, ReviewRecord
 from codelens.review.domain.review_profile import ReviewProfile
@@ -419,6 +420,34 @@ class DirectoryListingResponse(StrictDto):
     is_truncated: bool
 
 
+class ExistingFindingRequest(StrictDto):
+    """Accept one bounded historical issue for duplicate suppression context."""
+
+    source_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    finding_id: Annotated[str, StringConstraints(min_length=1, max_length=256)]
+    title: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+    content: Annotated[str, StringConstraints(min_length=1, max_length=8_000)]
+    path: str | None = None
+    side: Literal["old", "new"] | None = None
+    start_line: Annotated[int, Field(ge=1)] | None = None
+    end_line: Annotated[int, Field(ge=1)] | None = None
+    existing_code: Annotated[str, StringConstraints(min_length=1, max_length=8_000)] | None = None
+    fingerprint: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
+    recommendation: Annotated[str, StringConstraints(min_length=1, max_length=8_000)] | None = None
+    category: Annotated[str, StringConstraints(min_length=1, max_length=128)] | None = None
+    severity: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = None
+
+    def to_domain(self) -> ExistingFinding:
+        return ExistingFinding(**self.model_dump())
+
+    @model_validator(mode="after")
+    def validate_domain_invariants(self) -> "ExistingFindingRequest":
+        """Surface unsafe paths and incomplete locations as HTTP validation errors."""
+
+        self.to_domain()
+        return self
+
+
 class CreateReviewRequest(StrictDto):
     repository_path: Path
     scope: ScopeRequest
@@ -426,6 +455,18 @@ class CreateReviewRequest(StrictDto):
     profile_source: "ReviewProfileSourceDto | None" = None
     prompt_locale: Literal["en", "zh-CN"] = "en"
     external_context: dict[str, Any] | None = None
+    existing_findings: Annotated[list[ExistingFindingRequest], Field(max_length=500)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validate_existing_findings_budget(self) -> "CreateReviewRequest":
+        """Reject an oversized canonical set before entering the application layer."""
+
+        ExistingFindingSet.from_findings(
+            tuple(finding.to_domain() for finding in self.existing_findings)
+        )
+        return self
 
     def review_profile_snapshot(self) -> ReviewProfileSnapshot:
         selection = self.reviewer_selection

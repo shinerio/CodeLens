@@ -457,6 +457,7 @@ async def test_streamed_model_events_publish_the_prompt_before_completion() -> N
     model_output = next(entry for entry in entries if entry[0] == "model_output")
     assert model_output[2] == {
         "agent": "correctness:v2",
+        "usage_scope": "agent_run",
         "model_name": "fake-model",
         "llm_call_count": "2",
         "input_tokens": "11",

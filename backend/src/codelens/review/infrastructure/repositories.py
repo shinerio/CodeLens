@@ -24,6 +24,7 @@ from codelens.findings.domain.candidates import (
     EvidenceStrength,
 )
 from codelens.findings.domain.clusters import FindingCluster
+from codelens.findings.domain.existing_findings import ExistingFindingSet
 from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
@@ -355,6 +356,9 @@ def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
     external_context = None
     if row["external_context_json"] is not None:
         external_context = json.loads(str(row["external_context_json"]))
+    existing_findings_json = str(row["existing_findings_json"])
+    existing_findings_hash = str(row["existing_findings_hash"])
+    existing_findings = ExistingFindingSet.from_json(existing_findings_json, existing_findings_hash)
     base_ref, target_ref = _review_scope_refs(scope)
     return ReviewRecord(
         task_id=str(row["task_id"]),
@@ -390,6 +394,7 @@ def _review_record(row: Any, finding_count: int = 0) -> ReviewRecord:
         finding_count=finding_count,
         external_context=external_context,
         has_partial_coverage=bool(row["has_partial_coverage"]),
+        existing_finding_count=len(existing_findings.items),
     )
 
 
@@ -1408,6 +1413,8 @@ class SqlReviewStore:
                     external_context_json=(
                         _json(task.external_context) if task.external_context else None
                     ),
+                    existing_findings_json=task.existing_findings_json,
+                    existing_findings_hash=task.existing_findings_hash,
                     worktree_id=task.worktree_id,
                     snapshot_id=task.snapshot_id,
                     cancellation_requested=task.cancellation_requested,
@@ -1594,6 +1601,8 @@ class SqlReviewStore:
                 external_context_json=_json(task.external_context)
                 if task.external_context
                 else None,
+                existing_findings_json=task.existing_findings_json,
+                existing_findings_hash=task.existing_findings_hash,
                 worktree_id=None,
                 snapshot_id=None,
                 cancellation_requested=False,
@@ -1810,6 +1819,8 @@ class SqlReviewStore:
                     planning_context_hash=source["planning_context_hash"],
                     prompt_locale=source["prompt_locale"],
                     external_context_json=source["external_context_json"],
+                    existing_findings_json=source["existing_findings_json"],
+                    existing_findings_hash=source["existing_findings_hash"],
                     worktree_id=None,
                     snapshot_id=None,
                     cancellation_requested=False,
@@ -1988,6 +1999,8 @@ class SqlReviewStore:
             status=str(row["status"]),
             cancellation_requested=bool(row["cancellation_requested"]),
             has_partial_coverage=summary.has_partial_coverage,
+            existing_findings_json=str(row["existing_findings_json"]),
+            existing_findings_hash=str(row["existing_findings_hash"]),
         )
 
     async def list_active_executions(self) -> tuple[ReviewExecutionRecord, ...]:
@@ -2052,6 +2065,8 @@ class SqlReviewStore:
                     status=str(row["status"]),
                     cancellation_requested=bool(row["cancellation_requested"]),
                     has_partial_coverage=summary.has_partial_coverage,
+                    existing_findings_json=str(row["existing_findings_json"]),
+                    existing_findings_hash=str(row["existing_findings_hash"]),
                 )
             )
         return tuple(executions)

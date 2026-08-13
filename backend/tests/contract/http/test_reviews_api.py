@@ -82,6 +82,67 @@ def test_create_review_rejects_removed_selected_agents_field(
     assert response.status_code == 422
 
 
+def test_create_review_rejects_unsafe_existing_finding_location(tmp_path: Path) -> None:
+    payload = _request(tmp_path, {"type": "uncommitted"})
+    payload["existing_findings"] = [
+        {
+            "source_id": "github",
+            "finding_id": "discussion-42",
+            "title": "Existing issue",
+            "content": "Previously reported.",
+            "path": "../outside.py",
+            "side": "new",
+            "start_line": 1,
+            "end_line": 1,
+            "existing_code": "return secret",
+        }
+    ]
+
+    with TestClient(
+        create_app(_settings(tmp_path, tmp_path)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        response = client.post("/api/reviews", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_create_review_accepts_existing_code_as_the_historical_location_anchor(
+    tmp_path: Path, git_repository: Path
+) -> None:
+    _prepared_repository(git_repository)
+    payload = _request(
+        git_repository,
+        {
+            "type": "branch",
+            "base_ref": "main",
+            "target_ref": "feature-one",
+            "include_workspace_changes": False,
+        },
+    )
+    payload["existing_findings"] = [
+        {
+            "source_id": "github",
+            "finding_id": "discussion-42",
+            "title": "Existing issue",
+            "content": "Previously reported on an older PR revision.",
+            "path": "feature.py",
+            "side": "new",
+            "start_line": 40,
+            "end_line": 40,
+            "existing_code": "value = previous_revision_value",
+        }
+    ]
+
+    with TestClient(
+        create_app(_settings(tmp_path, tmp_path)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        response = client.post("/api/reviews", json=payload)
+
+    assert response.status_code == 202
+
+
 def test_v2_adaptive_selection_is_persisted_without_legacy_upgrade(
     tmp_path: Path, git_repository: Path
 ) -> None:

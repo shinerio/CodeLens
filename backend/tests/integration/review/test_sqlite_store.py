@@ -1,5 +1,6 @@
 import asyncio
 import hashlib
+import json
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Literal
@@ -21,6 +22,7 @@ from codelens.findings.domain.candidates import (
     EvidenceStrength,
 )
 from codelens.findings.domain.clusters import FindingCluster
+from codelens.findings.domain.existing_findings import ExistingFinding
 from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
@@ -78,6 +80,7 @@ def _task(
     idempotency_key: str | None = None,
     trigger_slot_key: str | None = None,
     supersede_policy: Literal["latest_snapshot", "preserve_all"] = "latest_snapshot",
+    existing_findings: tuple[ExistingFinding, ...] = (),
 ) -> ReviewTask:
     return ReviewTask.create(
         task_id=task_id,
@@ -95,6 +98,7 @@ def _task(
         idempotency_key=idempotency_key,
         trigger_slot_key=trigger_slot_key,
         created_at=created_at,
+        existing_findings=existing_findings,
     )
 
 
@@ -237,6 +241,37 @@ async def _database(tmp_path: Path) -> Database:
     database = Database(f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}")
     await database.migrate()
     return database
+
+
+async def test_existing_findings_survive_restart_as_hash_verified_execution_input(
+    tmp_path: Path,
+) -> None:
+    database_url = f"sqlite+aiosqlite:///{tmp_path / 'review.sqlite3'}"
+    database = Database(database_url)
+    await database.migrate()
+    existing = ExistingFinding(
+        source_id="github",
+        finding_id="discussion-42",
+        title="Already reported",
+        content="The null branch is already under discussion.",
+    )
+    try:
+        await SqlReviewStore(database).create_with_job(
+            _task("review-existing", existing_findings=(existing,))
+        )
+    finally:
+        await database.dispose()
+
+    reopened = Database(database_url)
+    try:
+        execution = await SqlReviewStore(reopened).get_execution("review-existing")
+        summary = await SqlReviewStore(reopened).get_review("review-existing")
+        assert execution is not None
+        assert json.loads(execution.existing_findings_json) == [existing.as_payload()]
+        assert len(execution.existing_findings_hash) == 64
+        assert summary is not None and summary.existing_finding_count == 1
+    finally:
+        await reopened.dispose()
 
 
 async def test_plan_specs_and_audit_records_survive_restart_without_trusted_bodies(

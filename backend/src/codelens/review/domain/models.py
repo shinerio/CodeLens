@@ -7,6 +7,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal
 
+from codelens.findings.domain.existing_findings import ExistingFinding, ExistingFindingSet
 from codelens.review.domain.review_strategy import (
     FixedReviewerSelection,
     ReviewProfileSnapshot,
@@ -106,6 +107,8 @@ class ReviewTask:
     trigger_slot_key: str | None = None
     overlay_artifact_ref: str | None = None
     external_context: dict | None = None
+    existing_findings_json: str = "[]"
+    existing_findings_hash: str = hashlib.sha256(b"[]").hexdigest()
     worktree_id: str | None = None
     snapshot_id: str | None = None
     started_at: datetime | None = None
@@ -136,6 +139,7 @@ class ReviewTask:
         overlay_artifact_ref: str | None = None,
         prompt_locale: str = "en",
         external_context: dict | None = None,
+        existing_findings: tuple[ExistingFinding, ...] = (),
         file_exclusion_policy: ReviewFileExclusionPolicy | None = None,
     ) -> "ReviewTask":
         """Create a task with a frozen strategy and an unplanned Adaptive actual team."""
@@ -161,6 +165,7 @@ class ReviewTask:
             context, ensure_ascii=False, sort_keys=True, separators=(",", ":")
         )
         policy = file_exclusion_policy or ReviewFileExclusionPolicy()
+        frozen_existing_findings = ExistingFindingSet.from_findings(existing_findings)
         return cls(
             task_id=task_id,
             repository_id=repository_id,
@@ -184,6 +189,8 @@ class ReviewTask:
             created_at=created_at,
             overlay_artifact_ref=overlay_artifact_ref,
             external_context=external_context,
+            existing_findings_json=frozen_existing_findings.canonical_json,
+            existing_findings_hash=frozen_existing_findings.content_hash,
         )
 
     @staticmethod

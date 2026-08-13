@@ -29,6 +29,9 @@ from codelens.plugin.infrastructure.export_history_store import SqliteExportHist
 from codelens.plugin.infrastructure.git_installer import GitPluginInstaller
 from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader
 from codelens.plugin.infrastructure.plugin_store import FilesystemPluginStore
+from codelens.plugin.report.local_file_export.existing_findings import (
+    LocalExistingFindingsProvider,
+)
 from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
@@ -202,9 +205,7 @@ def build_unified_backend(
         FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
     )
     tool_limits_service = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
-    file_exclusion_source = FilesystemFileExclusionPolicySource(
-        settings.file_exclusion_config
-    )
+    file_exclusion_source = FilesystemFileExclusionPolicySource(settings.file_exclusion_config)
     file_exclusion_source.get_policy()
     file_exclusion_settings = FileExclusionPolicyService(
         file_exclusion_source,
@@ -353,6 +354,7 @@ def build_unified_backend(
     plugin_installer = GitPluginInstaller(git, plugins_dir)
     plugin_loader = CompositePluginLoader()
     plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir, plugin_loader)
+    local_existing_findings = LocalExistingFindingsProvider(plugin_store)
     export_history = SqliteExportHistoryStore(settings.data_dir / "codelens.sqlite3")
     export_orchestrator = ExportOrchestrator(
         review_store,
@@ -390,6 +392,7 @@ def build_unified_backend(
             input_artifacts,
             idempotency_settings=trigger_idempotency_settings,
             file_exclusion_settings=file_exclusion_settings,
+            existing_findings_provider=local_existing_findings,
         ),
         repository_inspector,
     )
@@ -416,6 +419,7 @@ def build_unified_backend(
             review_store,
             input_artifacts,
             file_exclusion_settings=file_exclusion_settings,
+            existing_findings_provider=local_existing_findings,
         ),
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),

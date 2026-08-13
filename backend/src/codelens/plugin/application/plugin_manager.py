@@ -158,6 +158,14 @@ class PluginManager:
                                 "items": {"type": "string", "enum": ["json", "markdown"]},
                                 "default": ["json", "markdown"],
                             },
+                            "use_as_existing_findings": {
+                                "type": "boolean",
+                                "default": True,
+                                "description": (
+                                    "Inject prior JSON exports into new reviews "
+                                    "to suppress duplicates"
+                                ),
+                            },
                         },
                     },
                 ),
@@ -206,6 +214,7 @@ class PluginManager:
             report_config={
                 "output_dir": "CodeLensReview",
                 "formats": ["json", "markdown"],
+                "use_as_existing_findings": True,
             },
         )
 

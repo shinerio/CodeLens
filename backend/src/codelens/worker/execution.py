@@ -21,6 +21,7 @@ from codelens.capabilities.infrastructure.builtin_profiles import (
 from codelens.findings.application.publish_findings import FindingPublisher
 from codelens.findings.application.resolve_clusters import ClusterService, publish_all_verdicts
 from codelens.findings.application.validate_candidates import CandidateValidator
+from codelens.findings.domain.existing_findings import ExistingFindingSet
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.instruction_policy.domain.models import ResolvedInstructionSet
 from codelens.review.application.context_builder import ContextBuilder
@@ -215,6 +216,31 @@ def add_host_run_identity(input_payload: bytes, run_id: str) -> bytes:
         raise ValueError("Agent role context must be an object")
     role_context["_host_run_id"] = run_id
     return json.dumps(envelope, sort_keys=True, separators=(",", ":")).encode()
+
+
+def add_existing_findings_context(
+    base_payload: bytes, existing_findings: ExistingFindingSet
+) -> bytes:
+    """Attach frozen duplicate context without accepting arbitrary prompt fragments."""
+
+    if not existing_findings.items:
+        return base_payload
+    try:
+        envelope = json.loads(base_payload)
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("Agent input is not canonical JSON") from error
+    if not isinstance(envelope, dict):
+        raise ValueError("Agent input has an invalid shape")
+    role_context = envelope.setdefault("role_context", {})
+    if not isinstance(role_context, dict):
+        raise ValueError("Agent role context must be an object")
+    if "existing_findings" in role_context:
+        raise ValueError("Agent input already contains existing findings")
+    role_context["existing_findings"] = {
+        "schema_version": "1",
+        "findings": [finding.as_payload() for finding in existing_findings.items],
+    }
+    return json.dumps(envelope, ensure_ascii=False, sort_keys=True, separators=(",", ":")).encode()
 
 
 @dataclass(frozen=True)
@@ -469,6 +495,9 @@ class WorkerReviewExecutor:
         record = await self._review_store.get_execution(task_id)
         if record is None:
             raise KeyError(task_id)
+        existing_findings = ExistingFindingSet.from_json(
+            record.existing_findings_json, record.existing_findings_hash
+        )
         await self._validate_repository(record)
         captured = self._captured(record)
         worktree = await self._worktree_registry.get(task_id)
@@ -553,7 +582,7 @@ class WorkerReviewExecutor:
                 snapshot=snapshot,
                 execution_specs=tuple(execution_specs_by_node.values()),
                 input_payloads=self._plan_payloads(
-                    task_id, plan, execution_specs_by_node, base_input
+                    task_id, plan, execution_specs_by_node, base_input, existing_findings
                 ),
                 prompt_locale=record.prompt_locale,
                 plan=plan,
@@ -585,7 +614,7 @@ class WorkerReviewExecutor:
                 snapshot=snapshot,
                 execution_specs=tuple(execution_specs_by_node.values()),
                 input_payloads=self._plan_payloads(
-                    task_id, plan, execution_specs_by_node, base_input
+                    task_id, plan, execution_specs_by_node, base_input, existing_findings
                 ),
                 prompt_locale=record.prompt_locale,
                 plan=plan,
@@ -614,7 +643,9 @@ class WorkerReviewExecutor:
         payloads: dict[str, bytes] = {}
         for execution_spec in execution_specs:
             agent_input = self._context_builder.build(snapshot, instructions)
-            payloads[execution_spec.agent.reference] = agent_input.canonical_bytes()
+            payloads[execution_spec.agent.reference] = add_existing_findings_context(
+                agent_input.canonical_bytes(), existing_findings
+            )
         return PreparedReview(
             snapshot=snapshot,
             execution_specs=execution_specs,
@@ -785,7 +816,15 @@ class WorkerReviewExecutor:
         return PreparedReview(
             snapshot=snapshot,
             execution_specs=tuple(specs_by_node.values()),
-            input_payloads=self._plan_payloads(record.task_id, plan, specs_by_node, base_input),
+            input_payloads=self._plan_payloads(
+                record.task_id,
+                plan,
+                specs_by_node,
+                base_input,
+                ExistingFindingSet.from_json(
+                    record.existing_findings_json, record.existing_findings_hash
+                ),
+            ),
             prompt_locale=record.prompt_locale,
             plan=plan,
             execution_specs_by_node=specs_by_node,
@@ -1007,6 +1046,7 @@ class WorkerReviewExecutor:
         plan: ReviewPlan,
         execution_specs_by_node: dict[str, FrozenAgentExecutionSpec],
         base_input: bytes,
+        existing_findings: ExistingFindingSet,
     ) -> dict[str, bytes]:
         """Attach host-only stable identities to every immutable Plan node input."""
 
@@ -1025,6 +1065,11 @@ class WorkerReviewExecutor:
                 if guidance is not None
                 else base_input
             )
+            if node.node_type in {
+                ReviewPlanNodeType.REVIEWER,
+                ReviewPlanNodeType.VERIFIER,
+            }:
+                visible_payload = add_existing_findings_context(visible_payload, existing_findings)
             run = AgentRun.create(
                 task_id=task_id,
                 agent_version=node.agent_reference,

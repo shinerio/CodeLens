@@ -4,6 +4,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import Literal, Protocol, cast
 
+from codelens.findings.domain.existing_findings import ExistingFinding as ExistingFindingV2
 from codelens.plugin.domain.models import ExportResult
 from codelens.review.application.export_findings import FindingExportEnvelopeV2
 
@@ -87,6 +88,7 @@ class ReviewCreatorPort(Protocol):
         scope_params: dict[str, str | None],
         review_policy: TriggerReviewPolicy,
         external_context: dict[str, object] | None = None,
+        existing_findings: tuple[ExistingFindingV2, ...] = (),
     ) -> str: ...
 
 
@@ -104,6 +106,7 @@ class ReportSinkPort(Protocol):
 __all__ = [
     "AdaptiveReviewerSelection",
     "FindingExportEnvelopeV2",
+    "ExistingFindingV2",
     "FixedReviewerSelection",
     "ReportSinkPort",
     "ReviewCreatorPort",

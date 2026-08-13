@@ -14,6 +14,7 @@ from codelens.capabilities.domain.models import (
     canonical_execution_payload,
 )
 from codelens.capabilities.domain.skills import SkillActivationFacts
+from codelens.findings.domain.existing_findings import ExistingFinding, ExistingFindingSet
 from codelens.review.domain.ports import (
     AgentExecutionSpecRecord,
     AgentRuntimeEvent,
@@ -174,6 +175,16 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     profile = ReviewProfileSnapshot(FixedReviewerSelection(("correctness:v2", "security:v2")))
+    existing_findings = ExistingFindingSet.from_findings(
+        (
+            ExistingFinding(
+                source_id="local",
+                finding_id="finding-1",
+                title="Already reported",
+                content="Do not report this issue again.",
+            ),
+        )
+    )
     record = ReviewExecutionRecord(
         task_id="review-fixed",
         repository_path=tmp_path,
@@ -196,6 +207,8 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
         status="provisioning_worktree",
         cancellation_requested=False,
         review_profile=profile,
+        existing_findings_json=existing_findings.canonical_json,
+        existing_findings_hash=existing_findings.content_hash,
     )
     snapshot = _snapshot(tmp_path)
     plan_store = _PlanStore()
@@ -271,6 +284,11 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
         json.loads(payload)["role_context"]["_host_run_id"].startswith("run_")
         for payload in prepared.input_payloads.values()
     )
+    assert all(
+        json.loads(payload)["role_context"]["existing_findings"]["findings"]
+        == [existing_findings.items[0].as_payload()]
+        for payload in prepared.input_payloads.values()
+    )
     first_payloads = prepared.input_payloads
     artifact_count = len(artifacts.payloads)
 
@@ -285,6 +303,21 @@ async def test_prepare_runs_and_persists_adaptive_planner_before_reviewers(
     tmp_path: Path, monkeypatch: Any
 ) -> None:
     profile = ReviewProfileSnapshot(AdaptiveReviewerSelection())
+    existing_findings = ExistingFindingSet.from_findings(
+        (
+            ExistingFinding(
+                source_id="github",
+                finding_id="discussion-42",
+                title="Already reported",
+                content="Do not report this issue again.",
+                path="src/review.py",
+                side="new",
+                start_line=1,
+                end_line=1,
+                existing_code="return review",
+            ),
+        )
+    )
     record = ReviewExecutionRecord(
         task_id="review-adaptive",
         repository_path=tmp_path,
@@ -307,6 +340,8 @@ async def test_prepare_runs_and_persists_adaptive_planner_before_reviewers(
         status="provisioning_worktree",
         cancellation_requested=False,
         review_profile=profile,
+        existing_findings_json=existing_findings.canonical_json,
+        existing_findings_hash=existing_findings.content_hash,
     )
     snapshot = _snapshot(tmp_path)
     checkpoints = _Checkpoints()
@@ -397,6 +432,16 @@ async def test_prepare_runs_and_persists_adaptive_planner_before_reviewers(
     assert prepared.plan.nodes[0].node_type is ReviewPlanNodeType.PLANNER
     assert runtime.invoke.await_count == 0
     assert runtime.invoke_stream.await_count == 1
+    planner_payload = json.loads(runtime.invoke_stream.await_args.args[1])
+    assert "existing_findings" not in planner_payload.get("role_context", {})
+    for node in prepared.plan.nodes:
+        node_payload = json.loads(prepared.input_payloads[node.node_id])
+        if node.node_type is ReviewPlanNodeType.PLANNER:
+            assert "existing_findings" not in node_payload["role_context"]
+        else:
+            assert node_payload["role_context"]["existing_findings"]["findings"] == [
+                existing_findings.items[0].as_payload()
+            ]
     planner_records = executor._transcripts.append.await_args_list
     assert {call.args[1] for call in planner_records} >= {
         "prompt",

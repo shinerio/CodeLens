@@ -2,6 +2,7 @@ import pytest
 
 from codelens.plugin.api.v2 import (
     AdaptiveReviewerSelection,
+    ExistingFindingV2,
     FindingExportEnvelopeV2,
     FixedReviewerSelection,
     ReportSinkPort,
@@ -70,3 +71,19 @@ def test_general_must_be_the_only_fixed_reviewer() -> None:
 def test_report_contract_is_available_only_through_the_public_v2_surface() -> None:
     assert FindingExportEnvelopeV2.__name__ == "FindingExportEnvelopeV2"
     assert ReportSinkPort.__name__ == "ReportSinkPort"
+
+
+def test_trigger_plugins_can_submit_structured_existing_findings_through_v2() -> None:
+    finding = ExistingFindingV2(
+        source_id="github",
+        finding_id="PRRC_kwDO-example",
+        title="Existing PR comment",
+        content="This issue was reported on the prior PR revision.",
+        path="src/service.py",
+        side="new",
+        start_line=12,
+        end_line=12,
+        existing_code="return account.name",
+    )
+
+    assert finding.as_payload()["source_id"] == "github"

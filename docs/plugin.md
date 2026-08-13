@@ -305,6 +305,24 @@ CodeLens 核心**不校验** `external_context` 的内部结构，只做 dict �
 - 现有 API 调用不传 `external_context` 时行为不变
 - 现有内置插件（如 `local` 的 file-export）不读取该字段，不受影响
 
+### 4.6 已有问题注入与本地报告回读
+
+已有问题与 `external_context` 的职责不同：前者进入 Reviewer/Verifier 的模型可见去重上下文，后者只用于平台路由。二者不得互相替代。
+
+内置 `local` 插件在 Report 配置中提供：
+
+```json
+{
+  "output_dir": "CodeLensReview",
+  "formats": ["json", "markdown"],
+  "use_as_existing_findings": true
+}
+```
+
+启用后，每次创建 Review 都会从被审仓库根目录下的 `output_dir` 读取 `findings-*.json` v2 报告。读取器按原报告的 side 和位置从 `source_excerpt` 提取精确 `existing_code`；后续去重以这段旧代码和问题语义为主要基准，旧 path/side/行号仅作提示，因此 PR 更新导致行号移动时不要求旧位置仍能在新版本解析。读取发生在创建边界并立即冻结；已创建任务不会因目录中新增、删除或修改报告而改变。只读取原子导出的 JSON 文件，不解析 Markdown；超过 100 个报告文件、单文件超过 2 MiB、目录越出仓库或报告结构损坏都会明确拒绝创建，避免静默漏掉历史意见。设置 `use_as_existing_findings=false` 可关闭回读而继续保留导出。
+
+远端平台插件应在 webhook 处理时获取平台已有意见，映射为公开 API v2 的 `ExistingFindingV2`，并通过 `ReviewCreatorPort.create_review_from_trigger(..., existing_findings=...)` 提交。Core 不允许插件传入任意 Prompt 片段；历史意见始终是不可信的去重数据，不能扩大工具或仓库权限。
+
 ---
 
 ## 5. 平台匹配与路由
@@ -1005,7 +1023,7 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/reviews` | POST | 创建 review（支持 `external_context`） |
+| `/api/reviews` | POST | 创建 review（支持 `external_context` 和结构化 `existing_findings`） |
 | `/api/reviews/{task_id}/export` | POST | 手动触发插件 report 导出 |
 | `/api/trigger-events` | POST | 接收本地 Git Hook 事件 |
 | `/api/webhooks/{platform}` | POST | 接收远端平台 webhook |
@@ -1025,11 +1043,30 @@ class ReviewCreatorPort(Protocol):
         scope_params: dict[str, str | None],
         review_policy: TriggerReviewPolicy,
         external_context: dict[str, object] | None = None,
+        existing_findings: tuple[ExistingFindingV2, ...] = (),
     ) -> str:
         ...
 ```
 
 `TriggerReviewPolicy` 是只读值对象，由 `TriggerReviewPolicy.from_config(config)` 从插件配置构造。详见 [插件 API v2 升级指南](./plugin-upgradev2.md) §7。
+
+`existing_findings` 是唯一允许插件影响去重上下文的入口。插件只能提交 `ExistingFindingV2` 结构，不能提交 Prompt 文本；Core 会校验路径与位置、限制最多 500 条和 512 KiB 规范 JSON、按 `(source_id, finding_id)` 去重，并在创建任务时冻结。GitHub 插件通常读取 PR 当前未解决的 review comments 后映射为：
+
+```python
+ExistingFindingV2(
+    source_id="github",
+    finding_id=comment.node_id,
+    title=comment.title,
+    content=comment.body,
+    path=comment.path,
+    side="new",
+    start_line=comment.line,
+    end_line=comment.line,
+    existing_code=comment.diff_code,
+)
+```
+
+对 inline comment，`existing_code` 必须是意见所针对的原 revision 原样连续代码，不得用当前 PR 行号重新读取后替换；旧行号只用于帮助理解原位置。没有代码位置的 PR general comment 可以省略整组 path/side/start_line/end_line/existing_code。
 
 ### 10.3 FindingExportEnvelope（v2）
 
