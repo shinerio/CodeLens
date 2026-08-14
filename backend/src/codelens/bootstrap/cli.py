@@ -114,8 +114,14 @@ def main(arguments: Sequence[str] | None = None) -> None:
         asyncio.run(prepare_runtime(settings))
         from codelens.bootstrap.logging import configure_process_logging
         from codelens.bootstrap.unified import run_unified
+        from codelens.bootstrap.web_settings_defaults import load_web_settings_defaults
 
-        configure_process_logging("unified", data_directory=settings.data_dir)
+        defaults = load_web_settings_defaults(settings.web_settings_defaults_config)
+        configure_process_logging(
+            "unified",
+            data_directory=settings.data_dir,
+            default_level=defaults.log_level,
+        )
         asyncio.run(run_unified(settings))
         return
 

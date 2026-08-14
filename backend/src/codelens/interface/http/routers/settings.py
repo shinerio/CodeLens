@@ -146,7 +146,11 @@ async def get_runtime_log_level_setting(
 ) -> RuntimeLogLevelResponse:
     """Return the persisted runtime log threshold without exposing log contents."""
 
-    level = await asyncio.to_thread(get_runtime_log_level, components.settings.data_dir)
+    level = await asyncio.to_thread(
+        get_runtime_log_level,
+        components.settings.data_dir,
+        components.web_settings_defaults.log_level,
+    )
     return RuntimeLogLevelResponse(level=level)
 
 
@@ -440,40 +444,38 @@ async def reset_all_settings(
     """
 
     from codelens.bootstrap.logging import get_runtime_log_level, set_runtime_log_level
-    from codelens.instruction_policy.domain.models import (
-        DEFAULT_NESTED_INSTRUCTION_MAX_LINES,
-        DEFAULT_ROOT_INSTRUCTION_MAX_LINES,
-    )
-    from codelens.review.application.settings import DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
-    from codelens.review.domain.ports import DEFAULT_RECENT_REPOSITORY_LIMIT
-    from codelens.review.domain.tool_limits import ToolLimits
+    defaults = components.web_settings_defaults
 
     # Reset instruction file limits
     instruction_limits = await components.instruction_settings.update(
-        root_max_lines=DEFAULT_ROOT_INSTRUCTION_MAX_LINES,
-        nested_max_lines=DEFAULT_NESTED_INSTRUCTION_MAX_LINES,
+        root_max_lines=defaults.instruction_files.root_max_lines,
+        nested_max_lines=defaults.instruction_files.nested_max_lines,
     )
 
     file_exclusions = await components.file_exclusion_settings.update_web(
-        suffixes=(),
-        path_regexes=(),
+        suffixes=defaults.file_exclusions.suffixes,
+        path_regexes=defaults.file_exclusions.path_regexes,
     )
 
     # Reset review completion settings
     review_completion = await components.review_completion_settings.update(
-        max_incomplete_review_retries=DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
+        max_incomplete_review_retries=(
+            defaults.review_completion.max_incomplete_review_retries
+        )
     )
 
     # Reset trigger idempotency settings
-    trigger_idempotency = await components.trigger_idempotency_settings.update(enabled=False)
+    trigger_idempotency = await components.trigger_idempotency_settings.update(
+        enabled=defaults.trigger_idempotency.enabled
+    )
 
     # Reset recent repository limit
     recent_repo_limit = await components.update_recent_repository_settings.handle(
-        DEFAULT_RECENT_REPOSITORY_LIMIT
+        defaults.recent_repository_limit
     )
 
     # Reset tool limits
-    default_tool_limits = ToolLimits()
+    default_tool_limits = defaults.tool_limits
     tool_limits = await components.tool_limits.update(
         max_results=default_tool_limits.max_results,
         max_read_bytes=default_tool_limits.max_read_bytes,
@@ -496,8 +498,12 @@ async def reset_all_settings(
     )
 
     # Reset log level
-    await asyncio.to_thread(set_runtime_log_level, components.settings.data_dir, "info")
-    log_level = await asyncio.to_thread(get_runtime_log_level, components.settings.data_dir)
+    await asyncio.to_thread(
+        set_runtime_log_level, components.settings.data_dir, defaults.log_level
+    )
+    log_level = await asyncio.to_thread(
+        get_runtime_log_level, components.settings.data_dir, defaults.log_level
+    )
 
     # Reset active gateway execution limits (if a gateway is active)
     gateway_catalog = await components.model_gateways.list()

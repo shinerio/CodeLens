@@ -17,14 +17,19 @@ class _InstructionSettingsPayload(TypedDict):
 class FilesystemInstructionLineLimitsStore:
     """Store instruction limits in the local CodeLens data directory."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        defaults: InstructionLineLimits | None = None,
+    ) -> None:
         self._path = data_dir.expanduser().resolve() / "instruction-policy.json"
+        self._defaults = defaults or InstructionLineLimits()
 
     def get_line_limits(self) -> InstructionLineLimits:
         """Load persisted limits, using product defaults before first save."""
 
         if not self._path.exists():
-            return InstructionLineLimits()
+            return self._defaults
         raw: object = json.loads(self._path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("instruction policy settings are invalid")

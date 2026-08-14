@@ -13,6 +13,7 @@ class Settings(BaseSettings):
     data_dir: Path = Path()
     prompt_dir: Path = Path()
     file_exclusion_config: Path = Path()
+    web_settings_defaults_config: Path = Path()
     host: str = "127.0.0.1"
     port: int = 8800
     auth: Literal["none"] = "none"
@@ -36,6 +37,13 @@ class Settings(BaseSettings):
             data["prompt_dir"] = project_root / "prompts"
         if "file_exclusion_config" not in data or data["file_exclusion_config"] is None:
             data["file_exclusion_config"] = project_root / "conf" / "file-exclusions.toml"
+        if (
+            "web_settings_defaults_config" not in data
+            or data["web_settings_defaults_config"] is None
+        ):
+            data["web_settings_defaults_config"] = (
+                project_root / "conf" / "web-settings-defaults.toml"
+            )
         return data
 
     @field_validator("repository_roots")

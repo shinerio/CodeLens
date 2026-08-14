@@ -23,14 +23,19 @@ class _TriggerIdempotencySettingsPayload(TypedDict):
 class FilesystemReviewCompletionSettingsStore:
     """Store Review completion settings in the local CodeLens data directory."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        defaults: ReviewCompletionSettings | None = None,
+    ) -> None:
         self._path = data_dir.expanduser().resolve() / "review-completion.json"
+        self._defaults = defaults or ReviewCompletionSettings()
 
     def get_settings(self) -> ReviewCompletionSettings:
         """Load persisted settings, using product defaults before first save."""
 
         if not self._path.exists():
-            return ReviewCompletionSettings()
+            return self._defaults
         raw: object = json.loads(self._path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("review completion settings are invalid")
@@ -69,14 +74,19 @@ class FilesystemReviewCompletionSettingsStore:
 class FilesystemTriggerIdempotencySettingsStore:
     """Store trigger idempotency settings in the local CodeLens data directory."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        defaults: TriggerIdempotencySettings | None = None,
+    ) -> None:
         self._path = data_dir.expanduser().resolve() / "trigger-idempotency.json"
+        self._defaults = defaults or TriggerIdempotencySettings()
 
     def get_settings(self) -> TriggerIdempotencySettings:
         """Load persisted settings, using product defaults before first save."""
 
         if not self._path.exists():
-            return TriggerIdempotencySettings()
+            return self._defaults
         raw: object = json.loads(self._path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("trigger idempotency settings are invalid")

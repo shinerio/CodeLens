@@ -49,20 +49,21 @@ _INT_FIELDS = (
 class FilesystemToolLimitsStore:
     """Store tool limits in the local CodeLens data directory."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, defaults: ToolLimits | None = None) -> None:
         self._path = data_dir.expanduser().resolve() / "tool-limits.json"
+        self._defaults = defaults or ToolLimits()
 
     def get_tool_limits(self) -> ToolLimits:
         """Load persisted limits, using product defaults before first save."""
 
         if not self._path.exists():
-            return ToolLimits()
+            return self._defaults
         raw: object = json.loads(self._path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("tool limits are invalid")
         payload = cast(dict[object, object], raw)
         kwargs: dict[str, int | float] = {}
-        defaults = ToolLimits()
+        defaults = self._defaults
         for field in _INT_FIELDS:
             value = payload.get(field, getattr(defaults, field))
             if not isinstance(value, int) or isinstance(value, bool):

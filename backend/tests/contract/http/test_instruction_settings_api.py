@@ -27,7 +27,7 @@ def test_instruction_line_limits_are_validated_and_persistent(tmp_path: Path) ->
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
         persisted = client.get("/api/settings/instruction-files")
 
-    assert initial.json() == {"root_max_lines": 500, "nested_max_lines": 200}
+    assert initial.json() == {"root_max_lines": 1000, "nested_max_lines": 500}
     assert updated.json() == {"root_max_lines": 800, "nested_max_lines": 240}
     assert inverted.status_code == 422
     assert too_large.status_code == 422

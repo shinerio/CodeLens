@@ -7,7 +7,7 @@ import { SettingsPage } from "./SettingsPage";
 
 const fetchMock = vi.fn();
 
-function instructionSettingsResponse(rootMaxLines = 500, nestedMaxLines = 200) {
+function instructionSettingsResponse(rootMaxLines = 1000, nestedMaxLines = 500) {
   return new Response(JSON.stringify({
     root_max_lines: rootMaxLines,
     nested_max_lines: nestedMaxLines,
@@ -52,7 +52,7 @@ function toolLimitsResponse() {
     max_read_bytes: 65536,
     max_scan_bytes: 1048576,
     max_source_bytes: 1048576,
-    max_lines: 500,
+    max_lines: 1000,
     max_path_chars: 1024,
     max_pattern_chars: 512,
     regex_timeout_seconds: 30.0,

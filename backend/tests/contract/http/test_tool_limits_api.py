@@ -20,7 +20,7 @@ def test_tool_limits_returns_defaults_initially(tmp_path: Path) -> None:
     assert data["max_read_bytes"] == 65536
     assert data["max_scan_bytes"] == 1048576
     assert data["max_source_bytes"] == 1048576
-    assert data["max_lines"] == 500
+    assert data["max_lines"] == 1000
     assert data["max_path_chars"] == 1024
     assert data["max_pattern_chars"] == 512
     assert data["regex_timeout_seconds"] == 30.0
@@ -77,7 +77,7 @@ def test_tool_limits_partial_update(tmp_path: Path) -> None:
         assert update.status_code == 200
         data = update.json()
         assert data["max_results"] == 300
-        assert data["max_lines"] == 500  # unchanged
+        assert data["max_lines"] == 1000  # unchanged
 
 
 def test_tool_limits_rejects_invalid_range(tmp_path: Path) -> None:
@@ -142,8 +142,8 @@ def test_reset_all_restores_defaults(tmp_path: Path) -> None:
         assert data["tool_limits"]["max_results"] == 200
         assert data["logging"]["level"] == "info"
         assert data["recent_repositories"]["recent_repository_limit"] == 10
-        assert data["instruction_files"]["root_max_lines"] == 500
-        assert data["instruction_files"]["nested_max_lines"] == 200
+        assert data["instruction_files"]["root_max_lines"] == 1000
+        assert data["instruction_files"]["nested_max_lines"] == 500
         assert data["review_completion"]["max_incomplete_review_retries"] == 3
         reset_gateway = data["model_gateways"]["gateways"][0]
         assert reset_gateway["agent_timeout"] == 3600

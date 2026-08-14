@@ -7,6 +7,7 @@ from collections.abc import Mapping
 from dataclasses import dataclass, replace
 
 from codelens.bootstrap.settings import Settings
+from codelens.bootstrap.web_settings_defaults import load_web_settings_defaults
 from codelens.capabilities.application.resolve import CapabilityResolver
 from codelens.capabilities.domain.models import (
     AgentExecutionLimits,
@@ -434,7 +435,12 @@ class WorkerReviewExecutor:
             settings.data_dir
         )
         self._tool_limits_service = tool_limits_service or ToolLimitsService(
-            FilesystemToolLimitsStore(settings.data_dir)
+            FilesystemToolLimitsStore(
+                settings.data_dir,
+                load_web_settings_defaults(
+                    settings.web_settings_defaults_config
+                ).tool_limits,
+            )
         )
         self._capability_resolver = capability_resolver or CapabilityResolver(
             builtin_capability_profiles(),

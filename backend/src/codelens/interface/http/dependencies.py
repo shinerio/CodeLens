@@ -6,6 +6,10 @@ from pathlib import Path
 from fastapi import Request
 
 from codelens.bootstrap.settings import Settings
+from codelens.bootstrap.web_settings_defaults import (
+    WebSettingsDefaults,
+    load_web_settings_defaults,
+)
 from codelens.instruction_policy.application.settings import InstructionSettingsService
 from codelens.instruction_policy.infrastructure.file_settings import (
     FilesystemInstructionLineLimitsStore,
@@ -117,6 +121,7 @@ class HttpComponents:
     """Hold interface dependencies while keeping construction at the outermost layer."""
 
     settings: Settings
+    web_settings_defaults: WebSettingsDefaults
     database: Database
     repository_inspector: RepositoryInspector
     repository_catalog: RepositoryCatalogService
@@ -165,7 +170,11 @@ class HttpComponents:
         """Create contained runtime directories and apply migrations before serving."""
 
         await asyncio.to_thread(self.settings.data_dir.mkdir, parents=True, exist_ok=True)
-        await self.database.migrate()
+        database_was_created = await self.database.migrate()
+        if database_was_created:
+            await self.update_recent_repository_settings.handle(
+                self.web_settings_defaults.recent_repository_limit
+            )
         references = await self.review_store.list_input_artifact_references()
         await self.input_artifacts.prune_orphans(references)
 
@@ -178,6 +187,9 @@ class HttpComponents:
 def build_components(settings: Settings) -> HttpComponents:
     """Compose application services with concrete outer adapters."""
 
+    web_settings_defaults = load_web_settings_defaults(
+        settings.web_settings_defaults_config
+    )
     database = Database(settings.resolved_database_url)
     event_bus = InMemoryEventBus()
     git = GitCli()
@@ -199,21 +211,31 @@ def build_components(settings: Settings) -> HttpComponents:
         locks=RepositoryLockRegistry(),
     )
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
-    instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
+    instruction_line_limits = FilesystemInstructionLineLimitsStore(
+        settings.data_dir, web_settings_defaults.instruction_files
+    )
     review_completion_settings = ReviewCompletionSettingsService(
-        FilesystemReviewCompletionSettingsStore(settings.data_dir)
+        FilesystemReviewCompletionSettingsStore(
+            settings.data_dir, web_settings_defaults.review_completion
+        )
     )
     trigger_idempotency_settings = TriggerIdempotencySettingsService(
-        FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
+        FilesystemTriggerIdempotencySettingsStore(
+            settings.data_dir, web_settings_defaults.trigger_idempotency
+        )
     )
-    tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
+    tool_limits = ToolLimitsService(
+        FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
+    )
     file_exclusion_source = FilesystemFileExclusionPolicySource(
         settings.file_exclusion_config
     )
     file_exclusion_source.get_policy()
     file_exclusion_settings = FileExclusionPolicyService(
         file_exclusion_source,
-        FilesystemFileExclusionPolicyStore(settings.data_dir),
+        FilesystemFileExclusionPolicyStore(
+            settings.data_dir, web_settings_defaults.file_exclusions
+        ),
     )
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
@@ -267,6 +289,7 @@ def build_components(settings: Settings) -> HttpComponents:
 
     return HttpComponents(
         settings=settings,
+        web_settings_defaults=web_settings_defaults,
         database=database,
         repository_inspector=repository_inspector,
         repository_catalog=RepositoryCatalogService(

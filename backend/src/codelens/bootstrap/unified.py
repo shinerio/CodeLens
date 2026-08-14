@@ -9,6 +9,7 @@ import uvicorn
 
 from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.settings import Settings
+from codelens.bootstrap.web_settings_defaults import load_web_settings_defaults
 from codelens.instruction_policy.application.resolver import InstructionResolver
 from codelens.instruction_policy.application.settings import InstructionSettingsService
 from codelens.instruction_policy.infrastructure.file_settings import (
@@ -132,7 +133,11 @@ class UnifiedBackend:
 
         await self.components.start()
         await initialize_plugins(self.components)
-        configure_process_logging("unified", data_directory=self.settings.data_dir)
+        configure_process_logging(
+            "unified",
+            data_directory=self.settings.data_dir,
+            default_level=self.components.web_settings_defaults.log_level,
+        )
         _LOGGER.info("Unified backend started")
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -180,6 +185,9 @@ def build_unified_backend(
 ) -> UnifiedBackend:
     """Compose API and Worker with shared database, event bus, and transcripts."""
 
+    web_settings_defaults = load_web_settings_defaults(
+        settings.web_settings_defaults_config
+    )
     database = Database(settings.resolved_database_url)
     event_bus = InMemoryEventBus()
     git = GitCli()
@@ -197,19 +205,29 @@ def build_unified_backend(
         model_log=ModelTranscriptLogWriter(),
         rejection_events=event_outbox,
     )
-    instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
+    instruction_line_limits = FilesystemInstructionLineLimitsStore(
+        settings.data_dir, web_settings_defaults.instruction_files
+    )
     review_completion_settings = ReviewCompletionSettingsService(
-        FilesystemReviewCompletionSettingsStore(settings.data_dir)
+        FilesystemReviewCompletionSettingsStore(
+            settings.data_dir, web_settings_defaults.review_completion
+        )
     )
     trigger_idempotency_settings = TriggerIdempotencySettingsService(
-        FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
+        FilesystemTriggerIdempotencySettingsStore(
+            settings.data_dir, web_settings_defaults.trigger_idempotency
+        )
     )
-    tool_limits_service = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
+    tool_limits_service = ToolLimitsService(
+        FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
+    )
     file_exclusion_source = FilesystemFileExclusionPolicySource(settings.file_exclusion_config)
     file_exclusion_source.get_policy()
     file_exclusion_settings = FileExclusionPolicyService(
         file_exclusion_source,
-        FilesystemFileExclusionPolicyStore(settings.data_dir),
+        FilesystemFileExclusionPolicyStore(
+            settings.data_dir, web_settings_defaults.file_exclusions
+        ),
     )
 
     # Create repository inspector early so it can be shared with Worker
@@ -342,7 +360,9 @@ def build_unified_backend(
     planner = ScopePlanner(GitWorkspaceAdapter(git))
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
-    tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
+    tool_limits = ToolLimitsService(
+        FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
+    )
 
     # Plugin context: store, loader, lifecycle manager, and export orchestrator.
     # The terminal hook is late-bound on the review store so that the
@@ -406,6 +426,7 @@ def build_unified_backend(
 
     components = HttpComponents(
         settings=settings,
+        web_settings_defaults=web_settings_defaults,
         database=database,
         repository_inspector=repository_inspector,
         repository_catalog=RepositoryCatalogService(

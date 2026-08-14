@@ -14,14 +14,19 @@ _EXPECTED_KEYS = {"path_regexes", "suffixes"}
 class FilesystemFileExclusionPolicyStore:
     """Atomically persist only the Web-managed file exclusion overlay."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(
+        self,
+        data_dir: Path,
+        defaults: ReviewFileExclusionPolicy | None = None,
+    ) -> None:
         self._path = data_dir.expanduser().resolve() / "file-exclusions.json"
+        self._defaults = defaults or ReviewFileExclusionPolicy()
 
     def get_policy(self) -> ReviewFileExclusionPolicy:
         """Load the Web overlay, using a neutral policy before first save."""
 
         if not self._path.exists():
-            return ReviewFileExclusionPolicy()
+            return self._defaults
         try:
             return ReviewFileExclusionPolicy.from_json(
                 self._path.read_text(encoding="utf-8")
