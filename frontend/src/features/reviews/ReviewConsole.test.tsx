@@ -4,7 +4,7 @@ import { expect, it } from "vitest";
 import { ReviewConsole } from "./ReviewConsole";
 import { ReviewProcessReport } from "./ReviewProcessReport";
 
-it("shows global lifecycle entries by default and excludes them from a selected stage", () => {
+it("hides global lifecycle entries by default and places their filter last", () => {
   render(
     <ReviewConsole
       entries={[
@@ -40,8 +40,12 @@ it("shows global lifecycle entries by default and excludes them from a selected 
     />,
   );
 
+  const systemFilter = screen.getByRole("checkbox", { name: "System / lifecycle" });
+  expect(screen.queryByText("Review execution started")).not.toBeInTheDocument();
+  expect(systemFilter).not.toBeChecked();
+  expect(screen.getAllByRole("checkbox").at(-1)).toBe(systemFilter);
+  fireEvent.click(systemFilter);
   expect(screen.getByText("Review execution started")).toBeInTheDocument();
-  expect(screen.getByRole("checkbox", { name: "System / lifecycle" })).toBeChecked();
   fireEvent.click(screen.getByRole("button", { name: /Planner/ }));
   expect(screen.queryByText("Review execution started")).not.toBeInTheDocument();
   expect(screen.getByText("planner prompt")).toBeInTheDocument();
@@ -64,9 +68,9 @@ it("uses visible transcript records for stage and reviewer counts", () => {
     />,
   );
 
-  expect(within(screen.getByRole("button", { name: /Reviewers/ })).getByText("1")).toBeInTheDocument();
-  fireEvent.click(screen.getByRole("checkbox", { name: "System / lifecycle" }));
   expect(within(screen.getByRole("button", { name: /Reviewers/ })).getByText("0")).toBeInTheDocument();
+  fireEvent.click(screen.getByRole("checkbox", { name: "System / lifecycle" }));
+  expect(within(screen.getByRole("button", { name: /Reviewers/ })).getByText("1")).toBeInTheDocument();
 });
 
 it("renders final model output as Markdown after streaming completes", () => {

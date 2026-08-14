@@ -21,7 +21,7 @@ type ConsoleVisibility = {
 };
 
 const DEFAULT_VISIBILITY: ConsoleVisibility = {
-  system: true,
+  system: false,
   prompt: true,
   reasoning: true,
   output: true,
@@ -198,12 +198,12 @@ export function ReviewConsole({
       <label className="review-console__search"><Search aria-hidden="true" /><span className="sr-only">Search console</span><input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Search complete execution output" /></label>
       <fieldset className="review-console__filters">
         <legend>{t("logs.filters")}</legend>
-        <FilterOption label={t("logs.filterSystem")} checked={visibility.system} onChange={(checked) => setVisibility((value) => ({ ...value, system: checked }))} />
         <FilterOption label={t("logs.filterPrompt")} checked={visibility.prompt} onChange={(checked) => setVisibility((value) => ({ ...value, prompt: checked }))} />
         <FilterOption label={t("logs.filterReasoning")} checked={visibility.reasoning} onChange={(checked) => setVisibility((value) => ({ ...value, reasoning: checked }))} />
         <FilterOption label={t("logs.filterOutput")} checked={visibility.output} onChange={(checked) => setVisibility((value) => ({ ...value, output: checked }))} />
         <FilterOption label={t("logs.filterTools")} checked={visibility.tools} onChange={(checked) => setVisibility((value) => ({ ...value, tools: checked }))} />
         <FilterOption label={t("logs.filterRawResponses")} checked={visibility.rawResponses} onChange={(checked) => setVisibility((value) => ({ ...value, rawResponses: checked }))} />
+        <FilterOption label={t("logs.filterSystem")} checked={visibility.system} onChange={(checked) => setVisibility((value) => ({ ...value, system: checked }))} />
       </fieldset>
       <button type="button" onClick={() => setCollapsed(new Set(messages.map((entry) => entry.messageKey)))}>Collapse all</button>
       <button type="button" onClick={() => setCollapsed(new Set())}>Expand all</button>
