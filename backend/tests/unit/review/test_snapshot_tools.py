@@ -1084,6 +1084,56 @@ async def test_get_diff_pages_only_at_complete_hunk_boundaries(tmp_path: Path) -
     assert tools.reviewed_paths == {"src/multi.py"}
 
 
+async def test_get_diff_cursor_skips_oversized_hunk_to_reach_later_hunks(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _multi_hunk_snapshot(tmp_path)
+    path = "src/multi.py"
+    oversized_content = (tmp_path / path).read_bytes().replace(
+        b"changed 2\n",
+        b"changed 2 " + (b"x" * 400) + b"\n",
+    )
+    (tmp_path / path).write_bytes(oversized_content)
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            entries=tuple(
+                replace(
+                    entry,
+                    size_bytes=len(oversized_content),
+                    content_hash=_hash(oversized_content),
+                )
+                if entry.path == path
+                else entry
+                for entry in snapshot.manifest.entries
+            ),
+        ),
+    )
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_read_bytes=300),
+    )
+
+    oversized_page = json.loads(await tools.get_diff(path))
+
+    assert oversized_page["status"] == "needs_action"
+    assert oversized_page["data"]["returned_hunk_count"] == 0
+    assert oversized_page["diagnostics"][0]["code"] == "diff_hunk_exceeds_limit"
+    assert oversized_page["data"]["read_file_suggestions"]
+    cursor = oversized_page["data"]["next_cursor"]
+    assert isinstance(cursor, str)
+
+    remaining_page = json.loads(await tools.get_diff(path, cursor))
+
+    assert remaining_page["status"] == "success"
+    assert remaining_page["data"]["returned_hunk_count"] == 2
+    assert remaining_page["data"]["has_more"] is False
+    assert remaining_page["data"]["next_cursor"] is None
+
+
 async def test_get_diff_cursor_rejects_position_and_snapshot_tampering(tmp_path: Path) -> None:
     snapshot = await _multi_hunk_snapshot(tmp_path)
     tools = FilesystemReviewTools(

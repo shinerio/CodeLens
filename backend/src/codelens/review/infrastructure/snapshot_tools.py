@@ -777,6 +777,7 @@ class FilesystemReviewTools:
         next_file_index = file_index
         next_hunk_index = hunk_index
         oversized_hunk: tuple[str, str] | None = None
+        oversized_resume_position: tuple[int, int] | None = None
         while (
             next_file_index < len(parsed_files)
             and len(returned_files) < self._limits.max_results
@@ -790,6 +791,12 @@ class FilesystemReviewTools:
                 hunk_bytes = len(hunk.encode("utf-8"))
                 if hunk_bytes > self._limits.max_read_bytes:
                     oversized_hunk = (candidate_path, hunk)
+                    next_index = current_hunk_index + 1
+                    oversized_resume_position = (
+                        (next_file_index, next_index)
+                        if next_index < len(hunks)
+                        else (next_file_index + 1, 0)
+                    )
                     break
                 if content_bytes + file_bytes + hunk_bytes > self._limits.max_read_bytes:
                     break
@@ -853,11 +860,17 @@ class FilesystemReviewTools:
             if oversized_hunk is not None and returned_hunk_count == 0
             else (ToolResultStatus.PARTIAL if has_more else ToolResultStatus.SUCCESS)
         )
+        if status is ToolResultStatus.NEEDS_ACTION:
+            # The oversized hunk remains reachable through read_file_suggestions;
+            # advance the signed cursor so later hunks do not become unreachable.
+            assert oversized_resume_position is not None
+            next_file_index, next_hunk_index = oversized_resume_position
+            has_more = next_file_index < len(paths)
         next_cursor = (
             self._encode_diff_cursor(
                 normalized_path.normalized_path, next_file_index, next_hunk_index
             )
-            if has_more and status is not ToolResultStatus.NEEDS_ACTION
+            if has_more
             else None
         )
         return ToolResult(
