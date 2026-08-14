@@ -20,6 +20,7 @@ from codelens.review.application.orchestrator import (
     PreparedReview,
     ReviewOrchestrator,
 )
+from codelens.review.domain.errors import ToolLoopDetectedError
 from codelens.review.domain.ports import (
     AgentResponseDiagnostic,
     AgentRuntimeEvent,
@@ -467,6 +468,8 @@ async def test_streamed_model_events_publish_the_prompt_before_completion() -> N
         "context_compacted_result_count": "0",
         "context_compaction_original_bytes": "0",
         "context_compaction_compressed_bytes": "0",
+        "compaction_replay_registered_count": "0",
+        "compaction_replay_consumed_count": "0",
         "output_tokens": "4",
         "total_tokens": "15",
     }
@@ -864,6 +867,22 @@ class _ScriptedRuntime:
         )
 
 
+class _LoopFailingRuntime(_ScriptedRuntime):
+    async def invoke(
+        self,
+        execution_spec: FrozenAgentExecutionSpec,
+        _input_payload: bytes,
+        _snapshot: object,
+        _prompt_locale: str,
+    ) -> UnvalidatedAgentOutput:
+        self.calls.append(execution_spec.agent.reference)
+        raise ToolLoopDetectedError(
+            "provider payload contains token=do-not-record",
+            phase="investigation",
+            reason_code="identical_tool_result_loop",
+        )
+
+
 def _prepared_plan(plan: ReviewPlan) -> PreparedReview:
     base = _prepared()
     catalog = builtin_agent_catalog()
@@ -937,6 +956,68 @@ async def test_all_reviewer_failures_fail_task_without_running_verifier() -> Non
     assert workflow.status == "failed"
     assert "review-verifier:v2" not in runtime.calls
     assert checkpoints.records[verifier.node_id].status == "skipped"
+
+
+async def test_fatal_agent_failure_records_stable_sanitized_lifecycle_event() -> None:
+    reference = "general:v2"
+    reviewer = ReviewPlanNode.create(
+        task_id="review-1",
+        node_type=ReviewPlanNodeType.REVIEWER,
+        agent_reference=reference,
+        pass_index=ReviewPass.REVIEWER,
+        shard_id="root",
+        logical_attempt_group="primary",
+        depends_on=(),
+    )
+    plan = ReviewPlan.create(
+        task_id="review-1",
+        selection_mode="fixed",
+        reviewer_references=(reference,),
+        nodes=(reviewer,),
+        planner_reason=None,
+    )
+    workflow = MemoryWorkflow("preparing")
+    checkpoints = _PlanCheckpoints()
+    transcript = RecordingTranscript()
+    prepared = _prepared_plan(plan)
+
+    async def prepare(_task_id: str) -> PreparedReview:
+        return prepared
+
+    await ReviewOrchestrator(
+        workflow=workflow,
+        prepare=prepare,
+        runtime=_LoopFailingRuntime(set()),
+        artifacts=MemoryArtifacts(),
+        checkpoints=checkpoints,
+        validator_factory=lambda *_args: EmptyValidator(),
+        completion=_PlanCompletion(checkpoints),
+        agent_semaphore=asyncio.Semaphore(1),
+        max_agent_runs_per_review=1,
+        transcript=transcript,
+    ).execute("review-1")
+
+    lifecycle_entries = [
+        entry
+        for batch in transcript.batches
+        for entry in batch
+        if entry[0] == "lifecycle"
+        and isinstance(entry[2], dict)
+        and entry[2].get("error_type") == "ToolLoopDetectedError"
+    ]
+    assert len(lifecycle_entries) == 1
+    _kind, content, metadata = lifecycle_entries[0]
+    assert content == "Agent node failed and the persisted DAG will reduce its stage"
+    assert metadata == {
+        "agent": reference,
+        "error_type": "ToolLoopDetectedError",
+        "error_code": "tool_loop_detected",
+        "reason_code": "identical_tool_result_loop",
+        "phase": "investigation",
+        "retryable": "false",
+    }
+    assert "do-not-record" not in content
+    assert "do-not-record" not in json.dumps(metadata)
 
 
 @pytest.mark.parametrize("reference", ("general:v2", "security:v2"))

@@ -108,6 +108,7 @@ def test_reviewer_assembles_only_canonical_v2_tools(
         "read_file",
         "get_diff",
         "comment",
+        "retract_comment",
         "task_done",
     )
     assert runtime_context.collector_contract_version == "2"
@@ -124,6 +125,7 @@ def test_comment_v2_reviewer_preserves_order_and_selects_v2_collector(
         "read_file",
         "get_diff",
         "comment",
+        "retract_comment",
         "task_done",
     )
     assert runtime_context.collector_contract_version == "2"
@@ -160,21 +162,30 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
     rejected_completion = json.loads(
         await invoke("task_done", {"summary": "Need to inspect the frozen scope."})
     )
-    assert rejected_completion["accepted"] is False
-    assert rejected_completion["missing_review_files"] == ["src/value.py"]
-    assert "missing_diff_files" not in rejected_completion
+    assert rejected_completion["status"] == "needs_action"
+    assert rejected_completion["data"]["missing_review_files"] == ["src/value.py"]
+    assert rejected_completion["data"]["reviewed_file_count"] == 0
+    assert rejected_completion["data"]["total_review_file_count"] == 1
+    assert rejected_completion["data"]["missing_file_count"] == 1
 
-    await invoke("read_file", {"path": "src/value.py", "version": "current"})
+    await invoke(
+        "read_file",
+        {"path": "src/value.py", "version": "current", "line_range": None},
+    )
     completion = json.loads(
         await invoke("task_done", {"summary": "Reviewed the complete frozen scope."})
     )
 
     assert runtime_context.is_completed is True
     assert runtime_context.incomplete_review_files == ()
-    assert completion == {
-        "accepted": True,
-        "comment_count": 0,
+    assert completion["status"] == "success"
+    assert completion["data"] == {
+        "active_comment_count": 0,
         "forced_completion": False,
+        "incomplete_files": [],
+        "missing_file_count": 0,
+        "reviewed_file_count": 1,
+        "total_review_file_count": 1,
     }
     assert isinstance(runtime_context.final_output(), CandidateFindingBatch)
 
@@ -208,6 +219,38 @@ def test_internal_roles_receive_only_their_frozen_tool_matrix(
     assert _tool_names(agent_reference, runtime_context) == expected
     assert "comment" not in expected
     assert "task_done" not in expected
+
+
+@pytest.mark.parametrize(
+    "agent_reference",
+    ("correctness:v2", "review-planner:v2", "review-verifier:v2"),
+)
+def test_every_model_visible_tool_uses_recursive_strict_schema(
+    runtime_context: RuntimeToolContext,
+    agent_reference: str,
+) -> None:
+    tools = CapabilityToolAssembler().assemble(
+        _resolved_spec(agent_reference),
+        runtime_context,
+    )
+
+    def assert_strict_object_schemas(value: object) -> None:
+        if isinstance(value, list):
+            for item in value:
+                assert_strict_object_schemas(item)
+            return
+        if not isinstance(value, dict):
+            return
+        properties = value.get("properties")
+        if isinstance(properties, dict):
+            assert value.get("additionalProperties") is False
+            assert set(value.get("required", ())) == set(properties)
+        for nested in value.values():
+            assert_strict_object_schemas(nested)
+
+    for tool in tools:
+        assert tool.strict_json_schema is True
+        assert_strict_object_schemas(tool.params_json_schema)
 
 
 def test_unknown_contract_version_fails_before_any_tool_is_returned(

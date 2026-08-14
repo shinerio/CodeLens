@@ -46,6 +46,7 @@ def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
             _tools(
                 *evidence,
                 ("comment", 2),
+                ("retract_comment", 2),
                 ("task_done", 2),
             ),
         ),

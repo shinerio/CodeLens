@@ -14,6 +14,7 @@ from codelens.review.application.dag_scheduler import (
     PersistedDagScheduler,
     reviewer_stage_outcome,
 )
+from codelens.review.domain.errors import AgentRuntimeError
 from codelens.review.domain.ports import (
     AgentReviewCompletionStatus,
     AgentRunCompletionPort,
@@ -407,15 +408,17 @@ class ReviewOrchestrator:
                     "agent_node_failed",
                     is_timeout=isinstance(error, TimeoutError),
                 )
+            failure_metadata = {
+                "agent": node.agent_reference,
+                "error_type": type(error).__name__,
+            }
+            if isinstance(error, AgentRuntimeError):
+                failure_metadata.update(error.failure_metadata())
             await self._record(
                 task_id,
                 "lifecycle",
                 "Agent node failed and the persisted DAG will reduce its stage",
-                {
-                    "agent": node.agent_reference,
-                    "error_type": type(error).__name__,
-                    "error_message": str(error),
-                },
+                failure_metadata,
             )
 
     async def _skip_pending_nodes(
@@ -510,14 +513,18 @@ class ReviewOrchestrator:
                     "cached_input_tokens": str(output.cached_input_tokens),
                     "cache_write_input_tokens": str(output.cache_write_input_tokens),
                     "context_compaction_count": str(output.context_compaction_count),
-                    "context_compacted_result_count": str(
-                        output.context_compacted_result_count
-                    ),
+                    "context_compacted_result_count": str(output.context_compacted_result_count),
                     "context_compaction_original_bytes": str(
                         output.context_compaction_original_bytes
                     ),
                     "context_compaction_compressed_bytes": str(
                         output.context_compaction_compressed_bytes
+                    ),
+                    "compaction_replay_registered_count": str(
+                        output.compaction_replay_registered_count
+                    ),
+                    "compaction_replay_consumed_count": str(
+                        output.compaction_replay_consumed_count
                     ),
                     "output_tokens": str(output.output_tokens),
                     "total_tokens": str(output.input_tokens + output.output_tokens),

@@ -1,11 +1,12 @@
 """Resolve canonical Comment submissions against one immutable Review Snapshot."""
 
+import asyncio
 import hashlib
 import json
 import re
 from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Annotated, Literal, Protocol
+from typing import Annotated, Literal, Protocol, cast
 
 from agents import Tool, function_tool
 from pydantic import Field, StringConstraints
@@ -22,6 +23,12 @@ from codelens.review.application.settings import (
     MIN_MAX_INCOMPLETE_REVIEW_RETRIES,
 )
 from codelens.review.domain.tool_limits import ToolLimits
+from codelens.review.domain.tool_results import (
+    JsonValue,
+    ToolDiagnostic,
+    ToolResult,
+    ToolResultStatus,
+)
 from codelens.review.infrastructure.line_resolver import split_and_normalize
 from codelens.review.infrastructure.location_resolver import (
     LocationOutsideChangedHunkError,
@@ -81,6 +88,19 @@ def _normalized_excerpt_hash(existing_code: str) -> str:
 
 
 @dataclass
+class _CandidateRecord:
+    """Retain one Candidate payload and its auditable active/retracted transition."""
+
+    candidate: CandidateFinding
+    business_key: str
+    status: Literal["active", "retracted"] = "active"
+    retraction_reason: str | None = None
+    transitions: list[tuple[Literal["active", "retracted"], str | None]] = field(
+        default_factory=lambda: [("active", None)]
+    )
+
+
+@dataclass
 class ReviewCommentCollector:
     """Resolve Comment v2 items and enforce evidence coverage at task completion.
 
@@ -98,7 +118,8 @@ class ReviewCommentCollector:
     review_feedback: str | None = None
     tool_limits: ToolLimits = field(default_factory=ToolLimits)
     max_incomplete_review_retries: int = 3
-    _candidates: list[CandidateFinding] = field(default_factory=list, init=False)
+    _candidate_records: list[_CandidateRecord] = field(default_factory=list, init=False)
+    _state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
     _completion_summary: str | None = field(default=None, init=False)
     _incomplete_retry_count: int = field(default=0, init=False)
     _incomplete_review_files: tuple[str, ...] = field(default=(), init=False)
@@ -118,18 +139,31 @@ class ReviewCommentCollector:
         ):
             raise ValueError("max incomplete review retries must be between 0 and 20")
 
-    async def submit(self, submission: CommentFindingSchema) -> str:
+    async def submit(self, submission: CommentFindingSchema) -> CandidateFinding:
         """Resolve one submission or reject it without retaining partial state."""
+
+        if self.is_completed:
+            raise CommentCandidateRejectedError(
+                "reviewer has already completed",
+                reason_code="reviewer_already_completed",
+            )
 
         expected_reviewer_id = self.reviewer_reference.rpartition(":v")[0]
         if submission.reviewer_id != expected_reviewer_id:
-            raise CommentCandidateRejectedError("comment reviewer does not match this Agent Run")
+            raise CommentCandidateRejectedError(
+                "comment reviewer does not match this Agent Run",
+                reason_code="reviewer_mismatch",
+            )
         if submission.primary_dimension not in self.reviewer_dimensions:
             raise CommentCandidateRejectedError(
-                "comment primary dimension is outside this reviewer's assignment"
+                "comment primary dimension is outside this reviewer's assignment",
+                reason_code="dimension_outside_assignment",
             )
         if submission.path not in self.tools.review_file_paths:
-            raise CommentCandidateRejectedError("comment path is outside this Review")
+            raise CommentCandidateRejectedError(
+                "comment path is outside this Review",
+                reason_code="path_outside_review",
+            )
 
         try:
             location, changed_hunk_id = await SnapshotLocationResolver(
@@ -169,7 +203,7 @@ class ReviewCommentCollector:
                 "evidence_hashes": evidence_hashes,
             }
         )
-        candidate_identity = _canonical_hash(
+        business_key = _canonical_hash(
             {
                 "task_id": self.task_id,
                 "run_id": self.run_id,
@@ -184,11 +218,28 @@ class ReviewCommentCollector:
                 "axes": axes,
             }
         )
-        candidate_id = f"candidate_{candidate_identity}"
-        if any(candidate.candidate_id == candidate_id for candidate in self._candidates):
-            raise CommentCandidateRejectedError("comment duplicates an accepted candidate")
-        self._candidates.append(
-            CandidateFinding(
+        async with self._state_lock:
+            if self.is_completed:
+                raise CommentCandidateRejectedError(
+                    "reviewer has already completed",
+                    reason_code="reviewer_already_completed",
+                )
+            if any(
+                record.business_key == business_key and record.status == "active"
+                for record in self._candidate_records
+            ):
+                raise CommentCandidateRejectedError(
+                    "comment duplicates an active candidate",
+                    reason_code="duplicate_comment",
+                )
+            candidate_id = "candidate_" + _canonical_hash(
+                {
+                    "run_id": self.run_id,
+                    "acceptance_index": len(self._candidate_records),
+                    "business_key": business_key,
+                }
+            )
+            candidate = CandidateFinding(
                 task_id=self.task_id,
                 candidate_id=candidate_id,
                 run_id=self.run_id,
@@ -208,50 +259,195 @@ class ReviewCommentCollector:
                 recommendation=submission.recommendation,
                 fingerprint=fingerprint,
             )
-        )
-        return json.dumps(
-            {"accepted": True, "comment_count": len(self._candidates)},
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+            self._candidate_records.append(
+                _CandidateRecord(candidate=candidate, business_key=business_key)
+            )
+        return candidate
 
     async def submit_many(self, submissions: list[CommentFindingSchema]) -> str:
         """Retain valid submissions while reporting each rejected item by index."""
 
+        if self.is_completed:
+            return ToolResult(
+                "comment",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "reviewer_already_completed",
+                        "The reviewer has already completed this Agent Run.",
+                        False,
+                    ),
+                ),
+            ).to_json()
         if not submissions or len(submissions) > self.tool_limits.comment_batch_size:
-            raise ValueError(
-                f"comment requires between one and {self.tool_limits.comment_batch_size} comments"
-            )
-        accepted_count = 0
-        rejected_comments: list[dict[str, object]] = []
-        for index, submission in enumerate(submissions):
+            return ToolResult(
+                "comment",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "invalid_argument_value",
+                        "comment batch size is outside the configured limit.",
+                        True,
+                        "comments",
+                    ),
+                ),
+            ).to_json()
+        accepted_comments: list[dict[str, JsonValue]] = []
+        rejected_comments: list[dict[str, JsonValue]] = []
+        for input_index, submission in enumerate(submissions):
             try:
-                await self.submit(submission)
+                candidate = await self.submit(submission)
             except CommentCandidateRejectedError as error:
-                rejection: dict[str, object] = {"index": index, "reason": str(error)}
-                if error.reason_code is not None:
-                    rejection["reason_code"] = error.reason_code
-                rejected_comments.append(rejection)
+                rejected_comments.append(
+                    {
+                        "input_index": input_index,
+                        "code": error.reason_code or "comment_rejected",
+                        "message": str(error),
+                    }
+                )
             else:
-                accepted_count += 1
-        return json.dumps(
-            {
-                "accepted": accepted_count > 0,
-                "accepted_count": accepted_count,
-                "comment_count": len(self._candidates),
-                "rejected_comments": rejected_comments,
-                "rejected_count": len(rejected_comments),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
+                accepted_comments.append(
+                    {
+                        "input_index": input_index,
+                        "candidate_id": candidate.candidate_id,
+                        "path": candidate.primary_location.path,
+                        "side": candidate.primary_location.side,
+                        "title": candidate.title,
+                    }
+                )
+        accepted_count = len(accepted_comments)
+        rejected_count = len(rejected_comments)
+        status = (
+            ToolResultStatus.SUCCESS
+            if accepted_count and not rejected_count
+            else (ToolResultStatus.PARTIAL if accepted_count else ToolResultStatus.REJECTED)
         )
+        diagnostics = tuple(
+            ToolDiagnostic(
+                str(rejection["code"]),
+                str(rejection["message"]),
+                True,
+            )
+            for rejection in rejected_comments
+        )
+        return ToolResult(
+            "comment",
+            status,
+            {
+                "submitted_count": len(submissions),
+                "accepted_count": accepted_count,
+                "rejected_count": rejected_count,
+                "active_comment_count": self.active_comment_count,
+                "accepted_comments": cast(JsonValue, accepted_comments),
+                "rejected_comments": cast(JsonValue, rejected_comments),
+            },
+            diagnostics,
+        ).to_json()
+
+    def retract_many(self, candidate_ids: list[str], reason: str) -> str:
+        """Idempotently retract current-Run Candidates while preserving their audit records."""
+
+        if self.is_completed:
+            return ToolResult(
+                "retract_comment",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "reviewer_already_completed",
+                        "The reviewer has already completed this Agent Run.",
+                        False,
+                    ),
+                ),
+            ).to_json()
+        normalized_reason = reason.strip()
+        if (
+            not candidate_ids
+            or len(candidate_ids) > self.tool_limits.comment_batch_size
+            or len(candidate_ids) != len(set(candidate_ids))
+            or not normalized_reason
+            or len(normalized_reason) > self.tool_limits.long_text_max
+        ):
+            return ToolResult(
+                "retract_comment",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "invalid_argument_value",
+                        "Retraction IDs and reason must satisfy the strict input limits.",
+                        True,
+                    ),
+                ),
+            ).to_json()
+        records_by_id = {
+            record.candidate.candidate_id: record for record in self._candidate_records
+        }
+        results: list[dict[str, JsonValue]] = []
+        retracted_count = 0
+        already_retracted_count = 0
+        unknown_count = 0
+        for candidate_id in candidate_ids:
+            record = records_by_id.get(candidate_id)
+            if record is None:
+                item_status = "unknown_candidate"
+                unknown_count += 1
+            elif record.status == "retracted":
+                item_status = "already_retracted"
+                already_retracted_count += 1
+            else:
+                record.status = "retracted"
+                record.retraction_reason = normalized_reason
+                record.transitions.append(("retracted", normalized_reason))
+                item_status = "retracted"
+                retracted_count += 1
+            results.append({"candidate_id": candidate_id, "status": item_status})
+        status = (
+            ToolResultStatus.REJECTED
+            if unknown_count == len(candidate_ids)
+            else (ToolResultStatus.PARTIAL if unknown_count else ToolResultStatus.SUCCESS)
+        )
+        diagnostics: tuple[ToolDiagnostic, ...] = ()
+        if retracted_count == 0 and unknown_count == 0:
+            diagnostics = (
+                ToolDiagnostic(
+                    "no_state_change",
+                    "All requested Candidates were already retracted.",
+                    False,
+                ),
+            )
+        elif unknown_count:
+            diagnostics = (
+                ToolDiagnostic(
+                    "unknown_candidate",
+                    "At least one Candidate does not belong to this Reviewer Agent Run.",
+                    False,
+                    "candidate_ids",
+                ),
+            )
+        return ToolResult(
+            "retract_comment",
+            status,
+            {
+                "results": cast(JsonValue, results),
+                "retracted_count": retracted_count,
+                "already_retracted_count": already_retracted_count,
+                "unknown_count": unknown_count,
+                "active_comment_count": self.active_comment_count,
+            },
+            diagnostics,
+        ).to_json()
 
     def candidate_batch(self) -> CandidateFindingBatch:
         """Return only fully resolved candidates in stable acceptance order."""
 
-        return CandidateFindingBatch(tuple(self._candidates))
+        return CandidateFindingBatch(
+            tuple(
+                record.candidate for record in self._candidate_records if record.status == "active"
+            )
+        )
 
     def as_agent_tools(self, tool_descriptions: dict[str, str]) -> list[Tool]:
         """Expose the canonical comment and task completion contracts.
@@ -265,10 +461,36 @@ class ReviewCommentCollector:
             list[CommentFindingSchema],
             Field(min_length=1, max_length=self.tool_limits.comment_batch_size),
         ]
+        CandidateIds = Annotated[
+            list[
+                Annotated[
+                    str,
+                    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+                ]
+            ],
+            Field(min_length=1, max_length=self.tool_limits.comment_batch_size),
+        ]
 
         @function_tool(name_override="comment", description_override=tool_descriptions["comment"])
         async def comment_tool(comments: CommentBatch) -> str:
             return await self.submit_many(comments)
+
+        @function_tool(
+            name_override="retract_comment",
+            description_override=tool_descriptions["retract_comment"],
+        )
+        async def retract_comment_tool(
+            candidate_ids: CandidateIds,
+            reason: Annotated[
+                str,
+                StringConstraints(
+                    strip_whitespace=True,
+                    min_length=1,
+                    max_length=self.tool_limits.long_text_max,
+                ),
+            ],
+        ) -> str:
+            return self.retract_many(candidate_ids, reason)
 
         @function_tool(
             name_override="task_done", description_override=tool_descriptions["task_done"]
@@ -291,43 +513,79 @@ class ReviewCommentCollector:
         properties = finding_schema.get("properties", {})
         properties["primary_dimension"]["enum"] = list(self.reviewer_dimensions)
         properties["reviewer_id"]["enum"] = [expected_reviewer_id]
-        return [tool, reject_unknown_arguments(task_done_tool)]
+        return [
+            tool,
+            reject_unknown_arguments(retract_comment_tool),
+            reject_unknown_arguments(task_done_tool),
+        ]
 
     def complete(self, summary: str) -> str:
         """Accept task completion after all Review files have model-visible evidence."""
 
         if self._completion_summary is not None:
-            raise ValueError("task_done has already been called")
+            return ToolResult(
+                "task_done",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "reviewer_already_completed",
+                        "The reviewer has already completed this Agent Run.",
+                        False,
+                    ),
+                ),
+            ).to_json()
         targets = set(self.tools.review_file_paths)
-        reviewed = set(self.tools.reviewed_paths)
-        incomplete = tuple(sorted(targets - reviewed))
+        reviewed_targets = targets.intersection(self.tools.reviewed_paths)
+        incomplete = tuple(sorted(targets - reviewed_targets))
+        total_review_file_count = len(targets)
+        reviewed_file_count = len(reviewed_targets)
+        missing_file_count = len(incomplete)
         if incomplete:
             self._incomplete_retry_count += 1
             if self._incomplete_retry_count <= self.max_incomplete_review_retries:
-                return json.dumps(
+                diagnostic_message = (
+                    "Review evidence is still missing for one or more files."
+                    if self._incomplete_retry_count == 1
+                    else (
+                        "Review evidence is still missing. Do not call task_done again "
+                        "until every missing_review_files entry has evidence."
+                    )
+                )
+                return ToolResult(
+                    "task_done",
+                    ToolResultStatus.NEEDS_ACTION,
                     {
-                        "accepted": False,
                         "incomplete_retry_count": self._incomplete_retry_count,
                         "max_incomplete_review_retries": self.max_incomplete_review_retries,
-                        "missing_review_files": incomplete,
+                        "missing_review_files": cast(JsonValue, list(incomplete)),
+                        "missing_file_count": missing_file_count,
+                        "reviewed_file_count": reviewed_file_count,
+                        "total_review_file_count": total_review_file_count,
+                        "active_comment_count": self.active_comment_count,
                     },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
+                    (
+                        ToolDiagnostic(
+                            "missing_review_files",
+                            diagnostic_message,
+                            True,
+                        ),
+                    ),
+                ).to_json()
             self._incomplete_review_files = incomplete
         self._completion_summary = summary
-        return json.dumps(
+        return ToolResult(
+            "task_done",
+            ToolResultStatus.SUCCESS,
             {
-                "accepted": True,
-                "comment_count": len(self._candidates),
+                "active_comment_count": self.active_comment_count,
                 "forced_completion": bool(incomplete),
-                **({"incomplete_files": incomplete} if incomplete else {}),
+                "incomplete_files": cast(JsonValue, list(incomplete)),
+                "missing_file_count": missing_file_count,
+                "reviewed_file_count": reviewed_file_count,
+                "total_review_file_count": total_review_file_count,
             },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        ).to_json()
 
     @property
     def is_completed(self) -> bool:
@@ -340,3 +598,29 @@ class ReviewCommentCollector:
         """Return paths missing evidence when forced completion was accepted."""
 
         return self._incomplete_review_files
+
+    @property
+    def active_comment_count(self) -> int:
+        """Return the number of Candidates eligible for final publication."""
+
+        return sum(record.status == "active" for record in self._candidate_records)
+
+    @property
+    def candidate_audit(
+        self,
+    ) -> tuple[
+        tuple[
+            str,
+            tuple[tuple[Literal["active", "retracted"], str | None], ...],
+        ],
+        ...,
+    ]:
+        """Expose bounded Candidate state transitions for tests and transcript projection."""
+
+        return tuple(
+            (
+                record.candidate.candidate_id,
+                tuple(record.transitions),
+            )
+            for record in self._candidate_records
+        )

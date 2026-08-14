@@ -19,6 +19,7 @@ _REQUIRED_TOOL_NAMES = frozenset(
         "read_file",
         "get_diff",
         "comment",
+        "retract_comment",
         "task_done",
         "finalize_plan",
         "verdict",

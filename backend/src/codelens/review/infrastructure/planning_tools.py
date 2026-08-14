@@ -2,11 +2,13 @@ from agents import Tool, function_tool
 
 from codelens.capabilities.domain.models import ToolContractReference
 from codelens.review.application.planning import PlannerSelection
+from codelens.review.domain.tool_results import ToolDiagnostic, ToolResult, ToolResultStatus
 from codelens.review.infrastructure.capability_tools import RoleOutputToolBinding
 from codelens.review.infrastructure.planner_output import (
     PlannerOutputCodec,
     PlannerSelectionDto,
 )
+from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 
 
 class ReviewPlanSubmissionCollector:
@@ -37,10 +39,42 @@ class ReviewPlanSubmissionCollector:
 
     async def finalize(self, submission: PlannerSelectionDto) -> str:
         if self._selection is not None:
-            raise ValueError("Planner has already finalized the Review Plan")
-        self._selection = self._codec.decode(submission.model_dump(mode="json"))
+            return ToolResult(
+                "finalize_plan",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "plan_already_finalized", "The Review Plan is already final.", False
+                    ),
+                ),
+            ).to_json()
+        try:
+            selection = self._codec.decode(submission.model_dump(mode="json"))
+        except ValueError:
+            return ToolResult(
+                "finalize_plan",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "invalid_reviewer_selection",
+                        "The Reviewer selection is invalid.",
+                        True,
+                        "submission",
+                    ),
+                ),
+            ).to_json()
+        self._selection = selection
         reviewer_count = len(self._selection.reviewer_references)
-        return f"Review Plan finalized with {reviewer_count} Reviewer(s)."
+        return ToolResult(
+            "finalize_plan",
+            ToolResultStatus.SUCCESS,
+            {
+                "reviewer_count": reviewer_count,
+                "reviewer_references": list(self._selection.reviewer_references),
+            },
+        ).to_json()
 
     def as_finalize_tool(self, description: str) -> Tool:
         collector = self
@@ -54,7 +88,7 @@ class ReviewPlanSubmissionCollector:
 
             return await collector.finalize(submission)
 
-        return finalize_plan
+        return reject_unknown_arguments(finalize_plan)
 
     def bindings(self, finalize_description: str) -> tuple[RoleOutputToolBinding]:
         return (

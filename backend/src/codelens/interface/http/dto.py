@@ -197,12 +197,8 @@ class ToolLimitsResponse(StrictDto):
     long_text_max: Annotated[int, Field(ge=256, le=64_000)]
     task_summary_max: Annotated[int, Field(ge=256, le=64_000)]
     context_compaction_enabled: bool
-    context_compaction_trigger_bytes: Annotated[
-        int, Field(ge=1024, le=100 * 1024 * 1024)
-    ]
-    context_compaction_target_bytes: Annotated[
-        int, Field(ge=1024, le=100 * 1024 * 1024)
-    ]
+    context_compaction_trigger_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
+    context_compaction_target_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
     context_compaction_keep_recent_evidence_results: Annotated[int, Field(ge=0, le=100)]
 
 
@@ -225,12 +221,12 @@ class UpdateToolLimitsRequest(StrictDto):
     context_compaction_trigger_bytes: Annotated[
         int | None, Field(ge=1024, le=100 * 1024 * 1024)
     ] = None
-    context_compaction_target_bytes: Annotated[
-        int | None, Field(ge=1024, le=100 * 1024 * 1024)
-    ] = None
-    context_compaction_keep_recent_evidence_results: Annotated[
-        int | None, Field(ge=0, le=100)
-    ] = None
+    context_compaction_target_bytes: Annotated[int | None, Field(ge=1024, le=100 * 1024 * 1024)] = (
+        None
+    )
+    context_compaction_keep_recent_evidence_results: Annotated[int | None, Field(ge=0, le=100)] = (
+        None
+    )
 
 
 class FileExclusionSettingsResponse(StrictDto):
@@ -618,6 +614,8 @@ class AgentProcessResponse(StrictDto):
     context_compacted_result_count: Annotated[int, Field(ge=0)]
     context_compaction_original_bytes: Annotated[int, Field(ge=0)]
     context_compaction_compressed_bytes: Annotated[int, Field(ge=0)]
+    compaction_replay_registered_count: Annotated[int, Field(ge=0)]
+    compaction_replay_consumed_count: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
     total_tokens: Annotated[int, Field(ge=0)]
     tool_call_count: Annotated[int, Field(ge=0)]
@@ -644,6 +642,8 @@ class ReviewProcessReportResponse(StrictDto):
     context_compacted_result_count: Annotated[int, Field(ge=0)]
     context_compaction_original_bytes: Annotated[int, Field(ge=0)]
     context_compaction_compressed_bytes: Annotated[int, Field(ge=0)]
+    compaction_replay_registered_count: Annotated[int, Field(ge=0)]
+    compaction_replay_consumed_count: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
     total_tokens: Annotated[int, Field(ge=0)]
     tool_call_count: Annotated[int, Field(ge=0)]
@@ -653,6 +653,9 @@ class ReviewProcessReportResponse(StrictDto):
     invalid_tool_call_count: Annotated[int, Field(ge=0)]
     tool_result_count: Annotated[int, Field(ge=0)]
     unmatched_tool_result_count: Annotated[int, Field(ge=0)]
+    non_json_tool_result_count: Annotated[int, Field(ge=0)]
+    loop_abort_count: Annotated[int, Field(ge=0)]
+    tool_result_status_counts: dict[str, Annotated[int, Field(ge=0)]]
     finding_count: Annotated[int, Field(ge=0)]
     transcript_entry_count: Annotated[int, Field(ge=0)]
     started_at: datetime | None

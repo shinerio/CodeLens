@@ -10,6 +10,7 @@ from codelens.review.domain.tool_invocation import (
     ToolInvocationOutcome,
     classify_tool_result,
 )
+from codelens.review.domain.tool_results import ToolResultError, parse_tool_result
 
 _STABLE_REVIEW_TOOL_NAMES = frozenset(
     {
@@ -21,6 +22,7 @@ _STABLE_REVIEW_TOOL_NAMES = frozenset(
         "grep",
         "merge",
         "read_file",
+        "retract_comment",
         "submit_review_plan",
         "task_done",
         "verdict",
@@ -84,6 +86,8 @@ class AgentProcessSummary:
     context_compacted_result_count: int
     context_compaction_original_bytes: int
     context_compaction_compressed_bytes: int
+    compaction_replay_registered_count: int
+    compaction_replay_consumed_count: int
     output_tokens: int
     total_tokens: int
     tool_call_count: int
@@ -111,6 +115,8 @@ class ReviewProcessReport:
     context_compacted_result_count: int
     context_compaction_original_bytes: int
     context_compaction_compressed_bytes: int
+    compaction_replay_registered_count: int
+    compaction_replay_consumed_count: int
     output_tokens: int
     total_tokens: int
     tool_call_count: int
@@ -120,6 +126,9 @@ class ReviewProcessReport:
     invalid_tool_call_count: int
     tool_result_count: int
     unmatched_tool_result_count: int
+    non_json_tool_result_count: int
+    loop_abort_count: int
+    tool_result_status_counts: dict[str, int]
     finding_count: int
     transcript_entry_count: int
     started_at: datetime | None
@@ -142,6 +151,8 @@ class _AgentAccumulator:
     context_compacted_result_count: int = 0
     context_compaction_original_bytes: int = 0
     context_compaction_compressed_bytes: int = 0
+    compaction_replay_registered_count: int = 0
+    compaction_replay_consumed_count: int = 0
     output_tokens: int = 0
     total_tokens: int = 0
     tool_call_count: int = 0
@@ -180,10 +191,20 @@ def build_process_report(
     tool_result_count = 0
     unmatched_tool_result_count = 0
     rejected_call_summaries: list[RejectedToolCallSummary] = []
+    tool_result_status_counts = {
+        status: 0 for status in ("success", "partial", "needs_action", "rejected", "failed")
+    }
+    non_json_tool_result_count = 0
+    loop_abort_count = 0
 
     for entry in ordered:
         agent_name = entry.metadata.get("agent", "unknown")
         accumulator = agents[agent_name]
+        if entry.metadata.get("reason_code") in {
+            "identical_tool_result_loop",
+            "tool_loop_detected",
+        }:
+            loop_abort_count += 1
         if entry.kind == "model_started":
             usage_scope = entry.metadata.get("usage_scope")
             if usage_scope == "provider_call":
@@ -231,6 +252,15 @@ def build_process_report(
             invalid_tool_calls[tool_name or "unknown"] += 1
         elif entry.kind == "tool_result":
             tool_result_count += 1
+            result_status = entry.metadata.get("tool_result_status")
+            if result_status not in tool_result_status_counts:
+                try:
+                    result_status = parse_tool_result(entry.content).status.value
+                except ToolResultError:
+                    result_status = None
+                    non_json_tool_result_count += 1
+            if result_status is not None:
+                tool_result_status_counts[result_status] += 1
             call_id = entry.metadata.get("tool_call_id")
             tool_name = calls_by_id.get((agent_name, call_id)) if call_id else None
             if tool_name is not None:
@@ -257,7 +287,7 @@ def build_process_report(
                             reason=outcome.reason or "Tool invocation was rejected.",
                         )
                     )
-                else:
+                elif outcome.status == "accepted":
                     accepted_tool_calls[tool_name] += 1
                     accumulator.accepted_tool_call_count += 1
 
@@ -273,6 +303,8 @@ def build_process_report(
             context_compacted_result_count=value.context_compacted_result_count,
             context_compaction_original_bytes=value.context_compaction_original_bytes,
             context_compaction_compressed_bytes=value.context_compaction_compressed_bytes,
+            compaction_replay_registered_count=value.compaction_replay_registered_count,
+            compaction_replay_consumed_count=value.compaction_replay_consumed_count,
             output_tokens=value.output_tokens,
             total_tokens=value.total_tokens,
             tool_call_count=value.tool_call_count,
@@ -316,9 +348,7 @@ def build_process_report(
     usage_is_complete = bool(
         observed_usage_entries > 0
         and live_usage_entries == complete_live_usage_entries == live_attempt_count
-        and legacy_usage_entries
-        == complete_legacy_usage_entries
-        == legacy_attempt_count
+        and legacy_usage_entries == complete_legacy_usage_entries == legacy_attempt_count
     )
 
     return ReviewProcessReport(
@@ -329,12 +359,8 @@ def build_process_report(
         llm_call_count=sum(agent.llm_call_count for agent in agent_summaries),
         input_tokens=sum(agent.input_tokens for agent in agent_summaries),
         cached_input_tokens=sum(agent.cached_input_tokens for agent in agent_summaries),
-        cache_write_input_tokens=sum(
-            agent.cache_write_input_tokens for agent in agent_summaries
-        ),
-        context_compaction_count=sum(
-            agent.context_compaction_count for agent in agent_summaries
-        ),
+        cache_write_input_tokens=sum(agent.cache_write_input_tokens for agent in agent_summaries),
+        context_compaction_count=sum(agent.context_compaction_count for agent in agent_summaries),
         context_compacted_result_count=sum(
             agent.context_compacted_result_count for agent in agent_summaries
         ),
@@ -343,6 +369,12 @@ def build_process_report(
         ),
         context_compaction_compressed_bytes=sum(
             agent.context_compaction_compressed_bytes for agent in agent_summaries
+        ),
+        compaction_replay_registered_count=sum(
+            agent.compaction_replay_registered_count for agent in agent_summaries
+        ),
+        compaction_replay_consumed_count=sum(
+            agent.compaction_replay_consumed_count for agent in agent_summaries
         ),
         output_tokens=sum(agent.output_tokens for agent in agent_summaries),
         total_tokens=sum(agent.total_tokens for agent in agent_summaries),
@@ -353,6 +385,9 @@ def build_process_report(
         invalid_tool_call_count=sum(tool.call_count for tool in invalid_tools),
         tool_result_count=tool_result_count,
         unmatched_tool_result_count=unmatched_tool_result_count,
+        non_json_tool_result_count=non_json_tool_result_count,
+        loop_abort_count=loop_abort_count,
+        tool_result_status_counts=tool_result_status_counts,
         finding_count=finding_count,
         transcript_entry_count=len(ordered),
         started_at=started_at,
@@ -379,6 +414,8 @@ def _tool_outcome(entry: ProcessTranscriptEntry) -> ToolInvocationOutcome:
             entry.metadata.get("tool_rejection_reason_code"),
             entry.metadata.get("tool_rejection_reason"),
         )
+    if status == "unclassified":
+        return ToolInvocationOutcome("unclassified")
     return classify_tool_result(entry.content)
 
 
@@ -388,12 +425,8 @@ def _accumulate_usage(accumulator: _AgentAccumulator, metadata: dict[str, str]) 
     accumulator.llm_call_count += _non_negative_int(metadata, "llm_call_count")
     accumulator.input_tokens += _non_negative_int(metadata, "input_tokens")
     accumulator.cached_input_tokens += _non_negative_int(metadata, "cached_input_tokens")
-    accumulator.cache_write_input_tokens += _non_negative_int(
-        metadata, "cache_write_input_tokens"
-    )
-    accumulator.context_compaction_count += _non_negative_int(
-        metadata, "context_compaction_count"
-    )
+    accumulator.cache_write_input_tokens += _non_negative_int(metadata, "cache_write_input_tokens")
+    accumulator.context_compaction_count += _non_negative_int(metadata, "context_compaction_count")
     accumulator.context_compacted_result_count += _non_negative_int(
         metadata, "context_compacted_result_count"
     )
@@ -402,20 +435,22 @@ def _accumulate_usage(accumulator: _AgentAccumulator, metadata: dict[str, str]) 
     )
     accumulator.context_compaction_compressed_bytes += _non_negative_int(
         metadata, "context_compaction_compressed_bytes"
+    )
+    accumulator.compaction_replay_registered_count += _non_negative_int(
+        metadata, "compaction_replay_registered_count"
+    )
+    accumulator.compaction_replay_consumed_count += _non_negative_int(
+        metadata, "compaction_replay_consumed_count"
     )
     accumulator.output_tokens += _non_negative_int(metadata, "output_tokens")
     accumulator.total_tokens += _non_negative_int(metadata, "total_tokens")
     accumulator.model_name = metadata.get("model_name") or accumulator.model_name
 
 
-def _accumulate_run_diagnostics(
-    accumulator: _AgentAccumulator, metadata: dict[str, str]
-) -> None:
+def _accumulate_run_diagnostics(accumulator: _AgentAccumulator, metadata: dict[str, str]) -> None:
     """Merge Agent-run diagnostics that are not present on provider response usage."""
 
-    accumulator.context_compaction_count += _non_negative_int(
-        metadata, "context_compaction_count"
-    )
+    accumulator.context_compaction_count += _non_negative_int(metadata, "context_compaction_count")
     accumulator.context_compacted_result_count += _non_negative_int(
         metadata, "context_compacted_result_count"
     )
@@ -424,6 +459,12 @@ def _accumulate_run_diagnostics(
     )
     accumulator.context_compaction_compressed_bytes += _non_negative_int(
         metadata, "context_compaction_compressed_bytes"
+    )
+    accumulator.compaction_replay_registered_count += _non_negative_int(
+        metadata, "compaction_replay_registered_count"
+    )
+    accumulator.compaction_replay_consumed_count += _non_negative_int(
+        metadata, "compaction_replay_consumed_count"
     )
     accumulator.model_name = metadata.get("model_name") or accumulator.model_name
 
@@ -494,6 +535,8 @@ def _has_activity(value: _AgentAccumulator) -> bool:
             value.context_compacted_result_count,
             value.context_compaction_original_bytes,
             value.context_compaction_compressed_bytes,
+            value.compaction_replay_registered_count,
+            value.compaction_replay_consumed_count,
             value.output_tokens,
             value.total_tokens,
             value.tool_call_count,

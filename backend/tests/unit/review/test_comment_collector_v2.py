@@ -1,3 +1,4 @@
+import asyncio
 import hashlib
 import json
 from pathlib import Path
@@ -24,6 +25,9 @@ def _hash(payload: bytes) -> str:
 
 class FakeEvidenceTools:
     review_file_paths = ("src/webhook.py", "src/deleted.py")
+
+    def __init__(self) -> None:
+        self.reviewed_paths: set[str] = set()
 
     async def read_diff_for_resolution(self, path: str) -> str:
         if path == "src/deleted.py":
@@ -132,6 +136,48 @@ def _collector(
     )
 
 
+def test_incomplete_completion_reports_host_derived_coverage_progress() -> None:
+    collector = _collector()
+    assert isinstance(collector.tools, FakeEvidenceTools)
+    collector.tools.reviewed_paths.add("src/webhook.py")
+
+    completion = json.loads(collector.complete("Not complete yet."))
+
+    assert completion["status"] == "needs_action"
+    assert completion["data"] == {
+        "active_comment_count": 0,
+        "incomplete_retry_count": 1,
+        "max_incomplete_review_retries": 3,
+        "missing_file_count": 1,
+        "missing_review_files": ["src/deleted.py"],
+        "reviewed_file_count": 1,
+        "total_review_file_count": 2,
+    }
+
+    repeated_completion = json.loads(collector.complete("Still incomplete."))
+    assert repeated_completion["status"] == "needs_action"
+    assert repeated_completion["diagnostics"][0]["code"] == "missing_review_files"
+    assert "Do not call task_done again" in repeated_completion["diagnostics"][0]["message"]
+
+
+def test_complete_completion_reports_host_derived_coverage_progress() -> None:
+    collector = _collector()
+    assert isinstance(collector.tools, FakeEvidenceTools)
+    collector.tools.reviewed_paths.update(collector.tools.review_file_paths)
+
+    completion = json.loads(collector.complete("Complete."))
+
+    assert completion["status"] == "success"
+    assert completion["data"] == {
+        "active_comment_count": 0,
+        "forced_completion": False,
+        "incomplete_files": [],
+        "missing_file_count": 0,
+        "reviewed_file_count": 2,
+        "total_review_file_count": 2,
+    }
+
+
 async def test_collector_resolves_new_and_deleted_old_locations() -> None:
     collector = _collector()
 
@@ -163,9 +209,14 @@ async def test_collector_rejects_items_independently() -> None:
         await collector.submit_many([_submission(path="outside.py"), _submission()])
     )
 
-    assert result["accepted_count"] == 1
-    assert result["rejected_comments"] == [
-        {"index": 0, "reason": "comment path is outside this Review"}
+    assert result["status"] == "partial"
+    assert result["data"]["accepted_count"] == 1
+    assert result["data"]["rejected_comments"] == [
+        {
+            "input_index": 0,
+            "code": "path_outside_review",
+            "message": "comment path is outside this Review",
+        }
     ]
     assert len(collector.candidate_batch().candidates) == 1
 
@@ -180,12 +231,13 @@ async def test_collector_returns_localized_feedback_for_an_unchanged_location() 
         )
     )
 
-    assert result["accepted_count"] == 0
-    assert result["rejected_comments"] == [
+    assert result["status"] == "rejected"
+    assert result["data"]["accepted_count"] == 0
+    assert result["data"]["rejected_comments"] == [
         {
-            "index": 0,
-            "reason_code": "comment_outside_diff",
-            "reason": feedback,
+            "input_index": 0,
+            "code": "comment_outside_diff",
+            "message": feedback,
         }
     ]
     assert collector.candidate_batch().candidates == ()
@@ -196,9 +248,13 @@ async def test_collector_rejects_duplicate_candidate_identity() -> None:
 
     result = json.loads(await collector.submit_many([_submission(), _submission()]))
 
-    assert result["accepted_count"] == 1
-    assert result["rejected_comments"] == [
-        {"index": 1, "reason": "comment duplicates an accepted candidate"}
+    assert result["data"]["accepted_count"] == 1
+    assert result["data"]["rejected_comments"] == [
+        {
+            "input_index": 1,
+            "code": "duplicate_comment",
+            "message": "comment duplicates an active candidate",
+        }
     ]
 
 
@@ -207,9 +263,9 @@ async def test_specialist_primary_dimension_must_match_assignment() -> None:
 
     result = json.loads(await collector.submit_many([_submission(primary_dimension="performance")]))
 
-    assert result["accepted_count"] == 0
-    assert result["rejected_comments"][0]["index"] == 0
-    assert "primary dimension" in result["rejected_comments"][0]["reason"]
+    assert result["data"]["accepted_count"] == 0
+    assert result["data"]["rejected_comments"][0]["input_index"] == 0
+    assert "primary dimension" in result["data"]["rejected_comments"][0]["message"]
 
 
 async def test_general_accepts_any_dimension_in_its_declared_scope() -> None:
@@ -228,4 +284,110 @@ async def test_general_accepts_any_dimension_in_its_declared_scope() -> None:
 
     result = json.loads(await collector.submit_many([_submission(reviewer_id="general")]))
 
-    assert result["accepted_count"] == 1
+    assert result["data"]["accepted_count"] == 1
+
+
+async def test_comment_returns_candidate_ids_and_retraction_is_auditable() -> None:
+    collector = _collector()
+    submitted = json.loads(await collector.submit_many([_submission()]))
+    candidate_id = submitted["data"]["accepted_comments"][0]["candidate_id"]
+
+    retracted = json.loads(
+        collector.retract_many([candidate_id], "Later evidence disproves the claim.")
+    )
+    repeated = json.loads(
+        collector.retract_many([candidate_id], "Later evidence disproves the claim.")
+    )
+
+    assert submitted["status"] == "success"
+    assert candidate_id.startswith("candidate_")
+    assert retracted["status"] == "success"
+    assert retracted["data"]["retracted_count"] == 1
+    assert collector.candidate_batch().candidates == ()
+    assert collector.candidate_audit == (
+        (
+            candidate_id,
+            (
+                ("active", None),
+                ("retracted", "Later evidence disproves the claim."),
+            ),
+        ),
+    )
+    assert repeated["status"] == "success"
+    assert repeated["data"]["already_retracted_count"] == 1
+    assert repeated["diagnostics"][0]["code"] == "no_state_change"
+
+
+async def test_retraction_mixed_unknown_and_retracted_is_partial() -> None:
+    collector = _collector()
+    submitted = json.loads(await collector.submit_many([_submission()]))
+    candidate_id = submitted["data"]["accepted_comments"][0]["candidate_id"]
+
+    result = json.loads(collector.retract_many([candidate_id, "candidate_other_run"], "Incorrect."))
+
+    assert result["status"] == "partial"
+    assert result["data"]["retracted_count"] == 1
+    assert result["data"]["unknown_count"] == 1
+    assert result["diagnostics"][0]["code"] == "unknown_candidate"
+
+
+async def test_retracted_comment_can_be_resubmitted_at_end_of_active_order() -> None:
+    collector = _collector()
+    first = json.loads(await collector.submit_many([_submission()]))
+    first_id = first["data"]["accepted_comments"][0]["candidate_id"]
+    collector.retract_many([first_id], "Incorrect.")
+
+    second = json.loads(await collector.submit_many([_submission()]))
+    second_id = second["data"]["accepted_comments"][0]["candidate_id"]
+
+    assert second_id != first_id
+    assert [item.candidate_id for item in collector.candidate_batch().candidates] == [second_id]
+
+
+async def test_completion_freezes_comment_state_and_uses_active_count() -> None:
+    collector = _collector()
+    assert isinstance(collector.tools, FakeEvidenceTools)
+    collector.tools.reviewed_paths.update(collector.tools.review_file_paths)
+    submitted = json.loads(await collector.submit_many([_submission()]))
+    candidate_id = submitted["data"]["accepted_comments"][0]["candidate_id"]
+
+    completion = json.loads(collector.complete("Finished."))
+    late_retraction = json.loads(collector.retract_many([candidate_id], "Too late."))
+    late_comment = json.loads(await collector.submit_many([_submission()]))
+    repeated_completion = json.loads(collector.complete("Again."))
+
+    assert completion["status"] == "success"
+    assert completion["data"]["active_comment_count"] == 1
+    assert late_retraction["diagnostics"][0]["code"] == "reviewer_already_completed"
+    assert late_comment["diagnostics"][0]["code"] == "reviewer_already_completed"
+    assert repeated_completion["diagnostics"][0]["code"] == "reviewer_already_completed"
+
+
+async def test_concurrent_duplicate_comments_leave_one_active_candidate() -> None:
+    collector = _collector()
+
+    first, second = await asyncio.gather(
+        collector.submit_many([_submission()]),
+        collector.submit_many([_submission()]),
+    )
+
+    results = [json.loads(first), json.loads(second)]
+    assert sorted(result["status"] for result in results) == ["rejected", "success"]
+    assert collector.active_comment_count == 1
+
+
+async def test_retraction_rejects_all_unknown_duplicate_ids_and_blank_reason() -> None:
+    collector = _collector()
+
+    unknown = json.loads(collector.retract_many(["candidate_from_another_run"], "Not this run."))
+    duplicates = json.loads(
+        collector.retract_many(["candidate_x", "candidate_x"], "Duplicate input.")
+    )
+    blank_reason = json.loads(collector.retract_many(["candidate_x"], "   "))
+
+    assert unknown["status"] == "rejected"
+    assert unknown["data"]["unknown_count"] == 1
+    assert unknown["diagnostics"][0]["code"] == "unknown_candidate"
+    assert duplicates["status"] == "rejected"
+    assert duplicates["diagnostics"][0]["code"] == "invalid_argument_value"
+    assert blank_reason["status"] == "rejected"

@@ -149,17 +149,28 @@ def test_stream_tool_events_include_stable_name_and_call_identity() -> None:
             item=SimpleNamespace(raw_item=raw_call),
         )
     )
+    result = (
+        '{"schema_version":"2","tool":"read_file","status":"success","data":{},"diagnostics":[]}'
+    )
     tool_result = _visible_event(
         RunItemStreamEvent(
             name="tool_output",
-            item=SimpleNamespace(raw_item=SimpleNamespace(call_id="call-1")),
+            item=SimpleNamespace(
+                raw_item=SimpleNamespace(call_id="call-1"),
+                output=result,
+            ),
         )
     )
 
     assert tool_call is not None
     assert tool_result is not None
     assert tool_call.metadata == {"tool_call_id": "call-1", "tool_name": "read_file"}
-    assert tool_result.metadata == {"tool_call_id": "call-1", "tool_outcome": "accepted"}
+    assert tool_result.content == result
+    assert tool_result.metadata == {
+        "tool_call_id": "call-1",
+        "tool_outcome": "accepted",
+        "tool_result_status": "success",
+    }
 
 
 def test_stream_tool_result_records_bounded_rejection_reason() -> None:
@@ -179,9 +190,8 @@ def test_stream_tool_result_records_bounded_rejection_reason() -> None:
     assert tool_result is not None
     assert tool_result.metadata == {
         "tool_call_id": "call-rejected",
-        "tool_outcome": "rejected",
-        "tool_rejection_reason_code": "invalid_tool_arguments",
-        "tool_rejection_reason": "Tool arguments failed schema validation.",
+        "tool_outcome": "unclassified",
+        "non_json_tool_result": "true",
     }
 
 
@@ -207,4 +217,5 @@ def test_stream_tool_events_exclude_non_serializable_sdk_runtime_state() -> None
     assert tool_result is not None
     assert json.loads(tool_call.content) == raw_call
     assert json.loads(tool_result.content) == {"content": "bounded", "path": "a.py"}
-    assert tool_result.metadata["tool_outcome"] == "accepted"
+    assert tool_result.metadata["tool_outcome"] == "unclassified"
+    assert tool_result.metadata["non_json_tool_result"] == "true"

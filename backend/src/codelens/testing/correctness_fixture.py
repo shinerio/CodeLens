@@ -18,6 +18,7 @@ from codelens.review.domain.ports import (
     AgentRuntimeEventSink,
     UnvalidatedAgentOutput,
 )
+from codelens.review.domain.tool_results import ToolDiagnostic, ToolResult, ToolResultStatus
 from codelens.review.infrastructure.comment_collector import ReviewCommentCollector
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.reviewer_catalog.domain.models import AgentRole
@@ -29,6 +30,181 @@ _FIXTURE_ROOT = (
     _REPO_ROOT / "backend" / "tests" / "evals" / "fixtures" / "correctness" / "simple_branch"
 )
 _DELETED_PATHS = ("src/permissions.py",)
+
+
+def _fixture_tool_exchange(
+    tool_name: str,
+    call_index: int,
+    arguments: dict[str, object],
+    result: ToolResult,
+) -> tuple[AgentRuntimeEvent, AgentRuntimeEvent]:
+    """Build one deterministic, strictly JSON model-visible tool exchange."""
+
+    call_id = f"fixture-{call_index:02d}-{tool_name}"
+    return (
+        AgentRuntimeEvent(
+            "tool_call",
+            json.dumps(arguments, sort_keys=True, separators=(",", ":")),
+            {"tool_call_id": call_id, "tool_name": tool_name},
+        ),
+        AgentRuntimeEvent(
+            "tool_result",
+            result.to_json(),
+            {
+                "tool_call_id": call_id,
+                "tool_outcome": (
+                    "accepted"
+                    if result.status in {ToolResultStatus.SUCCESS, ToolResultStatus.PARTIAL}
+                    else "rejected"
+                ),
+                "tool_result_status": result.status.value,
+            },
+        ),
+    )
+
+
+def deterministic_reviewer_tool_scenario(
+    comments: tuple[CommentFindingSchema, ...],
+    candidate_ids: tuple[str, ...],
+) -> tuple[AgentRuntimeEvent, ...]:
+    """Exercise discovery, pagination, correction, retraction, and completion in order."""
+
+    transient_id = "candidate_fixture_retracted"
+    transient_comment = comments[0].model_copy(
+        update={"title": "Transient fixture claim disproved by later evidence"}
+    )
+    exchanges = (
+        _fixture_tool_exchange(
+            "find_files",
+            1,
+            {"path": "", "pattern": "*.py"},
+            ToolResult(
+                "find_files",
+                ToolResultStatus.SUCCESS,
+                {"paths": ["src/cache.py"], "truncated": False},
+            ),
+        ),
+        _fixture_tool_exchange(
+            "grep",
+            2,
+            {
+                "pattern": "cache",
+                "mode": "literal",
+                "path": "src",
+                "file_pattern": "*.py",
+            },
+            ToolResult("grep", ToolResultStatus.SUCCESS, {"match_count": 1}),
+        ),
+        _fixture_tool_exchange(
+            "read_file",
+            3,
+            {"path": "src/cache.py", "version": "current", "line_range": None},
+            ToolResult(
+                "read_file",
+                ToolResultStatus.PARTIAL,
+                {"next_line_range": {"start_line": 2, "end_line": 20}},
+                (
+                    ToolDiagnostic(
+                        "read_page_incomplete",
+                        "More source lines remain.",
+                        True,
+                        "line_range",
+                        {
+                            "path": "src/cache.py",
+                            "version": "current",
+                            "line_range": {"start_line": 2, "end_line": 20},
+                        },
+                    ),
+                ),
+            ),
+        ),
+        _fixture_tool_exchange(
+            "read_file",
+            4,
+            {
+                "path": "src/cache.py",
+                "version": "current",
+                "line_range": {"start_line": 2, "end_line": 20},
+            },
+            ToolResult("read_file", ToolResultStatus.SUCCESS, {"truncated": False}),
+        ),
+        _fixture_tool_exchange(
+            "get_diff",
+            5,
+            {"path": "src", "cursor": None},
+            ToolResult(
+                "get_diff",
+                ToolResultStatus.PARTIAL,
+                {"next_cursor": "fixture-cursor"},
+                (
+                    ToolDiagnostic(
+                        "diff_page_incomplete",
+                        "More complete hunks remain.",
+                        True,
+                        "cursor",
+                        {"path": "src", "cursor": "fixture-cursor"},
+                    ),
+                ),
+            ),
+        ),
+        _fixture_tool_exchange(
+            "get_diff",
+            6,
+            {"path": "src", "cursor": "fixture-cursor"},
+            ToolResult("get_diff", ToolResultStatus.SUCCESS, {"has_more": False}),
+        ),
+        _fixture_tool_exchange(
+            "comment",
+            7,
+            {
+                "comments": [
+                    *(comment.model_dump(mode="json") for comment in comments),
+                    transient_comment.model_dump(mode="json"),
+                ]
+            },
+            ToolResult(
+                "comment",
+                ToolResultStatus.SUCCESS,
+                {
+                    "accepted_count": len(candidate_ids) + 1,
+                    "accepted_candidate_ids": [*candidate_ids, transient_id],
+                    "active_comment_count": len(candidate_ids) + 1,
+                },
+            ),
+        ),
+        _fixture_tool_exchange(
+            "retract_comment",
+            8,
+            {
+                "candidate_ids": [transient_id],
+                "reason": "Later evidence disproves this transient fixture claim.",
+            },
+            ToolResult(
+                "retract_comment",
+                ToolResultStatus.SUCCESS,
+                {
+                    "results": [{"candidate_id": transient_id, "status": "retracted"}],
+                    "retracted_count": 1,
+                    "active_comment_count": len(candidate_ids),
+                },
+            ),
+        ),
+        _fixture_tool_exchange(
+            "task_done",
+            9,
+            {"summary": "Deterministic fixture reviewed every frozen file."},
+            ToolResult(
+                "task_done",
+                ToolResultStatus.SUCCESS,
+                {
+                    "active_comment_count": len(candidate_ids),
+                    "forced_completion": False,
+                    "incomplete_files": [],
+                },
+            ),
+        ),
+    )
+    return tuple(event for exchange in exchanges for event in exchange)
 
 
 @dataclass(frozen=True)
@@ -176,29 +352,26 @@ class FixtureRuntime:
         """Emit bounded observable events around the deterministic v2 Artifact."""
 
         await sink(AgentRuntimeEvent("model_started", "", {}))
-        tool_name = "verdict" if execution_spec.agent.role is AgentRole.VERIFIER else "comment"
-        call_id = f"fixture-{tool_name}-call"
-        call_content = (
-            json.dumps({"fixture": True})
-            if execution_spec.agent.role is AgentRole.VERIFIER
-            else json.dumps(
-                {"comments": [comment.model_dump(mode="json") for comment in self._comments]}
-            )
-        )
-        await sink(
-            AgentRuntimeEvent(
-                "tool_call",
-                call_content,
-                {"tool_call_id": call_id, "tool_name": tool_name},
-            )
-        )
         output = await self.invoke(execution_spec, payload, snapshot, prompt_locale)
-        await sink(
-            AgentRuntimeEvent(
-                "tool_result",
-                json.dumps({"accepted": True}),
-                {"tool_call_id": call_id},
+        events: tuple[AgentRuntimeEvent, ...]
+        if execution_spec.agent.role is AgentRole.VERIFIER:
+            events = _fixture_tool_exchange(
+                "finalize_verdicts",
+                1,
+                {},
+                ToolResult(
+                    "finalize_verdicts",
+                    ToolResultStatus.SUCCESS,
+                    {"fixture": True},
+                ),
             )
-        )
+        else:
+            artifact = json.loads(output.canonical_bytes)
+            candidate_ids = tuple(
+                str(candidate["candidate_id"]) for candidate in artifact.get("candidates", [])
+            )
+            events = deterministic_reviewer_tool_scenario(self._comments, candidate_ids)
+        for event in events:
+            await sink(event)
         await sink(AgentRuntimeEvent("model_completed", "", {}))
         return output

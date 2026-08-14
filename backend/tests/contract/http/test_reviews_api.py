@@ -1035,9 +1035,9 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
                         "tool_call_id": "live-call-1",
                     },
                 ),
-                (
-                    "tool_result",
-                    "{}",
+                    (
+                        "tool_result",
+                        '{"schema_version":"2","tool":"read_file","status":"success","data":{},"diagnostics":[]}',
                     {"agent": "correctness:v2", "tool_call_id": "live-call-1"},
                 ),
             ),
@@ -1070,9 +1070,9 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
                         "tool_call_id": "call-1",
                     },
                 ),
-                (
-                    "tool_result",
-                    "{}",
+                    (
+                        "tool_result",
+                        '{"schema_version":"2","tool":"read_file","status":"success","data":{},"diagnostics":[]}',
                     {"agent": "correctness:v2", "tool_call_id": "call-1"},
                 ),
                 (

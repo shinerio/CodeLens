@@ -1,3 +1,5 @@
+import json
+
 import pytest
 from pydantic import ValidationError
 
@@ -41,9 +43,7 @@ def test_planner_output_accepts_general_alone() -> None:
         unavailable_reviewer_references=(),
     )
 
-    selection = codec.decode(
-        {"schema_version": "2", "reviewer_references": ["general:v2"]}
-    )
+    selection = codec.decode({"schema_version": "2", "reviewer_references": ["general:v2"]})
 
     assert selection.reviewer_references == ("general:v2",)
 
@@ -66,9 +66,7 @@ def test_planner_output_rejects_illegal_team_shapes(
     )
 
     with pytest.raises((ValueError, ValidationError)):
-        codec.decode(
-            {"schema_version": "2", "reviewer_references": reviewer_references}
-        )
+        codec.decode({"schema_version": "2", "reviewer_references": reviewer_references})
 
 
 def test_planner_output_rejects_extra_fields() -> None:
@@ -106,11 +104,12 @@ async def test_planner_submission_finalizes_once() -> None:
     collector = ReviewPlanSubmissionCollector(codec)
 
     finalize_result = await collector.finalize(_dto())
-    assert "2 Reviewer(s)" in finalize_result
+    assert json.loads(finalize_result)["data"]["reviewer_count"] == 2
     selection = collector.selection
     assert set(selection.reviewer_references) == {"security:v2", "performance:v2"}
 
-    with pytest.raises(ValueError, match="already finalized"):
-        await collector.finalize(_dto())
+    repeated = json.loads(await collector.finalize(_dto()))
+    assert repeated["status"] == "rejected"
+    assert repeated["diagnostics"][0]["code"] == "plan_already_finalized"
 
     assert collector.selection is selection

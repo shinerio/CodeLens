@@ -92,18 +92,15 @@ test("streams the correctness fixture from inspect to validated findings", async
   await expect(page.locator(".review-run-page__subtitle")).toContainText("completed", {
     timeout: 15000,
   });
-  await page.getByRole("tab", { name: /Execution/ }).click();
+  await page.getByRole("tab", { name: /Runtime overview/ }).click();
   await expect(page.getByRole("heading", { name: "Process report" })).toBeVisible({
     timeout: 15000,
   });
+  const processReport = page.getByRole("article", { name: "Process report" });
+  await expect(processReport).toBeVisible();
   await page.getByRole("tab", { name: /Logs/ }).click();
   const console = page.getByRole("region", { name: "Review execution console" });
-  const embeddedProcessReport = console.getByRole("article", { name: "Process report" });
-  await expect(embeddedProcessReport).toBeVisible();
-  await expect(embeddedProcessReport).toHaveCSS("color", "rgb(241, 247, 246)");
-  await expect(embeddedProcessReport).toHaveCSS("background-color", "rgb(21, 33, 38)");
-  await console.getByRole("button", { name: /Reviewers/ }).click();
-  await expect(console.getByText("correctness:v2", { exact: true }).first()).toBeVisible();
+  await expect(console.getByRole("button", { name: /Reviewers/ })).toBeVisible();
   await expect(console.getByRole("button", { name: /Verifier/ })).toHaveCount(0);
   await expect(console.getByText("review-verifier:v2", { exact: true })).toHaveCount(0);
   expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();

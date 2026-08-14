@@ -104,8 +104,9 @@ def test_process_report_distinguishes_rejected_tool_attempts_from_accepted_calls
             "tool_result",
             created_at + timedelta(seconds=1),
             content=(
-                '"An error occurred while running the tool. Please try again. Error: '
-                'Invalid JSON input for tool comment: extra inputs are not permitted"'
+                '{"schema_version":"2","tool":"comment","status":"rejected",'
+                '"data":{},"diagnostics":[{"code":"invalid_arguments_json",'
+                '"message":"Invalid arguments.","retryable":true}]}'
             ),
             metadata={"agent": agent, "tool_call_id": "call-1"},
         ),
@@ -119,7 +120,10 @@ def test_process_report_distinguishes_rejected_tool_attempts_from_accepted_calls
             4,
             "tool_result",
             created_at + timedelta(seconds=3),
-            content='"{\\"accepted\\":true,\\"accepted_count\\":1,\\"rejected_count\\":0}"',
+            content=(
+                '{"schema_version":"2","tool":"comment","status":"success",'
+                '"data":{"accepted_count":1},"diagnostics":[]}'
+            ),
             metadata={"agent": agent, "tool_call_id": "call-2"},
         ),
     )
@@ -144,7 +148,92 @@ def test_process_report_distinguishes_rejected_tool_attempts_from_accepted_calls
         )
         for tool in report.tools
     ] == [("comment", 2, 1, 1)]
-    assert report.rejected_tool_calls[0].reason_code == "invalid_tool_arguments"
+    assert report.rejected_tool_calls[0].reason_code == "invalid_arguments_json"
+    assert report.tool_result_status_counts["success"] == 1
+    assert report.tool_result_status_counts["rejected"] == 1
+    assert report.non_json_tool_result_count == 0
+
+
+def test_process_report_counts_non_json_replay_metrics_and_loop_aborts() -> None:
+    created_at = datetime(2026, 8, 14, tzinfo=UTC)
+    entries = (
+        _entry(
+            1,
+            "tool_call",
+            created_at,
+            metadata={"agent": "security:v2", "tool_name": "grep", "tool_call_id": "c1"},
+        ),
+        _entry(
+            2,
+            "tool_result",
+            created_at,
+            content="not-json",
+            metadata={"agent": "security:v2", "tool_call_id": "c1"},
+        ),
+        _entry(
+            3,
+            "model_output",
+            created_at,
+            metadata={
+                "agent": "security:v2",
+                "llm_call_count": "1",
+                "input_tokens": "1",
+                "output_tokens": "1",
+                "total_tokens": "2",
+                "compaction_replay_registered_count": "2",
+                "compaction_replay_consumed_count": "1",
+            },
+        ),
+        _entry(
+            4,
+            "lifecycle",
+            created_at,
+            metadata={
+                "agent": "security:v2",
+                "reason_code": "identical_tool_result_loop",
+            },
+        ),
+    )
+
+    report = build_process_report(
+        task_id="review_" + "f" * 32,
+        status="failed",
+        entries=entries,
+        finding_count=0,
+    )
+
+    assert report.non_json_tool_result_count == 1
+    assert report.compaction_replay_registered_count == 2
+    assert report.compaction_replay_consumed_count == 1
+    assert report.loop_abort_count == 1
+
+
+def test_process_report_counts_every_tool_result_status() -> None:
+    created_at = datetime(2026, 8, 14, tzinfo=UTC)
+    statuses = ("success", "partial", "needs_action", "rejected", "failed")
+    entries = tuple(
+        _entry(
+            sequence,
+            "tool_result",
+            created_at,
+            content=(
+                '{"schema_version":"2","tool":"read_file","status":"'
+                + status
+                + '","data":{},"diagnostics":[]}'
+            ),
+        )
+        for sequence, status in enumerate(statuses, start=1)
+    )
+
+    report = build_process_report(
+        task_id="review_" + "d" * 32,
+        status="completed",
+        entries=entries,
+        finding_count=0,
+    )
+
+    assert report.tool_result_status_counts == {status: 1 for status in statuses}
+    assert report.non_json_tool_result_count == 0
 
 
 def test_process_report_marks_usage_incomplete_for_legacy_transcripts() -> None:

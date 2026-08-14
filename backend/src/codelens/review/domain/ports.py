@@ -117,6 +117,8 @@ class UnvalidatedAgentOutput:
     context_compacted_result_count: int = 0
     context_compaction_original_bytes: int = 0
     context_compaction_compressed_bytes: int = 0
+    compaction_replay_registered_count: int = 0
+    compaction_replay_consumed_count: int = 0
 
     @property
     def review_completion_status(self) -> AgentReviewCompletionStatus:

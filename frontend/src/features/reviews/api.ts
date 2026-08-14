@@ -108,6 +108,8 @@ export interface AgentProcessSummary {
   context_compacted_result_count?: number;
   context_compaction_original_bytes?: number;
   context_compaction_compressed_bytes?: number;
+  compaction_replay_registered_count?: number;
+  compaction_replay_consumed_count?: number;
   output_tokens: number;
   total_tokens: number;
   tool_call_count: number;
@@ -132,6 +134,8 @@ export interface ReviewProcessReport {
   context_compacted_result_count?: number;
   context_compaction_original_bytes?: number;
   context_compaction_compressed_bytes?: number;
+  compaction_replay_registered_count?: number;
+  compaction_replay_consumed_count?: number;
   output_tokens: number;
   total_tokens: number;
   tool_call_count: number;
@@ -141,6 +145,9 @@ export interface ReviewProcessReport {
   invalid_tool_call_count: number;
   tool_result_count: number;
   unmatched_tool_result_count: number;
+  non_json_tool_result_count: number;
+  loop_abort_count: number;
+  tool_result_status_counts: Record<string, number>;
   finding_count: number;
   transcript_entry_count: number;
   started_at: string | null;

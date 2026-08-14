@@ -24,6 +24,7 @@ def test_builtin_profiles_expose_only_the_approved_tools() -> None:
         "read_file",
         "get_diff",
         "comment",
+        "retract_comment",
         "task_done",
     )
     assert _tool_names("verifier:v2") == (

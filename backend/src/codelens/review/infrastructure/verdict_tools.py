@@ -10,7 +10,7 @@ Three tools drive the Final Verifier stage:
   and produce the final validated verdict batch.
 """
 
-from typing import Literal
+from typing import Literal, cast
 
 from agents import Tool, function_tool
 
@@ -21,8 +21,15 @@ from codelens.findings.infrastructure.verdict_codec import (
     VerdictCodec,
 )
 from codelens.review.domain.ports import FindingValidationWarning
+from codelens.review.domain.tool_results import (
+    JsonValue,
+    ToolDiagnostic,
+    ToolResult,
+    ToolResultStatus,
+)
 from codelens.review.infrastructure.capability_tools import RoleOutputToolBinding
 from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
+from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 
 
 class VerdictSubmissionCollector:
@@ -65,17 +72,24 @@ class VerdictSubmissionCollector:
     ) -> str:
         """Record an accept or deny decision for one or more clusters."""
         if self._finalized is not None:
-            raise ValueError("Final Verifier has already finalized decisions")
+            return self._completed_result("verdict")
 
-        validated_ids = self._codec.validate_new_cluster_ids(cluster_ids, self._covered_cluster_ids)
+        validated_ids, rejected = self._partition_cluster_ids(cluster_ids)
+        if not validated_ids:
+            return self._batch_result("verdict", cluster_ids, validated_ids, rejected)
         outcome = VerdictOutcome.ACCEPT if action == "accept" else VerdictOutcome.DENY
         self._decisions.extend(
             VerdictDecision(cluster_ids=(cluster_id,), outcome=outcome)
             for cluster_id in validated_ids
         )
         self._covered_cluster_ids.update(validated_ids)
-        verb = "accepted" if action == "accept" else "denied"
-        return f"{len(cluster_ids)} cluster(s) {verb}. Total decisions: {len(self._decisions)}"
+        return self._batch_result(
+            "verdict",
+            cluster_ids,
+            validated_ids,
+            rejected,
+            extra={"action": action, "decision_count": len(self._decisions)},
+        )
 
     async def merge(
         self,
@@ -93,20 +107,47 @@ class VerdictSubmissionCollector:
     ) -> str:
         """Merge one or more clusters into a single synthesized Finding."""
         if self._finalized is not None:
-            raise ValueError("Final Verifier has already finalized decisions")
+            return self._completed_result("merge")
 
         from codelens.findings.domain.candidates import EvidenceStrength
         from codelens.findings.domain.models import FindingSeverity
 
         if self._location_resolver is None:
-            raise ValueError("merge location resolver is unavailable")
-        primary_location, changed_hunk_id = await self._location_resolver.resolve(
-            path,
-            side,
-            existing_code,
-        )
-
-        validated_ids = self._codec.validate_new_cluster_ids(cluster_ids, self._covered_cluster_ids)
+            return ToolResult(
+                "merge",
+                ToolResultStatus.FAILED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "location_resolver_unavailable",
+                        "Merge location resolution is unavailable.",
+                        False,
+                    ),
+                ),
+            ).to_json()
+        validated_ids, rejected = self._partition_cluster_ids(cluster_ids)
+        if not validated_ids:
+            return self._batch_result("merge", cluster_ids, validated_ids, rejected)
+        try:
+            primary_location, changed_hunk_id = await self._location_resolver.resolve(
+                path,
+                side,
+                existing_code,
+            )
+        except ValueError:
+            return ToolResult(
+                "merge",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "invalid_merge_location",
+                        "The merge location is not valid evidence.",
+                        True,
+                        "path",
+                    ),
+                ),
+            ).to_json()
         decision = VerdictDecision.merge(
             cluster_ids=validated_ids,
             path=path,
@@ -124,16 +165,120 @@ class VerdictSubmissionCollector:
         )
         self._decisions.append(decision)
         self._covered_cluster_ids.update(validated_ids)
-        count = len(self._decisions)
-        return f"Merged {len(cluster_ids)} cluster(s) into one Finding. Total decisions: {count}"
+        return self._batch_result(
+            "merge",
+            cluster_ids,
+            validated_ids,
+            rejected,
+            extra={"decision_count": len(self._decisions)},
+        )
 
     async def finalize(self) -> str:
         """Validate all accumulated decisions and finalize."""
         if self._finalized is not None:
-            raise ValueError("Final Verifier has already finalized decisions")
+            return self._completed_result("finalize_verdicts")
+        try:
+            finalized = self._codec.decode_decisions(self._decisions)
+        except ValueError:
+            missing = sorted(
+                {cluster.cluster_id for cluster in self._codec.clusters} - self._covered_cluster_ids
+            )
+            return ToolResult(
+                "finalize_verdicts",
+                ToolResultStatus.NEEDS_ACTION,
+                {
+                    "missing_cluster_ids": cast(JsonValue, missing),
+                    "decision_count": len(self._decisions),
+                },
+                (
+                    ToolDiagnostic(
+                        "missing_cluster_verdicts",
+                        "Every cluster requires exactly one verdict.",
+                        True,
+                    ),
+                ),
+            ).to_json()
+        self._finalized = finalized
+        return ToolResult(
+            "finalize_verdicts",
+            ToolResultStatus.SUCCESS,
+            {
+                "verdict_count": len(finalized),
+                "covered_cluster_count": len(self._covered_cluster_ids),
+            },
+        ).to_json()
 
-        self._finalized = self._codec.decode_decisions(self._decisions)
-        return f"Final Verifier completed: {len(self._finalized)} verdict(s)"
+    def _partition_cluster_ids(
+        self, cluster_ids: list[str]
+    ) -> tuple[tuple[str, ...], list[dict[str, JsonValue]]]:
+        accepted: list[str] = []
+        rejected: list[dict[str, JsonValue]] = []
+        pending_covered = set(self._covered_cluster_ids)
+        for input_index, cluster_id in enumerate(cluster_ids):
+            try:
+                validated = self._codec.validate_new_cluster_ids([cluster_id], pending_covered)
+            except ValueError as error:
+                message = str(error)
+                code = (
+                    "unknown_cluster"
+                    if "unknown cluster" in message
+                    else "duplicate_cluster_verdict"
+                )
+                rejected.append(
+                    {"input_index": input_index, "cluster_id": cluster_id, "code": code}
+                )
+            else:
+                accepted.extend(validated)
+                pending_covered.update(validated)
+        return tuple(accepted), rejected
+
+    def _batch_result(
+        self,
+        tool: str,
+        submitted_ids: list[str],
+        accepted_ids: tuple[str, ...],
+        rejected: list[dict[str, JsonValue]],
+        *,
+        extra: dict[str, JsonValue] | None = None,
+    ) -> str:
+        status = (
+            ToolResultStatus.PARTIAL
+            if accepted_ids and rejected
+            else ToolResultStatus.SUCCESS
+            if accepted_ids
+            else ToolResultStatus.REJECTED
+        )
+        data: dict[str, JsonValue] = {
+            "submitted_count": len(submitted_ids),
+            "accepted_count": len(accepted_ids),
+            "rejected_count": len(rejected),
+            "accepted_cluster_ids": list(accepted_ids),
+            "rejected_clusters": cast(JsonValue, rejected),
+        }
+        if extra:
+            data.update(extra)
+        diagnostics = tuple(
+            ToolDiagnostic(
+                str(item["code"]), "The cluster cannot receive this verdict.", True, "cluster_ids"
+            )
+            for item in rejected
+        )
+        return ToolResult(tool, status, data, diagnostics).to_json()
+
+    @staticmethod
+    def _completed_result(tool: str) -> str:
+        return ToolResult(
+            tool,
+            ToolResultStatus.REJECTED,
+            {},
+            (
+                ToolDiagnostic(
+                    "verdicts_already_finalized",
+                    "Final Verifier decisions are already final.",
+                    False,
+                ),
+            ),
+        ).to_json()
 
     def as_verdict_tool(self, description: str) -> Tool:
         collector = self
@@ -146,7 +291,7 @@ class VerdictSubmissionCollector:
             """Accept or deny one or more finding clusters."""
             return await collector.verdict(cluster_ids=cluster_ids, action=action)
 
-        return verdict
+        return reject_unknown_arguments(verdict)
 
     def as_merge_tool(self, description: str) -> Tool:
         collector = self
@@ -180,7 +325,7 @@ class VerdictSubmissionCollector:
                 evidence_strength=evidence_strength,
             )
 
-        return merge
+        return reject_unknown_arguments(merge)
 
     def as_finalize_tool(self, description: str) -> Tool:
         collector = self
@@ -190,7 +335,7 @@ class VerdictSubmissionCollector:
             """Validate accumulated verdicts and finalize the Final Verifier stage."""
             return await collector.finalize()
 
-        return finalize_verdicts
+        return reject_unknown_arguments(finalize_verdicts)
 
     def bindings(
         self,

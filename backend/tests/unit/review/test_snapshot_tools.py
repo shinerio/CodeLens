@@ -1,3 +1,4 @@
+import base64
 import hashlib
 import json
 from dataclasses import replace
@@ -6,7 +7,10 @@ from pathlib import Path
 import pytest
 
 from codelens.review.domain.tool_limits import ToolLimits
-from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
+from codelens.review.infrastructure.snapshot_tools import (
+    FilesystemReviewTools,
+    ModelLineRange,
+)
 from codelens.workspace.domain.models import (
     ChangedHunk,
     ChangeIndex,
@@ -28,10 +32,22 @@ def _hash(value: bytes) -> str:
 
 def _only_diff(result: str) -> dict[str, object]:
     payload = json.loads(result)
-    assert payload["has_more"] is False
-    assert payload["next_cursor"] is None
-    assert len(payload["diffs"]) == 1
-    return payload["diffs"][0]
+    assert payload["data"]["has_more"] is False
+    assert payload["data"]["next_cursor"] is None
+    assert len(payload["data"]["files"]) == 1
+    file_result = payload["data"]["files"][0]
+    return {
+        **file_result,
+        "content": file_result["header"] + "".join(file_result["hunks"]),
+        "truncated": not file_result["is_complete"],
+    }
+
+
+def _tool_data(result: str) -> dict[str, object]:
+    payload = json.loads(result)
+    assert payload["schema_version"] == "2"
+    assert isinstance(payload["data"], dict)
+    return payload["data"]
 
 
 async def _git(repository: Path, *args: str) -> None:
@@ -85,7 +101,7 @@ async def _snapshot(tmp_path: Path) -> ReviewSnapshot:
             ),
             entries=(
                 SnapshotEntry(
-                    "src/service.py", "file", 0o100644, len(changed), _hash(changed), None, "target"
+                    "src/service.py", "file", 0o644, len(changed), _hash(changed), None, "target"
                 ),
                 SnapshotEntry(
                     "src/helper.py", "file", 0o100644, len(helper), _hash(helper), None, "context"
@@ -161,35 +177,298 @@ async def _snapshot(tmp_path: Path) -> ReviewSnapshot:
     )
 
 
+async def _multi_hunk_snapshot(tmp_path: Path) -> ReviewSnapshot:
+    await _git(tmp_path, "init")
+    await _git(tmp_path, "config", "user.email", "review@example.test")
+    await _git(tmp_path, "config", "user.name", "Review Test")
+    await _git(tmp_path, "config", "commit.gpgSign", "false")
+    (tmp_path / "src").mkdir()
+    base_lines = [f"line {line_number}\n" for line_number in range(1, 41)]
+    path = "src/multi.py"
+    (tmp_path / path).write_text("".join(base_lines))
+    await _git(tmp_path, "add", ".")
+    await _git(tmp_path, "commit", "-m", "base")
+    base_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    current_lines = list(base_lines)
+    for index in (1, 14, 27):
+        current_lines[index] = f"changed {index + 1}\n"
+    current = "".join(current_lines).encode()
+    (tmp_path / path).write_bytes(current)
+    await _git(tmp_path, "add", ".")
+    await _git(tmp_path, "commit", "-m", "head")
+    head_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    return ReviewSnapshot(
+        "snapshot-multi",
+        TaskWorktree("worktree-multi", "review-multi", "a" * 64, tmp_path, head_oid, "b" * 64),
+        ReviewTarget(base_oid, head_oid, None),
+        RepositoryFingerprint(head_oid, "c" * 64, "d" * 64),
+        SnapshotManifest(
+            ReviewFileScope.include_all((path,)),
+            entries=(
+                SnapshotEntry(path, "file", 0o100644, len(current), _hash(current), None, "target"),
+            ),
+        ),
+        ChangeIndex(
+            tuple(
+                ChangedHunk(
+                    f"hunk-{line_number}",
+                    path,
+                    line_number,
+                    line_number,
+                    "new",
+                    _hash(f"changed {line_number}\n".encode()),
+                )
+                for line_number in (2, 15, 28)
+            ),
+            (ReviewFileChange(path, "modified"),),
+        ),
+    )
+
+
+async def _contract_matrix_snapshot(tmp_path: Path) -> ReviewSnapshot:
+    """Build the plan's shared real-Git matrix for all four evidence tools."""
+
+    await _git(tmp_path, "init")
+    await _git(tmp_path, "config", "user.email", "review@example.test")
+    await _git(tmp_path, "config", "user.name", "Review Test")
+    await _git(tmp_path, "config", "commit.gpgSign", "false")
+    base_files = {
+        "README.md": b"matrix fixture\n",
+        "empty.txt": b"",
+        "src/a.py": b"VALUE = 'old'\n",
+        "src/deep/compiler_plan.py": b"needle = 'compiler'\n",
+        "src/deep/blank_lines.py": b"first\n\n   \nlast\n",
+        "tests/test_a.py": b"def test_a():\n    pass\n",
+        "tests/unit/test_nested.py": b"def test_nested():\n    pass\n",
+        "unicode/中文.py": "名称 = '值'\n".encode(),
+        "long/single_line.txt": ("😀" * 200 + "\n").encode(),
+        "binary/blob.bin": b"binary\0payload",
+        "renamed/old_name.py": b"RENAMED = True\n",
+        "deleted/gone.py": b"GONE = True\n",
+    }
+    for path, payload in base_files.items():
+        target = tmp_path / path
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(payload)
+    (tmp_path / "link-to-a").symlink_to("src/a.py")
+    await _git(tmp_path, "add", ".")
+    await _git(tmp_path, "commit", "-m", "matrix base")
+    base_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+
+    current_a = b"VALUE = 'new'\n"
+    (tmp_path / "src/a.py").write_bytes(current_a)
+    await _git(tmp_path, "mv", "renamed/old_name.py", "renamed/new_name.py")
+    (tmp_path / "deleted/gone.py").unlink()
+    (tmp_path / "link-to-a").unlink()
+    (tmp_path / "link-to-a").symlink_to("README.md")
+    await _git(tmp_path, "add", "-A")
+    await _git(tmp_path, "commit", "-m", "matrix head")
+    head_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+
+    current_files = {
+        **{
+            path: payload
+            for path, payload in base_files.items()
+            if path not in {"src/a.py", "renamed/old_name.py", "deleted/gone.py"}
+        },
+        "src/a.py": current_a,
+        "renamed/new_name.py": base_files["renamed/old_name.py"],
+    }
+    review_paths = (
+        "src/a.py",
+        "renamed/new_name.py",
+        "deleted/gone.py",
+        "link-to-a",
+    )
+    context_paths = tuple(sorted(path for path in current_files if path not in review_paths))
+    entries = [
+        SnapshotEntry(
+            path,
+            "file",
+            0o100644,
+            len(payload),
+            _hash(payload),
+            None,
+            "target" if path in review_paths else "context",
+        )
+        for path, payload in sorted(current_files.items())
+    ]
+    entries.extend(
+        (
+            SnapshotEntry(
+                "deleted/gone.py",
+                "deleted",
+                0,
+                0,
+                _hash(b""),
+                None,
+                "target",
+            ),
+            SnapshotEntry(
+                "link-to-a",
+                "symlink",
+                0o120000,
+                len(b"README.md"),
+                _hash(b"README.md"),
+                "README.md",
+                "target",
+            ),
+        )
+    )
+    return ReviewSnapshot(
+        "snapshot-contract-matrix",
+        TaskWorktree(
+            "worktree-contract-matrix",
+            "review-contract-matrix",
+            "a" * 64,
+            tmp_path,
+            head_oid,
+            "b" * 64,
+        ),
+        ReviewTarget(base_oid, head_oid, None),
+        RepositoryFingerprint(head_oid, "c" * 64, "d" * 64),
+        SnapshotManifest(
+            ReviewFileScope.include_all(review_paths, context_paths),
+            entries=tuple(entries),
+        ),
+        ChangeIndex(
+            (
+                ChangedHunk(
+                    "matrix-old-a",
+                    "src/a.py",
+                    1,
+                    1,
+                    "old",
+                    _hash(base_files["src/a.py"]),
+                ),
+                ChangedHunk(
+                    "matrix-new-a",
+                    "src/a.py",
+                    1,
+                    1,
+                    "new",
+                    _hash(current_a),
+                ),
+            ),
+            (
+                ReviewFileChange("src/a.py", "modified"),
+                ReviewFileChange(
+                    "renamed/new_name.py",
+                    "renamed",
+                    old_path="renamed/old_name.py",
+                ),
+                ReviewFileChange("deleted/gone.py", "deleted"),
+                ReviewFileChange("link-to-a", "modified"),
+            ),
+        ),
+    )
+
+
+async def test_all_evidence_tools_share_the_real_git_contract_matrix(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _contract_matrix_snapshot(tmp_path)
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+
+    found = _tool_data(await tools.find_files("", "*.py"))
+    searched = _tool_data(await tools.grep("needle", "literal", "", "*.py"))
+    blank_lines = _tool_data(await tools.read_file("src/deep/blank_lines.py", "current", None))
+    diff = _tool_data(await tools.get_diff("", None))
+
+    assert "src/deep/compiler_plan.py" in found["paths"]
+    assert "tests/unit/test_nested.py" in found["paths"]
+    assert "unicode/中文.py" in found["paths"]
+    assert searched["matches"] == [
+        {
+            "path": "src/deep/compiler_plan.py",
+            "line_number": 1,
+            "line": "needle = 'compiler'",
+        }
+    ]
+    assert blank_lines["content"] == ("   1 | first\n   2 | \n   3 |    \n   4 | last\n")
+    assert {item["change_type"] for item in diff["files"]} == {
+        "modified",
+        "renamed",
+        "deleted",
+    }
+    assert {item["path"] for item in diff["files"]} == set(snapshot.manifest.review_paths)
+    assert tools.reviewed_paths == set(snapshot.manifest.review_paths)
+
+
 async def test_exposes_only_hash_verified_snapshot_content(tmp_path: Path) -> None:
     snapshot = await _snapshot(tmp_path)
     tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
 
-    assert json.loads(await tools.find_files(path="src"))["paths"] == [
+    assert _tool_data(await tools.find_files(path="src"))["paths"] == [
         "src/helper.py",
         "src/service.py",
     ]
-    assert json.loads(await tools.find_files(pattern="src/*.py"))["paths"] == [
+    assert _tool_data(await tools.find_files(pattern="src/*.py"))["paths"] == [
         "src/helper.py",
         "src/service.py",
     ]
-    assert json.loads(await tools.find_files(path="src", pattern="service.*"))["paths"] == [
+    assert _tool_data(await tools.find_files(path="src", pattern="service.*"))["paths"] == [
         "src/service.py"
     ]
-    assert json.loads(await tools.grep("return"))["matches"] == [
-        {"line": 2, "path": "src/helper.py", "text": "    return 'helper'"},
-        {"line": 2, "path": "src/service.py", "text": "    return 'new'"},
+    assert _tool_data(await tools.grep("return"))["matches"] == [
+        {"line_number": 2, "path": "src/helper.py", "line": "    return 'helper'"},
+        {"line_number": 2, "path": "src/service.py", "line": "    return 'new'"},
     ]
-    read = json.loads(await tools.read_file("src/service.py", 1, 2))
-    assert read["content"] == "1|def original() -> str:\n2|    return 'new'"
+    read = _tool_data(
+        await tools.read_file("src/service.py", "current", ModelLineRange(start_line=1, end_line=2))
+    )
+    assert read["content"] == "   1 | def original() -> str:\n   2 |     return 'new'\n"
     assert read["version"] == "current"
     assert "content_hash" not in read
 
     (tmp_path / "src" / "helper.py").write_text("tampered\n")
-    with pytest.raises(ValueError, match="changed"):
-        await tools.read_file("src/helper.py", 1, 1)
-    with pytest.raises(ValueError, match="visible"):
-        await tools.read_file(".git/config", 1, 1)
+    tampered = json.loads(
+        await tools.read_file("src/helper.py", "current", ModelLineRange(start_line=1, end_line=1))
+    )
+    assert tampered["status"] == "rejected"
+    invisible = json.loads(
+        await tools.read_file(".git/config", "current", ModelLineRange(start_line=1, end_line=1))
+    )
+    assert invisible["status"] == "rejected"
+
+
+async def test_find_and_grep_share_recursive_basename_glob_semantics(tmp_path: Path) -> None:
+    snapshot = await _snapshot(tmp_path)
+    nested = b"def compiler_plan() -> str:\n    return 'nested'\n"
+    (tmp_path / "src" / "deep").mkdir()
+    (tmp_path / "src" / "deep" / "compiler_plan.py").write_bytes(nested)
+    nested_path = "src/deep/compiler_plan.py"
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            review_scope=ReviewFileScope.include_all(
+                snapshot.manifest.review_paths,
+                (*snapshot.manifest.context_paths, nested_path),
+            ),
+            entries=(
+                *snapshot.manifest.entries,
+                SnapshotEntry(
+                    nested_path,
+                    "file",
+                    0o100644,
+                    len(nested),
+                    _hash(nested),
+                    None,
+                    "context",
+                ),
+            ),
+        ),
+    )
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+
+    found = _tool_data(await tools.find_files(path="src", pattern="*.py"))
+    searched = _tool_data(await tools.grep("compiler_plan", path="src", file_pattern="*.py"))
+
+    assert nested_path in found["paths"]
+    assert searched["matches"] == [
+        {"line_number": 1, "path": nested_path, "line": "def compiler_plan() -> str:"}
+    ]
 
 
 async def test_grep_reports_truncation_and_supports_narrower_retry(
@@ -200,26 +479,30 @@ async def test_grep_reports_truncation_and_supports_narrower_retry(
     tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20, tool_limits=custom_limits)
 
     broad_result = json.loads(await tools.grep("return", path="src"))
-    assert broad_result == {
-        "matches": [{"line": 2, "path": "src/helper.py", "text": "    return 'helper'"}],
-        "truncated": True,
-    }
+    assert broad_result["status"] == "partial"
+    assert broad_result["data"]["matches"] == [
+        {"line_number": 2, "path": "src/helper.py", "line": "    return 'helper'"}
+    ]
+    assert broad_result["data"]["truncated"] is True
+    assert broad_result["diagnostics"][0]["code"] == "scan_limit_reached"
 
-    narrower_result = json.loads(await tools.grep("return", path="src", file_pattern="service.*"))
-    assert narrower_result == {
-        "matches": [{"line": 2, "path": "src/service.py", "text": "    return 'new'"}],
-        "truncated": False,
-    }
+    narrower_result = _tool_data(await tools.grep("return", path="src", file_pattern="service.*"))
+    assert narrower_result["matches"] == [
+        {"line_number": 2, "path": "src/service.py", "line": "    return 'new'"}
+    ]
+    assert narrower_result["truncated"] is False
 
     outside_scope = json.loads(await tools.grep("return", path="tests"))
-    assert outside_scope == {"matches": [], "truncated": False}
+    assert outside_scope["status"] == "success"
+    assert outside_scope["data"]["matches"] == []
+    assert outside_scope["diagnostics"][0]["code"] == "no_candidate_files"
 
 
 async def test_grep_filters_directory_scope_with_relative_file_pattern(tmp_path: Path) -> None:
     snapshot = await _snapshot(tmp_path)
     tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
 
-    result = json.loads(
+    result = _tool_data(
         await tools.grep(
             "return",
             path="src",
@@ -227,8 +510,10 @@ async def test_grep_filters_directory_scope_with_relative_file_pattern(tmp_path:
         )
     )
 
-    assert result["matches"] == [{"line": 2, "path": "src/service.py", "text": "    return 'new'"}]
-    exact_file = json.loads(
+    assert result["matches"] == [
+        {"line_number": 2, "path": "src/service.py", "line": "    return 'new'"}
+    ]
+    exact_file = _tool_data(
         await tools.grep(
             "return",
             path="src/service.py",
@@ -236,16 +521,17 @@ async def test_grep_filters_directory_scope_with_relative_file_pattern(tmp_path:
         )
     )
     assert exact_file["matches"] == result["matches"]
-    excluded_exact_file = json.loads(
+    exact_file_ignores_file_pattern = _tool_data(
         await tools.grep(
             "return",
             path="src/service.py",
             file_pattern="*.json",
         )
     )
-    assert excluded_exact_file["matches"] == []
-    with pytest.raises(ValueError, match="file pattern"):
-        await tools.grep("return", path="src", file_pattern="../*.py")
+    assert exact_file_ignores_file_pattern["matches"] == result["matches"]
+    invalid_glob = json.loads(await tools.grep("return", path="src", file_pattern="../*.py"))
+    assert invalid_glob["status"] == "rejected"
+    assert invalid_glob["diagnostics"][0]["code"] == "invalid_glob_pattern"
 
 
 async def test_grep_returns_a_window_containing_the_actual_match(tmp_path: Path) -> None:
@@ -266,15 +552,115 @@ async def test_grep_returns_a_window_containing_the_actual_match(tmp_path: Path)
         ),
     )
 
-    result = json.loads(
+    result = _tool_data(
         await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).grep(
             "needle", path=path, file_pattern="*.py"
         )
     )
 
     assert len(result["matches"]) == 1
-    assert "needle" in result["matches"][0]["text"]
-    assert len(result["matches"][0]["text"]) <= 200
+    assert "needle" in result["matches"][0]["line"]
+    assert len(result["matches"][0]["line"]) <= 200
+
+
+async def test_grep_distinguishes_literal_regex_and_no_content(tmp_path: Path) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "src/helper.py"
+    payload = b"a.b\naxb\n"
+    (tmp_path / path).write_bytes(payload)
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            entries=tuple(
+                replace(entry, size_bytes=len(payload), content_hash=_hash(payload))
+                if entry.path == path
+                else entry
+                for entry in snapshot.manifest.entries
+            ),
+        ),
+    )
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+
+    literal = _tool_data(await tools.grep("a.b", mode="literal", path=path))
+    regex = _tool_data(await tools.grep("a.b", mode="regex", path=path))
+    no_match = json.loads(await tools.grep("missing", mode="literal", path=path))
+    invalid_regex = json.loads(await tools.grep("[", mode="regex", path=path))
+
+    assert [match["line_number"] for match in literal["matches"]] == [1]
+    assert [match["line_number"] for match in regex["matches"]] == [1, 2]
+    assert no_match["status"] == "success"
+    assert no_match["diagnostics"][0]["code"] == "no_content_matches"
+    assert invalid_regex["status"] == "rejected"
+    assert invalid_regex["diagnostics"][0]["code"] == "invalid_regular_expression"
+
+
+async def test_grep_skips_binary_files_and_replaces_invalid_utf8_stably(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    binary_path = "src/blob.bin"
+    invalid_utf8_path = "src/invalid-utf8.txt"
+    binary_payload = b"needle\0binary\n"
+    invalid_utf8_payload = b"prefix-\xff-needle\n"
+    (tmp_path / binary_path).write_bytes(binary_payload)
+    (tmp_path / invalid_utf8_path).write_bytes(invalid_utf8_payload)
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            review_scope=snapshot.manifest.review_scope.with_visible_paths(
+                snapshot.manifest.review_paths,
+                (
+                    *snapshot.manifest.context_paths,
+                    binary_path,
+                    invalid_utf8_path,
+                ),
+            ),
+            entries=(
+                *snapshot.manifest.entries,
+                SnapshotEntry(
+                    binary_path,
+                    "file",
+                    0o100644,
+                    len(binary_payload),
+                    _hash(binary_payload),
+                    None,
+                    "context",
+                ),
+                SnapshotEntry(
+                    invalid_utf8_path,
+                    "file",
+                    0o100644,
+                    len(invalid_utf8_payload),
+                    _hash(invalid_utf8_payload),
+                    None,
+                    "context",
+                ),
+            ),
+        ),
+    )
+
+    result = json.loads(
+        await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).grep(
+            "needle",
+            mode="literal",
+            path="src",
+            file_pattern="*",
+        )
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["candidate_file_count"] == 4
+    assert result["data"]["scanned_file_count"] == 3
+    assert result["data"]["skipped_binary_file_count"] == 1
+    assert result["data"]["matches"] == [
+        {
+            "line_number": 1,
+            "path": invalid_utf8_path,
+            "line": "prefix-�-needle",
+        }
+    ]
 
 
 @pytest.mark.parametrize(("match_count", "is_truncated"), [(200, False), (201, True)])
@@ -305,7 +691,7 @@ async def test_grep_truncates_only_when_additional_matches_exist(
     )
     tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
 
-    result = json.loads(await tools.grep("match", path=path, file_pattern="*.py"))
+    result = _tool_data(await tools.grep("match", path=path, file_pattern="*.py"))
 
     assert len(result["matches"]) == min(match_count, 200)
     assert result["truncated"] is is_truncated
@@ -341,10 +727,14 @@ async def test_find_files_uses_posix_path_glob_semantics(tmp_path: Path) -> None
     )
     tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
 
-    direct = json.loads(await tools.find_files(path="src", pattern="*.py"))
-    recursive = json.loads(await tools.find_files(path="src", pattern="**/*.py"))
+    direct = _tool_data(await tools.find_files(path="src", pattern="*.py"))
+    recursive = _tool_data(await tools.find_files(path="src", pattern="**/*.py"))
 
-    assert direct["paths"] == ["src/helper.py", "src/service.py"]
+    assert direct["paths"] == [
+        "src/helper.py",
+        "src/nested/worker.py",
+        "src/service.py",
+    ]
     assert recursive["paths"] == [
         "src/helper.py",
         "src/nested/worker.py",
@@ -361,7 +751,59 @@ async def test_find_files_reports_non_paginated_truncation(
 
     result = json.loads(await tools.find_files(path="src", pattern="*.py"))
 
-    assert result == {"paths": ["src/helper.py"], "truncated": True}
+    assert result["status"] == "partial"
+    assert result["data"] == {
+        "effective_pattern": "*.py",
+        "matched_count": 2,
+        "normalized_path": "src",
+        "paths": ["src/helper.py"],
+        "pattern_scope": "recursive_basename",
+        "requested_path": "src",
+        "requested_pattern": "*.py",
+        "returned_count": 1,
+        "scope_type": "directory",
+        "truncated": True,
+        "visible_file_count": 2,
+    }
+    assert result["diagnostics"][0]["code"] == "result_limit_reached"
+
+
+async def test_find_files_distinguishes_empty_scope_no_match_and_file_path(
+    tmp_path: Path,
+) -> None:
+    tools = FilesystemReviewTools(await _snapshot(tmp_path), GitCli(), max_tool_calls=20)
+
+    empty_scope = json.loads(await tools.find_files(path="missing", pattern="*.py"))
+    no_match = json.loads(await tools.find_files(path="src", pattern="*.json"))
+    file_scope = json.loads(await tools.find_files(path="src/service.py", pattern="*.py"))
+
+    assert empty_scope["status"] == "success"
+    assert empty_scope["data"]["visible_file_count"] == 0
+    assert empty_scope["diagnostics"][0]["code"] == "empty_directory_scope"
+    assert no_match["status"] == "success"
+    assert no_match["data"]["visible_file_count"] == 2
+    assert no_match["diagnostics"][0]["code"] == "no_files_match_pattern"
+    assert file_scope["status"] == "rejected"
+    assert file_scope["diagnostics"][0]["code"] == "path_is_not_directory"
+    assert file_scope["diagnostics"][0]["suggested_arguments"] == {
+        "path": "src",
+        "pattern": "service.py",
+    }
+
+
+async def test_find_files_rejects_ambiguous_glob_with_complete_retry(
+    tmp_path: Path,
+) -> None:
+    tools = FilesystemReviewTools(await _snapshot(tmp_path), GitCli(), max_tool_calls=20)
+
+    result = json.loads(await tools.find_files(path="src", pattern="**.py"))
+
+    assert result["status"] == "rejected"
+    assert result["diagnostics"][0]["code"] == "ambiguous_recursive_glob"
+    assert result["diagnostics"][0]["suggested_arguments"] == {
+        "path": "src",
+        "pattern": "*.py",
+    }
 
 
 async def test_read_file_supports_bounded_whole_file_mode(tmp_path: Path) -> None:
@@ -370,16 +812,11 @@ async def test_read_file_supports_bounded_whole_file_mode(tmp_path: Path) -> Non
 
     read = json.loads(await tools.read_file("src/service.py"))
 
-    assert read == {
-        "path": "src/service.py",
-        "version": "current",
-        "start_line": 1,
-        "end_line": 2,
-        "content": "1|def original() -> str:\n2|    return 'new'",
-        "truncated": False,
-    }
-    with pytest.raises(ValueError, match="provided together"):
-        await tools.read_file("src/service.py", start_line=1)
+    assert read["status"] == "success"
+    assert read["data"]["requested_line_range"] is None
+    assert read["data"]["actual_line_range"] == {"start_line": 1, "end_line": 2}
+    assert read["data"]["content"] == ("   1 | def original() -> str:\n   2 |     return 'new'\n")
+    assert read["data"]["truncated"] is False
 
 
 async def test_read_file_marks_whole_file_line_limit_as_truncated(
@@ -391,9 +828,109 @@ async def test_read_file_marks_whole_file_line_limit_as_truncated(
 
     read = json.loads(await tools.read_file("src/service.py"))
 
-    assert read["content"] == "1|def original() -> str:"
-    assert read["end_line"] == 1
-    assert read["truncated"] is True
+    assert read["status"] == "partial"
+    assert read["data"]["content"] == "   1 | def original() -> str:\n"
+    assert read["data"]["actual_line_range"]["end_line"] == 1
+    assert read["data"]["next_line_range"] == {"start_line": 2, "end_line": 2}
+
+
+async def test_read_file_preserves_blank_whitespace_crlf_unicode_and_eof_clamp(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "src/helper.py"
+    payload = "alpha\r\n\r\n   \r\n中文😀\nlast".encode()
+    (tmp_path / path).write_bytes(payload)
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            entries=tuple(
+                replace(entry, size_bytes=len(payload), content_hash=_hash(payload))
+                if entry.path == path
+                else entry
+                for entry in snapshot.manifest.entries
+            ),
+        ),
+    )
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+
+    result = json.loads(
+        await tools.read_file(
+            path,
+            "current",
+            ModelLineRange(start_line=1, end_line=99),
+        )
+    )
+    beyond_eof = json.loads(
+        await tools.read_file(
+            path,
+            "current",
+            ModelLineRange(start_line=6, end_line=7),
+        )
+    )
+
+    assert result["status"] == "success"
+    assert result["data"]["total_lines"] == 5
+    assert result["data"]["actual_line_range"] == {"start_line": 1, "end_line": 5}
+    assert result["data"]["content"] == (
+        "   1 | alpha\n   2 | \n   3 |    \n   4 | 中文😀\n   5 | last"
+    )
+    assert beyond_eof["status"] == "rejected"
+    assert beyond_eof["diagnostics"][0]["code"] == "line_range_out_of_bounds"
+
+
+async def test_read_file_marks_utf8_safe_incomplete_long_line_as_non_evidence(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "src/service.py"
+    payload = ("😀" * 20).encode()
+    (tmp_path / path).write_bytes(payload)
+    snapshot = replace(
+        snapshot,
+        manifest=replace(
+            snapshot.manifest,
+            entries=tuple(
+                replace(entry, size_bytes=len(payload), content_hash=_hash(payload))
+                if entry.path == path
+                else entry
+                for entry in snapshot.manifest.entries
+            ),
+        ),
+    )
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_read_bytes=17),
+    )
+
+    result = json.loads(await tools.read_file(path))
+
+    assert result["status"] == "partial"
+    assert result["data"]["line_content_truncated"] is True
+    assert len(result["data"]["content"].encode("utf-8")) <= 17
+    assert result["diagnostics"][0]["code"] == "line_exceeds_read_limit"
+    assert tools.reviewed_paths == set()
+
+
+async def test_read_file_agent_schema_requires_nullable_line_range(tmp_path: Path) -> None:
+    tools = FilesystemReviewTools(await _snapshot(tmp_path), GitCli(), max_tool_calls=20)
+    descriptions = {name: name for name in ("find_files", "grep", "read_file", "get_diff")}
+
+    read_tool = next(
+        tool for tool in tools.as_agent_tools(descriptions) if tool.name == "read_file"
+    )
+    diff_tool = next(tool for tool in tools.as_agent_tools(descriptions) if tool.name == "get_diff")
+    schema = read_tool.params_json_schema
+
+    assert read_tool.strict_json_schema is True
+    assert set(schema["required"]) == {"path", "version", "line_range"}
+    assert schema["additionalProperties"] is False
+    assert schema["$defs"]["ModelLineRange"]["additionalProperties"] is False
+    assert diff_tool.strict_json_schema is True
+    assert set(diff_tool.params_json_schema["required"]) == {"path", "cursor"}
 
 
 async def test_tools_reject_oversized_snapshot_sources_before_reading(
@@ -418,8 +955,9 @@ async def test_tools_reject_oversized_snapshot_sources_before_reading(
     custom_limits = ToolLimits(max_source_bytes=8)
     tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20, tool_limits=custom_limits)
 
-    with pytest.raises(ValueError, match="source file exceeds"):
-        await tools.read_file(path)
+    result = json.loads(await tools.read_file(path))
+    assert result["status"] == "rejected"
+    assert result["diagnostics"][0]["code"] == "source_file_exceeds_limit"
 
 
 async def test_provides_diff_and_bounded_base_version_reads(
@@ -431,16 +969,21 @@ async def test_provides_diff_and_bounded_base_version_reads(
     diff = _only_diff(await tools.get_diff("src/service.py"))
     assert "-    return 'old'" in diff["content"]
     assert "+    return 'new'" in diff["content"]
+    assert "old mode" not in diff["content"]
+    assert "new mode" not in diff["content"]
     assert "content_hash" not in diff
-    revision = json.loads(await tools.read_file("src/service.py", 1, 2, "base"))
+    line_range = ModelLineRange(start_line=1, end_line=2)
+    revision = _tool_data(await tools.read_file("src/service.py", "base", line_range))
     base_content = revision["content"]
-    assert "2|    return 'old'" in base_content
+    assert "   2 |     return 'old'" in base_content
     assert "content_hash" not in revision
-    head = json.loads(await tools.read_file("src/service.py", 1, 2, "head"))
+    head = _tool_data(await tools.read_file("src/service.py", "head", line_range))
     assert head["version"] == "head"
-    assert "2|    return 'new'" in head["content"]
-    with pytest.raises(ValueError, match="version"):
-        await tools.read_file("src/service.py", 1, 2, "arbitrary")
+    assert "   2 |     return 'new'" in head["content"]
+    invalid_version = json.loads(
+        await tools.read_file("src/service.py", "arbitrary", line_range)  # type: ignore[arg-type]
+    )
+    assert invalid_version["status"] == "rejected"
 
 
 async def test_get_diff_pages_directory_in_stable_path_order(tmp_path: Path) -> None:
@@ -476,16 +1019,16 @@ async def test_get_diff_pages_directory_in_stable_path_order(tmp_path: Path) -> 
         tool_limits=ToolLimits(max_results=2),
     )
 
-    first = json.loads(await tools.get_diff("src"))
-    second = json.loads(await tools.get_diff("src", cursor=first["next_cursor"]))
+    first = _tool_data(await tools.get_diff("src"))
+    second = _tool_data(await tools.get_diff("src", cursor=first["next_cursor"]))
 
-    assert [item["path"] for item in first["diffs"]] == [
+    assert [item["path"] for item in first["files"]] == [
         "src/alpha.py",
         "src/service.py",
     ]
     assert first["has_more"] is True
     assert isinstance(first["next_cursor"], str)
-    assert [item["path"] for item in second["diffs"]] == ["src/zeta.py"]
+    assert [item["path"] for item in second["files"]] == ["src/zeta.py"]
     assert second["has_more"] is False
     assert second["next_cursor"] is None
     assert tools.reviewed_paths == {
@@ -498,13 +1041,92 @@ async def test_get_diff_pages_directory_in_stable_path_order(tmp_path: Path) -> 
 async def test_get_diff_cursor_is_bound_to_the_requested_scope(tmp_path: Path) -> None:
     snapshot = await _snapshot(tmp_path)
     tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-    cursor = json.loads(await tools.get_diff("src"))["next_cursor"]
+    cursor = _tool_data(await tools.get_diff("src"))["next_cursor"]
 
     if cursor is not None:
-        with pytest.raises(ValueError, match="cursor"):
-            await tools.get_diff("", cursor=cursor)
-    with pytest.raises(ValueError, match="cursor"):
-        await tools.get_diff("src", cursor="not-a-valid-cursor")
+        wrong_scope = json.loads(await tools.get_diff("", cursor=cursor))
+        assert wrong_scope["status"] == "rejected"
+        assert wrong_scope["diagnostics"][0]["code"] == "invalid_diff_cursor"
+    invalid = json.loads(await tools.get_diff("src", cursor="not-a-valid-cursor"))
+    assert invalid["status"] == "rejected"
+    assert invalid["diagnostics"][0]["code"] == "invalid_diff_cursor"
+
+
+async def test_get_diff_pages_only_at_complete_hunk_boundaries(tmp_path: Path) -> None:
+    snapshot = await _multi_hunk_snapshot(tmp_path)
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_read_bytes=300),
+    )
+
+    first_raw = await tools.get_diff("src/multi.py")
+    first = json.loads(first_raw)
+    assert first["status"] == "partial"
+    assert first["data"]["returned_hunk_count"] > 0
+    assert first["data"]["files"][0]["is_complete"] is False
+    assert first["data"]["completed_file_count"] == 0
+    assert tools.reviewed_paths == set()
+    cursor = first["data"]["next_cursor"]
+    assert isinstance(cursor, str)
+    assert await tools.get_diff("src/multi.py") == first_raw
+
+    second = json.loads(await tools.get_diff("src/multi.py", cursor))
+
+    all_hunks = [
+        *first["data"]["files"][0]["hunks"],
+        *second["data"]["files"][0]["hunks"],
+    ]
+    assert second["status"] == "success"
+    assert len(all_hunks) == first["data"]["total_hunk_count"] == 3
+    assert all(hunk.startswith("@@ ") for hunk in all_hunks)
+    assert tools.reviewed_paths == {"src/multi.py"}
+
+
+async def test_get_diff_cursor_rejects_position_and_snapshot_tampering(tmp_path: Path) -> None:
+    snapshot = await _multi_hunk_snapshot(tmp_path)
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_read_bytes=300),
+    )
+    cursor = _tool_data(await tools.get_diff("src/multi.py"))["next_cursor"]
+    assert isinstance(cursor, str)
+    decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
+    decoded["payload"]["hunk_index"] += 1
+    tampered = (
+        base64.urlsafe_b64encode(json.dumps(decoded, separators=(",", ":")).encode())
+        .decode()
+        .rstrip("=")
+    )
+
+    tampered_result = json.loads(await tools.get_diff("src/multi.py", tampered))
+    other_snapshot_tools = FilesystemReviewTools(
+        replace(snapshot, snapshot_id="snapshot-other"),
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_read_bytes=300),
+    )
+    other_snapshot_result = json.loads(await other_snapshot_tools.get_diff("src/multi.py", cursor))
+
+    assert tampered_result["diagnostics"][0]["code"] == "invalid_diff_cursor"
+    assert other_snapshot_result["diagnostics"][0]["code"] == "invalid_diff_cursor"
+
+
+async def test_get_diff_distinguishes_empty_directory_and_non_review_file(
+    tmp_path: Path,
+) -> None:
+    tools = FilesystemReviewTools(await _snapshot(tmp_path), GitCli(), max_tool_calls=20)
+
+    empty = json.loads(await tools.get_diff("tests"))
+    context_file = json.loads(await tools.get_diff("src/helper.py"))
+
+    assert empty["status"] == "success"
+    assert empty["data"]["total_file_count"] == 0
+    assert context_file["status"] == "rejected"
+    assert context_file["diagnostics"][0]["code"] == "path_is_not_review_file"
 
 
 async def test_successful_read_file_counts_as_review_coverage(tmp_path: Path) -> None:
@@ -519,8 +1141,11 @@ async def test_successful_read_file_counts_as_review_coverage(tmp_path: Path) ->
     await tools.read_file("src/service.py")
     result = json.loads(await tools.get_diff("src/service.py"))
 
-    assert result["diffs"][0]["truncated"] is True
-    assert tools.reviewed_paths == {"src/service.py"}
+    assert result["status"] == "needs_action"
+    assert result["data"]["files"] == []
+    assert result["diagnostics"][0]["code"] == "diff_hunk_exceeds_limit"
+    assert result["data"]["read_file_suggestions"]
+    assert tools.reviewed_paths == set()
 
 
 async def test_get_diff_separates_lines_without_trailing_newlines(tmp_path: Path) -> None:
@@ -629,10 +1254,14 @@ async def test_deleted_snapshot_entry_rejects_recreated_path(tmp_path: Path) -> 
         ),
     )
 
-    with pytest.raises(ValueError, match="changed"):
+    result = json.loads(
         await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).read_file(
-            deleted_path, 1, 1, "current"
+            deleted_path,
+            "current",
+            ModelLineRange(start_line=1, end_line=1),
         )
+    )
+    assert result["status"] == "rejected"
 
 
 async def test_grep_times_out_catastrophic_regular_expression(tmp_path: Path) -> None:
@@ -659,8 +1288,10 @@ async def test_grep_times_out_catastrophic_regular_expression(tmp_path: Path) ->
         tool_limits=custom_limits,
     )
 
-    with pytest.raises(ValueError, match="timed out"):
-        await tools.grep(r"(a+)+$")
+    result = json.loads(await tools.grep(r"(a+)+$", mode="regex"))
+
+    assert result["status"] == "failed"
+    assert result["diagnostics"][0]["code"] == "regular_expression_timed_out"
 
 
 async def test_grep_timeout_starts_after_isolated_worker_is_ready(tmp_path: Path) -> None:
@@ -673,7 +1304,7 @@ async def test_grep_timeout_starts_after_isolated_worker_is_ready(tmp_path: Path
         tool_limits=custom_limits,
     )
 
-    result = json.loads(await tools.grep("return"))
+    result = _tool_data(await tools.grep("return", mode="regex"))
 
     assert len(result["matches"]) == 2
 
@@ -738,14 +1369,16 @@ async def test_get_diff_accepts_pure_rename_without_text_hunks(tmp_path: Path) -
 
     assert "rename from src/service.py" in diff["content"]
     assert "rename to src/renamed.py" in diff["content"]
-    base = json.loads(
+    base = _tool_data(
         await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).read_file(
-            "src/renamed.py", 1, 2, "base"
+            "src/renamed.py",
+            "base",
+            ModelLineRange(start_line=1, end_line=2),
         )
     )
-    assert base["path"] == "src/renamed.py"
+    assert base["normalized_path"] == "src/renamed.py"
     assert base["version"] == "base"
-    assert "2|    return 'new'" in base["content"]
+    assert "   2 |     return 'new'" in base["content"]
 
 
 async def test_get_diff_accepts_binary_change_without_text_hunks(tmp_path: Path) -> None:
@@ -780,6 +1413,142 @@ async def test_get_diff_accepts_binary_change_without_text_hunks(tmp_path: Path)
     )
 
     assert "Binary files" in diff["content"]
+
+
+async def test_get_diff_accepts_mode_only_change_from_real_git_repository(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "src/executable.sh"
+    payload = b"#!/bin/sh\nexit 0\n"
+    file_path = tmp_path / path
+    file_path.write_bytes(payload)
+    file_path.chmod(0o644)
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "add script")
+    base_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    file_path.chmod(0o755)
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "make script executable")
+    head_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    snapshot = replace(
+        snapshot,
+        worktree=replace(snapshot.worktree, head_oid=head_oid),
+        target=ReviewTarget(base_oid, head_oid, None),
+        manifest=replace(
+            snapshot.manifest,
+            review_scope=ReviewFileScope.include_all((path,)),
+            entries=(
+                SnapshotEntry(
+                    path,
+                    "file",
+                    0o755,
+                    len(payload),
+                    _hash(payload),
+                    None,
+                    "target",
+                ),
+            ),
+        ),
+        change_index=ChangeIndex((), (ReviewFileChange(path, "modified"),)),
+    )
+
+    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
+    diff = _only_diff(await tools.get_diff(path))
+
+    assert "old mode 100644" in diff["content"]
+    assert "new mode 100755" in diff["content"]
+    assert tools.reviewed_paths == {path}
+
+
+async def test_get_diff_accepts_symlink_target_change_from_real_git_repository(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "link-to-target"
+    link_path = tmp_path / path
+    link_path.symlink_to("target-a")
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "add symlink")
+    base_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    link_path.unlink()
+    link_path.symlink_to("target-b")
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "change symlink target")
+    head_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    current_payload = b"target-b"
+    snapshot = replace(
+        snapshot,
+        worktree=replace(snapshot.worktree, head_oid=head_oid),
+        target=ReviewTarget(base_oid, head_oid, None),
+        manifest=replace(
+            snapshot.manifest,
+            review_scope=ReviewFileScope.include_all((path,)),
+            entries=(
+                SnapshotEntry(
+                    path,
+                    "symlink",
+                    0o120000,
+                    len(current_payload),
+                    _hash(current_payload),
+                    "target-b",
+                    "target",
+                ),
+            ),
+        ),
+        change_index=ChangeIndex((), (ReviewFileChange(path, "modified"),)),
+    )
+
+    diff = _only_diff(
+        await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).get_diff(path)
+    )["content"]
+
+    assert "-target-a" in diff
+    assert "+target-b" in diff
+
+
+async def test_get_diff_accepts_deleted_file_from_real_git_repository(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _snapshot(tmp_path)
+    path = "src/gone.py"
+    base_payload = b"obsolete = True\n"
+    (tmp_path / path).write_bytes(base_payload)
+    await _git(tmp_path, "add", path)
+    await _git(tmp_path, "commit", "-m", "add obsolete file")
+    base_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    (tmp_path / path).unlink()
+    await _git(tmp_path, "add", "-A")
+    await _git(tmp_path, "commit", "-m", "delete obsolete file")
+    head_oid = (await GitCli().run(tmp_path, "rev-parse", "HEAD")).stdout.decode().strip()
+    snapshot = replace(
+        snapshot,
+        worktree=replace(snapshot.worktree, head_oid=head_oid),
+        target=ReviewTarget(base_oid, head_oid, None),
+        manifest=replace(
+            snapshot.manifest,
+            review_scope=ReviewFileScope.include_all((path,)),
+            entries=(
+                SnapshotEntry(
+                    path,
+                    "deleted",
+                    0,
+                    0,
+                    _hash(b""),
+                    None,
+                    "target",
+                ),
+            ),
+        ),
+        change_index=ChangeIndex((), (ReviewFileChange(path, "deleted"),)),
+    )
+
+    diff = _only_diff(
+        await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).get_diff(path)
+    )["content"]
+
+    assert "deleted file mode" in diff
+    assert "-obsolete = True" in diff
 
 
 async def test_get_diff_synthesizes_untracked_added_file_from_frozen_snapshot(
@@ -837,11 +1606,15 @@ async def test_snapshot_symlink_payload_uses_frozen_link_target_text(tmp_path: P
         ),
     )
 
-    result = json.loads(
-        await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).read_file(path, 1, 1)
+    result = _tool_data(
+        await FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20).read_file(
+            path,
+            "current",
+            ModelLineRange(start_line=1, end_line=1),
+        )
     )
 
-    assert result["content"] == "1|service.py"
+    assert result["content"] == "   1 | service.py"
 
 
 async def test_rejects_unbounded_tool_use(tmp_path: Path) -> None:

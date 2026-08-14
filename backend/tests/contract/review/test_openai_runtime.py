@@ -290,9 +290,22 @@ def test_host_role_context_is_not_model_visible() -> None:
         b'"planner_guidance":{"focus_paths":[]}}}'
     )
 
-    assert json.loads(user_input)["role_context"] == {"planner_guidance": {"focus_paths": []}}
+    visible_input = json.loads(user_input)
+    assert visible_input["review_file_count"] == 0
+    assert visible_input["role_context"] == {"planner_guidance": {"focus_paths": []}}
     assert role_context is not None
     assert role_context["_host_run_id"].startswith("run_")
+
+
+def test_user_input_includes_host_derived_review_file_count() -> None:
+    user_input, _instructions, _role_context = _split_agent_input(
+        b'{"repository_instructions":[],"review_files":[{"path":"a.py"},{"path":"b.py"}]}'
+    )
+
+    assert json.loads(user_input) == {
+        "review_file_count": 2,
+        "review_files": [{"path": "a.py"}, {"path": "b.py"}],
+    }
 
 
 def test_old_evidence_tool_results_are_compacted_without_touching_recent_or_output_tools() -> None:
@@ -476,7 +489,10 @@ async def test_runtime_returns_unknown_tool_errors_to_the_same_model_run() -> No
     )
     assert isinstance(message, str)
     assert "bash" in message
-    assert "find_files, grep, read_file, get_diff, comment, task_done" in message
+    assert (
+        "find_files, grep, read_file, get_diff, comment, retract_comment, task_done"
+        in message
+    )
     assert "continue the current task" in message
 
 
@@ -738,6 +754,7 @@ async def test_accepted_task_done_stops_the_agent_without_another_model_turn() -
         "read_file",
         "get_diff",
         "comment",
+        "retract_comment",
         "task_done",
     )
 
@@ -777,6 +794,7 @@ async def test_frozen_skill_text_cannot_change_the_visible_tool_set() -> None:
         "read_file",
         "get_diff",
         "comment",
+        "retract_comment",
         "task_done",
     )
     assert instruction_text in str(runner.starting_agent.instructions)
@@ -862,6 +880,7 @@ def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_lo
         "read_file",
         "get_diff",
         "comment",
+        "retract_comment",
         "task_done",
         "finalize_plan",
         "verdict",

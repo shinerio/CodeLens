@@ -68,11 +68,23 @@ from codelens.review.domain.ports import (
 )
 from codelens.review.domain.tool_invocation import classify_tool_result, outcome_metadata
 from codelens.review.domain.tool_limits import ToolLimits
+from codelens.review.domain.tool_results import (
+    JsonValue,
+    ToolDiagnostic,
+    ToolResult,
+    ToolResultError,
+    ToolResultStatus,
+    parse_tool_result,
+)
 from codelens.review.infrastructure.capability_tools import (
     CapabilityToolAssembler,
     RoleOutputToolBinding,
     RuntimeToolContext,
     ToolExecutionLimits,
+)
+from codelens.review.infrastructure.evidence_replay import (
+    EVIDENCE_TOOL_NAMES,
+    CompactedEvidenceReplayRegistry,
 )
 from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
@@ -101,8 +113,7 @@ _FORBIDDEN_TOOL_CONTRACT_TERMS = (
     "precedence",
 )
 
-_EVIDENCE_TOOL_NAMES = frozenset({"find_files", "grep", "read_file", "get_diff"})
-_COMPACTION_MARKER = "codelens_context_compaction_v1"
+_COMPACTION_MARKER = "codelens_context_compaction_v2"
 
 
 @dataclass
@@ -136,6 +147,7 @@ def _compact_evidence_tool_results(
     keep_recent_evidence_results: int,
     notice: str,
     tracker: _ContextCompactionTracker,
+    replay_registry: CompactedEvidenceReplayRegistry | None = None,
 ) -> list[TResponseInputItem]:
     """Replace oldest evidence bodies until the frozen target budget is reached."""
 
@@ -158,7 +170,7 @@ def _compact_evidence_tool_results(
         if not isinstance(call_id, str) or call_id not in calls_by_id:
             continue
         name, arguments = calls_by_id[call_id]
-        if name not in _EVIDENCE_TOOL_NAMES:
+        if name not in EVIDENCE_TOOL_NAMES:
             continue
         output = item.get("output", "")
         encoded_size = len(
@@ -169,9 +181,7 @@ def _compact_evidence_tool_results(
     if active_bytes < trigger_bytes:
         return normalized
 
-    compactable_count = max(
-        0, len(evidence_outputs) - keep_recent_evidence_results
-    )
+    compactable_count = max(0, len(evidence_outputs) - keep_recent_evidence_results)
     compressed_in_pass = 0
     for index, call_id, name, arguments, output, encoded_size in evidence_outputs[
         :compactable_count
@@ -185,28 +195,41 @@ def _compact_evidence_tool_results(
         elif _is_compaction_placeholder(output):
             continue
         else:
+            if not isinstance(arguments, str):
+                continue
             try:
-                parsed_arguments: object = (
-                    json.loads(arguments) if isinstance(arguments, str) else arguments
-                )
+                parsed_arguments: object = json.loads(arguments)
             except json.JSONDecodeError:
-                parsed_arguments = str(arguments)[:2048]
-            compacted_output = json.dumps(
+                continue
+            if not isinstance(parsed_arguments, dict) or not all(
+                isinstance(key, str) for key in parsed_arguments
+            ):
+                continue
+            suggested_arguments = cast(dict[str, JsonValue], parsed_arguments)
+            compacted_output = ToolResult(
+                name,
+                ToolResultStatus.NEEDS_ACTION,
                 {
-                    "arguments": parsed_arguments,
-                    "call_id": call_id,
+                    "arguments": suggested_arguments,
                     "compaction": _COMPACTION_MARKER,
-                    "notice": notice,
                     "original_bytes": encoded_size,
-                    "tool_name": name,
+                    "original_call_id": call_id,
+                    "reread_allowed": True,
                 },
-                ensure_ascii=False,
-                sort_keys=True,
-                separators=(",", ":"),
-            )
+                (
+                    ToolDiagnostic(
+                        "evidence_compacted",
+                        notice,
+                        True,
+                        suggested_arguments=suggested_arguments,
+                    ),
+                ),
+            ).to_json()
             if len(compacted_output.encode("utf-8")) >= encoded_size:
                 continue
             tracker.record(call_id, compacted_output, encoded_size)
+            if replay_registry is not None:
+                replay_registry.register(call_id, name, arguments)
             is_new_compaction = True
         normalized[index] = cast(
             TResponseInputItem,
@@ -225,14 +248,18 @@ def _is_compaction_placeholder(output: object) -> bool:
     if not isinstance(output, str):
         return False
     try:
-        value: object = json.loads(output)
-    except json.JSONDecodeError:
+        value = parse_tool_result(output)
+    except ToolResultError:
         return False
-    return isinstance(value, dict) and value.get("compaction") == _COMPACTION_MARKER
+    return value.data.get("compaction") == _COMPACTION_MARKER
 
 
 def _context_compaction_filter(
-    *, limits: ToolLimits, notice: str, tracker: _ContextCompactionTracker
+    *,
+    limits: ToolLimits,
+    notice: str,
+    tracker: _ContextCompactionTracker,
+    replay_registry: CompactedEvidenceReplayRegistry,
 ) -> Callable[[CallModelData[object]], ModelInputData]:
     """Build one deterministic SDK pre-call filter for bounded evidence history."""
 
@@ -248,6 +275,7 @@ def _context_compaction_filter(
                 ),
                 notice=notice,
                 tracker=tracker,
+                replay_registry=replay_registry,
             ),
             instructions=data.model_data.instructions,
         )
@@ -469,6 +497,8 @@ class OpenAIAgentRuntime:
             role_output_tools = verdict_collector.bindings(
                 verdict_description, merge_description, finalize_description
             )
+        evidence_replay_registry = CompactedEvidenceReplayRegistry()
+        compaction_tracker = _ContextCompactionTracker()
         tool_context = RuntimeToolContext(
             snapshot=snapshot,
             git=self._git,
@@ -482,6 +512,7 @@ class OpenAIAgentRuntime:
                 tool_loop_warning_template=prompts.tool_loop_warning,
             ),
             role_output_tools=role_output_tools,
+            evidence_replay_registry=evidence_replay_registry,
             logical_run_id=_host_run_id(role_context),
             review_feedback=prompts.review_feedback,
         )
@@ -496,13 +527,13 @@ class OpenAIAgentRuntime:
                 *self._skill_instruction_sections(execution_spec),
             )
         )
-        compaction_tracker = _ContextCompactionTracker()
         run_config = RunConfig(
             trace_include_sensitive_data=False,
             call_model_input_filter=_context_compaction_filter(
                 limits=bounded_tool_limits,
                 notice=prompts.context_compaction_notice,
                 tracker=compaction_tracker,
+                replay_registry=evidence_replay_registry,
             ),
             tool_not_found_behavior="return_error_to_model",
             tool_error_formatter=_tool_error_formatter(
@@ -753,6 +784,8 @@ class OpenAIAgentRuntime:
             context_compacted_result_count=compaction_tracker.compressed_result_count,
             context_compaction_original_bytes=compaction_tracker.original_bytes,
             context_compaction_compressed_bytes=compaction_tracker.compressed_bytes,
+            compaction_replay_registered_count=evidence_replay_registry.registered_count,
+            compaction_replay_consumed_count=evidence_replay_registry.consumed_count,
         )
         await client.close()
         return output
@@ -1019,11 +1052,22 @@ def _visible_event(event: object) -> AgentRuntimeEvent | None:
                 _tool_metadata(event.item, include_name=True),
             )
         if event.name == "tool_output":
-            content = _json_value(getattr(event.item, "output", event.item))
+            output = getattr(event.item, "output", event.item)
+            content = output if isinstance(output, str) else _json_value(output)
+            metadata = {
+                **_tool_metadata(event.item),
+                **outcome_metadata(classify_tool_result(content)),
+            }
+            try:
+                result = parse_tool_result(content)
+            except ToolResultError:
+                metadata["non_json_tool_result"] = "true"
+            else:
+                metadata["tool_result_status"] = result.status.value
             return AgentRuntimeEvent(
                 "tool_result",
                 content,
-                {**_tool_metadata(event.item), **outcome_metadata(classify_tool_result(content))},
+                metadata,
             )
     return None
 
@@ -1097,6 +1141,7 @@ def _split_agent_input(input_payload: bytes) -> tuple[str, str, dict[str, object
     return (
         json.dumps(
             {
+                "review_file_count": len(review_files),
                 "review_files": review_files,
                 **({"role_context": model_role_context} if model_role_context else {}),
             },

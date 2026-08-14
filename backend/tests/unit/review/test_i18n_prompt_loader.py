@@ -39,8 +39,7 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "missing_review_files" in english.review_workflow
     assert "missing_review_files" in chinese.review_workflow
     assert (
-        "trigger -> changed-code mechanism -> concrete harmful outcome"
-        in english.review_workflow
+        "trigger -> changed-code mechanism -> concrete harmful outcome" in english.review_workflow
     )
     assert "触发条件 → 变更代码的错误机制 → 具体危害" in chinese.review_workflow
     assert "do not report" in english.review_workflow
@@ -49,6 +48,9 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "side=old" in english.tools["comment"].description
     assert "不含 diff 标记和未变更上下文" in chinese.tools["comment"].description
     assert "side=old" in chinese.tools["comment"].description
+    assert "retract_comment" in english.review_workflow
+    assert "retract_comment" in chinese.review_workflow
+    assert "candidate_ids" in english.tools["retract_comment"].description
     assert "does not fall on an actual changed diff line" in english.review_feedback
     assert "没有落在本次实际变更的 diff 行" in chinese.review_feedback
     assert "not evidence" in english.context_compaction_notice
@@ -57,14 +59,16 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "{available_tools}" in english.tool_not_found
     assert "{tool_name}" in chinese.tool_not_found
     assert "{available_tools}" in chinese.tool_not_found
-    assert "narrow path or pattern" in english.tools["find_files"].description
-    assert "缩小 path 或细化 pattern" in chinese.tools["find_files"].description
+    assert "recursively matches basenames" in english.tools["find_files"].description
+    assert "递归匹配 basename" in chinese.tools["find_files"].description
     assert "file_pattern" in english.tools["grep"].description
     assert "file_pattern" in chinese.tools["grep"].description
-    assert "narrow pattern, path, or file_pattern" in english.tools["grep"].description
-    assert "缩小 pattern、path 或细化 file_pattern" in chinese.tools["grep"].description
-    assert "may both be omitted" in english.tools["read_file"].description
-    assert "可以同时省略" in chinese.tools["read_file"].description
+    assert "mode=literal|regex" in english.tools["grep"].description
+    assert "mode=literal|regex" in chinese.tools["grep"].description
+    assert "line_range=null" in english.tools["read_file"].description
+    assert "line_range=null" in chinese.tools["read_file"].description
+    assert "cursor=null" in english.tools["get_diff"].description
+    assert "cursor=null" in chinese.tools["get_diff"].description
 
 
 def test_planner_and_verifier_prompts_define_focused_decision_boundaries() -> None:
@@ -78,16 +82,10 @@ def test_planner_and_verifier_prompts_define_focused_decision_boundaries() -> No
     assert "General 单独运行或至少两个专项 Reviewer" in chinese.tools["finalize_plan"].description
 
     for locale in ("en", "zh-CN"):
-        verifier = (PROMPT_ROOT / "review-verdict" / f"{locale}.md").read_text(
-            encoding="utf-8"
-        )
+        verifier = (PROMPT_ROOT / "review-verdict" / f"{locale}.md").read_text(encoding="utf-8")
         assert "weak" in verifier
         assert "inferred" in verifier
-    english_verifier = (PROMPT_ROOT / "review-verdict" / "en.md").read_text(
-        encoding="utf-8"
-    )
-    chinese_verifier = (PROMPT_ROOT / "review-verdict" / "zh-CN.md").read_text(
-        encoding="utf-8"
-    )
+    english_verifier = (PROMPT_ROOT / "review-verdict" / "en.md").read_text(encoding="utf-8")
+    chinese_verifier = (PROMPT_ROOT / "review-verdict" / "zh-CN.md").read_text(encoding="utf-8")
     assert "cannot establish that a defect exists" in english_verifier
     assert "无法建立缺陷确实存在" in chinese_verifier
