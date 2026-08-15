@@ -305,6 +305,52 @@ def test_process_report_exposes_live_provider_usage_without_agent_output() -> No
     assert report.duration_ms == 2_000
 
 
+def test_process_report_separates_checkpoint_provider_usage() -> None:
+    created_at = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
+    agent = "correctness:v2"
+    entries = (
+        _entry(
+            1,
+            "model_started",
+            created_at,
+            metadata={
+                "agent": agent,
+                "usage_scope": "provider_call",
+                "model_phase": "checkpoint_compaction",
+            },
+        ),
+        _entry(
+            2,
+            "model_completed",
+            created_at + timedelta(seconds=1),
+            metadata={
+                "agent": agent,
+                "usage_scope": "provider_call",
+                "model_phase": "checkpoint_compaction",
+                "model_name": "gpt-5.1",
+                "llm_call_count": "1",
+                "input_tokens": "90",
+                "cached_input_tokens": "0",
+                "cache_write_input_tokens": "0",
+                "output_tokens": "10",
+                "total_tokens": "100",
+            },
+        ),
+    )
+
+    report = build_process_report(
+        task_id="review_" + "c" * 32,
+        status="reviewing",
+        entries=entries,
+        finding_count=0,
+    )
+
+    assert report.llm_call_count == 1
+    assert report.checkpoint_llm_call_count == 1
+    assert report.checkpoint_input_tokens == 90
+    assert report.checkpoint_output_tokens == 10
+
+
 def test_process_report_does_not_double_count_live_and_terminal_usage() -> None:
     created_at = datetime(2026, 8, 12, 10, 0, tzinfo=UTC)
     agent = "correctness:v2"
@@ -422,6 +468,10 @@ def test_process_report_marks_retry_usage_incomplete_without_every_attempt_usage
                 "context_compacted_result_count": "5",
                 "context_compaction_original_bytes": "1000",
                 "context_compaction_compressed_bytes": "200",
+                "context_compaction_failure_count": "1",
+                "checkpoint_llm_call_count": "2",
+                "checkpoint_input_tokens": "3000",
+                "checkpoint_output_tokens": "200",
                 "output_tokens": "3267",
                 "total_tokens": "420959",
             },
@@ -444,6 +494,10 @@ def test_process_report_marks_retry_usage_incomplete_without_every_attempt_usage
     assert report.context_compacted_result_count == 5
     assert report.context_compaction_original_bytes == 1_000
     assert report.context_compaction_compressed_bytes == 200
+    assert report.context_compaction_failure_count == 1
+    assert report.checkpoint_llm_call_count == 2
+    assert report.checkpoint_input_tokens == 3_000
+    assert report.checkpoint_output_tokens == 200
     assert report.tool_call_count == 0
     assert report.invalid_tool_call_count == 1
     assert [(item.tool_name, item.call_count) for item in report.invalid_tools] == [

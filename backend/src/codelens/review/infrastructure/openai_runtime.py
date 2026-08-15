@@ -6,7 +6,7 @@ import json
 import logging
 import os
 from collections.abc import Callable
-from dataclasses import dataclass, field, fields, is_dataclass, replace
+from dataclasses import fields, is_dataclass, replace
 from typing import Any, Literal, Protocol, cast
 
 import httpx
@@ -31,9 +31,8 @@ from agents.exceptions import (
     ModelRefusalError,
     UserError,
 )
-from agents.items import TResponseInputItem
 from agents.result import RunResult
-from agents.run_config import CallModelData, ModelInputData, ToolErrorFormatterArgs
+from agents.run_config import ToolErrorFormatterArgs
 from openai import (
     APIConnectionError,
     APIStatusError,
@@ -69,11 +68,7 @@ from codelens.review.domain.ports import (
 from codelens.review.domain.tool_invocation import classify_tool_result, outcome_metadata
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.domain.tool_results import (
-    JsonValue,
-    ToolDiagnostic,
-    ToolResult,
     ToolResultError,
-    ToolResultStatus,
     parse_tool_result,
 )
 from codelens.review.infrastructure.capability_tools import (
@@ -82,9 +77,14 @@ from codelens.review.infrastructure.capability_tools import (
     RuntimeToolContext,
     ToolExecutionLimits,
 )
-from codelens.review.infrastructure.evidence_replay import (
-    EVIDENCE_TOOL_NAMES,
-    CompactedEvidenceReplayRegistry,
+from codelens.review.infrastructure.context_checkpoint import (
+    CheckpointSummarizerPort,
+    CheckpointSummaryRequest,
+    CheckpointSummaryResult,
+    ContextCheckpointError,
+    ContextCheckpointTracker,
+    build_context_checkpoint_filter,
+    checkpoint_summary_from_text,
 )
 from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
@@ -101,6 +101,7 @@ type _AgentFailure = (
     AgentMaxTurnsExceededError | TransientAgentRuntimeError | PermanentAgentOutputError
 )
 _LOGGER = logging.getLogger(__name__)
+_CHECKPOINT_MAX_OUTPUT_TOKENS = 8192
 _FORBIDDEN_TOOL_CONTRACT_TERMS = (
     "snapshot_id",
     "hunk_id",
@@ -112,176 +113,6 @@ _FORBIDDEN_TOOL_CONTRACT_TERMS = (
     "context_plan",
     "precedence",
 )
-
-_COMPACTION_MARKER = "codelens_context_compaction_v2"
-
-
-@dataclass
-class _ContextCompactionTracker:
-    """Accumulate unique, deterministic compaction effects for one Agent Run."""
-
-    compression_count: int = 0
-    compressed_result_count: int = 0
-    original_bytes: int = 0
-    compressed_bytes: int = 0
-    _placeholders: dict[str, str] = field(default_factory=dict)
-
-    def placeholder(self, call_id: str) -> str | None:
-        return self._placeholders.get(call_id)
-
-    def record(self, call_id: str, placeholder: str, original_bytes: int) -> None:
-        if call_id in self._placeholders:
-            return
-        self._placeholders[call_id] = placeholder
-        self.compressed_result_count += 1
-        self.original_bytes += original_bytes
-        self.compressed_bytes += len(placeholder.encode("utf-8"))
-
-
-def _compact_evidence_tool_results(
-    items: list[TResponseInputItem] | list[dict[str, object]],
-    *,
-    enabled: bool,
-    trigger_bytes: int,
-    target_bytes: int,
-    keep_recent_evidence_results: int,
-    notice: str,
-    tracker: _ContextCompactionTracker,
-    replay_registry: CompactedEvidenceReplayRegistry | None = None,
-) -> list[TResponseInputItem]:
-    """Replace oldest evidence bodies until the frozen target budget is reached."""
-
-    calls_by_id: dict[str, tuple[str, object]] = {}
-    evidence_outputs: list[tuple[int, str, str, object, object, int]] = []
-    normalized = [cast(TResponseInputItem, dict(item)) for item in items]
-    if not enabled:
-        return normalized
-    for item in normalized:
-        if item.get("type") != "function_call":
-            continue
-        call_id = item.get("call_id")
-        name = item.get("name")
-        if isinstance(call_id, str) and isinstance(name, str):
-            calls_by_id[call_id] = (name, item.get("arguments", "{}"))
-    for index, item in enumerate(normalized):
-        if item.get("type") != "function_call_output":
-            continue
-        call_id = item.get("call_id")
-        if not isinstance(call_id, str) or call_id not in calls_by_id:
-            continue
-        name, arguments = calls_by_id[call_id]
-        if name not in EVIDENCE_TOOL_NAMES:
-            continue
-        output = item.get("output", "")
-        encoded_size = len(
-            (output if isinstance(output, str) else _json_value(output)).encode("utf-8")
-        )
-        evidence_outputs.append((index, call_id, name, arguments, output, encoded_size))
-    active_bytes = sum(item[5] for item in evidence_outputs)
-    if active_bytes < trigger_bytes:
-        return normalized
-
-    compactable_count = max(0, len(evidence_outputs) - keep_recent_evidence_results)
-    compressed_in_pass = 0
-    for index, call_id, name, arguments, output, encoded_size in evidence_outputs[
-        :compactable_count
-    ]:
-        if active_bytes <= target_bytes:
-            break
-        existing_placeholder = tracker.placeholder(call_id)
-        is_new_compaction = False
-        if existing_placeholder is not None:
-            compacted_output = existing_placeholder
-        elif _is_compaction_placeholder(output):
-            continue
-        else:
-            if not isinstance(arguments, str):
-                continue
-            try:
-                parsed_arguments: object = json.loads(arguments)
-            except json.JSONDecodeError:
-                continue
-            if not isinstance(parsed_arguments, dict) or not all(
-                isinstance(key, str) for key in parsed_arguments
-            ):
-                continue
-            suggested_arguments = cast(dict[str, JsonValue], parsed_arguments)
-            compacted_output = ToolResult(
-                name,
-                ToolResultStatus.NEEDS_ACTION,
-                {
-                    "arguments": suggested_arguments,
-                    "compaction": _COMPACTION_MARKER,
-                    "original_bytes": encoded_size,
-                    "original_call_id": call_id,
-                    "reread_allowed": True,
-                },
-                (
-                    ToolDiagnostic(
-                        "evidence_compacted",
-                        notice,
-                        True,
-                        suggested_arguments=suggested_arguments,
-                    ),
-                ),
-            ).to_json()
-            if len(compacted_output.encode("utf-8")) >= encoded_size:
-                continue
-            tracker.record(call_id, compacted_output, encoded_size)
-            if replay_registry is not None:
-                replay_registry.register(call_id, name, arguments)
-            is_new_compaction = True
-        normalized[index] = cast(
-            TResponseInputItem,
-            {**normalized[index], "output": compacted_output},
-        )
-        compacted_size = len(compacted_output.encode("utf-8"))
-        active_bytes -= encoded_size - compacted_size
-        if is_new_compaction:
-            compressed_in_pass += 1
-    if compressed_in_pass > 0:
-        tracker.compression_count += 1
-    return normalized
-
-
-def _is_compaction_placeholder(output: object) -> bool:
-    if not isinstance(output, str):
-        return False
-    try:
-        value = parse_tool_result(output)
-    except ToolResultError:
-        return False
-    return value.data.get("compaction") == _COMPACTION_MARKER
-
-
-def _context_compaction_filter(
-    *,
-    limits: ToolLimits,
-    notice: str,
-    tracker: _ContextCompactionTracker,
-    replay_registry: CompactedEvidenceReplayRegistry,
-) -> Callable[[CallModelData[object]], ModelInputData]:
-    """Build one deterministic SDK pre-call filter for bounded evidence history."""
-
-    def compact(data: CallModelData[object]) -> ModelInputData:
-        return ModelInputData(
-            input=_compact_evidence_tool_results(
-                data.model_data.input,
-                enabled=limits.context_compaction_enabled,
-                trigger_bytes=limits.context_compaction_trigger_bytes,
-                target_bytes=limits.context_compaction_target_bytes,
-                keep_recent_evidence_results=(
-                    limits.context_compaction_keep_recent_evidence_results
-                ),
-                notice=notice,
-                tracker=tracker,
-                replay_registry=replay_registry,
-            ),
-            instructions=data.model_data.instructions,
-        )
-
-    return compact
-
 
 def _tool_error_formatter(
     template: str,
@@ -325,6 +156,68 @@ def _cache_token_details(usage: object) -> tuple[int, int]:
     cached = getattr(details, "cached_tokens", 0) if details is not None else 0
     cache_write = getattr(details, "cache_write_tokens", 0) if details is not None else 0
     return int(cached or 0), int(cache_write or 0)
+
+
+def _response_diagnostic(
+    response: Any,
+    *,
+    phase: Literal["agent", "checkpoint_compaction"] = "agent",
+) -> AgentResponseDiagnostic:
+    """Normalize bounded usage metadata for main and checkpoint model calls."""
+
+    cached_tokens, cache_write_tokens = _cache_token_details(response.usage)
+    return AgentResponseDiagnostic(
+        response_id=response.response_id,
+        request_id=response.request_id,
+        input_tokens=response.usage.input_tokens,
+        output_tokens=response.usage.output_tokens,
+        output_item_count=len(response.output),
+        cached_input_tokens=cached_tokens,
+        cache_write_input_tokens=cache_write_tokens,
+        phase=phase,
+    )
+
+
+class _SdkCheckpointSummarizer:
+    """Run checkpoint compaction as one isolated, provider-neutral text call."""
+
+    async def summarize(
+        self,
+        request: CheckpointSummaryRequest,
+        agent: Agent[Any],
+    ) -> CheckpointSummaryResult:
+        checkpoint_settings = replace(
+            agent.model_settings,
+            max_tokens=min(
+                agent.model_settings.max_tokens or _CHECKPOINT_MAX_OUTPUT_TOKENS,
+                _CHECKPOINT_MAX_OUTPUT_TOKENS,
+            ),
+            tool_choice=None,
+            parallel_tool_calls=None,
+            context_management=None,
+        )
+        checkpoint_agent: Agent[None] = Agent(
+            name=f"{agent.name}:checkpoint-compaction",
+            instructions=request.prompt,
+            model=agent.model,
+            model_settings=checkpoint_settings,
+        )
+        result = await Runner.run(
+            starting_agent=checkpoint_agent,
+            input=request.model_input(),
+            max_turns=1,
+            run_config=RunConfig(trace_include_sensitive_data=False),
+        )
+        final_output = result.final_output
+        if not isinstance(final_output, str):
+            raise ValueError("checkpoint model returned non-text output")
+        return CheckpointSummaryResult(
+            summary=checkpoint_summary_from_text(final_output),
+            diagnostics=tuple(
+                _response_diagnostic(response, phase="checkpoint_compaction")
+                for response in result.raw_responses
+            ),
+        )
 
 
 class _RunnerPort(Protocol):
@@ -382,6 +275,7 @@ class OpenAIAgentRuntime:
         runner: _RunnerPort | None = None,
         completion_settings: ReviewCompletionSettingsService | None = None,
         tool_limits_service: ToolLimitsService | None = None,
+        checkpoint_summarizer: CheckpointSummarizerPort | None = None,
     ) -> None:
         self._config_store = config_store
         self._git = git
@@ -389,6 +283,7 @@ class OpenAIAgentRuntime:
         self._runner = runner or _PublicSdkRunner()
         self._completion_settings = completion_settings
         self._tool_limits_service = tool_limits_service
+        self._checkpoint_summarizer = checkpoint_summarizer or _SdkCheckpointSummarizer()
 
     async def invoke(
         self,
@@ -497,8 +392,7 @@ class OpenAIAgentRuntime:
             role_output_tools = verdict_collector.bindings(
                 verdict_description, merge_description, finalize_description
             )
-        evidence_replay_registry = CompactedEvidenceReplayRegistry()
-        compaction_tracker = _ContextCompactionTracker()
+        checkpoint_tracker = ContextCheckpointTracker()
         tool_context = RuntimeToolContext(
             snapshot=snapshot,
             git=self._git,
@@ -512,7 +406,6 @@ class OpenAIAgentRuntime:
                 tool_loop_warning_template=prompts.tool_loop_warning,
             ),
             role_output_tools=role_output_tools,
-            evidence_replay_registry=evidence_replay_registry,
             logical_run_id=_host_run_id(role_context),
             review_feedback=prompts.review_feedback,
         )
@@ -529,11 +422,11 @@ class OpenAIAgentRuntime:
         )
         run_config = RunConfig(
             trace_include_sensitive_data=False,
-            call_model_input_filter=_context_compaction_filter(
+            call_model_input_filter=build_context_checkpoint_filter(
                 limits=bounded_tool_limits,
-                notice=prompts.context_compaction_notice,
-                tracker=compaction_tracker,
-                replay_registry=evidence_replay_registry,
+                prompt=prompts.checkpoint_compaction,
+                tracker=checkpoint_tracker,
+                summarizer=self._checkpoint_summarizer,
             ),
             tool_not_found_behavior="return_error_to_model",
             tool_error_formatter=_tool_error_formatter(
@@ -606,6 +499,59 @@ class OpenAIAgentRuntime:
                         timeout_seconds=execution_spec.execution_limits.timeout_seconds,
                     )
                     if sink is not None and investigation is not None:
+                        for checkpoint_index, payload in enumerate(
+                            checkpoint_tracker.checkpoint_payloads,
+                            start=1,
+                        ):
+                            await sink(
+                                AgentRuntimeEvent(
+                                    "checkpoint_compaction",
+                                    payload,
+                                    {
+                                        "checkpoint_index": str(checkpoint_index),
+                                        "checkpoint_schema_version": (
+                                            "codelens_review_checkpoint_v1"
+                                        ),
+                                    },
+                                )
+                            )
+                        for diagnostic in checkpoint_tracker.diagnostics:
+                            response_id = diagnostic.response_id or ""
+                            await sink(
+                                AgentRuntimeEvent(
+                                    "model_started",
+                                    "",
+                                    {
+                                        "response_id": response_id,
+                                        "usage_scope": "provider_call",
+                                        "model_phase": "checkpoint_compaction",
+                                    },
+                                )
+                            )
+                            await sink(
+                                AgentRuntimeEvent(
+                                    "model_completed",
+                                    "",
+                                    {
+                                        "response_id": response_id,
+                                        "usage_scope": "provider_call",
+                                        "model_phase": "checkpoint_compaction",
+                                        "model_name": provider_config.model,
+                                        "llm_call_count": "1",
+                                        "input_tokens": str(diagnostic.input_tokens),
+                                        "cached_input_tokens": str(
+                                            diagnostic.cached_input_tokens
+                                        ),
+                                        "cache_write_input_tokens": str(
+                                            diagnostic.cache_write_input_tokens
+                                        ),
+                                        "output_tokens": str(diagnostic.output_tokens),
+                                        "total_tokens": str(
+                                            diagnostic.input_tokens + diagnostic.output_tokens
+                                        ),
+                                    },
+                                )
+                            )
                         for response_index, response in enumerate(
                             cast(RunResult, investigation).raw_responses,
                             start=1,
@@ -640,6 +586,13 @@ class OpenAIAgentRuntime:
                 except RateLimitError:
                     attempt_failure = self._failure(
                         phase, "provider_rate_limited", "provider rate limit", retryable=True
+                    )
+                except ContextCheckpointError:
+                    attempt_failure = self._failure(
+                        phase,
+                        "context_checkpoint_failed",
+                        "context checkpoint failed beyond the hard watermark",
+                        retryable=False,
                     )
                 except InternalServerError:
                     attempt_failure = self._failure(
@@ -680,6 +633,7 @@ class OpenAIAgentRuntime:
                 investigation = None
                 break
 
+            checkpoint_tracker.reset_context()
             delay = min(retry_backoff_base * (2**attempt), retry_max_delay)
             retry_reason = attempt_failure.reason_code or "unknown"
             _LOGGER.warning(
@@ -756,17 +710,9 @@ class OpenAIAgentRuntime:
                 retryable=False,
             ) from error
 
-        diagnostics = tuple(
-            AgentResponseDiagnostic(
-                response_id=response.response_id,
-                request_id=response.request_id,
-                input_tokens=response.usage.input_tokens,
-                output_tokens=response.usage.output_tokens,
-                output_item_count=len(response.output),
-                cached_input_tokens=_cache_token_details(response.usage)[0],
-                cache_write_input_tokens=_cache_token_details(response.usage)[1],
-            )
-            for response in result.raw_responses
+        diagnostics = (
+            *tuple(_response_diagnostic(response) for response in result.raw_responses),
+            *checkpoint_tracker.diagnostics,
         )
         output = UnvalidatedAgentOutput(
             canonical_bytes=canonical_bytes,
@@ -780,12 +726,13 @@ class OpenAIAgentRuntime:
             output_tokens=sum(item.output_tokens for item in diagnostics),
             diagnostics=diagnostics,
             incomplete_review_files=tool_context.incomplete_review_files,
-            context_compaction_count=compaction_tracker.compression_count,
-            context_compacted_result_count=compaction_tracker.compressed_result_count,
-            context_compaction_original_bytes=compaction_tracker.original_bytes,
-            context_compaction_compressed_bytes=compaction_tracker.compressed_bytes,
-            compaction_replay_registered_count=evidence_replay_registry.registered_count,
-            compaction_replay_consumed_count=evidence_replay_registry.consumed_count,
+            context_compaction_count=checkpoint_tracker.checkpoint_count,
+            context_compacted_result_count=checkpoint_tracker.compacted_result_count,
+            context_compaction_original_bytes=checkpoint_tracker.original_bytes,
+            context_compaction_compressed_bytes=checkpoint_tracker.compressed_bytes,
+            context_compaction_failure_count=checkpoint_tracker.failure_count,
+            compaction_replay_registered_count=0,
+            compaction_replay_consumed_count=0,
         )
         await client.close()
         return output

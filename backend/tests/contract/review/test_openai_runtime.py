@@ -27,12 +27,16 @@ from codelens.review.domain.errors import (
     TransientAgentRuntimeError,
 )
 from codelens.review.domain.tool_limits import ToolLimits
+from codelens.review.infrastructure.context_checkpoint import (
+    CHECKPOINT_SCHEMA_VERSION,
+    CheckpointSummary,
+    CheckpointSummaryRequest,
+    CheckpointSummaryResult,
+)
 from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.openai_runtime import (
-    _COMPACTION_MARKER,
     OpenAIAgentRuntime,
-    _compact_evidence_tool_results,
-    _ContextCompactionTracker,
+    _SdkCheckpointSummarizer,
     _split_agent_input,
 )
 from codelens.reviewer_catalog.domain.models import AgentVersion
@@ -125,6 +129,62 @@ class FakeRunner:
             ),
             arguments,
         )
+
+
+class FakeCheckpointSummarizer:
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def summarize(self, request: object, agent: Agent[object]) -> CheckpointSummaryResult:
+        del request, agent
+        self.calls += 1
+        return CheckpointSummaryResult(
+            summary=CheckpointSummary(
+                schema_version=CHECKPOINT_SCHEMA_VERSION,
+                investigation_summary="The old evidence round was inspected.",
+                evidence_conclusions=[],
+                eliminated_hypotheses=[],
+                open_investigations=[],
+                next_actions=["Continue the review."],
+            ),
+            diagnostics=(),
+        )
+
+
+async def test_sdk_checkpoint_summarizer_uses_plain_markdown(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    payload = "## Current focus\nInspected the covered evidence."
+    captured: dict[str, object] = {}
+
+    async def fake_run(*, starting_agent: Agent[None], input: str, **kwargs: object) -> FakeResult:
+        captured["agent"] = starting_agent
+        captured["input"] = input
+        captured["kwargs"] = kwargs
+        return FakeResult(payload, ())
+
+    monkeypatch.setattr("codelens.review.infrastructure.openai_runtime.Runner.run", fake_run)
+    summarizer = _SdkCheckpointSummarizer()
+    result = await summarizer.summarize(
+        CheckpointSummaryRequest(
+            prompt="Return a concise checkpoint.",
+            previous_summary=None,
+            compacted_items=(),
+            evidence_index=(),
+        ),
+        Agent(name="reviewer", instructions="review"),
+    )
+
+    checkpoint_agent = captured["agent"]
+    assert isinstance(checkpoint_agent, Agent)
+    assert checkpoint_agent.output_type is None
+    assert checkpoint_agent.model_settings.max_tokens == 8192
+    assert result.summary.investigation_summary == payload
+    assert result.summary.evidence_conclusions == []
+    assert captured["input"] == (
+        '{"host_evidence_index":[],"previous_checkpoint":null,'
+        '"untrusted_transcript_segment":[]}'
+    )
 
 
 class SlowRunner(FakeRunner):
@@ -308,107 +368,6 @@ def test_user_input_includes_host_derived_review_file_count() -> None:
     }
 
 
-def test_old_evidence_tool_results_are_compacted_without_touching_recent_or_output_tools() -> None:
-    items = [
-        {
-            "type": "function_call",
-            "call_id": "old",
-            "name": "get_diff",
-            "arguments": '{"path":"src/old.py"}',
-        },
-        {"type": "function_call_output", "call_id": "old", "output": "x" * 8000},
-        {
-            "type": "function_call",
-            "call_id": "comment",
-            "name": "comment",
-            "arguments": "{}",
-        },
-        {"type": "function_call_output", "call_id": "comment", "output": "y" * 80},
-        {
-            "type": "function_call",
-            "call_id": "recent",
-            "name": "read_file",
-            "arguments": '{"path":"src/recent.py"}',
-        },
-        {"type": "function_call_output", "call_id": "recent", "output": "z" * 80},
-    ]
-
-    tracker = _ContextCompactionTracker()
-    compacted = _compact_evidence_tool_results(
-        items,
-        enabled=True,
-        trigger_bytes=8000,
-        target_bytes=1000,
-        keep_recent_evidence_results=1,
-        notice="Earlier evidence was compacted; call the tool again for exact content.",
-        tracker=tracker,
-    )
-
-    old_output = compacted[1]["output"]
-    assert "compacted" in old_output
-    assert "src/old.py" in old_output
-    assert compacted[3]["output"] == "y" * 80
-    assert compacted[5]["output"] == "z" * 80
-    assert tracker.compression_count == 1
-    assert tracker.compressed_result_count == 1
-    assert tracker.original_bytes == 8000
-    assert tracker.compressed_bytes < tracker.original_bytes
-
-    repeated = _compact_evidence_tool_results(
-        compacted,
-        enabled=True,
-        trigger_bytes=100,
-        target_bytes=50,
-        keep_recent_evidence_results=1,
-        notice="Earlier evidence was compacted; call the tool again for exact content.",
-        tracker=tracker,
-    )
-    assert repeated[1]["output"] == old_output
-    assert tracker.compressed_result_count == 1
-
-
-def test_context_compaction_batches_oldest_results_to_target_and_preserves_recent() -> None:
-    items: list[dict[str, object]] = [
-        {"type": "message", "role": "assistant", "content": "visible reasoning summary"}
-    ]
-    for index in range(4):
-        call_id = f"call-{index}"
-        items.extend(
-            (
-                {
-                    "type": "function_call",
-                    "call_id": call_id,
-                    "name": "read_file",
-                    "arguments": json.dumps({"path": f"src/{index}.py"}),
-                },
-                {
-                    "type": "function_call_output",
-                    "call_id": call_id,
-                    "output": str(index) * 4000,
-                },
-            )
-        )
-
-    tracker = _ContextCompactionTracker()
-    compacted = _compact_evidence_tool_results(
-        items,
-        enabled=True,
-        trigger_bytes=10_000,
-        target_bytes=5_000,
-        keep_recent_evidence_results=1,
-        notice="Re-read for exact evidence.",
-        tracker=tracker,
-    )
-
-    assert compacted[0] == items[0]
-    assert all(_COMPACTION_MARKER in str(compacted[index]["output"]) for index in (2, 4, 6))
-    assert compacted[8]["output"] == "3" * 4000
-    assert tracker.compression_count == 1
-    assert tracker.compressed_result_count == 3
-    assert tracker.original_bytes == 12_000
-    assert tracker.compressed_bytes < tracker.original_bytes
-
-
 async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() -> None:
     class RecordingToolLimitsService:
         def __init__(self) -> None:
@@ -425,12 +384,14 @@ async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() 
 
     service = RecordingToolLimitsService()
     runner = FakeRunner(FakeResult(None, ()))
+    checkpoint_summarizer = FakeCheckpointSummarizer()
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         git=GitCli(),
         prompt_loader=_prompt_loader(),
         runner=runner,
         tool_limits_service=service,  # type: ignore[arg-type]
+        checkpoint_summarizer=checkpoint_summarizer,
     )
 
     await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
@@ -441,7 +402,9 @@ async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() 
     input_filter = runner.run_config.call_model_input_filter
     assert input_filter is not None
     service.limits = replace(service.limits, context_compaction_enabled=False)
+    initial = {"type": "message", "role": "user", "content": "immutable input"}
     items = [
+        initial,
         {
             "type": "function_call",
             "call_id": "frozen-call",
@@ -454,7 +417,7 @@ async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() 
             "output": "x" * 4000,
         },
     ]
-    filtered = input_filter(
+    filtered = await input_filter(
         CallModelData(
             ModelInputData(input=items, instructions="stable-system-prompt"),
             runner.starting_agent,
@@ -462,7 +425,9 @@ async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() 
         )
     )
 
-    assert _COMPACTION_MARKER in str(filtered.input[1]["output"])
+    assert filtered.input[0] == initial
+    assert "<review-checkpoint>" in str(filtered.input[1]["content"])
+    assert checkpoint_summarizer.calls == 1
     assert filtered.instructions == "stable-system-prompt"
 
 

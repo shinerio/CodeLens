@@ -31,6 +31,7 @@ TranscriptKind = Literal[
     "model_output_completed",
     "model_completed",
     "model_raw_output",
+    "checkpoint_compaction",
 ]
 StreamingTranscriptKind = Literal["model_reasoning_delta", "model_output_delta"]
 _STREAMING_TRANSCRIPT_KINDS: frozenset[str] = frozenset(

@@ -49,8 +49,13 @@ ReviewSnapshot
 
 - `review-policy.md`：最高层的代码审查安全与规则解释策略。
 - `review-workflow.md`：Reviewer 的调查、证据、评论和完成协议。
+- `review-feedback.md`：评论位置或证据被宿主拒绝后的纠偏文本。
+- `tool-not-found.md`：模型调用冻结能力以外工具时的纠偏模板。
 - `tool-loop-warning.md`：检测到重复工具结果时使用的警告模板；它不属于初始 `instructions`。
+- `checkpoint-compaction.md`：独立 checkpoint LLM 调用使用的本地化语义压缩指令；不属于主 Agent 初始 `instructions`。
 - `tools.json`：所有稳定模型工具的本地化描述。
+
+Epoch checkpoint Runtime 已接线并在启动时校验该文件；完整设计、已实现边界和后续 token 水位增强见 [`prompt-cache.md`](./prompt-cache.md)。
 
 [`I18nPromptLoader`](../backend/src/codelens/review/infrastructure/i18n_prompt_loader.py#L38-L112) 在进程启动时读取并校验所有 locale 目录，将结果保存为不可变映射。请求 locale 存在时使用精确匹配，否则回退到默认 locale，当前默认值为 `en`。模型调用期间不会重新读取这些系统 Prompt 文件。
 

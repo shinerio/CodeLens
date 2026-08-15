@@ -43,6 +43,7 @@ type TranscriptKind = Literal[
     "model_output_completed",
     "model_completed",
     "model_raw_output",
+    "checkpoint_compaction",
 ]
 type TranscriptRecord = tuple[TranscriptKind, str, Mapping[str, str] | None]
 
@@ -509,7 +510,9 @@ class ReviewOrchestrator:
                     "usage_scope": "agent_run",
                     "model_name": output.model_name,
                     "llm_call_count": str(len(output.diagnostics)),
+                    "checkpoint_llm_call_count": str(output.checkpoint_llm_call_count),
                     "input_tokens": str(output.input_tokens),
+                    "checkpoint_input_tokens": str(output.checkpoint_input_tokens),
                     "cached_input_tokens": str(output.cached_input_tokens),
                     "cache_write_input_tokens": str(output.cache_write_input_tokens),
                     "context_compaction_count": str(output.context_compaction_count),
@@ -520,6 +523,9 @@ class ReviewOrchestrator:
                     "context_compaction_compressed_bytes": str(
                         output.context_compaction_compressed_bytes
                     ),
+                    "context_compaction_failure_count": str(
+                        output.context_compaction_failure_count
+                    ),
                     "compaction_replay_registered_count": str(
                         output.compaction_replay_registered_count
                     ),
@@ -527,6 +533,7 @@ class ReviewOrchestrator:
                         output.compaction_replay_consumed_count
                     ),
                     "output_tokens": str(output.output_tokens),
+                    "checkpoint_output_tokens": str(output.checkpoint_output_tokens),
                     "total_tokens": str(output.input_tokens + output.output_tokens),
                 },
             )

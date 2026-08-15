@@ -4,7 +4,7 @@ from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 
 PROMPT_ROOT = Path(__file__).parents[4] / "prompts"
 EXPECTED_BUNDLE_FILES = {
-    "context-compaction.md",
+    "checkpoint-compaction.md",
     "review-policy.md",
     "review-workflow.md",
     "review-feedback.md",
@@ -53,8 +53,16 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "candidate_ids" in english.tools["retract_comment"].description
     assert "does not fall on an actual changed diff line" in english.review_feedback
     assert "没有落在本次实际变更的 diff 行" in chinese.review_feedback
-    assert "not evidence" in english.context_compaction_notice
-    assert "不能作为证据" in chinese.context_compaction_notice
+    assert "evidence IDs" in english.checkpoint_compaction
+    assert "证据 ID" in chinese.checkpoint_compaction
+    assert "untrusted" in english.checkpoint_compaction
+    assert "不可信" in chinese.checkpoint_compaction
+    assert "task objective" in english.checkpoint_compaction
+    assert "任务目标" in chinese.checkpoint_compaction
+    assert "coverage" in english.checkpoint_compaction
+    assert "覆盖进度" in chinese.checkpoint_compaction
+    assert "JSON or XML" not in english.checkpoint_compaction
+    assert "JSON 或 XML" not in chinese.checkpoint_compaction
     assert "{tool_name}" in english.tool_not_found
     assert "{available_tools}" in english.tool_not_found
     assert "{tool_name}" in chinese.tool_not_found

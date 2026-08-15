@@ -103,6 +103,8 @@ Review Profile 将 reviewer 选择策略保存为可复用配置。任务创建�
 
 ## 8. 确定性上下文压缩
 
+> 这些字段名为兼容已有设置 API 保留，当前语义已切换为 [`prompt-cache.md`](./prompt-cache.md) 定义的 Epoch Checkpoint：达到 trigger 后只压缩最旧的完整 rounds，保留最近证据结果，并生成单一 checkpoint。长期仍需用模型 token 软/硬水位取代证据字节数作为主要容量判断。
+
 上下文压缩仅处理活动模型上下文中较早的 `read_file`、`get_diff`、`grep` 和 `find_files` 工具结果正文。模型历史输出、可见推理摘要、系统提示、仓库规则、初始 `review_files`、业务/控制工具结果、宿主覆盖状态和完整 Transcript 都不会被修改。
 
 压缩达到触发阈值后，从最早的可压缩结果开始批量替换，直到预计活动证据正文不高于目标值。占位内容保留原 `call_id`、工具名、参数和原始字节数，并提示需要精确证据时重新调用工具。已经压缩的占位内容保持稳定，不会在后续轮次反复改写，以减少 Prompt Cache 失效。

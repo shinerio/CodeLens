@@ -100,6 +100,7 @@ class AgentResponseDiagnostic:
     output_item_count: int
     cached_input_tokens: int = 0
     cache_write_input_tokens: int = 0
+    phase: Literal["agent", "checkpoint_compaction"] = "agent"
 
 
 @dataclass(frozen=True)
@@ -117,6 +118,7 @@ class UnvalidatedAgentOutput:
     context_compacted_result_count: int = 0
     context_compaction_original_bytes: int = 0
     context_compaction_compressed_bytes: int = 0
+    context_compaction_failure_count: int = 0
     compaction_replay_registered_count: int = 0
     compaction_replay_consumed_count: int = 0
 
@@ -138,6 +140,32 @@ class UnvalidatedAgentOutput:
 
         return sum(item.cache_write_input_tokens for item in self.diagnostics)
 
+    @property
+    def checkpoint_llm_call_count(self) -> int:
+        """Return the number of independent semantic checkpoint model calls."""
+
+        return sum(item.phase == "checkpoint_compaction" for item in self.diagnostics)
+
+    @property
+    def checkpoint_input_tokens(self) -> int:
+        """Return input tokens spent on semantic checkpoint calls."""
+
+        return sum(
+            item.input_tokens
+            for item in self.diagnostics
+            if item.phase == "checkpoint_compaction"
+        )
+
+    @property
+    def checkpoint_output_tokens(self) -> int:
+        """Return output tokens spent on semantic checkpoint calls."""
+
+        return sum(
+            item.output_tokens
+            for item in self.diagnostics
+            if item.phase == "checkpoint_compaction"
+        )
+
 
 @dataclass(frozen=True)
 class AgentRuntimeEvent:
@@ -152,6 +180,7 @@ class AgentRuntimeEvent:
         "model_output_completed",
         "model_completed",
         "model_raw_output",
+        "checkpoint_compaction",
         "tool_call",
         "invalid_tool_call",
         "invalid_tool_result",

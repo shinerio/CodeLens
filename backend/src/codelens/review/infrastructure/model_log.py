@@ -14,6 +14,7 @@ _MODEL_LOG_KINDS = frozenset(
     {
         "prompt",
         "model_raw_output",
+        "checkpoint_compaction",
         "tool_call",
         "invalid_tool_call",
         "tool_result",

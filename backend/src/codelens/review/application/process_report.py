@@ -79,16 +79,20 @@ class AgentProcessSummary:
     agent: str
     model_name: str | None
     llm_call_count: int
+    checkpoint_llm_call_count: int
     input_tokens: int
+    checkpoint_input_tokens: int
     cached_input_tokens: int
     cache_write_input_tokens: int
     context_compaction_count: int
     context_compacted_result_count: int
     context_compaction_original_bytes: int
     context_compaction_compressed_bytes: int
+    context_compaction_failure_count: int
     compaction_replay_registered_count: int
     compaction_replay_consumed_count: int
     output_tokens: int
+    checkpoint_output_tokens: int
     total_tokens: int
     tool_call_count: int
     accepted_tool_call_count: int
@@ -108,16 +112,20 @@ class ReviewProcessReport:
     usage_is_complete: bool
     agent_run_count: int
     llm_call_count: int
+    checkpoint_llm_call_count: int
     input_tokens: int
+    checkpoint_input_tokens: int
     cached_input_tokens: int
     cache_write_input_tokens: int
     context_compaction_count: int
     context_compacted_result_count: int
     context_compaction_original_bytes: int
     context_compaction_compressed_bytes: int
+    context_compaction_failure_count: int
     compaction_replay_registered_count: int
     compaction_replay_consumed_count: int
     output_tokens: int
+    checkpoint_output_tokens: int
     total_tokens: int
     tool_call_count: int
     accepted_tool_call_count: int
@@ -144,16 +152,20 @@ class ReviewProcessReport:
 class _AgentAccumulator:
     model_name: str | None = None
     llm_call_count: int = 0
+    checkpoint_llm_call_count: int = 0
     input_tokens: int = 0
+    checkpoint_input_tokens: int = 0
     cached_input_tokens: int = 0
     cache_write_input_tokens: int = 0
     context_compaction_count: int = 0
     context_compacted_result_count: int = 0
     context_compaction_original_bytes: int = 0
     context_compaction_compressed_bytes: int = 0
+    context_compaction_failure_count: int = 0
     compaction_replay_registered_count: int = 0
     compaction_replay_consumed_count: int = 0
     output_tokens: int = 0
+    checkpoint_output_tokens: int = 0
     total_tokens: int = 0
     tool_call_count: int = 0
     accepted_tool_call_count: int = 0
@@ -296,16 +308,20 @@ def build_process_report(
             agent=agent_name,
             model_name=value.model_name,
             llm_call_count=value.llm_call_count,
+            checkpoint_llm_call_count=value.checkpoint_llm_call_count,
             input_tokens=value.input_tokens,
+            checkpoint_input_tokens=value.checkpoint_input_tokens,
             cached_input_tokens=value.cached_input_tokens,
             cache_write_input_tokens=value.cache_write_input_tokens,
             context_compaction_count=value.context_compaction_count,
             context_compacted_result_count=value.context_compacted_result_count,
             context_compaction_original_bytes=value.context_compaction_original_bytes,
             context_compaction_compressed_bytes=value.context_compaction_compressed_bytes,
+            context_compaction_failure_count=value.context_compaction_failure_count,
             compaction_replay_registered_count=value.compaction_replay_registered_count,
             compaction_replay_consumed_count=value.compaction_replay_consumed_count,
             output_tokens=value.output_tokens,
+            checkpoint_output_tokens=value.checkpoint_output_tokens,
             total_tokens=value.total_tokens,
             tool_call_count=value.tool_call_count,
             accepted_tool_call_count=value.accepted_tool_call_count,
@@ -357,7 +373,13 @@ def build_process_report(
         usage_is_complete=usage_is_complete,
         agent_run_count=agent_run_count,
         llm_call_count=sum(agent.llm_call_count for agent in agent_summaries),
+        checkpoint_llm_call_count=sum(
+            agent.checkpoint_llm_call_count for agent in agent_summaries
+        ),
         input_tokens=sum(agent.input_tokens for agent in agent_summaries),
+        checkpoint_input_tokens=sum(
+            agent.checkpoint_input_tokens for agent in agent_summaries
+        ),
         cached_input_tokens=sum(agent.cached_input_tokens for agent in agent_summaries),
         cache_write_input_tokens=sum(agent.cache_write_input_tokens for agent in agent_summaries),
         context_compaction_count=sum(agent.context_compaction_count for agent in agent_summaries),
@@ -370,6 +392,9 @@ def build_process_report(
         context_compaction_compressed_bytes=sum(
             agent.context_compaction_compressed_bytes for agent in agent_summaries
         ),
+        context_compaction_failure_count=sum(
+            agent.context_compaction_failure_count for agent in agent_summaries
+        ),
         compaction_replay_registered_count=sum(
             agent.compaction_replay_registered_count for agent in agent_summaries
         ),
@@ -377,6 +402,9 @@ def build_process_report(
             agent.compaction_replay_consumed_count for agent in agent_summaries
         ),
         output_tokens=sum(agent.output_tokens for agent in agent_summaries),
+        checkpoint_output_tokens=sum(
+            agent.checkpoint_output_tokens for agent in agent_summaries
+        ),
         total_tokens=sum(agent.total_tokens for agent in agent_summaries),
         tool_call_count=sum(tool.call_count for tool in tools),
         accepted_tool_call_count=sum(tool.accepted_call_count for tool in tools),
@@ -436,6 +464,9 @@ def _accumulate_usage(accumulator: _AgentAccumulator, metadata: dict[str, str]) 
     accumulator.context_compaction_compressed_bytes += _non_negative_int(
         metadata, "context_compaction_compressed_bytes"
     )
+    accumulator.context_compaction_failure_count += _non_negative_int(
+        metadata, "context_compaction_failure_count"
+    )
     accumulator.compaction_replay_registered_count += _non_negative_int(
         metadata, "compaction_replay_registered_count"
     )
@@ -444,6 +475,22 @@ def _accumulate_usage(accumulator: _AgentAccumulator, metadata: dict[str, str]) 
     )
     accumulator.output_tokens += _non_negative_int(metadata, "output_tokens")
     accumulator.total_tokens += _non_negative_int(metadata, "total_tokens")
+    if metadata.get("model_phase") == "checkpoint_compaction":
+        accumulator.checkpoint_llm_call_count += _non_negative_int(
+            metadata, "llm_call_count"
+        )
+        accumulator.checkpoint_input_tokens += _non_negative_int(metadata, "input_tokens")
+        accumulator.checkpoint_output_tokens += _non_negative_int(metadata, "output_tokens")
+    else:
+        accumulator.checkpoint_llm_call_count += _non_negative_int(
+            metadata, "checkpoint_llm_call_count"
+        )
+        accumulator.checkpoint_input_tokens += _non_negative_int(
+            metadata, "checkpoint_input_tokens"
+        )
+        accumulator.checkpoint_output_tokens += _non_negative_int(
+            metadata, "checkpoint_output_tokens"
+        )
     accumulator.model_name = metadata.get("model_name") or accumulator.model_name
 
 
@@ -459,6 +506,9 @@ def _accumulate_run_diagnostics(accumulator: _AgentAccumulator, metadata: dict[s
     )
     accumulator.context_compaction_compressed_bytes += _non_negative_int(
         metadata, "context_compaction_compressed_bytes"
+    )
+    accumulator.context_compaction_failure_count += _non_negative_int(
+        metadata, "context_compaction_failure_count"
     )
     accumulator.compaction_replay_registered_count += _non_negative_int(
         metadata, "compaction_replay_registered_count"
