@@ -4,9 +4,14 @@
 
 本文记录 2026-07-26 文档审计中发现的潜在实现问题。审计基线为当前工作树（基于提交 `0916275e85a7e3a95074fb8b7955d58886102247`）。这些条目与 [`ARCHITECTURE.md`](./ARCHITECTURE.md)、根目录 [`README.md`](../README.md) 或 [`AGENTS.md`](../AGENTS.md) 中的明确契约不一致，且从安全性、稳定契约或数据生命周期判断，更可能需要修改代码或补充产品决策，因此本次没有把权威文档改成当前实现行为。
 
-每项状态均为“待处理”。修复后应同步补充相应测试，并从本文件删除已经解决的条目。
+条目编号沿用原始审计编号；已解决的条目按本文件规则直接删除，不再占用编号。各条目状态在标题中标注：`未解决` 表示冲突仍然存在；`部分解决` 表示条目中部分子项已修复或权威契约已收窄，剩余子项仍待处理。修复后应同步补充相应测试，并从本文件删除已经解决的条目（或把部分解决条目收敛为剩余子项）。
 
-## 2. 非回环地址允许无鉴权监听
+状态记录：
+
+- 2026-07-26 初版：条目 2–11 全部为待处理。
+- 后续复核（基于提交 `567692c`）：条目 6（工具边界错误丢失稳定原因标识）已解决并从本文件删除——三种工具失败（`max_tool_calls_exceeded`、`tool_invocation_timed_out`、`identical_tool_result_loop`）现为 `PermanentAgentOutputError` 子类，`openai_runtime.py` 的 `_wrapped_agent_failure` 会从 SDK 的 `UserError` 包装中恢复原始领域异常，`test_openai_runtime.py` 已覆盖包装后永久工具失败不重试且保留 `reason_code`；条目 5、7、8 为部分解决；其余条目未解决。
+
+## 2. 非回环地址允许无鉴权监听（未解决）
 
 **预期契约**
 
@@ -15,8 +20,8 @@
 
 **当前实现**
 
-- [`settings.py`](../backend/src/codelens/bootstrap/settings.py#L45-L52) 把 `0.0.0.0` 列入允许值；只要配置了至少一个 `repository_roots` 就会通过校验。
-- [`test_settings.py`](../backend/tests/unit/bootstrap/test_settings.py) 把这一行为作为有效配置覆盖。
+- [`settings.py`](../backend/src/codelens/bootstrap/settings.py#L56-L69) 校验 `auth=none` 时把 `0.0.0.0` 列入允许值（L60），且不要求 `repository_roots` 非空。
+- [`test_settings.py`](../backend/tests/unit/bootstrap/test_settings.py#L27-L34) 把这一行为作为有效配置覆盖。
 
 **影响**
 
@@ -26,7 +31,7 @@
 
 确认首版是否应完全拒绝非回环绑定；若确实需要远程访问，先定义并实现明确的认证、授权和传输边界，再调整架构与 README。
 
-## 3. 默认数据目录位于源码仓库内
+## 3. 默认数据目录位于源码仓库内（未解决）
 
 **预期契约**
 
@@ -35,8 +40,8 @@
 
 **当前实现**
 
-- [`settings.py`](../backend/src/codelens/bootstrap/settings.py#L26-L36) 将默认 `data_dir` 解析为 `<project-root>/data`。
-- [`cli.py`](../backend/src/codelens/bootstrap/cli.py#L24-L45) 使用 `Settings()` 产生 `--data-dir` 默认值，并把该值重新传入运行时设置，因此普通 CLI 启动同样落到仓库内的 `data/`。
+- [`settings.py`](../backend/src/codelens/bootstrap/settings.py#L28-L47) 将默认 `data_dir` 解析为 `<project-root>/data`（L34-L35）。
+- [`cli.py`](../backend/src/codelens/bootstrap/cli.py#L35) 使用 `Settings()` 产生 `--data-dir` 默认值，并把该值重新传入运行时设置（L72-L77、L108-L113），因此普通 CLI 启动同样落到仓库内的 `data/`。
 
 **影响**
 
@@ -46,7 +51,7 @@ SQLite、Artifact、worktree 和 `secrets/model-gateways.json` 默认与源码�
 
 确定跨平台应用数据目录策略，并让 Settings、CLI、启动脚本、测试和 README 共用同一默认值；同时保留显式 `--data-dir`/环境变量覆盖能力。
 
-## 4. `model.log` 未要求操作者显式启用
+## 4. `model.log` 未要求操作者显式启用（未解决）
 
 **预期契约**
 
@@ -54,9 +59,9 @@ SQLite、Artifact、worktree 和 `secrets/model-gateways.json` 默认与源码�
 
 **当前实现**
 
-- [`logging.py`](../backend/src/codelens/bootstrap/logging.py#L160-L180) 每次配置进程日志时都会创建并启用 `model.log` Handler。
-- [`unified.py`](../backend/src/codelens/bootstrap/unified.py#L138-L147) 始终向 `WorkerTranscriptStore` 注入 `ModelTranscriptLogWriter`。
-- [`model_log.py`](../backend/src/codelens/review/infrastructure/model_log.py#L24-L52) 会在终态转录写入时记录 Prompt、原始模型输出和工具交互，没有检查 opt-in 设置。
+- [`logging.py`](../backend/src/codelens/bootstrap/logging.py#L172-L192) 每次配置进程日志时都会创建并启用 `model.log` Handler。
+- [`unified.py`](../backend/src/codelens/bootstrap/unified.py#L136-L140) 配置日志时未检查 opt-in；[`unified.py`](../backend/src/codelens/bootstrap/unified.py#L205) 始终向 `WorkerTranscriptStore` 注入 `ModelTranscriptLogWriter`。
+- [`model_log.py`](../backend/src/codelens/review/infrastructure/model_log.py#L34-L39) 会在终态转录写入时记录 Prompt、原始模型输出和工具交互，没有检查 opt-in 设置。
 
 **影响**
 
@@ -66,7 +71,7 @@ SQLite、Artifact、worktree 和 `secrets/model-gateways.json` 默认与源码�
 
 增加默认关闭的持久化设置或启动配置，并让 Handler 安装和 `ModelTranscriptLogWriter` 注入共同遵循该设置；补充启用、关闭和运行期切换测试。
 
-## 5. 运行日志契约未完全落实
+## 5. 运行日志契约未完全落实（部分解决）
 
 **预期契约**
 
@@ -74,81 +79,84 @@ SQLite、Artifact、worktree 和 `secrets/model-gateways.json` 默认与源码�
 
 **当前实现**
 
-- [`logging.py`](../backend/src/codelens/bootstrap/logging.py#L128-L146) 未显式传入目录时使用 `Path.cwd()/logs`，从其他目录手动启动时不保证是项目根目录。
-- [`logging.py`](../backend/src/codelens/bootstrap/logging.py#L38-L45) 直接输出 `record.levelname`，实际值为 `INFO`、`WARNING` 等大写文本。
-- [`dto.py`](../backend/src/codelens/interface/http/dto.py#L50-L55) 和 [`settings.py`](../backend/src/codelens/interface/http/routers/settings.py#L73-L92) 的 HTTP 契约只返回 `level`，没有分别表达默认级别和当前级别。
-- Unix [`code-lens`](../code-lens#L159-L168) 与 Windows [`code-lens.ps1`](../code-lens.ps1#L61-L88) 通过 Shell 重定向写入 `supervisor.log`/`frontend.log`，不是结构化限量 Handler，也无法采用运行期日志级别设置。
+已解决：
+
+- 运行期日志级别热切换已落地：[`logging.py`](../backend/src/codelens/bootstrap/logging.py#L75-L112) 提供 `get_runtime_log_level`/`set_runtime_log_level`（持久化到 `data/logging.json`）与 `_RuntimeLevelFilter`（逐条刷新阈值），[`settings.py`](../backend/src/codelens/interface/http/routers/settings.py#L143-L166) 的 `GET/PUT /api/settings/logging` 与 `reset-all` 已接入；API、Worker 与 Supervisor 无需重启即可采用新级别。
+
+仍未解决：
+
+- [`logging.py`](../backend/src/codelens/bootstrap/logging.py#L38-L51) 仍直接输出 `record.levelname`，实际值为 `INFO`、`WARNING` 等大写文本，与契约的小写稳定值不符。
+- [`dto.py`](../backend/src/codelens/interface/http/dto.py#L137-L138) 的 `RuntimeLogLevelResponse` 仍只有 `level`，没有分别表达默认级别和当前级别；默认级别只存在于服务端 `conf/web-settings-defaults.toml`，客户端无法区分。
+- [`supervisor.py`](../backend/src/codelens/bootstrap/supervisor.py#L397-L398) 和 [`supervisor.py`](../backend/src/codelens/bootstrap/supervisor.py#L445-L446) 仍通过子进程 stdout 重定向写入 `supervisor.log`/`frontend.log`，不是结构化限量 Handler，也无法采用运行期日志级别设置。
+- [`logging.py`](../backend/src/codelens/bootstrap/logging.py#L150) 未显式传入目录时仍使用 `Path.cwd()/logs`；Supervisor 启动时因 cwd 为项目根而实际落在项目 `logs/`，但手动从其他目录启动仍不保证是项目根目录。
 
 **影响**
 
-日志位置会依赖启动目录；同一架构字段存在大小写差异；客户端无法区分默认与当前设置；Supervisor 日志可能无界增长且与后端动态级别行为不一致。
+日志记录字段仍存在大小写差异；客户端无法区分默认与当前设置；Supervisor 日志仍可能无界增长且与后端动态级别行为不一致。
 
 **后续处理方向**
 
-分别确认后端、前端启动输出和 Supervisor 的所有权。统一解析项目日志目录、规范化级别字段、扩展 Settings DTO，并为 Supervisor 引入可轮转且能响应运行期设置的实现或重新收窄架构契约。
+- 规范化日志记录中的级别字段为小写稳定值，或重新收窄架构契约。
+- 扩展 Settings DTO，分别返回默认级别与当前级别。
+- 为 Supervisor 引入可轮转且能响应运行期设置的实现，或重新收窄架构契约。
 
-## 6. 工具边界错误丢失稳定原因标识
+## 7. 同轮完成工具与只读证据并发的终态确定性（部分解决）
 
 **预期契约**
 
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) 要求工具调用次数耗尽、单次超时和相同结果循环立即以明确、不可重试的错误终止，诊断应保留稳定原因。
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) 要求 `task_done` 依据完整、确定的覆盖状态决定接受、打回或强制部分完成；一次模型响应中的多个只读工具允许有界并行，但同轮全部结果必须按原调用顺序一次性返回，状态或完成工具不得与只读证据调用组成并行批次。相同模型输出不应因协程调度顺序产生不同 Review 终态。
 
 **当前实现**
 
-- [`tool_contract.py`](../backend/src/codelens/review/infrastructure/tool_contract.py#L72-L112) 分别产生 `max_tool_calls_exceeded`、`tool_invocation_timed_out` 和 `identical_tool_result_loop`。
-- Agents SDK 会把这些非 SDK 异常包装为 `UserError`；[`openai_runtime.py`](../backend/src/codelens/review/infrastructure/openai_runtime.py#L317-L324) 再把所有 `UserError` 统一转换为 `invalid_model_output`。
-- 当前行为也记录在 [`agent-loop.md`](./agent-loop.md) 的异常转换说明中。
+已解决：
+
+- 原 `review_file_done` 工具已在工具契约 v2 硬切中删除，已调查文件不再由模型显式声明，而是由 `read_file` 证据自动累计（[`snapshot_tools.py`](../backend/src/codelens/review/infrastructure/snapshot_tools.py#L184) 与 L683 的 `_reviewed_paths`），`task_done` 依据 `reviewed_paths` 判定覆盖（[`comment_collector.py`](../backend/src/codelens/review/infrastructure/comment_collector.py#L522-L588)）。条目原述“同一轮 `review_file_done` 与 `task_done` 并发”的具体竞争已不存在。
+
+仍未解决：
+
+- 锁定的 Agents SDK（0.18.3）同一模型响应中的多个函数工具仍并发执行（task-slot 调度）。
+- [`snapshot_tools.py`](../backend/src/codelens/review/infrastructure/snapshot_tools.py#L1054-L1057) 的 `reviewed_paths` 快照（`frozenset(self._reviewed_paths)`）未与 `read_file` 的写入共享锁；`complete()` 也未持有 [`comment_collector.py`](../backend/src/codelens/review/infrastructure/comment_collector.py#L122) 的 `_state_lock`。同一 turn 最后一个 `read_file` 与 `task_done` 并发时，终态仍可能依赖调度顺序。
+- 架构契约已明确“状态或完成工具不得与只读证据调用组成并行批次”，但工具执行层未找到强制实现，也缺少真实并发回归测试。
 
 **影响**
 
-Agent Run 虽然会停止，但 Transcript、持久化失败原因和前端诊断无法区分预算耗尽、工具超时、重复循环与普通模型输出错误，削弱了稳定错误契约和可运维性。
+模型若在同一 turn 同时产生证据读取与 `task_done`，Review 判定为完整或强制部分完成仍可能因协程调度顺序不同而不同。
 
 **后续处理方向**
 
-在 SDK 包装边界前后保留原始领域异常身份，或建立受控的异常解包映射；为三种错误分别增加 Runtime 契约测试，验证最终 `reason_code` 和 `retryable=false`。
+- 在工具执行层串行化 `task_done`（及有状态工具）与只读证据调用，或让 `complete()` 与证据写入共享锁并按依赖排序。
+- 增加真实并发回归测试，验证同一批状态与证据工具在相同模型输出下产生确定性终态。
 
-## 7. 同一轮状态工具并发导致完成结果依赖调度顺序
+## 8. Finding 源码预览的 tombstone 可见性与重命名/overlay 处理（部分解决）
 
 **预期契约**
 
-`review_file_done` 应先记录已调查文件，`task_done` 再依据完整、确定的覆盖状态决定接受、打回或强制部分完成。相同模型输出不应因协程调度顺序产生不同 Review 终态。
+[`ARCHITECTURE.md`](./ARCHITECTURE.md) 要求 Finding 源码预览返回 Review 固定 base/head revision 的可用完整正文，不读取可变原始工作区；重命名和 overlay 也必须回到同一份可信证据；软删除 Review 不得通过单条读取重新暴露。
 
 **当前实现**
 
-- 锁定的 Agents SDK 允许同一模型响应中的多个函数工具并发执行，详见 [`agent-loop.md`](./agent-loop.md) 的“同一轮多个工具如何执行”。
-- [`comment_collector.py`](../backend/src/codelens/review/infrastructure/comment_collector.py#L260-L322) 中 `complete()` 与 `complete_files()` 读写 `_completion`、`_reviewed_files` 和重试计数，没有共享锁或同批依赖排序。
-- [`tool_contract.py`](../backend/src/codelens/review/infrastructure/tool_contract.py#L61-L65) 的锁只保护调用预算和重复结果计数，不保护 Collector 状态转换。
+已解决：
+
+- 源码预览契约已收窄为“Review 固定 base/head revision”，[`source_preview.py`](../backend/src/codelens/review/application/source_preview.py#L59-L92) 按 `base_oid`/`head_oid` 从原始仓库读取固定版本正文，常规 base/head 读取与现行契约一致，不再要求冻结 Snapshot current 内容。
+
+仍未解决：
+
+- 服务仍通过 `get_execution()` 取任务（[`repositories.py`](../backend/src/codelens/review/infrastructure/repositories.py#L1944-L1998)），不过滤 tombstone；源码路由（[`reviews.py`](../backend/src/codelens/interface/http/routers/reviews.py#L265-L279)）也没有先调用可见 Review 查询。已删除 Review 的 Finding 源码仍可能通过已知 ID 访问。
+- 重命名文件的 base 侧应使用 `old_path`，服务对两侧仍使用 Finding 的新 `location.path`。
+- workspace overlay 内容不属于 `head_oid`，overlay 任务的 target 预览可能缺失 overlay 正文。
 
 **影响**
 
-模型若在同一 turn 同时调用 `review_file_done` 和 `task_done`，先执行 `task_done` 时可能先被判定为未完整；当 `max_incomplete_review_retries=0` 时还可能直接强制部分完成，随后 `review_file_done` 因任务已完成而失败。相反顺序则可能完整成功。
+已删除 Review 的 Finding 源码仍可被单条读取重新暴露；重命名 Finding 可能缺少 base 内容，overlay Finding 的 target 正文可能不完整，破坏 UI 证据与最终 Finding 的一致性。
 
 **后续处理方向**
 
-增加真实并发回归测试，明确同一批状态工具的顺序语义。可选方案包括让状态转换共享锁并按依赖排序、拒绝同批完成调用，或在工具执行计划层串行化有状态工具。
+- 在应用用例边界先验证 Review 未删除（tombstone 过滤或可见 Review 查询）。
+- 显式使用重命名 `old_path` 读取 base 侧。
+- 为 overlay 任务保留可恢复的 Snapshot/overlay 内容身份或专用 Artifact。
+- 补充 overlay、rename、tombstone、新增和删除文件测试。
 
-## 8. Finding 源码预览未完全使用冻结 Snapshot
-
-**预期契约**
-
-[`ARCHITECTURE.md`](./ARCHITECTURE.md) 要求 Finding 源码预览返回固定 base 与冻结 target/current 内容，不读取可变原始工作区；重命名和 overlay 也必须回到同一份可信证据。软删除 Review 不得通过单条读取重新暴露。
-
-**当前实现**
-
-- [`source_preview.py`](../backend/src/codelens/review/application/source_preview.py#L59-L92) 从原始仓库按 `base_oid`/`head_oid` 读取 `location.path`，没有读取 Snapshot current 内容。
-- workspace overlay 不属于 `head_oid`，因此 target 预览可能落后于产生 Finding 的冻结 current 内容。
-- 重命名文件的 base 侧应使用 `old_path`，但服务对两侧都使用 Finding 的新 `location.path`。
-- 服务通过 `get_execution()` 取任务；[`repositories.py`](../backend/src/codelens/review/infrastructure/repositories.py#L621-L637) 不过滤 tombstone。源码路由 [`reviews.py`](../backend/src/codelens/interface/http/routers/reviews.py#L208-L222) 也没有先调用可见 Review 查询。
-
-**影响**
-
-overlay Finding 可能显示错误目标正文，重命名 Finding 可能缺少 base 内容，已删除 Review 的 Finding 源码仍可能通过已知 ID 访问。这会破坏 UI 证据与最终 Finding 的一致性及 tombstone 可见性。
-
-**后续处理方向**
-
-为源码预览保留可恢复的 Snapshot 内容身份或专用 Artifact，显式使用 rename `old_path`，并在应用用例边界先验证 Review 未删除。补充 overlay、rename、tombstone、新增和删除文件测试。
-
-## 9. Artifact 缺少任务级配额和保留策略
+## 9. Artifact 缺少任务级配额和保留策略（未解决）
 
 **预期契约**
 
@@ -156,8 +164,8 @@ overlay Finding 可能显示错误目标正文，重命名 Finding 可能缺少 
 
 **当前实现**
 
-- [`run_artifacts.py`](../backend/src/codelens/review/infrastructure/run_artifacts.py#L41-L94) 只实现输出 Artifact 写入和读取，没有容量检查、淘汰、删除或孤儿清理。
-- [`input_artifacts.py`](../backend/src/codelens/workspace/infrastructure/input_artifacts.py#L44-L79) 仅清理未被 Review 引用的输入 Artifact，不构成任务级总配额或终态保留策略。
+- [`run_artifacts.py`](../backend/src/codelens/review/infrastructure/run_artifacts.py#L48-L94) 只实现输出 Artifact 写入和读取，没有容量检查、淘汰、删除或孤儿清理。
+- [`input_artifacts.py`](../backend/src/codelens/workspace/infrastructure/input_artifacts.py#L61-L79) 仅清理未被 Review 引用的输入 Artifact，不构成任务级总配额或终态保留策略。
 - Review 使用 tombstone，当前没有与 tombstone 或保留期联动的 Artifact 清理流程。
 
 **影响**
@@ -168,7 +176,7 @@ overlay Finding 可能显示错误目标正文，重命名 Finding 可能缺少 
 
 定义可配置的单任务与全局容量、终态保留期、tombstone 行为和删除审计语义，再为写入拒绝、淘汰顺序、进程重启及部分失败增加集成测试。
 
-## 10. SSE 事件名称没有显式版本
+## 10. SSE 事件名称没有显式版本（未解决）
 
 **预期契约**
 
@@ -176,8 +184,8 @@ overlay Finding 可能显示错误目标正文，重命名 Finding 可能缺少 
 
 **当前实现**
 
-- [`repositories.py`](../backend/src/codelens/review/infrastructure/repositories.py#L328-L393) 等位置产生 `review.created`、`review.completed`、`review.failed`、`agent.succeeded` 等未带版本的事件名。
-- [`reviews.py`](../backend/src/codelens/interface/http/routers/reviews.py#L34-L40) 的终态事件集合使用相同未版本化名称，并直接作为 SSE `event` 字段发送。
+- [`repositories.py`](../backend/src/codelens/review/infrastructure/repositories.py#L638) 与 L1438、L1628、L2188、L2489 等位置产生 `review.plan_created`、`review.created`、`review.failed`、`agent.succeeded`、`agent_run.started` 等未带版本的事件名。
+- [`reviews.py`](../backend/src/codelens/interface/http/routers/reviews.py#L37-L43) 的终态事件集合使用相同未版本化名称，并直接作为 SSE `event` 字段发送（L377、L396）。
 
 **影响**
 
@@ -187,7 +195,7 @@ overlay Finding 可能显示错误目标正文，重命名 Finding 可能缺少 
 
 确定事件版本命名方案和兼容迁移策略，处理数据库中既有 outbox 事件，并用 HTTP/SSE 契约测试覆盖旧事件重放与新客户端解析。
 
-## 11. TypeScript 未启用严格模式
+## 11. TypeScript 未启用严格模式（未解决）
 
 **预期契约**
 
