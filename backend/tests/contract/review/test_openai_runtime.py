@@ -209,14 +209,7 @@ class PlannerRunner(FakeRunner):
     @staticmethod
     async def complete_review(starting_agent: Agent[None]) -> None:
         finalize_tool = next(tool for tool in starting_agent.tools if tool.name == "finalize_plan")
-        arguments = json.dumps(
-            {
-                "submission": {
-                    "schema_version": "2",
-                    "reviewer_references": ["general:v2"],
-                }
-            }
-        )
+        arguments = json.dumps({"reviewer_references": ["general:v2"]})
         await finalize_tool.on_invoke_tool(
             ToolContext(
                 None,

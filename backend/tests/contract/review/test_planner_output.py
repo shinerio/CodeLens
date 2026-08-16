@@ -1,24 +1,9 @@
 import json
 
 import pytest
-from pydantic import ValidationError
 
-from codelens.review.infrastructure.planner_output import (
-    PlannerOutputCodec,
-    PlannerSelectionDto,
-)
+from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
-
-
-def _payload() -> dict[str, object]:
-    return {
-        "schema_version": "2",
-        "reviewer_references": ["security:v2", "performance:v2"],
-    }
-
-
-def _dto() -> PlannerSelectionDto:
-    return PlannerSelectionDto.model_validate(_payload())
 
 
 def test_planner_output_accepts_a_specialist_subset() -> None:
@@ -32,9 +17,10 @@ def test_planner_output_accepts_a_specialist_subset() -> None:
         unavailable_reviewer_references=(),
     )
 
-    selection = codec.decode(_payload())
+    selection = codec.decode_references(["security:v2", "performance:v2"])
 
     assert selection.reviewer_references == ("security:v2", "performance:v2")
+    assert selection.schema_version == "2"
 
 
 def test_planner_output_accepts_general_alone() -> None:
@@ -43,7 +29,7 @@ def test_planner_output_accepts_general_alone() -> None:
         unavailable_reviewer_references=(),
     )
 
-    selection = codec.decode({"schema_version": "2", "reviewer_references": ["general:v2"]})
+    selection = codec.decode_references(["general:v2"])
 
     assert selection.reviewer_references == ("general:v2",)
 
@@ -65,20 +51,8 @@ def test_planner_output_rejects_illegal_team_shapes(
         unavailable_reviewer_references=(),
     )
 
-    with pytest.raises((ValueError, ValidationError)):
-        codec.decode({"schema_version": "2", "reviewer_references": reviewer_references})
-
-
-def test_planner_output_rejects_extra_fields() -> None:
-    codec = PlannerOutputCodec(
-        eligible_reviewer_references=("security:v2", "performance:v2", "general:v2"),
-        unavailable_reviewer_references=(),
-    )
-    payload = _payload()
-    payload["unknown"] = True
-
-    with pytest.raises(ValidationError):
-        codec.decode(payload)
+    with pytest.raises(ValueError):
+        codec.decode_references(reviewer_references)
 
 
 def test_planner_output_rejects_selecting_unavailable_reviewer() -> None:
@@ -88,7 +62,7 @@ def test_planner_output_rejects_selecting_unavailable_reviewer() -> None:
     )
 
     with pytest.raises(ValueError, match="unavailable"):
-        codec.decode(_payload())
+        codec.decode_references(["security:v2", "performance:v2"])
 
 
 async def test_planner_submission_finalizes_once() -> None:
@@ -103,12 +77,12 @@ async def test_planner_submission_finalizes_once() -> None:
     )
     collector = ReviewPlanSubmissionCollector(codec)
 
-    finalize_result = await collector.finalize(_dto())
+    finalize_result = await collector.finalize(["security:v2", "performance:v2"])
     assert json.loads(finalize_result)["data"]["reviewer_count"] == 2
     selection = collector.selection
     assert set(selection.reviewer_references) == {"security:v2", "performance:v2"}
 
-    repeated = json.loads(await collector.finalize(_dto()))
+    repeated = json.loads(await collector.finalize(["security:v2", "performance:v2"]))
     assert repeated["status"] == "rejected"
     assert repeated["diagnostics"][0]["code"] == "plan_already_finalized"
 

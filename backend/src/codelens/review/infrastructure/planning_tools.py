@@ -4,10 +4,7 @@ from codelens.capabilities.domain.models import ToolContractReference
 from codelens.review.application.planning import PlannerSelection
 from codelens.review.domain.tool_results import ToolDiagnostic, ToolResult, ToolResultStatus
 from codelens.review.infrastructure.capability_tools import RoleOutputToolBinding
-from codelens.review.infrastructure.planner_output import (
-    PlannerOutputCodec,
-    PlannerSelectionDto,
-)
+from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 
 
@@ -37,7 +34,7 @@ class ReviewPlanSubmissionCollector:
     def final_output(self) -> PlannerSelection:
         return self.selection
 
-    async def finalize(self, submission: PlannerSelectionDto) -> str:
+    async def finalize(self, reviewer_references: list[str]) -> str:
         if self._selection is not None:
             return ToolResult(
                 "finalize_plan",
@@ -50,7 +47,7 @@ class ReviewPlanSubmissionCollector:
                 ),
             ).to_json()
         try:
-            selection = self._codec.decode(submission.model_dump(mode="json"))
+            selection = self._codec.decode_references(reviewer_references)
         except ValueError:
             return ToolResult(
                 "finalize_plan",
@@ -61,7 +58,7 @@ class ReviewPlanSubmissionCollector:
                         "invalid_reviewer_selection",
                         "The Reviewer selection is invalid.",
                         True,
-                        "submission",
+                        "reviewer_references",
                     ),
                 ),
             ).to_json()
@@ -83,10 +80,10 @@ class ReviewPlanSubmissionCollector:
             name_override="finalize_plan",
             description_override=description,
         )
-        async def finalize_plan(submission: PlannerSelectionDto) -> str:
+        async def finalize_plan(reviewer_references: list[str]) -> str:
             """Validate one complete Reviewer selection and finalize the Plan."""
 
-            return await collector.finalize(submission)
+            return await collector.finalize(reviewer_references)
 
         return reject_unknown_arguments(finalize_plan)
 

@@ -779,10 +779,12 @@ class WorkerReviewExecutor:
             planner_payload = json.loads(planner_bytes)
         except (UnicodeDecodeError, json.JSONDecodeError) as error:
             raise ValueError("Adaptive Planner output is not canonical JSON") from error
+        if not isinstance(planner_payload, dict) or "reviewer_references" not in planner_payload:
+            raise ValueError("Adaptive Planner output is missing reviewer_references")
         selection = PlannerOutputCodec(
             eligible_reviewer_references=eligible,
             unavailable_reviewer_references=(),
-        ).decode(planner_payload)
+        ).decode_references(planner_payload["reviewer_references"])
         if checkpoint.status == "validating":
             await self._review_store.complete_planner_run(
                 record.task_id, planner_node.node_id, selection.reviewer_references

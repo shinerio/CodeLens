@@ -1,23 +1,18 @@
 import json
-from collections.abc import Mapping
-from typing import Annotated, Literal
-
-from pydantic import BaseModel, ConfigDict, Field
+from typing import Literal
 
 from codelens.review.application.planning import PlannerSelection
 
 
-class _StrictModel(BaseModel):
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-
-class PlannerSelectionDto(_StrictModel):
-    schema_version: Literal["2"]
-    reviewer_references: Annotated[list[str], Field(min_length=1, max_length=32)]
-
-
 class PlannerOutputCodec:
-    """Validate one focused Planner selection against frozen host-owned inputs."""
+    """Validate one focused Planner selection against frozen host-owned inputs.
+
+    The Planner model submits only the flat ``reviewer_references`` list; the
+    frozen ``schema_version`` is a host-owned constant injected server-side so
+    the model never encodes (or double-encodes) a nested JSON envelope.
+    """
+
+    _SCHEMA_VERSION: Literal["2"] = "2"
 
     def __init__(
         self,
@@ -32,11 +27,10 @@ class PlannerOutputCodec:
         if not self._unavailable.issubset(self._eligible):
             raise ValueError("unavailable Reviewers must belong to the eligible Catalog")
 
-    def decode(self, payload: object) -> PlannerSelection:
+    def decode_references(self, reviewer_references: list[str]) -> PlannerSelection:
         """Validate General alone or a team of at least two specialists."""
 
-        value = self._parse_dto(payload)
-        references = tuple(value.reviewer_references)
+        references = tuple(reviewer_references)
         if len(references) != len(set(references)):
             raise ValueError("Planner reviewer references must be unique")
         selected = set(references)
@@ -51,19 +45,9 @@ class PlannerOutputCodec:
         if "general:v2" not in selected and len(selected) < 2:
             raise ValueError("Planner specialist team requires at least two Reviewers")
         return PlannerSelection(
-            schema_version="2",
+            schema_version=self._SCHEMA_VERSION,
             reviewer_references=references,
         )
-
-    def _parse_dto(self, payload: object) -> PlannerSelectionDto:
-        if isinstance(payload, bytes):
-            return PlannerSelectionDto.model_validate_json(payload)
-        elif isinstance(payload, str):
-            return PlannerSelectionDto.model_validate_json(payload)
-        elif isinstance(payload, Mapping):
-            return PlannerSelectionDto.model_validate(dict(payload))
-        else:
-            raise ValueError("Planner output must be a JSON object")
 
     def canonical_bytes(self, selection: PlannerSelection) -> bytes:
         payload = {
