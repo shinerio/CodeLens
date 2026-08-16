@@ -1052,14 +1052,19 @@ class FilesystemReviewTools:
         @function_tool(
             name_override="read_file",
             description_override=descriptions["read_file"],
+            strict_mode=False,
         )
         async def read_file_tool(
             path: ModelPath,
-            version: _FileVersion,
-            line_range: ModelLineRange | None,
+            version: _FileVersion = "current",
+            start_line: _ModelLine | None = None,
+            end_line: _ModelLine | None = None,
         ) -> str:
             """Read a bounded range or bounded whole current, base, or head file."""
 
+            line_range: ModelLineRange | None = None
+            if start_line is not None and end_line is not None:
+                line_range = ModelLineRange(start_line=start_line, end_line=end_line)
             return await self.read_file(path, version, line_range)
 
         @function_tool(

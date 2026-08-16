@@ -73,8 +73,10 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "file_pattern" in chinese.tools["grep"].description
     assert "mode=literal|regex" in english.tools["grep"].description
     assert "mode=literal|regex" in chinese.tools["grep"].description
-    assert "line_range=null" in english.tools["read_file"].description
-    assert "line_range=null" in chinese.tools["read_file"].description
+    assert "start_line" in english.tools["read_file"].description
+    assert "end_line" in english.tools["read_file"].description
+    assert "start_line" in chinese.tools["read_file"].description
+    assert "end_line" in chinese.tools["read_file"].description
     assert "Omit cursor" in english.tools["get_diff"].description
     assert "省略 cursor" in chinese.tools["get_diff"].description
 

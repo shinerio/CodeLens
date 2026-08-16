@@ -170,7 +170,7 @@ async def test_v2_context_retains_task_done_controls_and_candidate_output(
 
     await invoke(
         "read_file",
-        {"path": "src/value.py", "version": "current", "line_range": None},
+        {"path": "src/value.py", "version": "current"},
     )
     completion = json.loads(
         await invoke("task_done", {"summary": "Reviewed the complete frozen scope."})
@@ -248,13 +248,13 @@ def test_every_model_visible_tool_uses_recursive_strict_schema(
         for nested in value.values():
             assert_strict_object_schemas(nested)
 
-    # get_diff is the sole tool with strict_mode disabled: its cursor parameter
-    # is optional so the model can omit it on the first call instead of passing
-    # the string "null" (a recurring GLM failure under strict nullable params).
-    # reject_unknown_arguments still enforces no-extra-args and the decode layer
-    # validates cursor format, so the relaxed schema does not weaken input safety.
+    # get_diff and read_file have strict_mode disabled: their optional parameters
+    # (cursor; start_line/end_line) can be omitted on the first call instead of
+    # passing the string "null" (a recurring GLM failure under strict nullable
+    # params). reject_unknown_arguments still enforces no-extra-args and the
+    # decode layer validates values, so the relaxed schema does not weaken safety.
     for tool in tools:
-        if tool.name == "get_diff":
+        if tool.name in ("get_diff", "read_file"):
             assert tool.strict_json_schema is False
             continue
         assert tool.strict_json_schema is True

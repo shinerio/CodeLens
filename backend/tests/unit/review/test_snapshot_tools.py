@@ -924,10 +924,11 @@ async def test_read_file_agent_schema_requires_nullable_line_range(tmp_path: Pat
     diff_tool = next(tool for tool in tools.as_agent_tools(descriptions) if tool.name == "get_diff")
     schema = read_tool.params_json_schema
 
-    assert read_tool.strict_json_schema is True
-    assert set(schema["required"]) == {"path", "version", "line_range"}
-    assert schema["additionalProperties"] is False
-    assert schema["$defs"]["ModelLineRange"]["additionalProperties"] is False
+    assert read_tool.strict_json_schema is False
+    assert set(schema["required"]) == {"path"}
+    assert "version" in schema["properties"]
+    assert "start_line" in schema["properties"]
+    assert "end_line" in schema["properties"]
     assert diff_tool.strict_json_schema is False
     assert set(diff_tool.params_json_schema["required"]) == {"path"}
     assert "cursor" in diff_tool.params_json_schema["properties"]

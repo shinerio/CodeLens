@@ -1243,14 +1243,17 @@ class WorkerReviewExecutor:
             excerpt_reader=self._excerpt_reader,
         )
 
-    async def _prepare_verdict(self, task_id: str, prepared: PreparedReview) -> None:
-        """Persist deterministic clusters and prepare Final Verifier input."""
+    async def _prepare_verdict(self, task_id: str, prepared: PreparedReview) -> bool:
+        """Persist deterministic clusters and prepare Final Verifier input.
+
+        Returns ``True`` when the verifier should be skipped (zero clusters).
+        """
 
         if self._candidate_store is None or self._verdict_store is None:
-            return
+            return False
         plan = prepared.plan
         if plan is None:
-            return
+            return False
         candidates = await self._candidate_store.list_for_task(task_id)
         service = ClusterService(self._verdict_store)
         clusters = await service.prepare(
@@ -1264,7 +1267,10 @@ class WorkerReviewExecutor:
         )
         if verifier is None:
             await self._verdict_store.save_decisions(task_id, publish_all_verdicts(clusters))
-            return
+            return True
+        if not clusters:
+            await self._verdict_store.save_decisions(task_id, publish_all_verdicts(clusters))
+            return True
         verifier_envelope = json.loads(prepared.input_payloads[verifier.node_id])
         verifier_role_context = verifier_envelope.setdefault("role_context", {})
         if not isinstance(verifier_role_context, dict):
@@ -1329,6 +1335,7 @@ class WorkerReviewExecutor:
             verifier_envelope, sort_keys=True, separators=(",", ":")
         ).encode()
         self._verdict_codecs[(task_id, verifier.node_id)] = VerdictCodec(clusters=clusters)
+        return False
 
     async def _publish_findings(self, task_id: str) -> None:
         if self._candidate_store is None or self._verdict_store is None:

@@ -183,7 +183,7 @@ class ReviewOrchestrator:
         completion: AgentRunCompletionPort,
         agent_semaphore: asyncio.Semaphore,
         max_agent_runs_per_review: int,
-        prepare_verdict: Callable[[str, PreparedReview], Awaitable[None]] | None = None,
+        prepare_verdict: Callable[[str, PreparedReview], Awaitable[bool]] | None = None,
         publish_findings: Callable[[str], Awaitable[None]] | None = None,
         transcript: _TranscriptPort | None = None,
         crash_injector: _CrashInjectorPort | None = None,
@@ -363,8 +363,14 @@ class ReviewOrchestrator:
                 None,
             )
             if verifier is not None and reviewers_terminal:
+                skip_verifier = False
                 if self._prepare_verdict is not None:
-                    await self._prepare_verdict(task_id, prepared)
+                    skip_verifier = await self._prepare_verdict(task_id, prepared)
+                if skip_verifier:
+                    if self._publish_findings is not None:
+                        await self._publish_findings(task_id)
+                    await self._finish_persisted_task(task_id, status)
+                    return
                 verifier_status = by_node[verifier.node_id].status
                 if verifier_status in {"failed", "timed_out"}:
                     await self._workflow.mark_partial_coverage(task_id)

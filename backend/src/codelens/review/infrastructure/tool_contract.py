@@ -113,7 +113,7 @@ def reject_unknown_arguments(tool: FunctionTool) -> FunctionTool:
             return _rejected_result(
                 tool.name,
                 code,
-                "Tool arguments failed schema validation.",
+                f"Tool arguments failed schema validation: {error_text}",
             )
         except ValueError:
             return _rejected_result(
@@ -140,10 +140,13 @@ def reject_unknown_arguments(tool: FunctionTool) -> FunctionTool:
                     )
                     else "invalid_argument_value"
                 )
+                validation_detail = result.removeprefix(
+                    sdk_validation_prefix
+                ).strip()
                 return _rejected_result(
                     tool.name,
                     code,
-                    "Tool arguments failed schema validation.",
+                    f"Tool arguments failed schema validation: {validation_detail}",
                 )
         return ensure_tool_result(tool.name, result)
 
