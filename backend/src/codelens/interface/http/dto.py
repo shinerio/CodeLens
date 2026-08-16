@@ -134,12 +134,15 @@ class FindingSourcePreviewResponse(StrictDto):
     highlight_end_line: int
 
 
-class RuntimeLogLevelResponse(StrictDto):
+class RuntimeLoggingSettingsResponse(StrictDto):
+    default_level: Literal["debug", "info", "warning", "error"]
     level: Literal["debug", "info", "warning", "error"]
+    model_output_enabled: bool
 
 
-class UpdateRuntimeLogLevelRequest(RuntimeLogLevelResponse):
-    pass
+class UpdateRuntimeLoggingSettingsRequest(StrictDto):
+    level: Literal["debug", "info", "warning", "error"]
+    model_output_enabled: bool
 
 
 class RecentRepositorySettingsResponse(StrictDto):
@@ -830,5 +833,5 @@ class ResetAllSettingsResponse(StrictDto):
     trigger_idempotency: TriggerIdempotencySettingsResponse
     recent_repositories: RecentRepositorySettingsResponse
     tool_limits: ToolLimitsResponse
-    logging: RuntimeLogLevelResponse
+    logging: RuntimeLoggingSettingsResponse
     model_gateways: ModelGatewayCatalogResponse

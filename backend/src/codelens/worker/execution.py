@@ -5,6 +5,7 @@ import hashlib
 import json
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
+from typing import cast
 
 from codelens.bootstrap.settings import Settings
 from codelens.bootstrap.web_settings_defaults import load_web_settings_defaults
@@ -293,12 +294,15 @@ class _ModelLimitedRuntime:
                 prompt_locale,
             )
         async with self._semaphore:
-            return await stream(
-                execution_spec,
-                input_payload,
-                snapshot,
-                prompt_locale,
-                sink,
+            return cast(
+                UnvalidatedAgentOutput,
+                await stream(
+                    execution_spec,
+                    input_payload,
+                    snapshot,
+                    prompt_locale,
+                    sink,
+                ),
             )
 
 

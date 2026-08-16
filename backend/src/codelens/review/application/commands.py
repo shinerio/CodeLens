@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from codelens.findings.domain.existing_findings import ExistingFinding
 from codelens.review.application.settings import TriggerIdempotencySettingsService
@@ -57,7 +57,7 @@ class CreateReviewCommand:
     trigger_source: Literal["manual", "plugin"] = "manual"
     supersede_policy: Literal["latest_snapshot", "preserve_all"] | None = None
     prompt_locale: str = "en"
-    external_context: dict | None = None
+    external_context: dict[str, Any] | None = None
     skip_if_duplicate: bool = False
     existing_findings: tuple[ExistingFinding, ...] = ()
 

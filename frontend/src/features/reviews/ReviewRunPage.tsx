@@ -247,7 +247,7 @@ export function ReviewRunPage() {
     }
     return selectedAgents.map((reference) => reviewerLabel(reference, t)).join(" · ");
   }, [reviewQuery.data?.selected_agents, t]);
-  const planCreatedEventId = events.findLast((event) => event.type === "review.plan_created")?.id;
+  const planCreatedEventId = events.findLast((event) => event.type === "review.plan_created.v2")?.id;
 
   useEffect(() => {
     if (planCreatedEventId === undefined) return;

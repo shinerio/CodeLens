@@ -632,50 +632,21 @@ def test_workspace_overlay_requires_target_to_match_current_head(
     assert response.json()["code"] == "invalid_repository"
 
 
-def test_local_http_safety_rejects_form_cross_origin_and_untrusted_host(
+def test_http_content_middleware_rejects_form_commands(
     tmp_path: Path,
     git_repository: Path,
 ) -> None:
-    _prepared_repository(git_repository)
-    payload = _request(
-        git_repository,
-        {
-            "type": "branch",
-            "base_ref": "main",
-            "target_ref": "feature-one",
-            "include_workspace_changes": False,
-        },
-    )
     app = create_app(_settings(tmp_path, tmp_path))
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
-        form = client.post("/api/reviews", data={"repository_path": str(git_repository)})
-        untrusted_host = client.post(
+        response = client.post(
             "/api/reviews",
-            json=payload,
-            headers={"Host": "attacker.example"},
-        )
-        userinfo_host = client.post(
-            "/api/reviews",
-            json=payload,
-            headers={"Host": "attacker@127.0.0.1"},
-        )
-        cross_origin = client.post(
-            "/api/reviews",
-            json=payload,
-            headers={"Origin": "https://attacker.example"},
-        )
-        userinfo_origin = client.post(
-            "/api/reviews",
-            json=payload,
-            headers={"Origin": "https://attacker@127.0.0.1"},
+            data={"repository_path": str(git_repository)},
         )
 
-    assert form.status_code == 415
-    assert untrusted_host.status_code == 400
-    assert userinfo_host.status_code == 400
-    assert cross_origin.status_code == 403
-    assert userinfo_origin.status_code == 403
+    assert response.status_code == 415
+    assert response.json()["code"] == "unsupported_media_type"
+
 
 
 def test_review_query_cancel_report_and_sse_resume_contract(
@@ -713,7 +684,7 @@ def test_review_query_cancel_report_and_sse_resume_contract(
         client.portal.call(
             event_store.append,
             task_id,
-            "review.completed",
+            "review.completed.v2",
             {"status": "completed", "finding_count": 0},
         )
         stream = client.get(
@@ -737,7 +708,7 @@ def test_review_query_cancel_report_and_sse_resume_contract(
     assert canceled.status_code == 202
     assert canceled.json()["cancellation_requested"] is True
     assert canceled_again.status_code == 202
-    assert sum(event.event_type == "review.cancel_requested" for event in initial_events) == 1
+    assert sum(event.event_type == "review.cancel_requested.v2" for event in initial_events) == 1
     assert report.status_code == 404
     assert report.json()["code"] == "report_not_ready"
     assert stream.status_code == 200
@@ -783,19 +754,19 @@ def test_sse_replay_skips_stale_intermediate_terminal_events(
         client.portal.call(
             event_store.append,
             task_id,
-            "review.partial",
+            "review.partial.v2",
             {"status": "partial"},
         )
         client.portal.call(
             event_store.append,
             task_id,
-            "review.failed",
+            "review.failed.v2",
             {"status": "failed", "error_code": "review_execution_failed"},
         )
         client.portal.call(
             event_store.append,
             task_id,
-            "review.completed",
+            "review.completed.v2",
             {"status": "completed", "finding_count": 2},
         )
 

@@ -12,12 +12,12 @@ beforeEach(() => {
 it("receives persisted lifecycle, agent, finding, rejection, and verdict event types", () => {
   const { result } = renderHook(() => useReviewEvents("review-1"));
   const types = [
-    "review.planning",
-    "agent_run.started",
-    "agent.succeeded",
-    "finding.published",
-    "agent_tool_call.rejected",
-    "review.verdict_completed",
+    "review.planning.v2",
+    "agent_run.started.v2",
+    "agent.succeeded.v2",
+    "finding.published.v2",
+    "agent_tool_call.rejected.v2",
+    "review.verdict_completed.v2",
   ];
 
   act(() => {

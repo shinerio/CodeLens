@@ -25,7 +25,6 @@ class ParsedStartCommand:
 def _add_start_flags(parser: argparse.ArgumentParser, defaults: Settings) -> None:
     """Register shared start/restart CLI flags on a subparser."""
 
-    parser.add_argument("repository_root", nargs="*")
     parser.add_argument("--host", default=defaults.host, help="Host for both frontend and backend")
     parser.add_argument("--port", type=int, default=defaults.port, help="Backend port")
     parser.add_argument("--backend-host", default=None, help="Override backend host")
@@ -50,7 +49,6 @@ def _parser() -> argparse.ArgumentParser:
 
     # Internal command used by supervisor to run backend directly
     run_backend = subparsers.add_parser("run-backend", help=argparse.SUPPRESS)
-    run_backend.add_argument("repository_root", nargs="*")
     run_backend.add_argument("--host", default=defaults.host)
     run_backend.add_argument("--port", type=int, default=defaults.port)
     run_backend.add_argument("--data-dir", type=Path, default=defaults.data_dir)
@@ -73,7 +71,6 @@ def _parse_start_args(arguments: Sequence[str]) -> ParsedStartCommand:
         data_dir=Path(values.data_dir),
         host=str(backend_host),
         port=int(backend_port),
-        repository_roots=tuple(Path(value) for value in values.repository_root),
     )
     supervisor_config = SupervisorConfig(
         frontend_host=str(frontend_host),
@@ -109,7 +106,6 @@ def main(arguments: Sequence[str] | None = None) -> None:
             data_dir=Path(parsed.data_dir),
             host=str(parsed.host),
             port=int(parsed.port),
-            repository_roots=tuple(Path(value) for value in parsed.repository_root),
         )
         asyncio.run(prepare_runtime(settings))
         from codelens.bootstrap.logging import configure_process_logging
@@ -137,7 +133,6 @@ def main(arguments: Sequence[str] | None = None) -> None:
         supervisor.restart(
             start_cmd.settings,
             start_cmd.supervisor_config,
-            default_root=Path.cwd().resolve(),
         )
         return
 
@@ -147,7 +142,6 @@ def main(arguments: Sequence[str] | None = None) -> None:
     supervisor.start(
         start_cmd.settings,
         start_cmd.supervisor_config,
-        default_root=Path.cwd().resolve(),
     )
 
 

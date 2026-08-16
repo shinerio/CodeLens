@@ -345,7 +345,7 @@ def build_components(settings: Settings) -> HttpComponents:
         ),
         transcripts=transcripts,
         worker_transcripts=worker_transcripts,
-        finding_source_preview=FindingSourcePreviewService(review_store, git),
+        finding_source_preview=FindingSourcePreviewService(review_store, git, input_artifacts, git),
         plugin_manager=plugin_manager,
         export_orchestrator=export_orchestrator,
         export_history=export_history,

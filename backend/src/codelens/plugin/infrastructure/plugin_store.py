@@ -84,7 +84,7 @@ class FilesystemPluginStore:
         self._write(payload)
         return True
 
-    def _read(self) -> dict:
+    def _read(self) -> dict[str, Any]:
         if not self._path.exists():
             return {"plugins": []}
         raw = json.loads(self._path.read_text(encoding="utf-8"))
@@ -92,7 +92,7 @@ class FilesystemPluginStore:
             raise ValueError("plugin store is invalid")
         return raw
 
-    def _write(self, payload: dict) -> None:
+    def _write(self, payload: dict[str, Any]) -> None:
         self._path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, name = tempfile.mkstemp(
             dir=self._path.parent, prefix=".plugins-", suffix=".tmp"
@@ -117,7 +117,7 @@ class FilesystemPluginStore:
             temporary.unlink(missing_ok=True)
 
 
-def _serialize_record(record: PluginRecord) -> dict:
+def _serialize_record(record: PluginRecord) -> dict[str, Any]:
     """Serialize a PluginRecord to a JSON-compatible dict."""
     manifest_dict: dict[str, Any] = {
         "plugin_id": record.manifest.plugin_id,
@@ -178,7 +178,7 @@ def _serialize_record(record: PluginRecord) -> dict:
     }
 
 
-def _deserialize_record(data: dict) -> PluginRecord | None:
+def _deserialize_record(data: dict[str, Any]) -> PluginRecord | None:
     """Deserialize a PluginRecord from a dict, returning None on failure."""
     try:
         manifest_data = data.get("manifest", {})

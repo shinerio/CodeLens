@@ -25,19 +25,19 @@ export type ReviewStreamEvent = {
 export type ConnectionState = "connecting" | "open" | "closed";
 
 const STATUS_BY_EVENT: Record<string, ReviewStatus> = {
-  "review.created": "created",
-  "review.provisioning_worktree": "provisioning_worktree",
-  "review.snapshotting": "snapshotting",
-  "review.preparing": "preparing",
-  "review.planning": "planning",
-  "review.reviewing": "reviewing",
-  "review.validating": "validating",
-  "review.verifying": "verifying",
-  "review.synthesizing": "synthesizing",
-  "review.completed": "completed",
-  "review.partial": "partial",
-  "review.failed": "failed",
-  "review.canceled": "canceled",
+  "review.created.v2": "created",
+  "review.provisioning_worktree.v2": "provisioning_worktree",
+  "review.snapshotting.v2": "snapshotting",
+  "review.preparing.v2": "preparing",
+  "review.planning.v2": "planning",
+  "review.reviewing.v2": "reviewing",
+  "review.validating.v2": "validating",
+  "review.verifying.v2": "verifying",
+  "review.synthesizing.v2": "synthesizing",
+  "review.completed.v2": "completed",
+  "review.partial.v2": "partial",
+  "review.failed.v2": "failed",
+  "review.canceled.v2": "canceled",
 };
 
 /**
@@ -46,18 +46,18 @@ const STATUS_BY_EVENT: Record<string, ReviewStatus> = {
  * be registered here and covered by the hook contract test.
  */
 const NON_STATUS_EVENT_TYPES = [
-  "review.plan_created",
-  "review.ready",
-  "review.scope_empty",
-  "review.cancel_requested",
-  "review.superseded",
-  "review.verdict_completed",
-  "agent_run.started",
-  "agent_run.completed",
-  "agent_run.failed",
-  "agent.succeeded",
-  "agent_tool_call.rejected",
-  "finding.published",
+  "review.plan_created.v2",
+  "review.ready.v2",
+  "review.scope_empty.v2",
+  "review.cancel_requested.v2",
+  "review.superseded.v2",
+  "review.verdict_completed.v2",
+  "agent_run.started.v2",
+  "agent_run.completed.v2",
+  "agent_run.failed.v2",
+  "agent.succeeded.v2",
+  "agent_tool_call.rejected.v2",
+  "finding.published.v2",
 ] as const;
 
 const TERMINAL_STATUSES = new Set<ReviewStatus>([

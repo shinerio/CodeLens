@@ -7,7 +7,7 @@ import tempfile
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pathspec import PathSpec
 
@@ -55,7 +55,7 @@ class LocalFileExportSink(ReportSinkPort):
     async def export(
         self,
         envelope: FindingExportEnvelope,
-        config: dict,
+        config: dict[str, Any],
         repository_path: Path,
     ) -> ExportResult:
         output_dir_name = config.get("output_dir", self._DEFAULT_OUTPUT_DIR)

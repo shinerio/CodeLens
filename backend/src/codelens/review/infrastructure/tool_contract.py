@@ -151,6 +151,93 @@ def reject_unknown_arguments(tool: FunctionTool) -> FunctionTool:
     return tool
 
 
+_EVIDENCE_TOOL_NAMES = frozenset(
+    (
+        "find_files",
+        "grep",
+        "read_file",
+        "get_diff",
+    )
+)
+"""Read-only tools whose effects must become visible before state mutations."""
+
+
+class ToolBatchPhaseCoordinator:
+    """Schedule read-only evidence ahead of state changes in one SDK tool batch.
+
+    The Agents SDK starts every function call in a turn as its own task.  Tool
+    wrappers do not receive the batch list before those tasks start, so the
+    coordinator uses a short admission interval: every invocation first registers,
+    then the batch closes.  Evidence proceeds once admission closes, while state
+    and completion tools additionally wait for all registered evidence calls to
+    succeed, fail, or be cancelled.  The interval is deliberately tiny and the
+    runtime explicitly preserves the SDK default of launching the complete batch.
+    """
+
+    _ADMISSION_INTERVAL_SECONDS = 0.01
+
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._active_calls: set[str] = set()
+        self._active_evidence: set[str] = set()
+        self._admission_closing = False
+        self._admission_closed = False
+
+    def wrap(self, tool: FunctionTool) -> FunctionTool:
+        """Attach phase scheduling to one function tool."""
+
+        invoke = tool.on_invoke_tool
+        is_evidence = tool.name in _EVIDENCE_TOOL_NAMES
+
+        async def invoke_phased(context: ToolContext[Any], arguments: str) -> Any:
+            call_id = context.tool_call_id or f"{tool.name}:{id(invoke)}"
+            try:
+                await self._register(call_id, is_evidence)
+                return await invoke(context, arguments)
+            finally:
+                await self._finish(call_id, is_evidence)
+
+        tool.on_invoke_tool = invoke_phased
+        return tool
+
+    async def _register(self, call_id: str, is_evidence: bool) -> None:
+        async with self._condition:
+            if call_id in self._active_calls:
+                raise RuntimeError(f"duplicate tool call id: {call_id}")
+            self._active_calls.add(call_id)
+            if is_evidence:
+                self._active_evidence.add(call_id)
+            if not self._admission_closing:
+                self._admission_closing = True
+                asyncio.create_task(self._close_after_admission())
+            await self._condition.wait_for(lambda: self._admission_closed)
+            if is_evidence:
+                return
+            await self._condition.wait_for(lambda: not self._active_evidence)
+
+    async def _close_after_admission(self) -> None:
+        try:
+            await asyncio.sleep(self._ADMISSION_INTERVAL_SECONDS)
+            async with self._condition:
+                self._admission_closed = True
+                self._condition.notify_all()
+        except BaseException:
+            async with self._condition:
+                self._admission_closed = True
+                self._condition.notify_all()
+            raise
+
+    async def _finish(self, call_id: str, is_evidence: bool) -> None:
+        async with self._condition:
+            self._active_calls.remove(call_id)
+            if is_evidence:
+                self._active_evidence.remove(call_id)
+            self._condition.notify_all()
+            if not self._active_calls:
+                self._admission_closed = False
+                self._admission_closing = False
+
+
 class ToolExecutionLimiter:
     """Enforce one Agent run's call budget, deadline, and no-progress loop breaker.
 
@@ -365,9 +452,10 @@ def enforce_tool_execution_limits(
         tool_loop_warning_template=tool_loop_warning_template,
         evidence_replay_registry=evidence_replay_registry,
     )
+    coordinator = ToolBatchPhaseCoordinator()
     limited: list[Tool] = []
     for tool in tools:
         if not isinstance(tool, FunctionTool):
             raise TypeError("execution limits require function tools")
-        limited.append(limiter.wrap(tool))
+        limited.append(limiter.wrap(coordinator.wrap(tool)))
     return limited

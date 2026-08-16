@@ -6,10 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Protocol, cast
+from typing import Any, Literal, Protocol, cast
 from zoneinfo import ZoneInfo
 
-from codelens.findings.domain.models import Finding, RuleReference, SourceLocation
+from codelens.findings.domain.models import Evidence, Finding, RuleReference, SourceLocation
 from codelens.review.domain.ports import ReviewExecutionRecord, ReviewPlanRecord, ReviewRecord
 from codelens.review.domain.review_plan import ReviewPlanNodeType
 from codelens.review.domain.review_strategy import AdaptiveReviewerSelection
@@ -79,7 +79,7 @@ class FindingExportItem:
     changed_hunk_id: str | None
     primary_location: SourceLocation
     related_locations: tuple[SourceLocation, ...]
-    evidence: tuple
+    evidence: tuple[Evidence, ...]
     impact: str
     explanation: str
     reproduction: str | None
@@ -131,7 +131,7 @@ class ReviewExportMetaV2:
     plan_summary: ReviewPlanSummaryDto
     coverage: ReviewCoverageDto
     created_at: datetime
-    external_context: dict | None = None
+    external_context: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)

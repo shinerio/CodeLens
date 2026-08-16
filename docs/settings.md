@@ -130,7 +130,7 @@ Review Profile 将 reviewer 选择策略保存为可复用配置。任务创建�
 | 运行日志级别（`level`） | 控制运行期普通日志详细度，可选 `debug`、`info`、`warning`、`error`。 | `info` | 日常使用 `info`；短期诊断用 `debug`，复现后及时恢复，避免增加日志量。 |
 | 恢复全部默认设置 | 恢复设置页持久化配置并清空模型网关目录。不会修改历史 Review 记录。 | 不适用 | 仅用于本地环境重置；执行前确认已保存网关凭证，因为操作不可从界面撤销。 |
 
-普通运行日志不得承担 Transcript 的职责。包含 Prompt、工具正文或模型输出的完整记录仍应遵循架构文档定义的数据边界、权限和轮转策略。
+普通运行日志不得承担 Transcript 的职责。普通运行日志不得包含 Prompt、工具正文或模型原始输出。`model_output_enabled` 控制的 `logs/model.log` 必须遵循架构文档定义的脱敏、权限和轮转策略。
 
 ## 10. 启动环境配置
 
@@ -140,14 +140,13 @@ Review Profile 将 reviewer 选择策略保存为可复用配置。任务创建�
 | --- | --- | --- | --- |
 | `CODELENS_DATA_DIR` | SQLite、设置、Artifact 和运行数据目录。 | 仓库 `data/` | 开发使用默认值；长期运行使用权限受控且有备份的本地目录。 |
 | `CODELENS_PROMPT_DIR` | 中英文 Prompt 模板目录。 | 仓库 `prompts/` | 使用随当前代码版本发布的模板目录。 |
-| `CODELENS_HOST` | HTTP 服务监听地址。 | `127.0.0.1` | 单机使用保持回环地址；不要为了远程访问绕过信任边界。 |
+| `CODELENS_HOST` | HTTP 服务监听地址。 | `0.0.0.0` | 仅绑定本机或明确受信任局域网；不要暴露到互联网。 |
 | `CODELENS_PORT` | HTTP 服务端口。 | `8800` | 保持 8800，端口冲突时改为未占用的本地端口。 |
-| `CODELENS_AUTH` | 认证模式；当前仅支持 `none`。 | `none` | 保持默认，并只在架构允许的本地信任边界运行。 |
 | `CODELENS_MAX_WORKERS` | Worker 进程数；当前版本只支持 1。 | `1` | 必须为 1。 |
 | `CODELENS_MAX_ACTIVE_REVIEWS` | 全局并行活动 Review 数。 | `4` | 本地开发建议 2–4；受供应商限流或机器资源限制时降低。 |
 | `CODELENS_MAX_ACTIVE_AGENT_RUNS` | 全局并行 Agent Run 数。 | `8` | 默认 8；应结合供应商并发额度和本机资源调整。 |
 | `CODELENS_MAX_AGENT_RUNS_PER_REVIEW` | 单个 Review 可并行运行的 Agent 数，不得超过全局上限。 | `4` | 默认 4；希望多个 Review 更公平地共享资源时降低。 |
-| `CODELENS_REPOSITORY_ROOTS` | 允许访问的仓库根目录集合，启动时规范化为绝对路径。 | 空 | 显式配置最小必要根目录，不要使用过宽的文件系统根。 |
+| `conf/runtime-settings.toml` 的 `repository.roots` / `CODELENS_REPOSITORY_ROOTS` | 允许访问的仓库根目录集合，启动时规范化为绝对路径；配置文件中的相对路径相对项目根解析，空集合表示宿主文件系统根（Windows 为现有磁盘）。环境变量或编程式传入仅用于部署覆盖。 | 空 | 个人电脑可使用空集合；局域网共享部署应显式配置最小必要根目录。 |
 | `CODELENS_DATABASE_URL` | 覆盖默认数据库连接。 | `data_dir/codelens.sqlite3` 对应的 SQLite URL | 单机版本保持默认；仅在已有适配和验证时覆盖。 |
 | `CODELENS_INITIALIZE_SCHEMA` | 启动时是否初始化数据库 schema。 | `true` | 开发和单机使用保持开启；受控迁移流程明确接管后才关闭。 |
 

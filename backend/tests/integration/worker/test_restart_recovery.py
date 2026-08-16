@@ -186,7 +186,7 @@ async def test_reopen_reuses_only_durable_output_and_terminal_event_is_singleton
             for event in await SqlEventOutbox(reopened).list_after(
                 "review-restart", after_event_id=0
             )
-            if event.event_type == "agent.succeeded"
+            if event.event_type == "agent.succeeded.v2"
         ]
         assert len(succeeded) == 1
     finally:

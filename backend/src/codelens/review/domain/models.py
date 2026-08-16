@@ -5,7 +5,7 @@ from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal
+from typing import Any, Literal
 
 from codelens.findings.domain.existing_findings import ExistingFinding, ExistingFindingSet
 from codelens.review.domain.review_strategy import (
@@ -106,7 +106,7 @@ class ReviewTask:
     idempotency_key: str | None = None
     trigger_slot_key: str | None = None
     overlay_artifact_ref: str | None = None
-    external_context: dict | None = None
+    external_context: dict[str, Any] | None = None
     existing_findings_json: str = "[]"
     existing_findings_hash: str = hashlib.sha256(b"[]").hexdigest()
     worktree_id: str | None = None
@@ -138,7 +138,7 @@ class ReviewTask:
         created_at: datetime,
         overlay_artifact_ref: str | None = None,
         prompt_locale: str = "en",
-        external_context: dict | None = None,
+        external_context: dict[str, Any] | None = None,
         existing_findings: tuple[ExistingFinding, ...] = (),
         file_exclusion_policy: ReviewFileExclusionPolicy | None = None,
     ) -> "ReviewTask":

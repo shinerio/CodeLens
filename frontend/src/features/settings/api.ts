@@ -8,8 +8,8 @@ import type {
   RecentRepositorySettings,
   ResetAllSettingsResponse,
   ReviewCompletionSettings,
-  RuntimeLogLevel,
-  RuntimeLogLevelSettings,
+  RuntimeLoggingSettings,
+  UpdateRuntimeLoggingSettings,
   ToolLimits,
   TriggerIdempotencySettings,
   UpdateModelGateway,
@@ -19,16 +19,16 @@ export async function listModelGateways(): Promise<ModelGatewayCatalog> {
   return api<ModelGatewayCatalog>("/settings/model-gateways");
 }
 
-export async function getRuntimeLogLevel(): Promise<RuntimeLogLevelSettings> {
-  return api<RuntimeLogLevelSettings>("/settings/logging");
+export async function getRuntimeLoggingSettings(): Promise<RuntimeLoggingSettings> {
+  return api<RuntimeLoggingSettings>("/settings/logging");
 }
 
-export async function updateRuntimeLogLevel(
-  level: RuntimeLogLevel,
-): Promise<RuntimeLogLevelSettings> {
-  return api<RuntimeLogLevelSettings>("/settings/logging", {
+export async function updateRuntimeLoggingSettings(
+  settings: UpdateRuntimeLoggingSettings,
+): Promise<RuntimeLoggingSettings> {
+  return api<RuntimeLoggingSettings>("/settings/logging", {
     method: "PUT",
-    body: JSON.stringify({ level }),
+    body: JSON.stringify(settings),
   });
 }
 

@@ -35,11 +35,11 @@ TaskId = Annotated[
     StringConstraints(pattern=r"^review_[0-9a-f]{32}$", min_length=39, max_length=39),
 ]
 _TERMINAL_EVENTS = {
-    "review.completed",
-    "review.partial",
-    "review.failed",
-    "review.canceled",
-    "review.superseded",
+    "review.completed.v2",
+    "review.partial.v2",
+    "review.failed.v2",
+    "review.canceled.v2",
+    "review.superseded.v2",
 }
 _TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled", "superseded"}
 

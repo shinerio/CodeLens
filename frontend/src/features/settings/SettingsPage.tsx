@@ -25,14 +25,14 @@ import {
   getInstructionFileSettings,
   getRecentRepositorySettings,
   getReviewCompletionSettings,
-  getRuntimeLogLevel,
+  getRuntimeLoggingSettings,
   getToolLimits,
   getTriggerIdempotencySettings,
   listModelGateways,
   resetAllSettings,
   testGatewayAvailability,
   testGatewayConnectivity,
-  updateRuntimeLogLevel,
+  updateRuntimeLoggingSettings,
   updateFileExclusionSettings,
   updateInstructionFileSettings,
   updateRecentRepositoryLimit,
@@ -49,12 +49,13 @@ import type {
   ModelGatewayCatalog,
   ModelProviderVendor,
   RuntimeLogLevel,
+  UpdateRuntimeLoggingSettings,
   ThinkingLevel,
 } from "./types";
 import "./SettingsPage.css";
 
 export const MODEL_GATEWAYS_QUERY_KEY = ["model-gateways"] as const;
-const RUNTIME_LOG_LEVEL_QUERY_KEY = ["runtime-log-level"] as const;
+const RUNTIME_LOGGING_SETTINGS_QUERY_KEY = ["runtime-logging-settings"] as const;
 const RECENT_REPOSITORY_SETTINGS_QUERY_KEY = ["recent-repository-settings"] as const;
 const INSTRUCTION_FILE_SETTINGS_QUERY_KEY = ["instruction-file-settings"] as const;
 const REVIEW_COMPLETION_SETTINGS_QUERY_KEY = ["review-completion-settings"] as const;
@@ -105,13 +106,13 @@ export function SettingsPage() {
     queryFn: listModelGateways,
   });
   const logLevelQuery = useQuery({
-    queryKey: RUNTIME_LOG_LEVEL_QUERY_KEY,
-    queryFn: getRuntimeLogLevel,
+    queryKey: RUNTIME_LOGGING_SETTINGS_QUERY_KEY,
+    queryFn: getRuntimeLoggingSettings,
   });
   const logLevelMutation = useMutation({
-    mutationFn: updateRuntimeLogLevel,
+    mutationFn: updateRuntimeLoggingSettings,
     onSuccess: (settings) => {
-      queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, settings);
+      queryClient.setQueryData(RUNTIME_LOGGING_SETTINGS_QUERY_KEY, settings);
     },
   });
   const recentRepositorySettingsQuery = useQuery({
@@ -202,7 +203,7 @@ export function SettingsPage() {
       queryClient.setQueryData(TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY, response.trigger_idempotency);
       queryClient.setQueryData(RECENT_REPOSITORY_SETTINGS_QUERY_KEY, response.recent_repositories);
       queryClient.setQueryData(["tool-limits"], response.tool_limits);
-      queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, response.logging);
+      queryClient.setQueryData(RUNTIME_LOGGING_SETTINGS_QUERY_KEY, response.logging);
       queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, response.model_gateways);
       setToolLimitsDraft(response.tool_limits);
       setFileExclusionsDraft(response.file_exclusions);
@@ -1377,15 +1378,41 @@ export function SettingsPage() {
                   aria-label={t("settings.runtimeLogLevel")}
                   disabled={logLevelQuery.isPending || logLevelMutation.isPending}
                   value={logLevelQuery.data?.level ?? "info"}
-                  onChange={(event) =>
-                    logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)
-                  }
+                  onChange={(event) => {
+                    if (logLevelQuery.data !== undefined) {
+                      const settings: UpdateRuntimeLoggingSettings = {
+                        level: event.currentTarget.value as RuntimeLogLevel,
+                        model_output_enabled: logLevelQuery.data.model_output_enabled,
+                      };
+                      logLevelMutation.mutate(settings);
+                    }
+                  }}
                 >
                   <option value="debug">{t("settings.logDebug")}</option>
                   <option value="info">{t("settings.logInfo")}</option>
                   <option value="warning">{t("settings.logWarning")}</option>
                   <option value="error">{t("settings.logError")}</option>
                 </select>
+              </label>
+              <label className="settings-field settings-field--inline">
+                <input
+                  aria-label={t("settings.modelOutputLogging")}
+                  checked={logLevelQuery.data?.model_output_enabled ?? true}
+                  disabled={logLevelQuery.isPending || logLevelMutation.isPending}
+                  type="checkbox"
+                  onChange={(event) => {
+                    if (logLevelQuery.data !== undefined) {
+                      const settings: UpdateRuntimeLoggingSettings = {
+                        level: logLevelQuery.data.level,
+                        model_output_enabled: event.currentTarget.checked,
+                      };
+                      logLevelMutation.mutate(settings);
+                    }
+                  }}
+                />
+                <span className="settings-field__label">
+                  {t("settings.modelOutputLogging")}
+                </span>
               </label>
             </div>
             <div className="settings-panel__actions">

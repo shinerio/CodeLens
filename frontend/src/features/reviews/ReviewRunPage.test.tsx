@@ -158,7 +158,7 @@ it("shows the live run and refreshes findings after completion", async () => {
   await userEvent.click(screen.getByRole("tab", { name: /Logs/ }));
   expect(screen.getByText("Waiting for events.")).toBeInTheDocument();
 
-  FakeEventSource.latest?.emit("review.completed", { finding_count: 1 }, "7");
+  FakeEventSource.latest?.emit("review.completed.v2", { finding_count: 1 }, "7");
 
   await waitFor(() => {
     expect(document.querySelector(".review-run-page__subtitle")).toHaveTextContent("completed");
@@ -316,7 +316,7 @@ it("keeps polling an empty transcript after completion until the worker persists
 
   await userEvent.click(await screen.findByRole("tab", { name: /Logs/ }));
   expect(await screen.findAllByText("Waiting for events.")).not.toHaveLength(0);
-  FakeEventSource.latest?.emit("review.completed", {}, "7");
+  FakeEventSource.latest?.emit("review.completed.v2", {}, "7");
 
   await waitFor(
     () => {
@@ -383,7 +383,7 @@ it("shows timeline filters when the persisted review plan arrives", async () => 
   await userEvent.click(await screen.findByRole("tab", { name: /Logs/ }));
   expect(screen.queryByRole("button", { name: /Reviewers/ })).not.toBeInTheDocument();
 
-  FakeEventSource.latest?.emit("review.plan_created", { reviewer_count: 2 }, "2");
+  FakeEventSource.latest?.emit("review.plan_created.v2", { reviewer_count: 2 }, "2");
 
   expect(await screen.findByRole("button", { name: /Reviewers/ })).toBeInTheDocument();
   expect(reviewRequests).toBe(2);
@@ -443,7 +443,7 @@ it("shows the actionable failure reason in the page banner", async () => {
   });
 
   expect(await screen.findByRole("heading", { name: "Correctness Reviewer" })).toBeInTheDocument();
-  FakeEventSource.latest?.emit("review.failed", {}, "9");
+  FakeEventSource.latest?.emit("review.failed.v2", {}, "9");
 
   expect(await screen.findByRole("alert")).toHaveTextContent("Cannot connect to the model gateway");
   expect(screen.getByRole("alert")).toHaveTextContent("Check the Base URL and network access");

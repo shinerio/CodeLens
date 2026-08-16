@@ -5,6 +5,7 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
@@ -136,7 +137,7 @@ class GitPluginInstaller:
                 f"plugin manifest is incompatible or missing a required field: {error}"
             ) from error
 
-    def _parse_capabilities(self, raw_capabilities: dict) -> dict:
+    def _parse_capabilities(self, raw_capabilities: dict[str, Any]) -> dict[str, Any]:
         """Parse capabilities dict into TriggerCapability/ReportCapability objects."""
         from typing import Any
 

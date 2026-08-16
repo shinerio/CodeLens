@@ -2,7 +2,7 @@
 
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from codelens.plugin.api.v2 import (
     AdaptiveReviewerSelection as PluginAdaptiveReviewerSelection,
@@ -94,7 +94,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
         scope_type: str,
         scope_params: dict[str, str | None],
         review_policy: TriggerReviewPolicy,
-        external_context: dict | None = None,
+        external_context: dict[str, Any] | None = None,
         existing_findings: tuple[ExistingFindingV2, ...] = (),
     ) -> str:
         """Create a review from a trigger event.

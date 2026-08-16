@@ -83,7 +83,7 @@ it("shows context and tool sizes in KB with compaction enabled by default", asyn
       return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
     }
     if (url === "/api/settings/logging") {
-      return Promise.resolve(new Response(JSON.stringify({ level: "info" })));
+      return Promise.resolve(new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true })));
     }
     if (url === "/api/settings/repositories") {
       return Promise.resolve(new Response(JSON.stringify({ recent_repository_limit: 10 })));
@@ -127,7 +127,7 @@ it("creates the first persistent model gateway without retaining its API key", a
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -213,7 +213,7 @@ it("edits, deduplicates, validates, and saves Web file exclusion rules", async (
       return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
     }
     if (url === "/api/settings/logging") {
-      return Promise.resolve(new Response(JSON.stringify({ level: "info" })));
+      return Promise.resolve(new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true })));
     }
     if (url === "/api/settings/repositories") {
       return Promise.resolve(new Response(JSON.stringify({ recent_repository_limit: 10 })));
@@ -282,7 +282,7 @@ it("switches the active gateway without asking for the stored key", async () => 
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -355,7 +355,7 @@ it("updates the selected model execution limits from the runtime rail", async ()
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -447,7 +447,7 @@ it("sends a connectivity test request when the test connectivity button is click
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -510,7 +510,7 @@ it("sends an availability test request when the test availability button is clic
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -561,7 +561,7 @@ it("updates the recent repository list limit", async () => {
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -613,7 +613,7 @@ it("updates instruction file limits and omits credential handling details", asyn
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -664,7 +664,7 @@ it("updates the maximum incomplete review retry count", async () => {
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -706,7 +706,7 @@ it("uses one panel-level action for all review settings", async () => {
       return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
     }
     if (url === "/api/settings/logging") {
-      return Promise.resolve(new Response(JSON.stringify({ level: "info" })));
+      return Promise.resolve(new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true })));
     }
     if (url === "/api/settings/repositories") {
       return Promise.resolve(new Response(JSON.stringify({ recent_repository_limit: 10 })));

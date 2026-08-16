@@ -8,6 +8,7 @@ plugin's install path.
 import importlib.util
 import sys
 from pathlib import Path
+from typing import cast
 
 from packaging.version import InvalidVersion, Version
 
@@ -76,7 +77,7 @@ class CompositePluginLoader:
         if plugin_id == LocalHookTriggerAdapter.TRIGGER_ID:
             instance = LocalHookTriggerAdapter(review_creator)
             self._trigger_instances[plugin_id] = instance
-            return instance
+            return cast(TriggerSinkPort, instance)
 
         # Fall back to external plugin loading
         if manifest is None or install_path is None:
@@ -200,7 +201,7 @@ class CompositePluginLoader:
         if not hasattr(instance, "trigger_id") or not hasattr(instance, "handle_event"):
             sys.modules.pop(cache_key, None)
             raise PluginLoadError(f"plugin {plugin_id} trigger does not implement TriggerSinkPort")
-        return instance
+        return cast(TriggerSinkPort, instance)
 
     def _load_external_report(
         self,
@@ -259,7 +260,7 @@ class CompositePluginLoader:
         if not hasattr(sink, "sink_id") or not hasattr(sink, "export"):
             sys.modules.pop(cache_key, None)
             raise PluginLoadError(f"plugin {plugin_id} sink does not implement ReportSinkPort")
-        return sink
+        return cast(ReportSinkPort, sink)
 
     def _module_cache_key(self, plugin_id: str) -> str:
         generation = self._generations.get(plugin_id, 0)

@@ -256,7 +256,7 @@ async def test_worker_transcript_persists_rejected_tool_reason_to_outbox(
     assert outbox.records == [
         (
             task_id,
-            "agent_tool_call.rejected",
+            "agent_tool_call.rejected.v2",
             {
                 "agent": "security:v2",
                 "tool_name": "comment",

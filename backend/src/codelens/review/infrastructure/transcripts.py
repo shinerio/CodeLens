@@ -292,7 +292,7 @@ class WorkerTranscriptStore:
         if self._rejection_events is not None:
             await self._rejection_events.append(
                 task_id,
-                "agent_tool_call.rejected",
+                "agent_tool_call.rejected.v2",
                 payload,
             )
 

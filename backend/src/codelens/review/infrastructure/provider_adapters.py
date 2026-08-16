@@ -3,7 +3,7 @@
 from dataclasses import dataclass
 from typing import Protocol
 
-from agents.model_settings import ModelSettings, Reasoning
+from agents.model_settings import ModelSettings, Reasoning  # type: ignore[attr-defined]
 from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
 from agents.models.openai_responses import OpenAIResponsesModel
 

@@ -1,5 +1,8 @@
 # CodeLens TODO
 
+- plan模式貌似有点草率，仅有一次模型调用，也没有使用任何工具查看过任何diff或file，结论是如何产生的
+- correctness agent在plan模式下应该必选
+- 过程数据增加缓存命中率看板
 - 大范围 Review 分片：按目录或变更域生成稳定 shard，为每个 shard 限定 reviewer scope，并在团队 Review 中合并覆盖状态；需要保持同一 Snapshot、证据校验、幂等 checkpoint 和最终聚类语义。
 - Review 启动前成本预估：基于文件数、diff 字节数和 prompt token 估算计算可配置阈值，超限时给出明确提示，并评估自动分片或切换策略；阈值需要通过历史运行数据校准，不能把估算值作为实际 usage。
 - `FrozenAgentExecutionSpec.execution_limits.max_input_tokens` 当前仅参与冻结指纹和审计，Runtime 暂不执行硬限制；后续实现供应商感知的调用前 token 预算，并与上下文压缩协同，且不得改变 Snapshot、工具覆盖和 Finding 语义。

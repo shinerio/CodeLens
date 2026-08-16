@@ -455,8 +455,8 @@ async def test_candidate_cluster_and_resolution_round_trip_and_atomic_completion
         await review_store.complete_with_verdicts(task_id, verifier_node.node_id, (decision,))
 
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
-        assert len([event for event in events if event.event_type == "agent.succeeded"]) == 2
-        assert len([event for event in events if event.event_type == "agent_run.completed"]) == 2
+        assert len([event for event in events if event.event_type == "agent.succeeded.v2"]) == 2
+        assert len([event for event in events if event.event_type == "agent_run.completed.v2"]) == 2
     finally:
         await database.dispose()
 
@@ -516,8 +516,8 @@ async def test_verification_and_publication_replay_are_exactly_once(
 
         assert await store.list_findings(task_id) == (finding,)
         events = await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
-        assert len([item for item in events if item.event_type == "finding.published"]) == 1
-        assert any(item.event_type == "review.verdict_completed" for item in events)
+        assert len([item for item in events if item.event_type == "finding.published.v2"]) == 1
+        assert any(item.event_type == "review.verdict_completed.v2" for item in events)
     finally:
         await database.dispose()
 
@@ -551,7 +551,7 @@ async def test_candidate_completion_rolls_back_candidates_checkpoint_and_event(
         assert await SqlCandidateFindingStore(database).list_for_task(task_id) == ()
         assert (await checkpoints.get(task_id, node.node_id)).status == "output_saved"
         assert not any(
-            event.event_type == "agent.succeeded"
+            event.event_type == "agent.succeeded.v2"
             for event in await SqlEventOutbox(database).list_after(task_id, after_event_id=0)
         )
     finally:
@@ -769,15 +769,15 @@ async def test_migration_and_task_job_event_creation_are_atomic(tmp_path: Path) 
 
         assert (await jobs.get("review-1")).status == "queued"
         created_events = await events.list_after("review-1", after_event_id=0)
-        assert [event.event_type for event in created_events] == ["review.created"]
-        await events.append("review-1", "review.preparing", {"step": 1})
-        await events.append("review-1", "review.ready", {"step": 2})
+        assert [event.event_type for event in created_events] == ["review.created.v2"]
+        await events.append("review-1", "review.preparing.v2", {"step": 1})
+        await events.append("review-1", "review.ready.v2", {"step": 2})
         resumed_events = await events.list_after(
             "review-1", after_event_id=created_events[0].event_id
         )
         assert [event.event_type for event in resumed_events] == [
-            "review.preparing",
-            "review.ready",
+            "review.preparing.v2",
+            "review.ready.v2",
         ]
         assert [event.event_id for event in resumed_events] == sorted(
             event.event_id for event in resumed_events
@@ -856,7 +856,7 @@ async def test_failed_review_retry_creates_an_independent_queued_task(tmp_path: 
         assert retry_execution.candidate_paths == original.candidate_paths
         assert (await jobs.get(retried.task_id)).status == "queued"
         retry_events = await events.list_after(retried.task_id, after_event_id=0)
-        assert [event.event_type for event in retry_events] == ["review.created"]
+        assert [event.event_type for event in retry_events] == ["review.created.v2"]
         assert retry_events[0].payload["retried_from_task_id"] == original.task_id
     finally:
         await database.dispose()
@@ -889,7 +889,7 @@ async def test_partial_review_transition_closes_the_job_and_emits_terminal_event
         assert review.status == "partial"
         assert (await jobs.get("review-partial")).status == "partial"
         assert (await events.list_after("review-partial", after_event_id=0))[-1].event_type == (
-            "review.partial"
+            "review.partial.v2"
         )
     finally:
         await database.dispose()
@@ -1089,7 +1089,7 @@ async def test_candidate_success_boundary_is_atomic(tmp_path: Path) -> None:
         stored_candidates = await candidate_store.list_for_task("review-success")
         assert [item.candidate_id for item in stored_candidates] == ["candidate-1"]
         assert any(
-            event.event_type == "agent.succeeded"
+            event.event_type == "agent.succeeded.v2"
             for event in await events.list_after("review-success", after_event_id=0)
         )
 
@@ -1115,7 +1115,7 @@ async def test_candidate_success_boundary_is_atomic(tmp_path: Path) -> None:
         assert len(await candidate_store.list_for_task("review-success")) == 1
         rollback_events = await events.list_after("review-success", after_event_id=0)
         assert not any(
-            event.event_type == "agent.succeeded"
+            event.event_type == "agent.succeeded.v2"
             and event.payload.get("node_key") == "node-rollback"
             for event in rollback_events
         )
@@ -1144,6 +1144,6 @@ async def test_sqlite_busy_retries_the_whole_idempotent_transaction(tmp_path: Pa
         assert [
             event.event_type
             for event in await SqlEventOutbox(database).list_after("review-busy", after_event_id=0)
-        ] == ["review.created"]
+        ] == ["review.created.v2"]
     finally:
         await database.dispose()

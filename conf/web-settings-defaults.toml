@@ -17,6 +17,7 @@ enabled = false
 
 [logging]
 level = "info"
+model_output_enabled = true
 
 [tool_limits]
 max_results = 200

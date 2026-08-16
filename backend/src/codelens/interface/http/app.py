@@ -1,7 +1,6 @@
 import logging
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
-from urllib.parse import urlsplit
 
 from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
@@ -40,77 +39,21 @@ from codelens.shared.domain.errors import (
 )
 
 _STATE_CHANGING_METHODS = {"POST", "PUT", "PATCH", "DELETE"}
-_LOOPBACK_HOSTS = {"127.0.0.1", "localhost", "::1", "0.0.0.0"}
 _LOGGER = logging.getLogger("uvicorn.error")
 
 
-def _validated_host(raw_host: str) -> str | None:
-    try:
-        parsed = urlsplit(f"//{raw_host}")
-        _port = parsed.port
-    except ValueError:
-        return None
-    if (
-        not raw_host
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path
-        or parsed.query
-        or parsed.fragment
-    ):
-        return None
-    return parsed.hostname
+class HttpContentMiddleware:
+    """Require JSON for state-changing HTTP commands."""
 
-
-def _validated_origin_host(raw_origin: str) -> str | None:
-    try:
-        parsed = urlsplit(raw_origin)
-        _port = parsed.port
-    except ValueError:
-        return None
-    if (
-        parsed.scheme not in {"http", "https"}
-        or not parsed.netloc
-        or parsed.username is not None
-        or parsed.password is not None
-        or parsed.path
-        or parsed.query
-        or parsed.fragment
-    ):
-        return None
-    return parsed.hostname
-
-
-class LocalHttpSafetyMiddleware:
-    """Reject untrusted Host/Origin and non-JSON command requests before routing."""
-
-    def __init__(self, app: ASGIApp, *, configured_host: str) -> None:
+    def __init__(self, app: ASGIApp) -> None:
         self._app = app
-        self._allow_all_hosts = configured_host == "0.0.0.0"
-        self._allowed_hosts = {*_LOOPBACK_HOSTS, configured_host}
 
     async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
-        if scope["type"] != "http" or scope.get("path") == "/api/health":
+        if scope["type"] != "http":
             await self._app(scope, receive, send)
             return
         headers = Headers(scope=scope)
-        if not self._allow_all_hosts:
-            host = _validated_host(headers.get("host", ""))
-            if host not in self._allowed_hosts:
-                await JSONResponse(
-                    {"code": "invalid_host", "message": "The Host header is not allowed."},
-                    status_code=400,
-                )(scope, receive, send)
-                return
-            origin = headers.get("origin")
-            if origin is not None:
-                if _validated_origin_host(origin) not in self._allowed_hosts:
-                    await JSONResponse(
-                        {"code": "invalid_origin", "message": "The Origin header is not allowed."},
-                        status_code=403,
-                    )(scope, receive, send)
-                    return
-        method = str(scope.get("method", "GET")).upper()
+        method = str(scope.get("method", "")).upper()
         if method in _STATE_CHANGING_METHODS:
             content_type = headers.get("content-type", "").partition(";")[0].strip().lower()
             if content_type != "application/json":
@@ -123,6 +66,7 @@ class LocalHttpSafetyMiddleware:
                 )(scope, receive, send)
                 return
         await self._app(scope, receive, send)
+
 
 
 def _domain_problem(error: DomainError) -> tuple[int, str]:
@@ -174,7 +118,7 @@ def create_app_with_components(
     app = FastAPI(title="CodeLens Review API", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.components = components
-    app.add_middleware(LocalHttpSafetyMiddleware, configured_host=settings.host)
+    app.add_middleware(HttpContentMiddleware)
 
     @app.exception_handler(DomainError)
     async def handle_domain_error(_request: Request, error: DomainError) -> JSONResponse:
@@ -208,7 +152,7 @@ def create_app_with_components(
     async def health() -> dict[str, str]:
         """Report process readiness without exposing environment details."""
 
-        return {"status": "ready", "auth": settings.auth}
+        return {"status": "ready"}
 
     app.include_router(repositories_router)
     app.include_router(review_profiles_router)

@@ -29,8 +29,15 @@ export type ModelGatewayCatalog = {
 
 export type RuntimeLogLevel = "debug" | "info" | "warning" | "error";
 
-export type RuntimeLogLevelSettings = {
+export type RuntimeLoggingSettings = {
+  default_level: RuntimeLogLevel;
   level: RuntimeLogLevel;
+  model_output_enabled: boolean;
+};
+
+export type UpdateRuntimeLoggingSettings = {
+  level: RuntimeLogLevel;
+  model_output_enabled: boolean;
 };
 
 export type RecentRepositorySettings = {
@@ -125,6 +132,6 @@ export type ResetAllSettingsResponse = {
   trigger_idempotency: TriggerIdempotencySettings;
   recent_repositories: RecentRepositorySettings;
   tool_limits: ToolLimits;
-  logging: RuntimeLogLevelSettings;
+  logging: RuntimeLoggingSettings;
   model_gateways: ModelGatewayCatalog;
 };

@@ -446,3 +446,99 @@ async def test_compaction_replay_still_consumes_the_total_call_budget() -> None:
     assert registry.consumed_count == 1
     with pytest.raises(ToolCallLimitExceededError):
         await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+
+
+async def test_mixed_batch_runs_evidence_before_state_and_completion_tools() -> None:
+    evidence_started = asyncio.Event()
+    release_evidence = asyncio.Event()
+    state_entered = False
+
+    @function_tool(name_override="read_file")
+    async def read_file(path: str) -> str:
+        evidence_started.set()
+        await release_evidence.wait()
+        return _success("read_file", {"path": path, "content": "trusted evidence"})
+
+    @function_tool(name_override="task_done")
+    async def task_done(summary: str) -> str:
+        nonlocal state_entered
+        state_entered = True
+        return _success("task_done", {"summary": summary})
+
+    tools = enforce_tool_execution_limits(
+        [task_done, read_file],
+        max_tool_calls=2,
+        max_identical_tool_results=3,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count} times, {remaining} attempt(s) left",
+    )
+    completion = tools[0]
+    evidence = tools[1]
+    completion_arguments = json.dumps({"summary": "complete"})
+    evidence_arguments = json.dumps({"path": "src/example.py"})
+    completion_task = asyncio.create_task(
+        completion.on_invoke_tool(
+            _context(completion.name, completion_arguments), completion_arguments
+        )
+    )
+    evidence_task = asyncio.create_task(
+        evidence.on_invoke_tool(
+            _context(evidence.name, evidence_arguments), evidence_arguments
+        )
+    )
+
+    await asyncio.wait_for(evidence_started.wait(), timeout=0.5)
+    assert state_entered is False
+
+    release_evidence.set()
+    completion_result, evidence_result = await asyncio.gather(completion_task, evidence_task)
+
+    assert json.loads(completion_result)["status"] == "success"
+    assert json.loads(evidence_result)["status"] == "success"
+    assert state_entered is True
+
+
+async def test_failed_evidence_still_releases_state_phase_waiters() -> None:
+    evidence_started = asyncio.Event()
+    state_result: dict[str, object] | None = None
+
+    @function_tool(name_override="grep")
+    async def grep(pattern: str) -> str:
+        evidence_started.set()
+        raise ValueError("evidence adapter failed")
+
+    @function_tool(name_override="comment")
+    async def comment(path: str, line: int, body: str) -> str:
+        nonlocal state_result
+        state_result = {"path": path, "line": line, "body": body}
+        return _success("comment", state_result)
+
+    tools = enforce_tool_execution_limits(
+        [comment, grep],
+        max_tool_calls=2,
+        max_identical_tool_results=3,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count} times, {remaining} attempt(s) left",
+    )
+    completion = tools[0]
+    evidence = tools[1]
+    completion_arguments = json.dumps({"path": "src/example.py", "line": 1, "body": "Finding"})
+    evidence_arguments = json.dumps({"pattern": "example"})
+    completion_task = asyncio.create_task(
+        completion.on_invoke_tool(
+            _context(completion.name, completion_arguments), completion_arguments
+        )
+    )
+    evidence_task = asyncio.create_task(
+        evidence.on_invoke_tool(
+            _context(evidence.name, evidence_arguments), evidence_arguments
+        )
+    )
+
+    await asyncio.wait_for(evidence_started.wait(), timeout=0.5)
+    evidence_result = await evidence_task
+    completion_result = await completion_task
+
+    assert json.loads(evidence_result)["status"] == "failed"
+    assert state_result is not None
+    assert json.loads(completion_result)["status"] == "success"

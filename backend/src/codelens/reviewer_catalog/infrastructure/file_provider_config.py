@@ -166,7 +166,7 @@ class FilesystemModelProviderConfigAdapter:
                     retry_max_delay=raw_retry_max_delay,
                 )
             )
-        return ModelGatewayCatalog(cast(str | None, active_gateway_id), tuple(gateways))
+        return ModelGatewayCatalog(active_gateway_id, tuple(gateways))
 
     @staticmethod
     def _validate_execution_limit(value: object, *, minimum: int, maximum: int) -> None:

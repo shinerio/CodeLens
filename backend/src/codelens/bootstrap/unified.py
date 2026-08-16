@@ -202,7 +202,7 @@ def build_unified_backend(
     transcripts_store = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(
         transcripts_store,
-        model_log=ModelTranscriptLogWriter(),
+        model_log=ModelTranscriptLogWriter(settings.data_dir),
         rejection_events=event_outbox,
     )
     instruction_line_limits = FilesystemInstructionLineLimitsStore(
@@ -481,7 +481,7 @@ def build_unified_backend(
         ),
         transcripts=transcripts_store,
         worker_transcripts=worker_transcripts,
-        finding_source_preview=FindingSourcePreviewService(review_store, git),
+        finding_source_preview=FindingSourcePreviewService(review_store, git, input_artifacts, git),
         plugin_manager=plugin_manager,
         export_orchestrator=export_orchestrator,
         export_history=export_history,

@@ -27,7 +27,7 @@ CodeLens 是一个本地优先的多 Agent 代码 Review 工作台。它通过 W
 - 通过 SQLite 持久化任务、检查点和事件；Worker 重启后可恢复未完成工作。
 - 通过 SSE 实时展示任务状态和 Agent 事件，并支持断线续传。
 - 校验模型输出的位置、证据和结构，展示严重级别、置信度、影响、解释、复现信息与修改建议。
-- 后端以统一进程运行 API 和 Worker；默认仅允许本机回环地址访问。
+- 后端以统一进程运行 API 和 Worker；默认监听 `0.0.0.0`，仅面向本机或明确受信任局域网。
 - 服务启动后可在 Web Settings 页面持久化多个模型网关，随时切换当前激活网关，无需重启。
 
 ## 环境要求
@@ -42,7 +42,7 @@ CodeLens 是一个本地优先的多 Agent 代码 Review 工作台。它通过 W
 
 ### 一键启动（推荐）
 
-脚本会自动安装或同步前后端依赖，同时启动统一后端进程和前端，并在终端打印所有访问地址。启动时不设置仓库根目录白名单，默认允许选择当前操作系统可访问的任意合法 Git 仓库。
+脚本会自动安装或同步前后端依赖，同时启动统一后端进程和前端，并在终端打印所有访问地址。启动时读取 `conf/runtime-settings.toml`；默认 `repository.roots = []` 表示允许选择当前操作系统可访问的任意合法 Git 仓库（Windows 为现有磁盘），相对根目录相对项目根解析。
 
 macOS / Linux：
 
@@ -110,7 +110,7 @@ pnpm --dir frontend dev
 
 可以重复添加多个网关。第一个网关会自动激活；之后可以在网关卡片上点击 **Activate / 激活** 随时切换，新的 Review 会使用当时激活的网关。编辑网关时 API Key 留空会保留原凭证。
 
-统一后端在未配置模型时也能正常启动。配置保存在仓库之外的应用数据目录，API 不会回传 Key；Worker 在 Review 实际执行时读取当前激活网关。默认路径不会被 Git 跟踪，项目 `.gitignore` 也排除了仓库内的 `.codelens-data/` 兜底目录。
+统一后端在未配置模型时也能正常启动。配置保存在项目数据目录 `data/secrets/model-gateways.json`，API 不会回传 Key；Worker 在 Review 实际执行时读取当前激活网关。项目 `.gitignore` 会排除 `data/`；删除该目录会删除本地设置、数据库、任务数据、Artifact 和网关凭证。
 
 请勿将 API Key 写入仓库、日志或截图。使用远程 HTTP 地址会以明文传输凭证和 Review 内容，仅应在明确受信任的网络中使用。
 
@@ -166,11 +166,11 @@ CodeLens 会随任务快照冻结适用于目标文件的规则，按从仓库�
 
 ## 安全与数据隔离
 
-- 无鉴权模式只允许绑定 `127.0.0.1`、`localhost` 或 `::1`，当前不支持直接开放到局域网或互联网。
-- 默认不设置仓库根目录白名单，因此仅应在受信任的个人电脑上以回环地址运行。Web 资源管理器只展示当前系统用户具备读取和进入权限的目录，无权限目录会被跳过。
+- CodeLens v2 无认证，定位为个人电脑或明确受信任局域网内的单用户工具；默认监听 `0.0.0.0`，不要暴露到互联网或不受信任网络。
+- 默认不设置仓库根目录白名单，因此操作系统当前用户可读的目录都属于本地信任边界。Web 资源管理器只展示该用户具备读取和进入权限的目录，无权限目录会被跳过；需要收窄时在 `conf/runtime-settings.toml` 配置仓库根目录。
 - REVIEW 模式对源仓库只读。任务只在应用数据目录下创建由 CodeLens 管理的 detached worktree。
 - 模型不会获得用户原始工作区路径；持久化记录和事件使用哈希或不透明引用表示敏感路径与 Artifact。
-- OpenAI Agents SDK 的模型数据和工具数据日志默认关闭，但仍应避免在规则文件和源码中放置密钥。
+- 完整脱敏模型交换日志默认写入项目 `logs/model.log`，并按 10 MiB 一个压缩备份轮转；可在 Settings 页关闭 Model output logging。普通运行日志不包含 Prompt、模型原始输出或源码正文。
 - Web 保存的模型网关配置位于 data directory 的 `secrets/model-gateways.json`，目录权限为 `0700`、文件权限为 `0600`。读取 API 返回网关 ID、名称、模型 ID、Base URL、供应商、API 类型、激活状态和非 Secret 的模型与执行策略，绝不返回 API Key。
 
 ## 配置
@@ -179,8 +179,8 @@ CodeLens 会随任务快照冻结适用于目标文件的规则，按从仓库�
 
 | 环境变量 | 默认值 | 说明 |
 | --- | --- | --- |
-| `CODELENS_DATA_DIR` | `~/.local/share/codelens-review` | SQLite、worktree、检查点和 Artifact 的应用数据目录 |
-| `CODELENS_HOST` | `127.0.0.1` | HTTP 监听地址；首版只接受回环地址 |
+| `CODELENS_DATA_DIR` | 项目 `data/` | SQLite、worktree、检查点和 Artifact 的应用数据目录；删除该目录会删除本地任务数据和网关凭证 |
+| `CODELENS_HOST` | `0.0.0.0` | HTTP 监听地址；仅用于本机或明确受信任局域网，不要暴露到互联网 |
 | `CODELENS_PORT` | `8800` | HTTP 端口 |
 | `CODELENS_DATABASE_URL` | 本地 SQLite | 可选数据库连接 URL；数据库结构仍由 Alembic 管理 |
 
@@ -258,7 +258,7 @@ pnpm --dir frontend exec playwright test
 - Security、Performance、Maintainability、Testing、Docs & Style 和 Cross-file Reviewer。
 - 多 Reviewer 并发汇总和完整 Review Report。
 - Artifact 浏览和 Reviewer 管理页面。
-- 多用户身份认证、权限、远程部署和同一数据目录的多 Worker 调度。
+- 互联网远程部署、多用户身份认证和权限；当前无认证边界只面向本机或明确受信任局域网。
 
 更多背景和后续计划：
 

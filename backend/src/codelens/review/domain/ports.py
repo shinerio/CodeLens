@@ -3,7 +3,7 @@ from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
-from typing import Literal, Protocol
+from typing import Any, Literal, Protocol
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFinding, CandidateFindingBatch
@@ -229,7 +229,7 @@ class ReviewRecord:
     created_at: datetime
     is_deleted: bool
     finding_count: int = 0
-    external_context: dict | None = None
+    external_context: dict[str, Any] | None = None
     has_partial_coverage: bool = False
     existing_finding_count: int = 0
 
@@ -282,7 +282,7 @@ class ReviewEvent:
     event_id: int
     task_id: str
     event_type: str
-    payload: dict[str, object]
+    payload: dict[str, Any]
 
 
 @dataclass(frozen=True)
@@ -509,7 +509,7 @@ class AgentRunCompletionPort(Protocol):
         node_key: str,
         candidates: CandidateFindingBatch,
         *,
-        result_summary: dict[str, object] | None = None,
+        result_summary: dict[str, Any] | None = None,
     ) -> None:
         """Atomically persist Candidates, node success, and one completion event."""
 

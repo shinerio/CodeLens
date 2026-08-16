@@ -5,7 +5,11 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import StringConstraints
 
-from codelens.bootstrap.logging import get_runtime_log_level, set_runtime_log_level
+from codelens.bootstrap.logging import (
+    get_model_output_logging_enabled,
+    get_runtime_log_level,
+    update_runtime_logging,
+)
 from codelens.interface.http.dependencies import HttpComponents, HttpProblem, get_components
 from codelens.interface.http.dto import (
     ActivateModelGatewayRequest,
@@ -19,7 +23,7 @@ from codelens.interface.http.dto import (
     RecentRepositorySettingsResponse,
     ResetAllSettingsResponse,
     ReviewCompletionSettingsResponse,
-    RuntimeLogLevelResponse,
+    RuntimeLoggingSettingsResponse,
     ToolLimitsResponse,
     TriggerIdempotencySettingsResponse,
     UpdateFileExclusionSettingsRequest,
@@ -27,7 +31,7 @@ from codelens.interface.http.dto import (
     UpdateModelGatewayRequest,
     UpdateRecentRepositorySettingsRequest,
     UpdateReviewCompletionSettingsRequest,
-    UpdateRuntimeLogLevelRequest,
+    UpdateRuntimeLoggingSettingsRequest,
     UpdateToolLimitsRequest,
     UpdateTriggerIdempotencySettingsRequest,
 )
@@ -140,30 +144,58 @@ async def update_file_exclusions(
     return _file_exclusion_response(policy)
 
 
-@router.get("/logging", response_model=RuntimeLogLevelResponse)
-async def get_runtime_log_level_setting(
+@router.get("/logging", response_model=RuntimeLoggingSettingsResponse)
+async def get_runtime_logging_settings(
     components: Annotated[HttpComponents, Depends(get_components)],
-) -> RuntimeLogLevelResponse:
-    """Return the persisted runtime log threshold without exposing log contents."""
+) -> RuntimeLoggingSettingsResponse:
+    """Return persisted logging controls without exposing log contents."""
 
+    data_directory = components.settings.data_dir
+    defaults = components.web_settings_defaults
     level = await asyncio.to_thread(
         get_runtime_log_level,
-        components.settings.data_dir,
-        components.web_settings_defaults.log_level,
+        data_directory,
+        defaults.log_level,
     )
-    return RuntimeLogLevelResponse(level=level)
+    model_output_enabled = await asyncio.to_thread(
+        get_model_output_logging_enabled,
+        data_directory,
+        defaults.model_output_enabled,
+    )
+    return RuntimeLoggingSettingsResponse(
+        default_level=defaults.log_level,
+        level=level,
+        model_output_enabled=model_output_enabled,
+    )
 
 
-@router.put("/logging", response_model=RuntimeLogLevelResponse)
-async def update_runtime_log_level_setting(
-    request: UpdateRuntimeLogLevelRequest,
+@router.put("/logging", response_model=RuntimeLoggingSettingsResponse)
+async def update_runtime_logging_settings(
+    request: UpdateRuntimeLoggingSettingsRequest,
     components: Annotated[HttpComponents, Depends(get_components)],
-) -> RuntimeLogLevelResponse:
-    """Persist a shared threshold used by every process on its next log event."""
+) -> RuntimeLoggingSettingsResponse:
+    """Persist controls used by every process on its next log event."""
 
-    await asyncio.to_thread(set_runtime_log_level, components.settings.data_dir, request.level)
-    _LOGGER.info("Runtime log level updated", extra={"log_level": request.level})
-    return RuntimeLogLevelResponse(level=request.level)
+    data_directory = components.settings.data_dir
+    defaults = components.web_settings_defaults
+    await asyncio.to_thread(
+        update_runtime_logging,
+        data_directory,
+        level=request.level,
+        model_output_enabled=request.model_output_enabled,
+    )
+    _LOGGER.info(
+        "Runtime logging settings updated",
+        extra={
+            "log_level": request.level,
+            "model_output_enabled": request.model_output_enabled,
+        },
+    )
+    return RuntimeLoggingSettingsResponse(
+        default_level=defaults.log_level,
+        level=request.level,
+        model_output_enabled=request.model_output_enabled,
+    )
 
 
 @router.get("/repositories", response_model=RecentRepositorySettingsResponse)
@@ -443,7 +475,11 @@ async def reset_all_settings(
     or trigger plugin configurations.
     """
 
-    from codelens.bootstrap.logging import get_runtime_log_level, set_runtime_log_level
+    from codelens.bootstrap.logging import (
+        get_model_output_logging_enabled,
+        get_runtime_log_level,
+        update_runtime_logging,
+    )
     defaults = components.web_settings_defaults
 
     # Reset instruction file limits
@@ -497,12 +533,20 @@ async def reset_all_settings(
         ),
     )
 
-    # Reset log level
+    # Reset logging controls
     await asyncio.to_thread(
-        set_runtime_log_level, components.settings.data_dir, defaults.log_level
+        update_runtime_logging,
+        components.settings.data_dir,
+        level=defaults.log_level,
+        model_output_enabled=defaults.model_output_enabled,
     )
     log_level = await asyncio.to_thread(
         get_runtime_log_level, components.settings.data_dir, defaults.log_level
+    )
+    model_output_enabled = await asyncio.to_thread(
+        get_model_output_logging_enabled,
+        components.settings.data_dir,
+        defaults.model_output_enabled,
     )
 
     # Reset active gateway execution limits (if a gateway is active)
@@ -549,6 +593,10 @@ async def reset_all_settings(
             recent_repository_limit=recent_repo_limit,
         ),
         tool_limits=_tool_limits_response(tool_limits),
-        logging=RuntimeLogLevelResponse(level=log_level),
+        logging=RuntimeLoggingSettingsResponse(
+            default_level=defaults.log_level,
+            level=log_level,
+            model_output_enabled=model_output_enabled,
+        ),
         model_gateways=_catalog_response(gateway_catalog),
     )

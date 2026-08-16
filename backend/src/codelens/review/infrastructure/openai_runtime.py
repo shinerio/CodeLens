@@ -23,6 +23,7 @@ from agents import (
     RunItemStreamEvent,
     Runner,
     Tool,
+    ToolExecutionConfig,
     ToolsToFinalOutputResult,
 )
 from agents.exceptions import (
@@ -422,6 +423,7 @@ class OpenAIAgentRuntime:
         )
         run_config = RunConfig(
             trace_include_sensitive_data=False,
+            tool_execution=ToolExecutionConfig(max_function_tool_concurrency=None),
             call_model_input_filter=build_context_checkpoint_filter(
                 limits=bounded_tool_limits,
                 prompt=prompts.checkpoint_compaction,

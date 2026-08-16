@@ -39,7 +39,7 @@ def _resolve_executable(command: str) -> str:
 class SupervisorConfig:
     """Frontend-specific configuration for the supervisor."""
 
-    frontend_host: str = "127.0.0.1"
+    frontend_host: str = "0.0.0.0"
     frontend_port: int = 5173
 
 
@@ -212,8 +212,6 @@ class Supervisor:
         self,
         settings: Settings,
         config: SupervisorConfig,
-        *,
-        default_root: Path | None = None,
     ) -> None:
         """Install dependencies, start backend and frontend, and wait for readiness."""
         self._check_dependencies()
@@ -233,7 +231,7 @@ class Supervisor:
 
         try:
             # Start backend
-            backend_pid = self._start_backend(settings, default_root)
+            backend_pid = self._start_backend(settings)
             self._write_pid(self._backend_pid_file, backend_pid)
 
             # Start frontend
@@ -316,8 +314,6 @@ class Supervisor:
         self,
         settings: Settings,
         config: SupervisorConfig,
-        *,
-        default_root: Path | None = None,
     ) -> None:
         """Stop all services and start them again."""
         self.stop()
@@ -326,7 +322,7 @@ class Supervisor:
         # backend may fail to acquire the worker singleton lock or bind to
         # the same port.
         time.sleep(1)
-        self.start(settings, config, default_root=default_root)
+        self.start(settings, config)
 
     # ── Private helpers ────────────────────────────────────────────────────
 
@@ -388,7 +384,7 @@ class Supervisor:
                         "use 'codelens-review restart' or 'codelens-review stop'"
                     )
 
-    def _start_backend(self, settings: Settings, default_root: Path | None = None) -> int:
+    def _start_backend(self, settings: Settings) -> int:
         """Spawn the backend process and return its PID."""
         env = os.environ.copy()
         env["CODELENS_HOST"] = settings.host
@@ -411,14 +407,6 @@ class Supervisor:
         ]
         if settings.data_dir != self._project_root / "data":
             cmd.extend(["--data-dir", str(settings.data_dir)])
-        # When the user has not configured explicit repository roots, trust the
-        # directory from which the start command was invoked so that repositories
-        # under the user's working directory are reviewable by default.
-        if not settings.repository_roots and default_root is not None:
-            cmd.append(str(default_root))
-        for root in settings.repository_roots:
-            cmd.append(str(root))
-
         try:
             proc = subprocess.Popen(
                 cmd,

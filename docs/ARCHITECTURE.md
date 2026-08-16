@@ -39,7 +39,7 @@
 - API 和 Worker 运行于同一后端进程，共享内存事件总线和转录存储；前端进程独立启动。后端进程必须能够独立启动，不得依赖进程内共享状态或隐式启动顺序。
 - 运行中的执行转录由后端进程保留在该任务的进程内内存中；SSE 端点通过内存事件总线实时推送事件，无需数据库轮询。Review 到达终态后，后端进程才一次性把完整转录写入任务 Artifact 并清理内存副本。
 - 当前阶段不实现可替代 Web 的 Review 业务 CLI；启动、进程管理和诊断命令不属于业务交互入口。架构仅保留未来 CLI 入站适配器的扩展能力。
-- 本机无鉴权模式仅允许绑定 `127.0.0.1`；非回环地址必须配置明确的信任和访问边界。
+- 本产品当前无鉴权，默认绑定 `0.0.0.0`，只允许本机或操作员明确信任的局域网访问；不得暴露到互联网或不受信任网络。
 
 ## 3. 前后端分离
 
@@ -73,7 +73,7 @@
 - `POST /api/reviews/{task_id}/retry` 仅接受失败且未删除的 Review，并从原任务已经冻结的请求输入创建具有新任务 ID、独立队列、检查点和事件流的 Review；原失败任务及其诊断保持不变，重试不得重新读取可变工作区来构造输入。
 - `POST /api/reviews/{task_id}/export` 仅接受终态 Review，body 为 `{plugin_id}`，触发该插件的导出。返回 `ExportResult`（包含 `plugin_id`、`task_id`、`success`、`output_path`、`error`、`exported_at`）；非终态 Review 必须拒绝；插件未启用或不存在必须返回明确错误。导出是用户主动发起的后置操作，不修改 Review 工作空间、Finding 或事件。
 - `/api/plugins` 是统一插件集合契约：`GET` 列出所有已安装插件，`GET /{plugin_id}` 返回显式的 API 兼容状态、配置修订和复制策略，`POST /install` 接收 `{git_url, ref?}` 并把外部 Git 插件安装到 `data/plugins/{plugin_id}/`，`DELETE /{plugin_id}` 卸载外部插件；`PUT /{plugin_id}/trigger/enable|disable|config` 和 `PUT /{plugin_id}/report/enable|disable|config|auto-export` 分别管理 Trigger 与 Report 能力。Manifest 必须显式声明主版本为 2 的 `plugin_api_version` 和兼容的 `min_codelens_version`，缺失版本或其他主版本必须拒绝；候选代码必须在激活或加载前再次通过兼容检查。配置写入前必须同时匹配 Manifest Schema 和 Core v2 Reviewer Policy 不变量，未声明的能力必须拒绝；本地 Git Hook 通过 `/trigger/install-hooks`、`/trigger/uninstall-hooks` 和 `/trigger/hook-status` 显式同步与查询。统一记录持久化到 `data/plugins.json`，写入必须原子化并串行保护读改写；插件更新时，候选代码与配置作为一个用户可见事务激活，任一失败恢复旧目录和旧记录。内置插件 ID `local` 为保留 ID 且不可卸载。外部入口代码通过受控 loader 加载，实现 v2 `TriggerSinkPort` 或 `ReportSinkPort`，卸载和重新安装必须使旧实例缓存失效。安装请求和普通运行日志不得记录可能携带凭证的完整 Git URL。
-- SSE 事件必须来自持久化 outbox；部分成功、超时和失败必须显式表达，不能伪装为完整成功。多 Agent 稳定事件包括 `review.plan_created`、`agent_run.started`、`agent_run.completed`、`agent_run.failed`、`agent_tool_call.rejected`、`review.verdict_completed`、`review.completed`、`review.partial`、`review.failed`、`review.canceled` 和 `review.superseded`；拒绝事件只含有界 Agent、工具、call ID、原因码和原因，不含工具参数或结果正文。所有事件载荷均不得包含 Prompt、源码、工具参数/结果正文、Skill 文本、Secret 或供应商原始输出。
+- SSE 事件必须来自持久化 outbox；部分成功、超时和失败必须显式表达，不能伪装为完整成功。多 Agent 稳定事件包括 `review.plan_created.v2`、`agent_run.started.v2`、`agent_run.completed.v2`、`agent_run.failed.v2`、`agent_tool_call.rejected.v2`、`review.verdict_completed.v2`、`review.completed.v2`、`review.partial.v2`、`review.failed.v2`、`review.canceled.v2` 和 `review.superseded.v2`；拒绝事件只含有界 Agent、工具、call ID、原因码和原因，不含工具参数或结果正文。所有事件载荷均不得包含 Prompt、源码、工具参数/结果正文、Skill 文本、Secret 或供应商原始输出。
 - 前端类型应从经过验证的契约生成或集中维护，不得通过 `any`、非空断言或未校验的类型转换绕过边界。
 
 稳定契约统一使用以下命名：HTTP 路径使用小写、复数资源名和 `kebab-case`，普通 CRUD 不使用动词路径；JSON 字段使用 `snake_case`，枚举和状态值使用小写 `snake_case`；事件名称使用已发生的领域事实并显式版本化，载荷遵循 JSON 命名规则。未来 CLI 的命令和选项使用小写 `kebab-case` 并复用领域词汇，机器可读输出使用稳定、版本化的 JSON schema。
@@ -232,16 +232,18 @@ frontend/src/
 ## 6. 数据、安全与执行边界
 
 - CodeLens 对源仓库严格只读。每个任务在应用数据目录创建自己拥有的 detached worktree，并在其中冻结 `ReviewSnapshot`；任务 worktree 只用于构建和读取不可变审查输入。
+- 运行时 SQLite、任务 worktree、检查点、输入/输出 Artifact、Web 设置和 Secret 默认保存在项目根 `data/`；操作者删除 `data/` 即显式删除这些本地状态与凭证。该目录不得进入 Git。
 - Agent、模型和沙箱不得访问用户原始工作区，不得写入任务 worktree，也不得修改源分支、index、tag 或任何其他 Git 引用。
 - 例外：`plugin` 上下文的导出能力在用户明确触发（手动或自动导出）时，可向被 Review 源仓库根目录下的 `CodeLensReview/` 目录写入带 UTC 时间戳且不覆盖历史结果的导出产物。该写入是用户主动发起的后置操作，不属于 Review 只读流程；写入路径必须是源仓库内、与代码目录隔离的固定子目录，不得修改任何代码文件、Git 引用或任务 worktree。外部插件实现 `ReportSinkPort` 时必须遵守此边界，不得越过配置的导出目录写入其他位置。内置 `local` 插件使用原子写入（`tempfile` + `os.replace`），并确保仓库根 `.gitignore` 覆盖配置的导出目录；这是该插件唯一可在导出目录外执行的仓库文件写入，且不得跟随 `.gitignore` 符号链接。
 - Finding 只包含问题位置、证据、影响、解释、复现信息和建议；模型输出、HTTP 契约与前端均不得承载可应用的代码变更。
 - Agent 的内置代码工具只能读取 Snapshot Manifest 中的 target/context 文件，并在每次读取前重新验证内容哈希；Git 旧版本读取只能使用 Snapshot 固定的 base/head OID，不能接受模型提供的任意 ref。
 - Agent 只能调用 `FrozenAgentExecutionSpec` 中列出的版本化工具契约；模型输出、Planner、插件、Skill 文本和未来 MCP 返回值都不能添加工具或改变 Capability Profile。当前所有内置工具以及未来受控 MCP Adapter 必须共享一个 Agent Run 级 Limiter，并继续服从同一 Snapshot、路径、哈希、超时和结果大小边界。
-- 默认本地部署不设置仓库根目录白名单，目录浏览从 POSIX `/` 或 Windows 现有盘符开始；因此操作系统用户可读的全部目录构成本地信任边界。该模式只能绑定回环地址。显式传入允许根目录时，后端仍必须在每次仓库访问时执行真实路径边界校验。
+- 默认本地部署不设置仓库根目录白名单，目录浏览从 POSIX `/` 或 Windows 现有盘符开始；因此操作系统当前用户可读的全部目录构成本地信任边界。仓库边界来自 `conf/runtime-settings.toml` 的 `[repository] roots`：空数组表示宿主文件系统根（Windows 为现有磁盘），相对路径相对项目根解析；编程式显式传入根目录时跳过该文件。后端必须在每次仓库访问时执行真实路径边界校验。
+- v2 明确是无认证的本地/可信局域网单用户产品，默认 HTTP 监听地址为 `0.0.0.0`，便于同一可信 LAN 内的桌面端访问；不得暴露到互联网或不受信任网络。多用户身份认证、权限和远程部署不属于当前契约。
 - 目录浏览只能列出当前启动用户具备读取和进入权限的目录及必要的 Git 仓库标记，无权限或无法解析的目录项必须逐项跳过且不得阻断同级列表，并设置数量上限；分支和 Commit 列表由后端通过受限 Git 参数数组读取，前端不得接收任意 Git 参数或自由文本 ref。
 - 仓库源码、未经验证的规则文件、Skill 文本、MCP 输出和模型输出全部视为不可信数据，不能扩大 Agent、进程或工具权限。Skill 激活只能由宿主基于冻结语言和变更路径事实确定，并冻结 Skill ID、版本、内容哈希和激活原因；Agent 不具备 `load_skill` 工具。MCP Binding 目前仅为声明式数据，未启动 MCP Server 或 Client；未来 Adapter 也不得把 Secret、原始动态 Schema 或 Snapshot 外数据交给模型。只有经过规则发现、Snapshot 冻结、路径/哈希/作用域/顺序校验并由 Context Builder 规范化的 `repository_instructions` 才是可信 Review 配置；其可信性仅用于进入系统指令，不能覆盖平台安全边界或扩大 Agent、进程和工具权限。
-- Secret（包括 API Key、Authorization、Cookie 和会话凭证）不得进入数据库、日志、事件、Artifact、Prompt、RunContext 或错误响应。为本机操作者提供可审计执行过程时，系统可以将已脱敏的 Prompt、模型可见输出、工具调用和 Skill 生命周期写入任务专属 Artifact，并仅通过稳定的 HTTP/JSON 与可恢复 SSE 契约读取；Transcript 对内容不做截断，折叠仅是前端呈现能力。经本地操作者明确启用的 `logs/model.log` 是唯一允许记录完整已脱敏模型交换的日志，不得包含凭证，也不得把正文复制到其他运行日志。任务级存储配额和删除策略负责 Artifact 保留边界；模型日志按固定大小和数量轮转，不得通过静默截断单条记录控制容量。
-- 本地 Web 写入的多网关 Secret Catalog 保存在 data directory 的 `secrets/model-gateways.json`；目录和文件分别使用 owner-only `0700`/`0600` 权限并原子替换。API 与 Worker 只通过 Secret Store Port 共享，Worker 在实际模型调用时读取当前激活网关，进程启动不得依赖网关已配置。Secret Store 默认位于源码仓库之外。
+- Secret（包括 API Key、Authorization、Cookie 和会话凭证）不得进入数据库、日志、事件、Artifact、Prompt、RunContext 或错误响应。为本机操作者提供可审计执行过程时，系统可以将已脱敏的 Prompt、模型可见输出、工具调用和 Skill 生命周期写入任务专属 Artifact，并仅通过稳定的 HTTP/JSON 与可恢复 SSE 契约读取；Transcript 对内容不做截断，折叠仅是前端呈现能力。`logs/model.log` 是唯一允许记录完整已脱敏模型交换的日志，产品默认启用，并可由本地操作者在 Settings 中按运行时开关关闭，不得包含凭证，也不得把正文复制到其他运行日志。Artifact 本身保持不可变、哈希校验且可按数据库身份审计；v2 不提供任务级/全局容量配额，也不自动按保留期删除终态 Artifact。输入 Artifact 只在确认无 Review 引用后清理孤儿文件，输出 Artifact 随数据目录由操作者显式删除；模型日志按固定大小和数量轮转，不得通过静默截断单条记录控制容量。
+- 本地 Web 写入的多网关 Secret Catalog 保存在 data directory 的 `secrets/model-gateways.json`；目录和文件分别使用 owner-only `0700`/`0600` 权限并原子替换。API 与 Worker 只通过 Secret Store Port 共享，Worker 在实际模型调用时读取当前激活网关，进程启动不得依赖网关已配置。Secret Store 默认位于项目数据目录 `data/secrets/model-gateways.json`；删除项目 `data/` 会同时删除本地保存的网关凭证。
 - Review 工作空间删除使用数据库 tombstone，不级联删除 Finding、事件、快照或审计数据；读取单个已删除 Review 与列表查询都不得重新暴露 tombstone 记录。
 - 最近 Review 仓库目录拥有独立于 Review 工作空间 tombstone 的持久化生命周期；删除 Review 不得改变该目录，目录只在新仓库使用或容量设置更新导致 LRU 超出当前配置时淘汰。
 - 非 HTTPS 的远程模型 Base URL 会明文传输凭证和 Review 内容，界面必须显式警告；是否使用该受信任网络边界由本机操作者决定。

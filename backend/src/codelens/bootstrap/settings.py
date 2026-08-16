@@ -1,8 +1,30 @@
+import tomllib
 from pathlib import Path
-from typing import Literal, Self
+from typing import Self, cast
 
 from pydantic import field_validator, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def _load_repository_roots(config_path: Path) -> tuple[Path, ...]:
+    """Load repository boundaries from the repository-owned runtime config."""
+
+    try:
+        payload = tomllib.loads(config_path.read_text(encoding="utf-8"))
+    except (OSError, tomllib.TOMLDecodeError) as error:
+        raise ValueError(f"cannot load runtime settings: {config_path}") from error
+    if set(payload) != {"repository"} or set(payload["repository"]) != {"roots"}:
+        raise ValueError("runtime settings must contain only [repository] roots")
+    roots = payload["repository"]["roots"]
+    if not isinstance(roots, list) or not all(isinstance(root, str) for root in roots):
+        raise ValueError("runtime repository roots must be an array of paths")
+    if any(not root for root in roots):
+        raise ValueError("runtime repository roots must not contain empty paths")
+    project_root = config_path.resolve().parent.parent
+    return tuple(
+        (project_root / root if not Path(root).is_absolute() else Path(root)).expanduser()
+        for root in roots
+    )
 
 
 class Settings(BaseSettings):
@@ -14,9 +36,9 @@ class Settings(BaseSettings):
     prompt_dir: Path = Path()
     file_exclusion_config: Path = Path()
     web_settings_defaults_config: Path = Path()
-    host: str = "127.0.0.1"
+    repository_settings_config: Path = Path()
+    host: str = "0.0.0.0"
     port: int = 8800
-    auth: Literal["none"] = "none"
     max_workers: int = 1
     max_active_reviews: int = 4
     max_active_agent_runs: int = 8
@@ -27,9 +49,8 @@ class Settings(BaseSettings):
 
     @model_validator(mode="before")
     @classmethod
-    def resolve_default_paths(cls, data: dict) -> dict:
-        """Resolve repository-owned defaults relative to the project root."""
-        # Project root = parent of backend/
+    def resolve_default_paths(cls, data: dict[str, object]) -> dict[str, object]:
+        """Resolve repository-owned defaults and runtime repository boundaries."""
         project_root = Path(__file__).resolve().parent.parent.parent.parent.parent
         if "data_dir" not in data or data["data_dir"] is None:
             data["data_dir"] = project_root / "data"
@@ -44,6 +65,17 @@ class Settings(BaseSettings):
             data["web_settings_defaults_config"] = (
                 project_root / "conf" / "web-settings-defaults.toml"
             )
+        if (
+            "repository_settings_config" not in data
+            or data["repository_settings_config"] is None
+        ):
+            data["repository_settings_config"] = (
+                project_root / "conf" / "runtime-settings.toml"
+            )
+        if "repository_roots" not in data or data["repository_roots"] is None:
+            data["repository_roots"] = _load_repository_roots(
+                Path(cast(str | Path, data["repository_settings_config"]))
+            )
         return data
 
     @field_validator("repository_roots")
@@ -54,12 +86,9 @@ class Settings(BaseSettings):
         return tuple(root.expanduser().resolve() for root in roots)
 
     @model_validator(mode="after")
-    def validate_single_user_runtime(self) -> Self:
-        """Fail closed for remote unauthenticated binds and unsupported Worker counts."""
+    def validate_runtime_limits(self) -> Self:
+        """Validate process and Review concurrency limits."""
 
-        if self.host not in {"127.0.0.1", "localhost", "::1", "0.0.0.0"}:
-            raise ValueError("auth=none requires a loopback host")
-        # plugin install paths are added dynamically at runtime
         if self.max_workers != 1:
             raise ValueError("the first release supports exactly one Worker")
         if self.max_active_reviews < 1 or self.max_active_agent_runs < 1:

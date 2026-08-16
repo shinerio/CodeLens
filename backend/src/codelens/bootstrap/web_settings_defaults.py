@@ -27,7 +27,7 @@ _EXPECTED_SECTION_KEYS = {
     "file_exclusions": {"suffixes", "path_regexes"},
     "review_completion": {"max_incomplete_review_retries"},
     "trigger_idempotency": {"enabled"},
-    "logging": {"level"},
+    "logging": {"level", "model_output_enabled"},
     "tool_limits": set(ToolLimits.__dataclass_fields__),
 }
 
@@ -42,6 +42,7 @@ class WebSettingsDefaults:
     review_completion: ReviewCompletionSettings
     trigger_idempotency: TriggerIdempotencySettings
     log_level: DefaultLogLevel
+    model_output_enabled: bool
     tool_limits: ToolLimits
 
 
@@ -85,6 +86,9 @@ def load_web_settings_defaults(path: Path) -> WebSettingsDefaults:
     level = logging.get("level")
     if level not in {"debug", "info", "warning", "error"}:
         raise ValueError("logging level default is invalid")
+    model_output_enabled = logging.get("model_output_enabled")
+    if not isinstance(model_output_enabled, bool):
+        raise ValueError("model output logging default must be boolean")
     suffixes = file_exclusions.get("suffixes")
     path_regexes = file_exclusions.get("path_regexes")
     if (
@@ -105,7 +109,8 @@ def load_web_settings_defaults(path: Path) -> WebSettingsDefaults:
             ),
             review_completion=ReviewCompletionSettings(**review_completion),  # type: ignore[arg-type]
             trigger_idempotency=TriggerIdempotencySettings(**trigger_idempotency),  # type: ignore[arg-type]
-            log_level=cast(DefaultLogLevel, level),
+            log_level=level,
+            model_output_enabled=model_output_enabled,
             tool_limits=ToolLimits(**tool_limits),  # type: ignore[arg-type]
         )
     except (TypeError, ValueError) as error:

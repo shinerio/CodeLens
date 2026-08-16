@@ -188,7 +188,7 @@ def _review_scope_type(scope: dict[str, object]) -> ReviewScopeType:
     value = scope.get("type")
     if value not in {"branch", "commit", "uncommitted", "full"}:
         raise RuntimeError("review has an invalid persisted scope type")
-    return cast(ReviewScopeType, value)
+    return value
 
 
 def _event_values(task_id: str, event_type: str, payload: dict[str, object]) -> dict[str, object]:
@@ -635,7 +635,7 @@ class SqlReviewPlanStore:
                     insert(events).values(
                         **_event_values(
                             plan.task_id,
-                            "review.plan_created",
+                            "review.plan_created.v2",
                             {"plan_hash": plan.plan_hash},
                         )
                     )
@@ -1272,7 +1272,7 @@ class SqlReviewStore:
             existing = await session.scalar(
                 select(events.c.event_id).where(
                     events.c.task_id == task_id,
-                    events.c.event_type == "review.scope_empty",
+                    events.c.event_type == "review.scope_empty.v2",
                 )
             )
             if existing is not None:
@@ -1280,7 +1280,7 @@ class SqlReviewStore:
             payload: dict[str, object] = {"reason_code": "review_scope_empty"}
             event_id = await session.scalar(
                 insert(events)
-                .values(**_event_values(task_id, "review.scope_empty", payload))
+                .values(**_event_values(task_id, "review.scope_empty.v2", payload))
                 .returning(events.c.event_id)
             )
             if event_id is not None:
@@ -1288,7 +1288,7 @@ class SqlReviewStore:
                     ReviewEvent(
                         event_id=int(event_id),
                         task_id=task_id,
-                        event_type="review.scope_empty",
+                        event_type="review.scope_empty.v2",
                         payload=payload,
                     )
                 )
@@ -1435,7 +1435,7 @@ class SqlReviewStore:
                 .values(
                     **_event_values(
                         task.task_id,
-                        "review.created",
+                        "review.created.v2",
                         {
                             "status": task.status.value,
                             "base_oid": task.target.base_oid,
@@ -1450,7 +1450,7 @@ class SqlReviewStore:
                     ReviewEvent(
                         event_id=int(event_id),
                         task_id=task.task_id,
-                        event_type="review.created",
+                        event_type="review.created.v2",
                         payload={
                             "status": task.status.value,
                             "base_oid": task.target.base_oid,
@@ -1545,14 +1545,14 @@ class SqlReviewStore:
                                 updated_at=task.created_at,
                             )
                         )
-                        event_type = "review.superseded"
+                        event_type = "review.superseded.v2"
                     else:
                         await session.execute(
                             update(review_tasks)
                             .where(review_tasks.c.task_id == older_id)
                             .values(cancellation_requested=True, updated_at=task.created_at)
                         )
-                        event_type = "review.cancel_requested"
+                        event_type = "review.cancel_requested.v2"
                     supersede_payload: dict[str, object] = {"superseded_by_task_id": task.task_id}
                     supersede_event_id = await session.scalar(
                         insert(events)
@@ -1625,11 +1625,13 @@ class SqlReviewStore:
             }
             event_id = await session.scalar(
                 insert(events)
-                .values(**_event_values(task.task_id, "review.created", payload))
+                .values(**_event_values(task.task_id, "review.created.v2", payload))
                 .returning(events.c.event_id)
             )
             if event_id is not None:
-                captured.append(ReviewEvent(int(event_id), task.task_id, "review.created", payload))
+                captured.append(
+                    ReviewEvent(int(event_id), task.task_id, "review.created.v2", payload)
+                )
             await _record_recent_repository(
                 session,
                 task.repository_path,
@@ -1844,7 +1846,7 @@ class SqlReviewStore:
             }
             event_id = await session.scalar(
                 insert(events)
-                .values(**_event_values(new_task_id, "review.created", payload))
+                .values(**_event_values(new_task_id, "review.created.v2", payload))
                 .returning(events.c.event_id)
             )
             if event_id is not None:
@@ -1852,7 +1854,7 @@ class SqlReviewStore:
                     ReviewEvent(
                         event_id=int(event_id),
                         task_id=new_task_id,
-                        event_type="review.created",
+                        event_type="review.created.v2",
                         payload=payload,
                     )
                 )
@@ -1920,7 +1922,7 @@ class SqlReviewStore:
                     .values(
                         **_event_values(
                             task_id,
-                            "review.cancel_requested",
+                            "review.cancel_requested.v2",
                             {"cancellation_requested": True},
                         )
                     )
@@ -1931,7 +1933,7 @@ class SqlReviewStore:
                         ReviewEvent(
                             event_id=int(event_id),
                             task_id=task_id,
-                            event_type="review.cancel_requested",
+                            event_type="review.cancel_requested.v2",
                             payload={"cancellation_requested": True},
                         )
                     )
@@ -1948,7 +1950,10 @@ class SqlReviewStore:
             row = (
                 (
                     await session.execute(
-                        select(review_tasks).where(review_tasks.c.task_id == task_id)
+                        select(review_tasks).where(
+                            review_tasks.c.task_id == task_id,
+                            review_tasks.c.deleted_at.is_(None),
+                        )
                     )
                 )
                 .mappings()
@@ -2163,7 +2168,7 @@ class SqlReviewStore:
                 )
             event_id = await session.scalar(
                 insert(events)
-                .values(**_event_values(task_id, f"review.{status}", {"status": status}))
+                .values(**_event_values(task_id, f"review.{status}.v2", {"status": status}))
                 .returning(events.c.event_id)
             )
             if event_id is not None:
@@ -2171,7 +2176,7 @@ class SqlReviewStore:
                     ReviewEvent(
                         event_id=int(event_id),
                         task_id=task_id,
-                        event_type=f"review.{status}",
+                        event_type=f"review.{status}.v2",
                         payload={"status": status},
                     )
                 )
@@ -2182,10 +2187,10 @@ class SqlReviewStore:
             await self._fire_terminal_hook(task_id, status)
 
     async def cancel(self, task_id: str) -> None:
-        await self._finish_unsuccessfully(task_id, "canceled", "review.canceled", None)
+        await self._finish_unsuccessfully(task_id, "canceled", "review.canceled.v2", None)
 
     async def fail(self, task_id: str, error_code: str) -> None:
-        await self._finish_unsuccessfully(task_id, "failed", "review.failed", error_code)
+        await self._finish_unsuccessfully(task_id, "failed", "review.failed.v2", error_code)
 
     async def _finish_unsuccessfully(
         self,
@@ -2327,7 +2332,7 @@ class SqlReviewStore:
                 .values(
                     **_event_values(
                         task_id,
-                        "review.cancel_requested",
+                        "review.cancel_requested.v2",
                         {"cancellation_requested": True},
                     )
                 )
@@ -2338,7 +2343,7 @@ class SqlReviewStore:
                     ReviewEvent(
                         event_id=int(event_id),
                         task_id=task_id,
-                        event_type="review.cancel_requested",
+                        event_type="review.cancel_requested.v2",
                         payload={"cancellation_requested": True},
                     )
                 )
@@ -2481,12 +2486,12 @@ class SqlReviewStore:
             }
             await session.execute(
                 insert(events).values(
-                    **_event_values(task_id, "agent_run.completed", event_payload)
+                    **_event_values(task_id, "agent_run.completed.v2", event_payload)
                 )
             )
             event_id = await session.scalar(
                 insert(events)
-                .values(**_event_values(task_id, "agent.succeeded", event_payload))
+                .values(**_event_values(task_id, "agent.succeeded.v2", event_payload))
                 .returning(events.c.event_id)
             )
             if event_id is None:
@@ -2494,7 +2499,7 @@ class SqlReviewStore:
             return ReviewEvent(
                 event_id=int(event_id),
                 task_id=task_id,
-                event_type="agent.succeeded",
+                event_type="agent.succeeded.v2",
                 payload=event_payload,
             )
 
@@ -2547,14 +2552,12 @@ class SqlReviewStore:
             )
             event_id = await session.scalar(
                 insert(events)
-                .values(**_event_values(task_id, "agent.succeeded", event_payload))
+                .values(**_event_values(task_id, "agent.succeeded.v2", event_payload))
                 .returning(events.c.event_id)
             )
             if event_id is None:
                 raise RuntimeError("Planner completion event was not persisted")
-            return ReviewEvent(
-                int(event_id), task_id, "agent.succeeded", event_payload
-            )
+            return ReviewEvent(int(event_id), task_id, "agent.succeeded.v2", event_payload)
 
         event = await self._database.run_transaction(operation)
         await self._publish_events([event])
@@ -2665,21 +2668,21 @@ class SqlReviewStore:
             }
             await session.execute(
                 insert(events).values(
-                    **_event_values(task_id, "agent_run.completed", event_payload)
+                    **_event_values(task_id, "agent_run.completed.v2", event_payload)
                 )
             )
             await session.execute(
                 insert(events).values(
                     **_event_values(
                         task_id,
-                        "review.verdict_completed",
+                        "review.verdict_completed.v2",
                         {"verdict_count": len(decisions)},
                     )
                 )
             )
             event_id = await session.scalar(
                 insert(events)
-                .values(**_event_values(task_id, "agent.succeeded", event_payload))
+                .values(**_event_values(task_id, "agent.succeeded.v2", event_payload))
                 .returning(events.c.event_id)
             )
             if event_id is None:
@@ -2687,7 +2690,7 @@ class SqlReviewStore:
             return ReviewEvent(
                 event_id=int(event_id),
                 task_id=task_id,
-                event_type="agent.succeeded",
+                event_type="agent.succeeded.v2",
                 payload=event_payload,
             )
 
@@ -2772,12 +2775,12 @@ class SqlReviewStore:
                 }
                 event_id = await session.scalar(
                     insert(events)
-                    .values(**_event_values(task_id, "finding.published", event_payload))
+                    .values(**_event_values(task_id, "finding.published.v2", event_payload))
                     .returning(events.c.event_id)
                 )
                 if event_id is not None:
                     emitted.append(
-                        ReviewEvent(int(event_id), task_id, "finding.published", event_payload)
+                        ReviewEvent(int(event_id), task_id, "finding.published.v2", event_payload)
                     )
             return emitted
 
@@ -3133,7 +3136,7 @@ class SqlCheckpointStore:
                 insert(events).values(
                     **_event_values(
                         task_id,
-                        "agent_run.started",
+                        "agent_run.started.v2",
                         {"node_key": node_key},
                     )
                 )
@@ -3214,7 +3217,7 @@ class SqlCheckpointStore:
                 insert(events).values(
                     **_event_values(
                         task_id,
-                        "agent_run.failed",
+                        "agent_run.failed.v2",
                         {"node_key": node_key, "error_code": error_code},
                     )
                 )
