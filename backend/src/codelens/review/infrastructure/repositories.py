@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from collections.abc import Awaitable, Callable
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import asdict, dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -3182,13 +3182,23 @@ class SqlCheckpointStore:
         await self._database.run_transaction(operation)
 
     async def mark_failed(
-        self, task_id: str, node_key: str, error_code: str, *, is_timeout: bool = False
+        self,
+        task_id: str,
+        node_key: str,
+        error_code: str,
+        *,
+        is_timeout: bool = False,
+        failure_metadata: Mapping[str, str] | None = None,
     ) -> None:
         """Terminally record one isolated node failure from an expected active state."""
 
         if not error_code:
             raise ValueError("failed checkpoint requires an error code")
         target = "timed_out" if is_timeout else "failed"
+
+        event_payload: dict[str, object] = {"node_key": node_key, "error_code": error_code}
+        if failure_metadata:
+            event_payload.update(failure_metadata)
 
         async def operation(session: AsyncSession) -> None:
             result = cast(
@@ -3215,11 +3225,7 @@ class SqlCheckpointStore:
                 raise InvalidAgentRunStateError("checkpoint is not active")
             await session.execute(
                 insert(events).values(
-                    **_event_values(
-                        task_id,
-                        "agent_run.failed.v2",
-                        {"node_key": node_key, "error_code": error_code},
-                    )
+                    **_event_values(task_id, "agent_run.failed.v2", event_payload)
                 )
             )
 

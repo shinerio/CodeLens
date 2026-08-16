@@ -365,9 +365,21 @@ class SqlCheckpointPortAdapter:
         return await self._checkpoints.list_for_task(task_id)
 
     async def mark_failed(
-        self, task_id: str, node_key: str, error_code: str, *, is_timeout: bool = False
+        self,
+        task_id: str,
+        node_key: str,
+        error_code: str,
+        *,
+        is_timeout: bool = False,
+        failure_metadata: Mapping[str, str] | None = None,
     ) -> None:
-        await self._checkpoints.mark_failed(task_id, node_key, error_code, is_timeout=is_timeout)
+        await self._checkpoints.mark_failed(
+            task_id,
+            node_key,
+            error_code,
+            is_timeout=is_timeout,
+            failure_metadata=failure_metadata,
+        )
 
     async def mark_skipped(self, task_id: str, node_key: str, reason_code: str) -> None:
         await self._checkpoints.mark_skipped(task_id, node_key, reason_code)

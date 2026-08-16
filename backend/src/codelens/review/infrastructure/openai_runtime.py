@@ -677,11 +677,11 @@ class OpenAIAgentRuntime:
         result = cast(RunResult, investigation)
         if not tool_context.is_completed:
             await client.close()
-            raise PermanentAgentOutputError(
+            raise TransientAgentRuntimeError(
                 "Agent execution ended without an accepted output submission.",
                 phase="investigation",
                 reason_code="review_completion_not_declared",
-                retryable=False,
+                retryable=True,
             ) from None
         try:
             if planner_codec is not None:

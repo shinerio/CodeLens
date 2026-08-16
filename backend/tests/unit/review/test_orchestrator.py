@@ -1,6 +1,7 @@
 import asyncio
 import hashlib
 import json
+from collections.abc import Mapping
 from dataclasses import dataclass
 
 import pytest
@@ -822,6 +823,7 @@ class _PlanCheckpoints:
         _error_code: str,
         *,
         is_timeout: bool = False,
+        failure_metadata: Mapping[str, str] | None = None,
     ) -> None:
         self.records[node_key].status = "timed_out" if is_timeout else "failed"
 

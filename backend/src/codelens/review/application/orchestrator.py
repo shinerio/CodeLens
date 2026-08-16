@@ -121,7 +121,13 @@ class _CheckpointPort(Protocol[_CheckpointViewT]):
     ) -> None: ...
     async def list_for_task(self, task_id: str) -> tuple[_CheckpointViewT, ...]: ...
     async def mark_failed(
-        self, task_id: str, node_key: str, error_code: str, *, is_timeout: bool = False
+        self,
+        task_id: str,
+        node_key: str,
+        error_code: str,
+        *,
+        is_timeout: bool = False,
+        failure_metadata: Mapping[str, str] | None = None,
     ) -> None: ...
     async def mark_skipped(self, task_id: str, node_key: str, reason_code: str) -> None: ...
     async def cancel_non_terminal(self, task_id: str) -> None: ...
@@ -401,6 +407,12 @@ class ReviewOrchestrator:
         except asyncio.CancelledError:
             raise
         except Exception as error:
+            failure_metadata: dict[str, str] = {
+                "agent": node.agent_reference,
+                "error_type": type(error).__name__,
+            }
+            if isinstance(error, AgentRuntimeError):
+                failure_metadata.update(error.failure_metadata())
             checkpoint = await self._checkpoints.get(task_id, node.node_id)
             if checkpoint.status in {"running", "validating"}:
                 await self._checkpoints.mark_failed(
@@ -408,13 +420,8 @@ class ReviewOrchestrator:
                     node.node_id,
                     "agent_node_failed",
                     is_timeout=isinstance(error, TimeoutError),
+                    failure_metadata=failure_metadata,
                 )
-            failure_metadata = {
-                "agent": node.agent_reference,
-                "error_type": type(error).__name__,
-            }
-            if isinstance(error, AgentRuntimeError):
-                failure_metadata.update(error.failure_metadata())
             await self._record(
                 task_id,
                 "lifecycle",
