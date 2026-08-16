@@ -19,7 +19,10 @@ from pydantic import BaseModel, ConfigDict, Field
 from codelens.review.domain.ports import AgentResponseDiagnostic
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.domain.tool_results import JsonValue
-from codelens.review.infrastructure.evidence_replay import EVIDENCE_TOOL_NAMES
+from codelens.review.infrastructure.evidence_replay import (
+    EVIDENCE_TOOL_NAMES,
+    ToolLoopResetSignal,
+)
 
 CHECKPOINT_SCHEMA_VERSION = "codelens_review_checkpoint_v1"
 _LOGGER = logging.getLogger(__name__)
@@ -37,8 +40,8 @@ class CheckpointEvidenceConclusion(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    evidence_ids: list[str] = Field(min_length=1, max_length=1000)
-    conclusion: str = Field(min_length=1, max_length=8000)
+    evidence_ids: list[str] = Field(min_length=1)
+    conclusion: str = Field(min_length=1)
 
 
 class CheckpointEliminatedHypothesis(BaseModel):
@@ -46,9 +49,9 @@ class CheckpointEliminatedHypothesis(BaseModel):
 
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
-    evidence_ids: list[str] = Field(min_length=1, max_length=1000)
-    hypothesis: str = Field(min_length=1, max_length=4000)
-    reason: str = Field(min_length=1, max_length=8000)
+    evidence_ids: list[str] = Field(min_length=1)
+    hypothesis: str = Field(min_length=1)
+    reason: str = Field(min_length=1)
 
 
 class CheckpointSummary(BaseModel):
@@ -57,11 +60,11 @@ class CheckpointSummary(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
     schema_version: Literal["codelens_review_checkpoint_v1"]
-    investigation_summary: str = Field(min_length=1, max_length=16_000)
-    evidence_conclusions: list[CheckpointEvidenceConclusion] = Field(max_length=1000)
-    eliminated_hypotheses: list[CheckpointEliminatedHypothesis] = Field(max_length=500)
-    open_investigations: list[str] = Field(max_length=500)
-    next_actions: list[str] = Field(max_length=500)
+    investigation_summary: str = Field(min_length=1)
+    evidence_conclusions: list[CheckpointEvidenceConclusion]
+    eliminated_hypotheses: list[CheckpointEliminatedHypothesis]
+    open_investigations: list[str]
+    next_actions: list[str]
 
 
 class CheckpointEvidenceReference(BaseModel):
@@ -192,6 +195,7 @@ def build_context_checkpoint_filter(
     prompt: str,
     tracker: ContextCheckpointTracker,
     summarizer: CheckpointSummarizerPort,
+    loop_reset_signal: ToolLoopResetSignal | None = None,
 ) -> Callable[[CallModelData[object]], Awaitable[ModelInputData]]:
     """Build an async pre-call filter that advances only on complete old rounds."""
 
@@ -342,6 +346,8 @@ def build_context_checkpoint_filter(
         tracker.checkpoint_payloads.append(_checkpoint_content(result.summary, evidence_index))
         tracker.consecutive_failure_count = 0
         tracker.last_failure_item_count = None
+        if loop_reset_signal is not None:
+            loop_reset_signal.trigger()
         return ModelInputData(
             input=tracker.effective_input(raw_items),
             instructions=data.model_data.instructions,
@@ -351,14 +357,22 @@ def build_context_checkpoint_filter(
 
 
 def checkpoint_summary_from_text(payload: str) -> CheckpointSummary:
-    """Wrap bounded model-authored prose in the host-owned checkpoint schema."""
+    """Wrap model-authored prose in the host-owned checkpoint schema.
+
+    Markdown fences are stripped leniently: a truncated closing fence (caused by
+    max_tokens cutoff) no longer fails validation — the opening fence line is
+    removed and the remaining text is accepted as the summary body.
+    """
 
     value = payload.strip()
     if value.startswith("```"):
         first_newline = value.find("\n")
-        if first_newline < 0 or not value.endswith("```"):
-            raise ValueError("checkpoint output contains an invalid Markdown fence")
-        value = value[first_newline + 1 : -3].strip()
+        if first_newline < 0:
+            value = ""
+        elif value.endswith("```"):
+            value = value[first_newline + 1 : -3].strip()
+        else:
+            value = value[first_newline + 1 :].strip()
     return CheckpointSummary(
         schema_version="codelens_review_checkpoint_v1",
         investigation_summary=value,

@@ -25,6 +25,7 @@ from codelens.review.domain.tool_results import (
 )
 from codelens.review.infrastructure.evidence_replay import (
     CompactedEvidenceReplayRegistry,
+    ToolLoopResetSignal,
     canonicalize_tool_arguments,
 )
 
@@ -257,6 +258,7 @@ class ToolExecutionLimiter:
         tool_timeout_seconds: float,
         tool_loop_warning_template: str,
         evidence_replay_registry: CompactedEvidenceReplayRegistry | None = None,
+        loop_reset_signal: ToolLoopResetSignal | None = None,
     ) -> None:
         if max_tool_calls <= 0:
             raise ValueError("tool call budget must be positive")
@@ -269,6 +271,8 @@ class ToolExecutionLimiter:
         self._tool_timeout_seconds = tool_timeout_seconds
         self._tool_loop_warning_template = tool_loop_warning_template
         self._evidence_replay_registry = evidence_replay_registry
+        self._loop_reset_signal = loop_reset_signal
+        self._last_reset_generation: int | None = None
         self._last_fingerprint: str | None = None
         self._consecutive_identical_count = 0
         self._lock = asyncio.Lock()
@@ -314,8 +318,17 @@ class ToolExecutionLimiter:
         """Check for repeated tool calls and return a warning if detected.
 
         Returns a warning message on first detection of repetition (count == 2),
-        or raises ToolLoopDetectedError if the threshold is reached.
+        or raises ToolLoopDetectedError if the threshold is reached. Resets the
+        counters when a ToolLoopResetSignal generation change indicates that
+        context compaction succeeded, so post-compaction re-reads are not flagged.
         """
+        if self._loop_reset_signal is not None:
+            current_generation = self._loop_reset_signal.generation
+            if current_generation != self._last_reset_generation:
+                async with self._lock:
+                    self._last_reset_generation = current_generation
+                    self._last_fingerprint = None
+                    self._consecutive_identical_count = 0
         if (
             self._evidence_replay_registry is not None
             and isinstance(result, str)
@@ -445,6 +458,7 @@ def enforce_tool_execution_limits(
     tool_timeout_seconds: float,
     tool_loop_warning_template: str,
     evidence_replay_registry: CompactedEvidenceReplayRegistry | None = None,
+    loop_reset_signal: ToolLoopResetSignal | None = None,
 ) -> list[Tool]:
     """Apply one shared execution limiter to every function tool in an Agent run."""
 
@@ -454,6 +468,7 @@ def enforce_tool_execution_limits(
         tool_timeout_seconds=tool_timeout_seconds,
         tool_loop_warning_template=tool_loop_warning_template,
         evidence_replay_registry=evidence_replay_registry,
+        loop_reset_signal=loop_reset_signal,
     )
     coordinator = ToolBatchPhaseCoordinator()
     limited: list[Tool] = []

@@ -133,6 +133,7 @@ export function ReviewProcessReport({
         <Metric icon={Coins} label={t("run.cachedInputTokens")} value={number.format(totals.cached_input_tokens ?? 0)} />
         <Metric icon={Coins} label={t("run.cacheWriteInputTokens")} value={number.format(totals.cache_write_input_tokens ?? 0)} />
         <Metric icon={Wrench} label={t("run.contextCompactions")} value={number.format(totals.context_compaction_count ?? 0)} />
+        <Metric icon={Wrench} label={t("run.contextCompactionFailures")} value={number.format(totals.context_compaction_failure_count ?? 0)} />
         <Metric icon={Wrench} label={t("run.contextCompactedResults")} value={number.format(totals.context_compacted_result_count ?? 0)} />
         <Metric icon={Coins} label={t("run.contextCompactionOriginalBytes")} value={number.format(totals.context_compaction_original_bytes ?? 0)} />
         <Metric icon={Coins} label={t("run.contextCompactionCompressedBytes")} value={number.format(totals.context_compaction_compressed_bytes ?? 0)} />
@@ -228,7 +229,7 @@ export function ReviewProcessReport({
 
 type UsageTotals = Pick<
   ProcessReport,
-  "llm_call_count" | "input_tokens" | "cached_input_tokens" | "cache_write_input_tokens" | "context_compaction_count" | "context_compacted_result_count" | "context_compaction_original_bytes" | "context_compaction_compressed_bytes" | "output_tokens" | "total_tokens" | "tool_call_count" | "accepted_tool_call_count" | "rejected_tool_call_count" | "unclassified_tool_call_count" | "duration_ms"
+  "llm_call_count" | "input_tokens" | "cached_input_tokens" | "cache_write_input_tokens" | "context_compaction_count" | "context_compaction_failure_count" | "context_compacted_result_count" | "context_compaction_original_bytes" | "context_compaction_compressed_bytes" | "output_tokens" | "total_tokens" | "tool_call_count" | "accepted_tool_call_count" | "rejected_tool_call_count" | "unclassified_tool_call_count" | "duration_ms"
 >;
 
 function summarizeAgents(agents: readonly AgentProcessSummary[]): UsageTotals {
@@ -247,6 +248,7 @@ function summarizeAgents(agents: readonly AgentProcessSummary[]): UsageTotals {
     cached_input_tokens: agents.reduce((total, agent) => total + (agent.cached_input_tokens ?? 0), 0),
     cache_write_input_tokens: agents.reduce((total, agent) => total + (agent.cache_write_input_tokens ?? 0), 0),
     context_compaction_count: agents.reduce((total, agent) => total + (agent.context_compaction_count ?? 0), 0),
+    context_compaction_failure_count: agents.reduce((total, agent) => total + (agent.context_compaction_failure_count ?? 0), 0),
     context_compacted_result_count: agents.reduce((total, agent) => total + (agent.context_compacted_result_count ?? 0), 0),
     context_compaction_original_bytes: agents.reduce((total, agent) => total + (agent.context_compaction_original_bytes ?? 0), 0),
     context_compaction_compressed_bytes: agents.reduce((total, agent) => total + (agent.context_compaction_compressed_bytes ?? 0), 0),

@@ -6,4 +6,4 @@ Preserve enough state to resume work without loss: the current task objective an
 
 Clearly distinguish confirmed facts, inferences, and unverified hypotheses. Bind every evidence-based conclusion only to evidence IDs present in `host_evidence_index`; never invent or alter evidence IDs. Do not copy large source excerpts, tool output bodies, repetitive narration, or irrelevant process that can be retrieved through the host index. When exact content is needed later, retain the relevant evidence ID and re-read arguments from the host index.
 
-Use any compact representation that preserves the state above. Do not call tools. Do not claim that an issue exists unless available evidence supports that statement.
+Compress the output size as much as possible while preserving every investigation detail (coverage progress, decided/undecided hypotheses, evidence IDs, next actions). Avoid verbose narration and large quotations; choose any compact representation. Do not call tools. Do not claim that an issue exists unless available evidence supports that statement.

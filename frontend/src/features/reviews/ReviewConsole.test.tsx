@@ -512,6 +512,7 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         cached_input_tokens: 120,
         cache_write_input_tokens: 30,
         context_compaction_count: 2,
+        context_compaction_failure_count: 1,
         context_compacted_result_count: 5,
         context_compaction_original_bytes: 9000,
         context_compaction_compressed_bytes: 600,

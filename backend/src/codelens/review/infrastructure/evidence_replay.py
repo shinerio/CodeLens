@@ -74,3 +74,26 @@ class CompactedEvidenceReplayRegistry:
 
         with self._lock:
             return self._consumed_count
+
+
+class ToolLoopResetSignal:
+    """Increment a generation counter after each successful context compaction.
+
+    The ToolExecutionLimiter observes the generation and resets its duplicate-call
+    counters when it changes, so that re-reading evidence after compaction is not
+    flagged as a no-progress loop. Accessed only within one agent run's event loop.
+    """
+
+    def __init__(self) -> None:
+        self._generation = 0
+
+    def trigger(self) -> None:
+        """Advance the generation after one successful checkpoint compaction."""
+
+        self._generation += 1
+
+    @property
+    def generation(self) -> int:
+        """Return the current generation counter."""
+
+        return self._generation

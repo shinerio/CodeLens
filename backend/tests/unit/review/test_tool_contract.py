@@ -17,6 +17,7 @@ from codelens.review.domain.tool_results import (
 )
 from codelens.review.infrastructure.evidence_replay import (
     CompactedEvidenceReplayRegistry,
+    ToolLoopResetSignal,
 )
 from codelens.review.infrastructure.tool_contract import (
     enforce_tool_execution_limits,
@@ -542,3 +543,60 @@ async def test_failed_evidence_still_releases_state_phase_waiters() -> None:
     assert json.loads(evidence_result)["status"] == "failed"
     assert state_result is not None
     assert json.loads(completion_result)["status"] == "success"
+
+
+async def test_loop_reset_signal_clears_duplicate_count_after_compaction() -> None:
+    """A generation change from ToolLoopResetSignal must reset the loop counters."""
+
+    @function_tool
+    async def stable_lookup(query: str) -> str:
+        return _success("stable_lookup", {"query": query, "matches": []})
+
+    signal = ToolLoopResetSignal()
+    tool = enforce_tool_execution_limits(
+        [stable_lookup],
+        max_tool_calls=20,
+        max_identical_tool_results=3,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count} times, {remaining} attempt(s) left",
+        loop_reset_signal=signal,
+    )[0]
+    arguments = json.dumps({"query": "missingSymbol"})
+
+    # Two identical calls build up the counter to 2 (warning territory)
+    first = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    assert "WARNING" not in first
+    second = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    assert "WARNING" in second
+
+    # Trigger compaction reset
+    signal.trigger()
+
+    # The same call must not be flagged — counter was reset
+    third = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    assert "WARNING" not in third
+
+    # Without another reset, the next identical call warns again
+    fourth = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    assert "WARNING" in fourth
+
+
+async def test_read_file_chunked_ranges_do_not_trigger_loop_detection() -> None:
+    """Different start_line/end_line arguments produce different fingerprints."""
+
+    @function_tool(name_override="read_file")
+    async def read_file(path: str, start_line: int, end_line: int) -> str:
+        return _success("read_file", {"path": path, "lines": list(range(start_line, end_line + 1))})
+
+    tool = enforce_tool_execution_limits(
+        [read_file],
+        max_tool_calls=20,
+        max_identical_tool_results=3,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count} times, {remaining} attempt(s) left",
+    )[0]
+
+    for start, end in [(1, 100), (101, 200), (201, 300)]:
+        arguments = json.dumps({"path": "src/example.py", "start_line": start, "end_line": end})
+        result = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+        assert "WARNING" not in result

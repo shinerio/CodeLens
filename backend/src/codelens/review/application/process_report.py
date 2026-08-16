@@ -465,24 +465,39 @@ def _accumulate_usage(accumulator: _AgentAccumulator, metadata: dict[str, str]) 
     accumulator.input_tokens += _non_negative_int(metadata, "input_tokens")
     accumulator.cached_input_tokens += _non_negative_int(metadata, "cached_input_tokens")
     accumulator.cache_write_input_tokens += _non_negative_int(metadata, "cache_write_input_tokens")
-    accumulator.context_compaction_count += _non_negative_int(metadata, "context_compaction_count")
-    accumulator.context_compacted_result_count += _non_negative_int(
-        metadata, "context_compacted_result_count"
+    accumulator.context_compaction_count = max(
+        accumulator.context_compaction_count,
+        _non_negative_int(metadata, "context_compaction_count"),
     )
-    accumulator.context_compaction_original_bytes += _non_negative_int(
-        metadata, "context_compaction_original_bytes"
+    accumulator.context_compacted_result_count = max(
+        accumulator.context_compacted_result_count, _non_negative_int(
+            metadata, "context_compacted_result_count"
+        )
     )
-    accumulator.context_compaction_compressed_bytes += _non_negative_int(
-        metadata, "context_compaction_compressed_bytes"
+    accumulator.context_compaction_original_bytes = max(
+        accumulator.context_compaction_original_bytes, _non_negative_int(
+            metadata, "context_compaction_original_bytes"
+        )
     )
-    accumulator.context_compaction_failure_count += _non_negative_int(
-        metadata, "context_compaction_failure_count"
+    accumulator.context_compaction_compressed_bytes = max(
+        accumulator.context_compaction_compressed_bytes, _non_negative_int(
+            metadata, "context_compaction_compressed_bytes"
+        )
     )
-    accumulator.compaction_replay_registered_count += _non_negative_int(
-        metadata, "compaction_replay_registered_count"
+    accumulator.context_compaction_failure_count = max(
+        accumulator.context_compaction_failure_count, _non_negative_int(
+            metadata, "context_compaction_failure_count"
+        )
     )
-    accumulator.compaction_replay_consumed_count += _non_negative_int(
-        metadata, "compaction_replay_consumed_count"
+    accumulator.compaction_replay_registered_count = max(
+        accumulator.compaction_replay_registered_count, _non_negative_int(
+            metadata, "compaction_replay_registered_count"
+        )
+    )
+    accumulator.compaction_replay_consumed_count = max(
+        accumulator.compaction_replay_consumed_count, _non_negative_int(
+            metadata, "compaction_replay_consumed_count"
+        )
     )
     accumulator.output_tokens += _non_negative_int(metadata, "output_tokens")
     accumulator.total_tokens += _non_negative_int(metadata, "total_tokens")
@@ -508,24 +523,39 @@ def _accumulate_usage(accumulator: _AgentAccumulator, metadata: dict[str, str]) 
 def _accumulate_run_diagnostics(accumulator: _AgentAccumulator, metadata: dict[str, str]) -> None:
     """Merge Agent-run diagnostics that are not present on provider response usage."""
 
-    accumulator.context_compaction_count += _non_negative_int(metadata, "context_compaction_count")
-    accumulator.context_compacted_result_count += _non_negative_int(
-        metadata, "context_compacted_result_count"
+    accumulator.context_compaction_count = max(
+        accumulator.context_compaction_count,
+        _non_negative_int(metadata, "context_compaction_count"),
     )
-    accumulator.context_compaction_original_bytes += _non_negative_int(
-        metadata, "context_compaction_original_bytes"
+    accumulator.context_compacted_result_count = max(
+        accumulator.context_compacted_result_count, _non_negative_int(
+            metadata, "context_compacted_result_count"
+        )
     )
-    accumulator.context_compaction_compressed_bytes += _non_negative_int(
-        metadata, "context_compaction_compressed_bytes"
+    accumulator.context_compaction_original_bytes = max(
+        accumulator.context_compaction_original_bytes, _non_negative_int(
+            metadata, "context_compaction_original_bytes"
+        )
     )
-    accumulator.context_compaction_failure_count += _non_negative_int(
-        metadata, "context_compaction_failure_count"
+    accumulator.context_compaction_compressed_bytes = max(
+        accumulator.context_compaction_compressed_bytes, _non_negative_int(
+            metadata, "context_compaction_compressed_bytes"
+        )
     )
-    accumulator.compaction_replay_registered_count += _non_negative_int(
-        metadata, "compaction_replay_registered_count"
+    accumulator.context_compaction_failure_count = max(
+        accumulator.context_compaction_failure_count, _non_negative_int(
+            metadata, "context_compaction_failure_count"
+        )
     )
-    accumulator.compaction_replay_consumed_count += _non_negative_int(
-        metadata, "compaction_replay_consumed_count"
+    accumulator.compaction_replay_registered_count = max(
+        accumulator.compaction_replay_registered_count, _non_negative_int(
+            metadata, "compaction_replay_registered_count"
+        )
+    )
+    accumulator.compaction_replay_consumed_count = max(
+        accumulator.compaction_replay_consumed_count, _non_negative_int(
+            metadata, "compaction_replay_consumed_count"
+        )
     )
     accumulator.model_name = metadata.get("model_name") or accumulator.model_name
 

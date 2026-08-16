@@ -15,7 +15,9 @@ from codelens.review.infrastructure.context_checkpoint import (
     ContextCheckpointError,
     ContextCheckpointTracker,
     build_context_checkpoint_filter,
+    checkpoint_summary_from_text,
 )
+from codelens.review.infrastructure.evidence_replay import ToolLoopResetSignal
 
 
 class RecordingSummarizer:
@@ -448,4 +450,114 @@ async def test_checkpoint_retry_recovers_after_transient_empty_output() -> None:
     assert tracker.checkpoint_count == 1
     assert tracker.failure_count == 0
     assert tracker.consecutive_failure_count == 0
+
+
+def test_checkpoint_summary_accepts_oversized_investigation_summary() -> None:
+    """Removing max_length must allow summaries exceeding the former 16_000 cap."""
+
+    long_text = "x" * 20_000
+    summary = checkpoint_summary_from_text(long_text)
+    assert len(summary.investigation_summary) == 20_000
+
+
+def test_checkpoint_summary_accepts_oversized_evidence_conclusions_list() -> None:
+    """Removing list max_length must allow >1000 evidence_conclusions entries."""
+
+    conclusions = [
+        CheckpointEvidenceConclusion(
+            evidence_ids=[f"evidence_{i:024d}"],
+            conclusion=f"conclusion-{i}",
+        )
+        for i in range(1001)
+    ]
+    summary = CheckpointSummary(
+        schema_version=CHECKPOINT_SCHEMA_VERSION,
+        investigation_summary="oversized list test",
+        evidence_conclusions=conclusions,
+        eliminated_hypotheses=[],
+        open_investigations=[],
+        next_actions=[],
+    )
+    assert len(summary.evidence_conclusions) == 1001
+
+
+def test_checkpoint_summary_from_text_strips_truncated_fence_as_plain_text() -> None:
+    """A markdown fence truncated by max_tokens must not raise ValueError."""
+
+    truncated = "```\ninvestigation summary that was cut off before closing fence"
+    summary = checkpoint_summary_from_text(truncated)
+    assert summary.investigation_summary == (
+        "investigation summary that was cut off before closing fence"
+    )
+
+
+def test_checkpoint_summary_from_text_strips_complete_fence() -> None:
+    """A complete markdown fence is stripped normally."""
+
+    fenced = "```json\nsummary inside fence\n```"
+    summary = checkpoint_summary_from_text(fenced)
+    assert summary.investigation_summary == "summary inside fence"
+
+
+def test_checkpoint_summary_from_text_rejects_empty_fence_only() -> None:
+    """A bare fence marker with no content must fail min_length=1."""
+
+    import pytest
+    from pydantic import ValidationError
+
+    with pytest.raises(ValidationError):
+        checkpoint_summary_from_text("```")
+
+
+async def test_loop_reset_signal_triggers_after_successful_compaction() -> None:
+    """Compaction success must advance the ToolLoopResetSignal generation."""
+
+    initial = {"type": "message", "role": "user", "content": "immutable input"}
+    summarizer = RecordingSummarizer()
+    tracker = ContextCheckpointTracker()
+    signal = ToolLoopResetSignal()
+    input_filter = build_context_checkpoint_filter(
+        limits=ToolLimits(
+            context_compaction_trigger_bytes=3000,
+            context_compaction_keep_recent_evidence_results=0,
+        ),
+        prompt="Create a checkpoint.",
+        tracker=tracker,
+        summarizer=summarizer,
+        loop_reset_signal=signal,
+    )
+
+    assert signal.generation == 0
+    await input_filter(_model_data([initial, *_round(0)]))
+    assert signal.generation == 1
+
+
+async def test_loop_reset_signal_does_not_trigger_on_compaction_failure() -> None:
+    """Compaction failure must not advance the ToolLoopResetSignal generation."""
+
+    class FailingSummarizer(RecordingSummarizer):
+        async def summarize(
+            self, request: Any, agent: Agent[Any]
+        ) -> CheckpointSummaryResult:
+            del request, agent
+            raise ValueError("compaction failed")
+
+    initial = {"type": "message", "role": "user", "content": "immutable input"}
+    tracker = ContextCheckpointTracker()
+    signal = ToolLoopResetSignal()
+    input_filter = build_context_checkpoint_filter(
+        limits=ToolLimits(
+            context_compaction_trigger_bytes=3000,
+            context_compaction_keep_recent_evidence_results=0,
+            context_compaction_max_retries=0,
+        ),
+        prompt="Create a checkpoint.",
+        tracker=tracker,
+        summarizer=FailingSummarizer(),
+        loop_reset_signal=signal,
+    )
+
+    await input_filter(_model_data([initial, *_round(0)]))
+    assert signal.generation == 0
+    assert tracker.failure_count == 1
     assert tracker.is_disabled is False

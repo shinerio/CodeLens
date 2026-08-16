@@ -15,7 +15,10 @@ from codelens.review.application.settings import ReviewCompletionSettings
 from codelens.review.domain.errors import PermanentAgentOutputError
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.comment_collector import ReviewCommentCollector
-from codelens.review.infrastructure.evidence_replay import CompactedEvidenceReplayRegistry
+from codelens.review.infrastructure.evidence_replay import (
+    CompactedEvidenceReplayRegistry,
+    ToolLoopResetSignal,
+)
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.review.infrastructure.tool_contract import enforce_tool_execution_limits
 from codelens.workspace.domain.models import ReviewSnapshot
@@ -130,6 +133,7 @@ class RuntimeToolContext:
     call_limits: ToolExecutionLimits
     role_output_tools: tuple[RoleOutputToolBinding, ...] = ()
     evidence_replay_registry: CompactedEvidenceReplayRegistry | None = None
+    loop_reset_signal: ToolLoopResetSignal | None = None
     logical_run_id: str | None = None
     review_feedback: str | None = None
     collector_contract_version: str | None = field(default=None, init=False)
@@ -243,6 +247,7 @@ class CapabilityToolAssembler:
             tool_timeout_seconds=context.call_limits.tool_timeout_seconds,
             tool_loop_warning_template=context.call_limits.tool_loop_warning_template,
             evidence_replay_registry=context.evidence_replay_registry,
+            loop_reset_signal=context.loop_reset_signal,
         )
 
     @staticmethod
