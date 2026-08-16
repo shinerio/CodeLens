@@ -24,8 +24,11 @@ class _ToolLimitsPayload(TypedDict):
     task_summary_max: int
     context_compaction_enabled: bool
     context_compaction_trigger_bytes: int
-    context_compaction_target_bytes: int
     context_compaction_keep_recent_evidence_results: int
+    context_compaction_max_retries: int
+    context_compaction_retry_backoff_base: float
+    context_compaction_retry_max_delay: float
+    context_compaction_max_consecutive_failures: int
 
 
 _INT_FIELDS = (
@@ -41,8 +44,15 @@ _INT_FIELDS = (
     "long_text_max",
     "task_summary_max",
     "context_compaction_trigger_bytes",
-    "context_compaction_target_bytes",
     "context_compaction_keep_recent_evidence_results",
+    "context_compaction_max_retries",
+    "context_compaction_max_consecutive_failures",
+)
+
+_FLOAT_FIELDS = (
+    "regex_timeout_seconds",
+    "context_compaction_retry_backoff_base",
+    "context_compaction_retry_max_delay",
 )
 
 
@@ -69,10 +79,11 @@ class FilesystemToolLimitsStore:
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(f"tool limits field {field} is invalid")
             kwargs[field] = value
-        timeout = payload.get("regex_timeout_seconds")
-        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-            raise ValueError("tool limits field regex_timeout_seconds is invalid")
-        kwargs["regex_timeout_seconds"] = float(timeout)
+        for field in _FLOAT_FIELDS:
+            value = payload.get(field, getattr(defaults, field))
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"tool limits field {field} is invalid")
+            kwargs[field] = float(value)
         enabled = payload.get(
             "context_compaction_enabled", defaults.context_compaction_enabled
         )
@@ -106,9 +117,18 @@ class FilesystemToolLimitsStore:
             "task_summary_max": limits.task_summary_max,
             "context_compaction_enabled": limits.context_compaction_enabled,
             "context_compaction_trigger_bytes": limits.context_compaction_trigger_bytes,
-            "context_compaction_target_bytes": limits.context_compaction_target_bytes,
             "context_compaction_keep_recent_evidence_results": (
                 limits.context_compaction_keep_recent_evidence_results
+            ),
+            "context_compaction_max_retries": limits.context_compaction_max_retries,
+            "context_compaction_retry_backoff_base": (
+                limits.context_compaction_retry_backoff_base
+            ),
+            "context_compaction_retry_max_delay": (
+                limits.context_compaction_retry_max_delay
+            ),
+            "context_compaction_max_consecutive_failures": (
+                limits.context_compaction_max_consecutive_failures
             ),
         }
         try:

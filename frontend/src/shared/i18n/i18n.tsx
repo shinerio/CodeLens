@@ -651,8 +651,11 @@ const EN_MESSAGES = {
   "settings.taskSummaryMax": "Task summary max",
   "settings.contextCompactionEnabled": "Enable deterministic context compaction",
   "settings.contextCompactionTriggerBytes": "Context compaction trigger (KB)",
-  "settings.contextCompactionTargetBytes": "Context compaction target (KB)",
   "settings.contextCompactionKeepRecent": "Recent evidence results kept in full",
+  "settings.contextCompactionMaxRetries": "Compaction max retries",
+  "settings.contextCompactionRetryBackoffBase": "Compaction retry backoff base (seconds)",
+  "settings.contextCompactionRetryMaxDelay": "Compaction retry max delay (seconds)",
+  "settings.contextCompactionMaxConsecutiveFailures": "Compaction consecutive failure circuit breaker",
 } as const;
 
 export type TranslationKey = keyof typeof EN_MESSAGES;
@@ -1297,8 +1300,11 @@ const ZH_MESSAGES: Record<TranslationKey, string> = {
   "settings.taskSummaryMax": "任务摘要上限",
   "settings.contextCompactionEnabled": "启用确定性上下文压缩",
   "settings.contextCompactionTriggerBytes": "上下文压缩触发阈值（KB）",
-  "settings.contextCompactionTargetBytes": "上下文压缩目标值（KB）",
   "settings.contextCompactionKeepRecent": "保留完整正文的最近证据结果数",
+  "settings.contextCompactionMaxRetries": "压缩最大重试次数",
+  "settings.contextCompactionRetryBackoffBase": "压缩重试退避基数（秒）",
+  "settings.contextCompactionRetryMaxDelay": "压缩重试最大延迟（秒）",
+  "settings.contextCompactionMaxConsecutiveFailures": "压缩连续失败熔断阈值",
 };
 
 type TranslationValues = Record<string, string | number>;

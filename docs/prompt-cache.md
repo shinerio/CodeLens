@@ -6,7 +6,7 @@
 
 本文是 [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) 中运行期成本与上下文边界的展开说明。若两者冲突，以 `docs/ARCHITECTURE.md` 为准。本文不改变 Review 的确定性范围划分策略；是否对 Review 范围分片不属于本方案，本阶段也不以确定性分片作为缓存优化手段。
 
-实现状态：Epoch checkpoint 主路径已实现，包括完整 round 切分、单一 checkpoint 替换、独立普通文本摘要调用、宿主 envelope 构造与校验、宿主 evidence 索引、国际化 Prompt、失败熔断及分阶段用量统计。Checkpoint 基线不要求模型网关支持 Structured Outputs、JSON Schema、模型手写 JSON 或工具调用。旧的逐项 Tool Result 替换、占位 replay allowance 和 `context-compaction.md` 已退出运行时。仍待完成的长期增强是供应商原生压缩能力探测、确定性旧工具正文预剪枝、基于模型 token 的异步软水位、可持久恢复的完整宿主 envelope、批量工具总预算，以及缓存差异点评测；当前兼容设置仍以证据字节数触发同步 checkpoint。
+实现状态：Epoch checkpoint 主路径已实现，包括完整 round 切分、单一 checkpoint 替换、独立普通文本摘要调用、宿主 envelope 构造与校验、宿主 evidence 索引、国际化 Prompt、失败重试与熔断及分阶段用量统计。Checkpoint 基线不要求模型网关支持 Structured Outputs、JSON Schema、模型手写 JSON 或工具调用。旧的逐项 Tool Result 替换、占位 replay allowance 和 `context-compaction.md` 已退出运行时。仍待完成的长期增强是供应商原生压缩能力探测、确定性旧工具正文预剪枝、基于模型 token 的异步软水位、可持久恢复的完整宿主 envelope、批量工具总预算，以及缓存差异点评测；当前兼容设置仍以活跃上下文字节数触发同步 checkpoint。
 
 ## 2. 核心判断
 
@@ -124,7 +124,7 @@ Checkpoint 调用通常是一次性输入，不能期待待压缩历史获得长
 2. **普通文本摘要层**：默认兼容路径。复用当前模型传输，只发送 system/user 文本并接收 Markdown 或纯文本；不注册工具，不声明 `output_type`、`response_format`、strict JSON Schema 或供应商压缩参数，也不要求模型手写 JSON。
 3. **确定性裁剪层**：在进入 LLM 摘要前，对已被宿主索引、且不在保留尾部的旧 Tool Result 正文执行安全预剪枝；完整正文仍保留在 Transcript/Artifact，通过 `evidence_id` 重取。该层尚未实现，实施前必须保证完整 round、并行 call/result 配对和审计边界不被破坏。
 
-Adapter 必须把能力支持与普通请求成功区分开。OpenAI-compatible Base URL 只说明协议形状相似，不能推导其支持 Structured Outputs、Responses compact 或同名模型能力。原生路径收到明确的 capability rejection 后必须降级到普通文本路径；普通文本路径收到 400、404 或 422 时，当前 Agent Run 立即打开 checkpoint 熔断。其他压缩错误连续三次后打开熔断。熔断后在软水位以下继续使用原上下文，不再因每个新增 Tool Result 重复调用；到达硬水位仍无法切换时显式失败。
+Adapter 必须把能力支持与普通请求成功区分开。OpenAI-compatible Base URL 只说明协议形状相似，不能推导其支持 Structured Outputs、Responses compact 或同名模型能力。原生路径收到明确的 capability rejection 后必须降级到普通文本路径；普通文本路径收到 400、404 或 422 时，当前 Agent Run 立即打开 checkpoint 熔断。其他压缩错误（包括模型返回空输出）先按 `context_compaction_max_retries` 进行指数退避重试，`context_compaction_retry_backoff_base` 为退避基数，`context_compaction_retry_max_delay` 为单次延迟上限；全部重试失败后累计 `consecutive_failure_count`，达到 `context_compaction_max_consecutive_failures` 阈值后打开熔断。熔断后在软水位以下继续使用原上下文，不再因每个新增 Tool Result 重复调用；到达硬水位仍无法切换时显式失败。
 
 当前实现直接以第二层作为跨供应商基线；第一层和第三层是后续增强。这样即使 DeepSeek、OpenAI-compatible proxy 或其他 Chat Completions 网关不实现 JSON Schema，或者 JSON 遵循能力不稳定，也能执行 checkpoint。
 
@@ -165,7 +165,7 @@ Immutable Prefix + Checkpoint N + Active Tail + Round A + Round B
 
 ### 6.2 触发阶段
 
-目标设计优先使用供应商报告的 input token 和模型上下文上限；缺少可靠 usage 时才使用与模型适配的本地 token 估算。字节数可以作为工具单次输出边界，但不能作为长期上下文容量的唯一判断依据。当前实现仍使用 `context_compaction_trigger_bytes` 与 `context_compaction_target_bytes` 作为兼容水位，因此这两个设置当前仍然生效；切换到可靠 token 水位前不得从 UI 或稳定设置契约中删除。
+目标设计优先使用供应商报告的 input token 和模型上下文上限；缺少可靠 usage 时才使用与模型适配的本地 token 估算。字节数可以作为工具单次输出边界，但不能作为长期上下文容量的唯一判断依据。当前实现使用 `context_compaction_trigger_bytes` 作为兼容水位——该值基于全活跃上下文字节数（包括模型输出、工具调用和工具结果），而不只是证据 Tool Result 正文。一旦活跃字节数超过触发水位，所有可压缩的完整 round 都会被压缩；不再设 `target_bytes` 上限来提前终止压缩。切换到可靠 token 水位前，`context_compaction_trigger_bytes` 仍需保留在 UI 和稳定设置契约中。
 
 采用软、硬两个水位：
 
@@ -243,7 +243,7 @@ Checkpoint 是兜底机制，不是允许工具无限输出的理由。优化优
 2. 引入批量只读工具及 Agent Run 级并行度、批次总输出限制。
 3. 已新增 `checkpoint-compaction.md` 多语言文件、加载契约、Markdown/纯文本输出约定和宿主严格 envelope 校验。
 4. 已实现 evidence 宿主状态、完整 round 分区和未知引用校验；后续补全可持久恢复的宿主 envelope。
-5. 当前已接入同步软/硬字节保护、能力拒绝即时熔断和连续三次失败熔断；后续切换为模型 token 水位并增加异步软水位准备。
+5. 当前已接入同步软/硬字节保护、能力拒绝即时熔断、可配置重试与连续失败熔断（`context_compaction_max_retries`、`context_compaction_retry_backoff_base`、`context_compaction_retry_max_delay`、`context_compaction_max_consecutive_failures`）；后续切换为模型 token 水位并增加异步软水位准备。
 6. 已将主 Agent 切换为 Immutable Prefix + 单一 Checkpoint + Active Tail。
 7. 已增加 checkpoint 调用、token、失败和覆盖结果指标；后续增加缓存差异点、重取和评测指标。
 8. 已移除逐项 Tool Result 替换、占位 replay allowance 和 `context-compaction.md`。

@@ -102,9 +102,14 @@ def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
         task_summary_max=limits.task_summary_max,
         context_compaction_enabled=limits.context_compaction_enabled,
         context_compaction_trigger_bytes=limits.context_compaction_trigger_bytes,
-        context_compaction_target_bytes=limits.context_compaction_target_bytes,
         context_compaction_keep_recent_evidence_results=(
             limits.context_compaction_keep_recent_evidence_results
+        ),
+        context_compaction_max_retries=limits.context_compaction_max_retries,
+        context_compaction_retry_backoff_base=limits.context_compaction_retry_backoff_base,
+        context_compaction_retry_max_delay=limits.context_compaction_retry_max_delay,
+        context_compaction_max_consecutive_failures=(
+            limits.context_compaction_max_consecutive_failures
         ),
     )
 
@@ -455,9 +460,18 @@ async def update_tool_limits(
             task_summary_max=request.task_summary_max,
             context_compaction_enabled=request.context_compaction_enabled,
             context_compaction_trigger_bytes=request.context_compaction_trigger_bytes,
-            context_compaction_target_bytes=request.context_compaction_target_bytes,
             context_compaction_keep_recent_evidence_results=(
                 request.context_compaction_keep_recent_evidence_results
+            ),
+            context_compaction_max_retries=request.context_compaction_max_retries,
+            context_compaction_retry_backoff_base=(
+                request.context_compaction_retry_backoff_base
+            ),
+            context_compaction_retry_max_delay=(
+                request.context_compaction_retry_max_delay
+            ),
+            context_compaction_max_consecutive_failures=(
+                request.context_compaction_max_consecutive_failures
             ),
         )
     except ValueError as error:
@@ -527,9 +541,18 @@ async def reset_all_settings(
         task_summary_max=default_tool_limits.task_summary_max,
         context_compaction_enabled=default_tool_limits.context_compaction_enabled,
         context_compaction_trigger_bytes=default_tool_limits.context_compaction_trigger_bytes,
-        context_compaction_target_bytes=default_tool_limits.context_compaction_target_bytes,
         context_compaction_keep_recent_evidence_results=(
             default_tool_limits.context_compaction_keep_recent_evidence_results
+        ),
+        context_compaction_max_retries=default_tool_limits.context_compaction_max_retries,
+        context_compaction_retry_backoff_base=(
+            default_tool_limits.context_compaction_retry_backoff_base
+        ),
+        context_compaction_retry_max_delay=(
+            default_tool_limits.context_compaction_retry_max_delay
+        ),
+        context_compaction_max_consecutive_failures=(
+            default_tool_limits.context_compaction_max_consecutive_failures
         ),
     )
 

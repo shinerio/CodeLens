@@ -30,8 +30,11 @@ def test_tool_limits_returns_defaults_initially(tmp_path: Path) -> None:
     assert data["task_summary_max"] == 8000
     assert data["context_compaction_enabled"] is True
     assert data["context_compaction_trigger_bytes"] == 131072
-    assert data["context_compaction_target_bytes"] == 32768
     assert data["context_compaction_keep_recent_evidence_results"] == 6
+    assert data["context_compaction_max_retries"] == 3
+    assert data["context_compaction_retry_backoff_base"] == 2.0
+    assert data["context_compaction_retry_max_delay"] == 30.0
+    assert data["context_compaction_max_consecutive_failures"] == 3
 
 
 def test_tool_limits_update_and_persist(tmp_path: Path) -> None:
@@ -54,8 +57,11 @@ def test_tool_limits_update_and_persist(tmp_path: Path) -> None:
                 "task_summary_max": 16000,
                 "context_compaction_enabled": False,
                 "context_compaction_trigger_bytes": 262144,
-                "context_compaction_target_bytes": 131072,
                 "context_compaction_keep_recent_evidence_results": 4,
+                "context_compaction_max_retries": 5,
+                "context_compaction_retry_backoff_base": 1.5,
+                "context_compaction_retry_max_delay": 60.0,
+                "context_compaction_max_consecutive_failures": 5,
             },
         )
         assert update.status_code == 200
@@ -89,20 +95,37 @@ def test_tool_limits_rejects_invalid_range(tmp_path: Path) -> None:
         assert too_large.status_code == 422
 
 
-def test_tool_limits_rejects_compaction_target_not_smaller_than_trigger(
-    tmp_path: Path,
-) -> None:
+def test_tool_limits_rejects_invalid_retry_config_ranges(tmp_path: Path) -> None:
+    """The new retry config fields are validated at the API layer with proper ranges."""
     settings = Settings(data_dir=tmp_path / "data")
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
+        # max_retries must be 0-10
         response = client.put(
             "/api/settings/tool-limits",
-            json={
-                "context_compaction_trigger_bytes": 65536,
-                "context_compaction_target_bytes": 65536,
-            },
+            json={"context_compaction_max_retries": 11},
         )
+        assert response.status_code == 422
 
-    assert response.status_code == 422
+        # retry_backoff_base must be 0.1-60.0
+        response = client.put(
+            "/api/settings/tool-limits",
+            json={"context_compaction_retry_backoff_base": 0.01},
+        )
+        assert response.status_code == 422
+
+        # retry_max_delay must be 1.0-300.0
+        response = client.put(
+            "/api/settings/tool-limits",
+            json={"context_compaction_retry_max_delay": 0.5},
+        )
+        assert response.status_code == 422
+
+        # max_consecutive_failures must be 1-10
+        response = client.put(
+            "/api/settings/tool-limits",
+            json={"context_compaction_max_consecutive_failures": 0},
+        )
+        assert response.status_code == 422
 
 
 def test_reset_all_restores_defaults(tmp_path: Path) -> None:

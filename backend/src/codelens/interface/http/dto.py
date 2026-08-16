@@ -201,8 +201,11 @@ class ToolLimitsResponse(StrictDto):
     task_summary_max: Annotated[int, Field(ge=256, le=64_000)]
     context_compaction_enabled: bool
     context_compaction_trigger_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
-    context_compaction_target_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
     context_compaction_keep_recent_evidence_results: Annotated[int, Field(ge=0, le=100)]
+    context_compaction_max_retries: Annotated[int, Field(ge=0, le=10)]
+    context_compaction_retry_backoff_base: Annotated[float, Field(ge=0.1, le=60.0)]
+    context_compaction_retry_max_delay: Annotated[float, Field(ge=1.0, le=300.0)]
+    context_compaction_max_consecutive_failures: Annotated[int, Field(ge=1, le=10)]
 
 
 class UpdateToolLimitsRequest(StrictDto):
@@ -224,12 +227,19 @@ class UpdateToolLimitsRequest(StrictDto):
     context_compaction_trigger_bytes: Annotated[
         int | None, Field(ge=1024, le=100 * 1024 * 1024)
     ] = None
-    context_compaction_target_bytes: Annotated[int | None, Field(ge=1024, le=100 * 1024 * 1024)] = (
-        None
-    )
     context_compaction_keep_recent_evidence_results: Annotated[int | None, Field(ge=0, le=100)] = (
         None
     )
+    context_compaction_max_retries: Annotated[int | None, Field(ge=0, le=10)] = None
+    context_compaction_retry_backoff_base: Annotated[
+        float | None, Field(ge=0.1, le=60.0)
+    ] = None
+    context_compaction_retry_max_delay: Annotated[
+        float | None, Field(ge=1.0, le=300.0)
+    ] = None
+    context_compaction_max_consecutive_failures: Annotated[
+        int | None, Field(ge=1, le=10)
+    ] = None
 
 
 class FileExclusionSettingsResponse(StrictDto):

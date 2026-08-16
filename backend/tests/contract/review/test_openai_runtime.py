@@ -187,6 +187,43 @@ async def test_sdk_checkpoint_summarizer_uses_plain_markdown(
     )
 
 
+@pytest.mark.parametrize(
+    ("final_output", "description"),
+    [
+        ("", "empty string"),
+        ("   \n\t  ", "whitespace-only string"),
+        (None, "non-string output"),
+        ([], "non-string list output"),
+    ],
+)
+async def test_sdk_checkpoint_summarizer_rejects_empty_output(
+    monkeypatch: pytest.MonkeyPatch,
+    final_output: object,
+    description: str,
+) -> None:
+    """The SDK checkpoint summarizer must raise ValueError for empty or non-string output.
+
+    This feeds the retry mechanism in context_checkpoint.py: the ValueError is
+    caught and retried up to context_compaction_max_retries times.
+    """
+
+    async def fake_run(*, starting_agent: Agent[None], input: str, **kwargs: object) -> FakeResult:
+        return FakeResult(final_output, ())
+
+    monkeypatch.setattr("codelens.review.infrastructure.openai_runtime.Runner.run", fake_run)
+    summarizer = _SdkCheckpointSummarizer()
+    with pytest.raises(ValueError, match="checkpoint model returned empty output"):
+        await summarizer.summarize(
+            CheckpointSummaryRequest(
+                prompt="Return a concise checkpoint.",
+                previous_summary=None,
+                compacted_items=(),
+                evidence_index=(),
+            ),
+            Agent(name="reviewer", instructions="review"),
+        )
+
+
 class SlowRunner(FakeRunner):
     async def run(
         self,
@@ -366,8 +403,7 @@ async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() 
         def __init__(self) -> None:
             self.calls = 0
             self.limits = ToolLimits(
-                    context_compaction_trigger_bytes=2048,
-                    context_compaction_target_bytes=1024,
+                context_compaction_trigger_bytes=2048,
                 context_compaction_keep_recent_evidence_results=0,
             )
 

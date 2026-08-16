@@ -34,8 +34,11 @@ class ToolLimitsService:
         task_summary_max: int | None = None,
         context_compaction_enabled: bool | None = None,
         context_compaction_trigger_bytes: int | None = None,
-        context_compaction_target_bytes: int | None = None,
         context_compaction_keep_recent_evidence_results: int | None = None,
+        context_compaction_max_retries: int | None = None,
+        context_compaction_retry_backoff_base: float | None = None,
+        context_compaction_retry_max_delay: float | None = None,
+        context_compaction_max_consecutive_failures: int | None = None,
     ) -> ToolLimits:
         """Merge partial updates into the current limits and atomically persist."""
 
@@ -75,15 +78,30 @@ class ToolLimitsService:
                 if context_compaction_trigger_bytes is not None
                 else current.context_compaction_trigger_bytes
             ),
-            context_compaction_target_bytes=(
-                context_compaction_target_bytes
-                if context_compaction_target_bytes is not None
-                else current.context_compaction_target_bytes
-            ),
             context_compaction_keep_recent_evidence_results=(
                 context_compaction_keep_recent_evidence_results
                 if context_compaction_keep_recent_evidence_results is not None
                 else current.context_compaction_keep_recent_evidence_results
+            ),
+            context_compaction_max_retries=(
+                context_compaction_max_retries
+                if context_compaction_max_retries is not None
+                else current.context_compaction_max_retries
+            ),
+            context_compaction_retry_backoff_base=(
+                context_compaction_retry_backoff_base
+                if context_compaction_retry_backoff_base is not None
+                else current.context_compaction_retry_backoff_base
+            ),
+            context_compaction_retry_max_delay=(
+                context_compaction_retry_max_delay
+                if context_compaction_retry_max_delay is not None
+                else current.context_compaction_retry_max_delay
+            ),
+            context_compaction_max_consecutive_failures=(
+                context_compaction_max_consecutive_failures
+                if context_compaction_max_consecutive_failures is not None
+                else current.context_compaction_max_consecutive_failures
             ),
         )
         await asyncio.to_thread(self._store.save_tool_limits, limits)

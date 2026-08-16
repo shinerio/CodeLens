@@ -62,8 +62,11 @@ function toolLimitsResponse() {
     task_summary_max: 8000,
     context_compaction_enabled: true,
     context_compaction_trigger_bytes: 131072,
-    context_compaction_target_bytes: 32768,
     context_compaction_keep_recent_evidence_results: 6,
+    context_compaction_max_retries: 3,
+    context_compaction_retry_backoff_base: 2.0,
+    context_compaction_retry_max_delay: 30.0,
+    context_compaction_max_consecutive_failures: 3,
   }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
@@ -112,10 +115,13 @@ it("shows context and tool sizes in KB with compaction enabled by default", asyn
   expect(screen.getByRole("spinbutton", { name: "Max scan size (KB)" })).toHaveValue(1024);
   expect(screen.getByRole("spinbutton", { name: "Max source size (KB)" })).toHaveValue(1024);
   expect(screen.getByRole("spinbutton", { name: "Context compaction trigger (KB)" })).toHaveValue(128);
-  expect(screen.getByRole("spinbutton", { name: "Context compaction target (KB)" })).toHaveValue(32);
   expect(
     screen.getByRole("checkbox", { name: "Enable deterministic context compaction" }),
   ).toBeChecked();
+  expect(screen.getByRole("spinbutton", { name: "Compaction max retries" })).toHaveValue(3);
+  expect(screen.getByRole("spinbutton", { name: "Compaction retry backoff base (seconds)" })).toHaveValue(2);
+  expect(screen.getByRole("spinbutton", { name: "Compaction retry max delay (seconds)" })).toHaveValue(30);
+  expect(screen.getByRole("spinbutton", { name: "Compaction consecutive failure circuit breaker" })).toHaveValue(3);
 });
 
 it("creates the first persistent model gateway without retaining its API key", async () => {

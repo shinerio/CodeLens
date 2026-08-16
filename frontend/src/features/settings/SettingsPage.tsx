@@ -513,10 +513,7 @@ export function SettingsPage() {
     instructionFileSettingsMutation.isPending ||
     reviewCompletionSettingsMutation.isPending ||
     triggerIdempotencySettingsMutation.isPending;
-  const areToolLimitsValid =
-    toolLimitsDraft !== null &&
-    toolLimitsDraft.context_compaction_target_bytes <
-      toolLimitsDraft.context_compaction_trigger_bytes;
+  const areToolLimitsValid = toolLimitsDraft !== null;
   const areToolLimitsUnchanged =
     toolLimitsDraft === null ||
     JSON.stringify(toolLimitsDraft) === JSON.stringify(toolLimitsQuery.data);
@@ -1310,22 +1307,6 @@ export function SettingsPage() {
                   />
                 </label>
                 <label className="settings-field">
-                  <span className="settings-field__label">{t("settings.contextCompactionTargetBytes")}</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={102400}
-                    value={toolLimitsDraft.context_compaction_target_bytes / BYTES_PER_KILOBYTE}
-                    onChange={(event) =>
-                      setToolLimitsDraft({
-                        ...toolLimitsDraft,
-                        context_compaction_target_bytes:
-                          Number(event.currentTarget.value) * BYTES_PER_KILOBYTE,
-                      })
-                    }
-                  />
-                </label>
-                <label className="settings-field">
                   <span className="settings-field__label">{t("settings.contextCompactionKeepRecent")}</span>
                   <input
                     type="number"
@@ -1336,6 +1317,74 @@ export function SettingsPage() {
                       setToolLimitsDraft({
                         ...toolLimitsDraft,
                         context_compaction_keep_recent_evidence_results: Number(
+                          event.currentTarget.value,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionMaxRetries")}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={toolLimitsDraft.context_compaction_max_retries}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_max_retries: Number(event.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionRetryBackoffBase")}</span>
+                  <input
+                    type="number"
+                    min={0.1}
+                    max={60}
+                    step={0.1}
+                    value={toolLimitsDraft.context_compaction_retry_backoff_base}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_retry_backoff_base: Number(
+                          event.currentTarget.value,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionRetryMaxDelay")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    step={1}
+                    value={toolLimitsDraft.context_compaction_retry_max_delay}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_retry_max_delay: Number(
+                          event.currentTarget.value,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionMaxConsecutiveFailures")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={toolLimitsDraft.context_compaction_max_consecutive_failures}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_max_consecutive_failures: Number(
                           event.currentTarget.value,
                         ),
                       })

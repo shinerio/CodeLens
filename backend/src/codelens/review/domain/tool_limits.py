@@ -16,8 +16,11 @@ DEFAULT_LONG_TEXT_MAX = 8000
 DEFAULT_TASK_SUMMARY_MAX = 8000
 DEFAULT_CONTEXT_COMPACTION_ENABLED = True
 DEFAULT_CONTEXT_COMPACTION_TRIGGER_BYTES = 128 * 1024
-DEFAULT_CONTEXT_COMPACTION_TARGET_BYTES = 32 * 1024
 DEFAULT_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 6
+DEFAULT_CONTEXT_COMPACTION_MAX_RETRIES = 3
+DEFAULT_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE = 2.0
+DEFAULT_CONTEXT_COMPACTION_RETRY_MAX_DELAY = 30.0
+DEFAULT_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES = 3
 
 MIN_MAX_RESULTS = 1
 MAX_MAX_RESULTS = 10_000
@@ -47,6 +50,14 @@ MIN_CONTEXT_COMPACTION_BYTES = 1024
 MAX_CONTEXT_COMPACTION_BYTES = 100 * 1024 * 1024
 MIN_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 0
 MAX_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 100
+MIN_CONTEXT_COMPACTION_MAX_RETRIES = 0
+MAX_CONTEXT_COMPACTION_MAX_RETRIES = 10
+MIN_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE = 0.1
+MAX_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE = 60.0
+MIN_CONTEXT_COMPACTION_RETRY_MAX_DELAY = 1.0
+MAX_CONTEXT_COMPACTION_RETRY_MAX_DELAY = 300.0
+MIN_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES = 1
+MAX_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES = 10
 
 
 @dataclass(frozen=True)
@@ -67,9 +78,18 @@ class ToolLimits:
     task_summary_max: int = DEFAULT_TASK_SUMMARY_MAX
     context_compaction_enabled: bool = DEFAULT_CONTEXT_COMPACTION_ENABLED
     context_compaction_trigger_bytes: int = DEFAULT_CONTEXT_COMPACTION_TRIGGER_BYTES
-    context_compaction_target_bytes: int = DEFAULT_CONTEXT_COMPACTION_TARGET_BYTES
     context_compaction_keep_recent_evidence_results: int = (
         DEFAULT_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS
+    )
+    context_compaction_max_retries: int = DEFAULT_CONTEXT_COMPACTION_MAX_RETRIES
+    context_compaction_retry_backoff_base: float = (
+        DEFAULT_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE
+    )
+    context_compaction_retry_max_delay: float = (
+        DEFAULT_CONTEXT_COMPACTION_RETRY_MAX_DELAY
+    )
+    context_compaction_max_consecutive_failures: int = (
+        DEFAULT_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES
     )
 
     def __post_init__(self) -> None:
@@ -118,24 +138,37 @@ class ToolLimits:
                 MAX_CONTEXT_COMPACTION_BYTES,
             ),
             (
-                "context_compaction_target_bytes",
-                self.context_compaction_target_bytes,
-                MIN_CONTEXT_COMPACTION_BYTES,
-                MAX_CONTEXT_COMPACTION_BYTES,
-            ),
-            (
                 "context_compaction_keep_recent_evidence_results",
                 self.context_compaction_keep_recent_evidence_results,
                 MIN_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS,
                 MAX_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS,
+            ),
+            (
+                "context_compaction_max_retries",
+                self.context_compaction_max_retries,
+                MIN_CONTEXT_COMPACTION_MAX_RETRIES,
+                MAX_CONTEXT_COMPACTION_MAX_RETRIES,
+            ),
+            (
+                "context_compaction_retry_backoff_base",
+                self.context_compaction_retry_backoff_base,
+                MIN_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE,
+                MAX_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE,
+            ),
+            (
+                "context_compaction_retry_max_delay",
+                self.context_compaction_retry_max_delay,
+                MIN_CONTEXT_COMPACTION_RETRY_MAX_DELAY,
+                MAX_CONTEXT_COMPACTION_RETRY_MAX_DELAY,
+            ),
+            (
+                "context_compaction_max_consecutive_failures",
+                self.context_compaction_max_consecutive_failures,
+                MIN_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES,
+                MAX_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES,
             ),
         ):
             if isinstance(value, bool) or value < lo or value > hi:
                 raise ValueError(f"{name} must be between {lo} and {hi}")
         if not isinstance(self.context_compaction_enabled, bool):
             raise ValueError("context_compaction_enabled must be a boolean")
-        if self.context_compaction_target_bytes >= self.context_compaction_trigger_bytes:
-            raise ValueError(
-                "context_compaction_target_bytes must be smaller than "
-                "context_compaction_trigger_bytes"
-            )

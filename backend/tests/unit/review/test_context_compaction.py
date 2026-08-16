@@ -109,7 +109,6 @@ async def test_checkpoint_preserves_initial_input_and_complete_parallel_rounds()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
             context_compaction_trigger_bytes=6000,
-            context_compaction_target_bytes=1024,
             context_compaction_keep_recent_evidence_results=1,
         ),
         prompt="Create a checkpoint.",
@@ -140,7 +139,6 @@ async def test_checkpoint_bytes_stay_identical_until_next_epoch() -> None:
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
             context_compaction_trigger_bytes=3000,
-            context_compaction_target_bytes=1024,
             context_compaction_keep_recent_evidence_results=1,
         ),
         prompt="Create a checkpoint.",
@@ -168,7 +166,6 @@ async def test_next_epoch_replaces_checkpoint_and_carries_previous_summary() -> 
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
             context_compaction_trigger_bytes=3000,
-            context_compaction_target_bytes=1024,
             context_compaction_keep_recent_evidence_results=1,
         ),
         prompt="Create a checkpoint.",
@@ -212,7 +209,6 @@ async def test_checkpoint_prose_does_not_treat_generic_evidence_words_as_ids() -
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
             context_compaction_trigger_bytes=3000,
-            context_compaction_target_bytes=1024,
             context_compaction_keep_recent_evidence_results=0,
         ),
         prompt="Create a checkpoint.",
@@ -249,8 +245,8 @@ async def test_invalid_checkpoint_keeps_existing_context_and_is_not_retried_unch
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
             context_compaction_trigger_bytes=3000,
-            context_compaction_target_bytes=1024,
             context_compaction_keep_recent_evidence_results=0,
+            context_compaction_max_retries=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
@@ -280,8 +276,8 @@ async def test_invalid_checkpoint_fails_explicitly_beyond_hard_watermark() -> No
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
             context_compaction_trigger_bytes=3000,
-            context_compaction_target_bytes=1024,
             context_compaction_keep_recent_evidence_results=0,
+            context_compaction_max_retries=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
@@ -314,8 +310,8 @@ async def test_provider_capability_rejection_disables_checkpoint_for_the_run() -
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
             context_compaction_trigger_bytes=3000,
-            context_compaction_target_bytes=1024,
             context_compaction_keep_recent_evidence_results=0,
+            context_compaction_max_retries=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
@@ -350,8 +346,9 @@ async def test_repeated_checkpoint_failures_open_circuit_after_three_attempts() 
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
             context_compaction_trigger_bytes=3000,
-            context_compaction_target_bytes=1024,
             context_compaction_keep_recent_evidence_results=0,
+            context_compaction_max_retries=0,
+            context_compaction_max_consecutive_failures=3,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
@@ -403,3 +400,52 @@ def test_reset_context_drops_metrics_from_an_abandoned_attempt() -> None:
     assert tracker.checkpoint_item is None
     assert tracker.evidence_index == ()
     assert tracker.last_failure_item_count is None
+
+
+async def test_checkpoint_retry_recovers_after_transient_empty_output() -> None:
+    """A transient summarizer failure (e.g. empty output) must be retried.
+
+    The first summarize() call raises ValueError (simulating the empty-output
+    detection from _SdkCheckpointSummarizer); the second call succeeds. The
+    checkpoint must succeed on the retry, and consecutive_failure_count must
+    stay at 0 because the overall attempt succeeded.
+    """
+
+    class TransientEmptySummarizer(RecordingSummarizer):
+        def __init__(self) -> None:
+            super().__init__()
+            self.attempt = 0
+
+        async def summarize(
+            self, request: Any, agent: Agent[Any]
+        ) -> CheckpointSummaryResult:
+            self.attempt += 1
+            if self.attempt == 1:
+                raise ValueError("checkpoint model returned empty output")
+            return await super().summarize(request, agent)
+
+    initial = {"type": "message", "role": "user", "content": "immutable input"}
+    summarizer = TransientEmptySummarizer()
+    tracker = ContextCheckpointTracker()
+    input_filter = build_context_checkpoint_filter(
+        limits=ToolLimits(
+            context_compaction_trigger_bytes=3000,
+            context_compaction_keep_recent_evidence_results=0,
+            context_compaction_max_retries=2,
+            context_compaction_retry_backoff_base=0.1,
+            context_compaction_retry_max_delay=1.0,
+        ),
+        prompt="Create a checkpoint.",
+        tracker=tracker,
+        summarizer=summarizer,
+    )
+
+    history = [initial, *_round(0)]
+    filtered = await input_filter(_model_data(history))
+
+    assert "<review-checkpoint>" in str(filtered.input[1]["content"])
+    assert len(summarizer.requests) == 1
+    assert tracker.checkpoint_count == 1
+    assert tracker.failure_count == 0
+    assert tracker.consecutive_failure_count == 0
+    assert tracker.is_disabled is False

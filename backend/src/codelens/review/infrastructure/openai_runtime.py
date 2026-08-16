@@ -210,8 +210,8 @@ class _SdkCheckpointSummarizer:
             run_config=RunConfig(trace_include_sensitive_data=False),
         )
         final_output = result.final_output
-        if not isinstance(final_output, str):
-            raise ValueError("checkpoint model returned non-text output")
+        if not isinstance(final_output, str) or not final_output.strip():
+            raise ValueError("checkpoint model returned empty output")
         return CheckpointSummaryResult(
             summary=checkpoint_summary_from_text(final_output),
             diagnostics=tuple(

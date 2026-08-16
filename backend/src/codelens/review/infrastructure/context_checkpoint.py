@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import hashlib
 import json
 import logging
@@ -23,7 +24,6 @@ from codelens.review.infrastructure.evidence_replay import EVIDENCE_TOOL_NAMES
 CHECKPOINT_SCHEMA_VERSION = "codelens_review_checkpoint_v1"
 _LOGGER = logging.getLogger(__name__)
 _MINIMUM_HARD_WATERMARK_GAP_BYTES = 64 * 1024
-_MAX_CONSECUTIVE_CHECKPOINT_FAILURES = 3
 _PROVIDER_CAPABILITY_REJECTION_STATUS_CODES = frozenset({400, 404, 422})
 _EVIDENCE_ID_PATTERN = re.compile(r"\bevidence_[a-f0-9]{24}\b")
 
@@ -206,7 +206,10 @@ def build_context_checkpoint_filter(
 
         rounds = _complete_rounds(raw_items, tracker.covered_item_count)
         evidence_outputs = [evidence for round_ in rounds for evidence in round_.evidence]
-        active_bytes = sum(item.encoded_size for item in evidence_outputs)
+        active_bytes = sum(
+            len(_json_text(item).encode("utf-8"))
+            for item in raw_items[tracker.covered_item_count :]
+        )
         hard_watermark = _hard_watermark(limits)
         if tracker.is_disabled:
             if active_bytes >= hard_watermark:
@@ -244,8 +247,6 @@ def build_context_checkpoint_filter(
             selected_result_count += round_result_count
             selected_bytes += sum(item.encoded_size for item in round_.evidence)
             covered_end = round_.end
-            if active_bytes - selected_bytes <= limits.context_compaction_target_bytes:
-                break
 
         if selected_result_count == 0 or covered_end <= tracker.covered_item_count:
             return ModelInputData(
@@ -270,27 +271,55 @@ def build_context_checkpoint_filter(
             compacted_items=newly_compacted,
             evidence_index=evidence_index,
         )
-        try:
-            result = await summarizer.summarize(request, data.agent)
-            _validate_evidence_references(result.summary, evidence_index)
-        except Exception as error:
+        max_retries = limits.context_compaction_max_retries
+        retry_backoff_base = limits.context_compaction_retry_backoff_base
+        retry_max_delay = limits.context_compaction_retry_max_delay
+        result: CheckpointSummaryResult | None = None
+        last_error: Exception | None = None
+        for retry_attempt in range(max_retries + 1):
+            try:
+                result = await summarizer.summarize(request, data.agent)
+                _validate_evidence_references(result.summary, evidence_index)
+                break
+            except Exception as error:
+                last_error = error
+                result = None
+                if retry_attempt < max_retries:
+                    delay = min(
+                        retry_backoff_base * (2**retry_attempt),
+                        retry_max_delay,
+                    )
+                    _LOGGER.warning(
+                        "Checkpoint compaction attempt %d failed, retrying in %.1fs",
+                        retry_attempt + 1,
+                        delay,
+                        extra={"error_type": type(error).__name__},
+                    )
+                    await asyncio.sleep(delay)
+                    continue
+        if result is None:
+            assert last_error is not None
             tracker.failure_count += 1
             tracker.consecutive_failure_count += 1
             tracker.last_failure_item_count = len(raw_items)
-            if _is_provider_capability_rejection(error):
+            if _is_provider_capability_rejection(last_error):
                 tracker.is_disabled = True
                 tracker.disabled_reason = "provider_compaction_unsupported"
-            elif tracker.consecutive_failure_count >= _MAX_CONSECUTIVE_CHECKPOINT_FAILURES:
+            elif (
+                tracker.consecutive_failure_count
+                >= limits.context_compaction_max_consecutive_failures
+            ):
                 tracker.is_disabled = True
                 tracker.disabled_reason = "checkpoint_failure_circuit_open"
             if active_bytes >= hard_watermark:
                 raise ContextCheckpointError(
                     "checkpoint compaction failed beyond the hard context watermark"
-                ) from error
+                ) from last_error
             _LOGGER.warning(
-                "Checkpoint compaction failed below the hard watermark",
+                "Checkpoint compaction failed below the hard watermark after %d attempts",
+                max_retries + 1,
                 extra={
-                    "error_type": type(error).__name__,
+                    "error_type": type(last_error).__name__,
                     "circuit_open": tracker.is_disabled,
                     "disabled_reason": tracker.disabled_reason,
                 },

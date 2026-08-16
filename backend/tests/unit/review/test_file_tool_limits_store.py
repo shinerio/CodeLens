@@ -34,8 +34,11 @@ def test_store_persists_and_reloads_limits(tmp_path: Path) -> None:
         task_summary_max=16000,
         context_compaction_enabled=False,
         context_compaction_trigger_bytes=262_144,
-        context_compaction_target_bytes=131_072,
         context_compaction_keep_recent_evidence_results=4,
+        context_compaction_max_retries=5,
+        context_compaction_retry_backoff_base=1.5,
+        context_compaction_retry_max_delay=60.0,
+        context_compaction_max_consecutive_failures=5,
     )
     store.save_tool_limits(custom)
     reloaded = store.get_tool_limits()
@@ -55,7 +58,11 @@ def test_store_loads_legacy_document_with_context_compaction_defaults(tmp_path: 
     reloaded = store.get_tool_limits()
 
     assert reloaded.context_compaction_enabled is True
-    assert reloaded.context_compaction_target_bytes < reloaded.context_compaction_trigger_bytes
+    assert reloaded.context_compaction_trigger_bytes == 128 * 1024
+    assert reloaded.context_compaction_max_retries == 3
+    assert reloaded.context_compaction_retry_backoff_base == 2.0
+    assert reloaded.context_compaction_retry_max_delay == 30.0
+    assert reloaded.context_compaction_max_consecutive_failures == 3
 
 
 def test_store_overwrites_previous_limits(tmp_path: Path) -> None:
