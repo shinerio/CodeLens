@@ -21,8 +21,8 @@ class _LockBearingToolResultItem:
     agent_lock: object = field(default_factory=threading.RLock)
 
 
-def test_stream_events_emit_full_text_on_done_and_skip_token_deltas() -> None:
-    """Token deltas are skipped; the full text is emitted once on ``*.done``."""
+def test_stream_events_skip_token_deltas_and_done_events() -> None:
+    """Token deltas and *.done events are handled in the stream loop, not here."""
 
     output_delta_events = _visible_event(
         RawResponsesStreamEvent(
@@ -66,29 +66,9 @@ def test_stream_events_emit_full_text_on_done_and_skip_token_deltas() -> None:
     )
 
     assert output_delta_events == []
+    assert output_done_events == []
     assert reasoning_delta_events == []
-    assert len(output_done_events) == 2
-    assert len(reasoning_done_events) == 2
-
-    output_delta, output_completed = output_done_events
-    assert output_delta.kind == "model_output_delta"
-    assert output_delta.content == "# Result"
-    assert output_delta.metadata == {"message_id": "output-1:0"}
-    assert output_completed.kind == "model_output_completed"
-    assert output_completed.metadata == {
-        "message_id": "output-1:0",
-        "event_role": "marker",
-    }
-
-    reasoning_delta, reasoning_completed = reasoning_done_events
-    assert reasoning_delta.kind == "model_reasoning_delta"
-    assert reasoning_delta.content == "## Plan"
-    assert reasoning_delta.metadata == {"message_id": "reasoning-1:0"}
-    assert reasoning_completed.kind == "model_reasoning_completed"
-    assert reasoning_completed.metadata == {
-        "message_id": "reasoning-1:0",
-        "event_role": "marker",
-    }
+    assert reasoning_done_events == []
 
 
 def test_stream_events_ignore_incremental_tool_arguments() -> None:

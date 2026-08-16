@@ -87,6 +87,7 @@ from codelens.review.infrastructure.context_checkpoint import (
     build_context_checkpoint_filter,
     checkpoint_summary_from_text,
 )
+from codelens.review.infrastructure.evidence_replay import ToolLoopResetSignal
 from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
@@ -394,6 +395,7 @@ class OpenAIAgentRuntime:
                 verdict_description, merge_description, finalize_description
             )
         checkpoint_tracker = ContextCheckpointTracker()
+        loop_reset_signal = ToolLoopResetSignal()
         tool_context = RuntimeToolContext(
             snapshot=snapshot,
             git=self._git,
@@ -409,6 +411,7 @@ class OpenAIAgentRuntime:
             role_output_tools=role_output_tools,
             logical_run_id=_host_run_id(role_context),
             review_feedback=prompts.review_feedback,
+            loop_reset_signal=loop_reset_signal,
         )
         model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)
@@ -430,6 +433,7 @@ class OpenAIAgentRuntime:
                 prompt=prompts.checkpoint_compaction,
                 tracker=checkpoint_tracker,
                 summarizer=self._checkpoint_summarizer,
+                loop_reset_signal=loop_reset_signal,
             ),
             tool_not_found_behavior="return_error_to_model",
             tool_error_formatter=_tool_error_formatter(
@@ -504,6 +508,7 @@ class OpenAIAgentRuntime:
                         run_config,
                         sink,
                         timeout_seconds=execution_spec.execution_limits.timeout_seconds,
+                        checkpoint_tracker=checkpoint_tracker,
                     )
                     if sink is not None and investigation is not None:
                         for checkpoint_index, payload in enumerate(
@@ -863,6 +868,7 @@ class OpenAIAgentRuntime:
         sink: AgentRuntimeEventSink | None,
         *,
         timeout_seconds: float = 3600,
+        checkpoint_tracker: ContextCheckpointTracker | None = None,
     ) -> object:
         if sink is None or not hasattr(self._runner, "run_streamed"):
             async with asyncio.timeout(timeout_seconds):
@@ -889,8 +895,115 @@ class OpenAIAgentRuntime:
         allowed_tool_names = {
             str(getattr(tool, "name", "")) for tool in agent.tools if getattr(tool, "name", "")
         }
+        # Accumulate token-level deltas for providers that don't emit *.done.
+        output_acc: list[str] = []
+        reasoning_acc: list[str] = []
+        output_meta: dict[str, str] = {}
+        reasoning_meta: dict[str, str] = {}
         async with asyncio.timeout(timeout_seconds):
             async for event in stream.stream_events():
+                if isinstance(event, RawResponsesStreamEvent):
+                    event_type = str(getattr(event.data, "type", ""))
+                    if event_type == "response.output_text.delta":
+                        output_acc.append(str(getattr(event.data, "delta", "")))
+                        if not output_meta:
+                            output_meta = _message_metadata(
+                                event.data, "content_index",
+                            )
+                        continue
+                    if event_type == "response.reasoning_summary_text.delta":
+                        reasoning_acc.append(str(getattr(event.data, "delta", "")))
+                        if not reasoning_meta:
+                            reasoning_meta = _message_metadata(
+                                event.data, "summary_index",
+                            )
+                        continue
+                    if event_type == "response.output_text.done":
+                        text = str(
+                            getattr(event.data, "text", "")
+                        ) or "".join(output_acc)
+                        msg_meta = _message_metadata(
+                            event.data, "content_index",
+                        )
+                        await sink(
+                            AgentRuntimeEvent(
+                                "model_output_delta", text, msg_meta,
+                            )
+                        )
+                        await sink(
+                            AgentRuntimeEvent(
+                                "model_output_completed",
+                                "",
+                                {**msg_meta, "event_role": "marker"},
+                            )
+                        )
+                        output_acc.clear()
+                        output_meta = {}
+                        continue
+                    if event_type == "response.reasoning_summary_text.done":
+                        text = (
+                            str(getattr(event.data, "summary", ""))
+                            or str(getattr(event.data, "text", ""))
+                            or "".join(reasoning_acc)
+                        )
+                        msg_meta = _message_metadata(
+                            event.data, "summary_index",
+                        )
+                        await sink(
+                            AgentRuntimeEvent(
+                                "model_reasoning_delta", text, msg_meta,
+                            )
+                        )
+                        await sink(
+                            AgentRuntimeEvent(
+                                "model_reasoning_completed",
+                                "",
+                                {**msg_meta, "event_role": "marker"},
+                            )
+                        )
+                        reasoning_acc.clear()
+                        reasoning_meta = {}
+                        continue
+                # Flush accumulated text before any non-delta event so the
+                # model output appears before tool calls or completion
+                # markers.  This covers providers that never emit *.done.
+                # Reasoning is flushed before output because reasoning
+                # summary deltas always precede output text deltas within a
+                # single response, so this preserves arrival order.
+                if reasoning_acc:
+                    await sink(
+                        AgentRuntimeEvent(
+                            "model_reasoning_delta",
+                            "".join(reasoning_acc),
+                            reasoning_meta,
+                        )
+                    )
+                    await sink(
+                        AgentRuntimeEvent(
+                            "model_reasoning_completed",
+                            "",
+                            {**reasoning_meta, "event_role": "marker"},
+                        )
+                    )
+                    reasoning_acc.clear()
+                    reasoning_meta = {}
+                if output_acc:
+                    await sink(
+                        AgentRuntimeEvent(
+                            "model_output_delta",
+                            "".join(output_acc),
+                            output_meta,
+                        )
+                    )
+                    await sink(
+                        AgentRuntimeEvent(
+                            "model_output_completed",
+                            "",
+                            {**output_meta, "event_role": "marker"},
+                        )
+                    )
+                    output_acc.clear()
+                    output_meta = {}
                 for emitted in _visible_event(event):
                     if emitted.kind == "tool_call":
                         call_id = emitted.metadata.get("tool_call_id")
@@ -913,7 +1026,8 @@ class OpenAIAgentRuntime:
                             emitted = AgentRuntimeEvent(
                                 "invalid_tool_result",
                                 emitted.content,
-                                {**emitted.metadata, "tool_name": invalid_tool_names[call_id]},
+                                {**emitted.metadata,
+                                 "tool_name": invalid_tool_names[call_id]},
                             )
                         elif (
                             call_id
@@ -921,7 +1035,58 @@ class OpenAIAgentRuntime:
                             and "tool_name" not in emitted.metadata
                         ):
                             emitted.metadata["tool_name"] = tool_names[call_id]
+                    elif (
+                        emitted.kind == "model_completed"
+                        and emitted.metadata.get("usage_scope") == "provider_call"
+                        and checkpoint_tracker is not None
+                    ):
+                        emitted.metadata["context_compaction_count"] = str(
+                            checkpoint_tracker.checkpoint_count
+                        )
+                        emitted.metadata["context_compaction_failure_count"] = str(
+                            checkpoint_tracker.failure_count
+                        )
+                        emitted.metadata["context_compacted_result_count"] = str(
+                            checkpoint_tracker.compacted_result_count
+                        )
+                        emitted.metadata["context_compaction_original_bytes"] = str(
+                            checkpoint_tracker.original_bytes
+                        )
+                        emitted.metadata["context_compaction_compressed_bytes"] = str(
+                            checkpoint_tracker.compressed_bytes
+                        )
                     await sink(emitted)
+        # Flush remaining accumulated text for providers that never emit
+        # *.done and whose response ended without a non-delta event.
+        # Reasoning is flushed before output to preserve arrival order.
+        if reasoning_acc:
+            await sink(
+                AgentRuntimeEvent(
+                    "model_reasoning_delta",
+                    "".join(reasoning_acc),
+                    reasoning_meta,
+                )
+            )
+            await sink(
+                AgentRuntimeEvent(
+                    "model_reasoning_completed",
+                    "",
+                    {**reasoning_meta, "event_role": "marker"},
+                )
+            )
+        if output_acc:
+            await sink(
+                AgentRuntimeEvent(
+                    "model_output_delta", "".join(output_acc), output_meta,
+                )
+            )
+            await sink(
+                AgentRuntimeEvent(
+                    "model_output_completed",
+                    "",
+                    {**output_meta, "event_role": "marker"},
+                )
+            )
         await sink(
             AgentRuntimeEvent(
                 "model_completed",
@@ -933,13 +1098,13 @@ class OpenAIAgentRuntime:
 
 
 def _visible_event(event: object) -> list[AgentRuntimeEvent]:
-    """Map streamed output and provider-issued reasoning summaries to console records.
+    """Map response boundaries and tool events to console records.
 
-    Token-level deltas are skipped; the full text is emitted once when the
-    corresponding ``*.done`` event arrives. Marker events (model_started,
-    model_completed, model_output_completed, model_reasoning_completed) are
-    tagged with ``event_role: "marker"`` so display layers can filter them
-    uniformly.
+    Token-level deltas and ``*.done`` events are handled directly in the
+    stream loop (accumulator + flush), not here.  This function covers
+    ``response.created``, ``response.completed``, and ``RunItemStreamEvent``
+    (tool calls and tool results).  Marker events are tagged with
+    ``event_role: "marker"`` so display layers can filter them uniformly.
     """
 
     if isinstance(event, RawResponsesStreamEvent):
@@ -978,28 +1143,8 @@ def _visible_event(event: object) -> list[AgentRuntimeEvent]:
                     }
                 )
             return [AgentRuntimeEvent("model_completed", "", metadata)]
-        if event_type == "response.output_text.delta":
-            return []
-        if event_type == "response.output_text.done":
-            text = str(getattr(payload, "text", ""))
-            msg_meta = _message_metadata(payload, "content_index")
-            return [
-                AgentRuntimeEvent("model_output_delta", text, msg_meta),
-                AgentRuntimeEvent(
-                    "model_output_completed", "", {**msg_meta, "event_role": "marker"},
-                ),
-            ]
-        if event_type == "response.reasoning_summary_text.delta":
-            return []
-        if event_type == "response.reasoning_summary_text.done":
-            text = str(getattr(payload, "summary", "")) or str(getattr(payload, "text", ""))
-            msg_meta = _message_metadata(payload, "summary_index")
-            return [
-                AgentRuntimeEvent("model_reasoning_delta", text, msg_meta),
-                AgentRuntimeEvent(
-                    "model_reasoning_completed", "", {**msg_meta, "event_role": "marker"},
-                ),
-            ]
+        # Token-level deltas and *.done events are handled directly in the
+        # stream loop (accumulator + flush), not here.
         return []
     if isinstance(event, RunItemStreamEvent):
         if event.name == "tool_called":
