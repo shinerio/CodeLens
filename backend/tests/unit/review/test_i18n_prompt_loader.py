@@ -75,8 +75,8 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "mode=literal|regex" in chinese.tools["grep"].description
     assert "line_range=null" in english.tools["read_file"].description
     assert "line_range=null" in chinese.tools["read_file"].description
-    assert "cursor=null" in english.tools["get_diff"].description
-    assert "cursor=null" in chinese.tools["get_diff"].description
+    assert "Omit cursor" in english.tools["get_diff"].description
+    assert "省略 cursor" in chinese.tools["get_diff"].description
 
 
 def test_planner_and_verifier_prompts_define_focused_decision_boundaries() -> None:

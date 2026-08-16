@@ -26,7 +26,7 @@
 
 ## 分页与证据覆盖
 
-`read_file.line_range=null` 表示从第 1 行开始的有界全文页；返回 `partial` 时使用 `next_line_range` 原样续读。`get_diff.cursor=null` 表示首屏；返回 `partial/diff_page_incomplete` 时使用 `next_cursor`。任何 diff hunk、物理行或 UTF-8 code point 都不能被截断；单 hunk 超限时按 Diagnostic 中的 `read_file` 参数读取对应 base/current 范围。
+`read_file.line_range=null` 表示从第 1 行开始的有界全文页；返回 `partial` 时使用 `next_line_range` 原样续读。`get_diff` 首次调用省略 cursor；返回 `partial/diff_page_incomplete` 时使用 `next_cursor`。任何 diff hunk、物理行或 UTF-8 code point 都不能被截断；单 hunk 超限时按 Diagnostic 中的 `read_file` 参数读取对应 base/current 范围。
 
 只有包含完整可用行的 `read_file` 成功页，以及文件 metadata 和全部 hunks 已完整返回的 `get_diff`，才形成 evidence coverage。上下文压缩占位不是证据；必须按 `suggested_arguments` 精确重读。
 

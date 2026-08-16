@@ -248,7 +248,15 @@ def test_every_model_visible_tool_uses_recursive_strict_schema(
         for nested in value.values():
             assert_strict_object_schemas(nested)
 
+    # get_diff is the sole tool with strict_mode disabled: its cursor parameter
+    # is optional so the model can omit it on the first call instead of passing
+    # the string "null" (a recurring GLM failure under strict nullable params).
+    # reject_unknown_arguments still enforces no-extra-args and the decode layer
+    # validates cursor format, so the relaxed schema does not weaken input safety.
     for tool in tools:
+        if tool.name == "get_diff":
+            assert tool.strict_json_schema is False
+            continue
         assert tool.strict_json_schema is True
         assert_strict_object_schemas(tool.params_json_schema)
 

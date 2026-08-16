@@ -5,8 +5,6 @@ manifest entry and validates its content hash before returning repository text.
 """
 
 import asyncio
-import base64
-import binascii
 import difflib
 import hashlib
 import json
@@ -926,70 +924,31 @@ class FilesystemReviewTools:
         )
 
     def _encode_diff_cursor(self, path: str, file_index: int, hunk_index: int) -> str:
-        payload = json.dumps(
-            {
-                "schema_version": "2",
-                "path": path,
-                "file_index": file_index,
-                "hunk_index": hunk_index,
-                "snapshot_hash": hashlib.sha256(
-                    self._snapshot.snapshot_id.encode()
-                ).hexdigest(),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-        signed = json.dumps(
-            {
-                "payload": json.loads(payload),
-                "signature": hashlib.sha256(
-                    f"{self._snapshot.snapshot_id}:{payload}".encode()
-                ).hexdigest(),
-            },
-            sort_keys=True,
-            separators=(",", ":"),
-        ).encode()
-        return base64.urlsafe_b64encode(signed).decode("ascii").rstrip("=")
+        """Encode a human-readable ``file_index:hunk_index`` position token.
+
+        The cursor is a plain position reference into the current request's
+        resolved file list. It is not cryptographically signed: the tool is a
+        read-only view over a frozen snapshot, so tamper-resistance adds model
+        burden (opaque base64 echo) without protecting any mutable state. The
+        model can read and self-correct the position, and range is validated on
+        decode. Path is intentionally omitted: the description instructs the
+        model to reuse ``next_cursor`` only with the same ``path`` argument.
+        """
+        return f"{file_index}:{hunk_index}"
 
     def _decode_diff_cursor(self, path: str, cursor: str | None) -> tuple[int, int]:
         if cursor is None:
             return 0, 0
-        try:
-            padding = "=" * (-len(cursor) % 4)
-            decoded = base64.b64decode(
-                f"{cursor}{padding}",
-                altchars=b"-_",
-                validate=True,
-            )
-            envelope = json.loads(decoded)
-        except (binascii.Error, UnicodeDecodeError, json.JSONDecodeError):
-            raise ValueError("get_diff cursor is invalid") from None
-        if not isinstance(envelope, dict) or set(envelope) != {"payload", "signature"}:
-            raise ValueError("get_diff cursor is invalid")
-        payload = envelope["payload"]
+        parts = cursor.split(":")
         if (
-            not isinstance(payload, dict)
-            or set(payload)
-            != {"schema_version", "path", "file_index", "hunk_index", "snapshot_hash"}
-            or payload["schema_version"] != "2"
-            or payload["path"] != path
-            or payload["snapshot_hash"]
-            != hashlib.sha256(self._snapshot.snapshot_id.encode()).hexdigest()
-            or any(
-                isinstance(payload[name], bool)
-                or not isinstance(payload[name], int)
-                or payload[name] < 0
-                for name in ("file_index", "hunk_index")
-            )
+            len(parts) != 2
+            or not parts[0].isdecimal()
+            or not parts[1].isdecimal()
         ):
             raise ValueError("get_diff cursor is invalid")
-        canonical_payload = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        expected_signature = hashlib.sha256(
-            f"{self._snapshot.snapshot_id}:{canonical_payload}".encode()
-        ).hexdigest()
-        if envelope["signature"] != expected_signature:
-            raise ValueError("get_diff cursor is invalid")
-        return payload["file_index"], payload["hunk_index"]
+        file_index = int(parts[0])
+        hunk_index = int(parts[1])
+        return file_index, hunk_index
 
     @staticmethod
     def _split_unified_diff(content: str) -> tuple[str, tuple[str, ...]]:
@@ -1063,7 +1022,9 @@ class FilesystemReviewTools:
         ModelPattern = Annotated[
             str, Field(min_length=1, max_length=self._limits.max_pattern_chars)
         ]
-        ModelCursor = Annotated[str, Field(min_length=1, max_length=8192)]
+        ModelCursor = Annotated[
+            str | None, Field(default=None, min_length=1, max_length=8192)
+        ]
 
         @function_tool(
             name_override="find_files",
@@ -1104,8 +1065,9 @@ class FilesystemReviewTools:
         @function_tool(
             name_override="get_diff",
             description_override=descriptions["get_diff"],
+            strict_mode=False,
         )
-        async def get_diff_tool(path: ModelPath, cursor: ModelCursor | None) -> str:
+        async def get_diff_tool(path: ModelPath, cursor: ModelCursor = None) -> str:
             """Read one page of diffs for a changed visible file or directory."""
 
             return await self.get_diff(path, cursor)

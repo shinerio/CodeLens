@@ -1,4 +1,3 @@
-import base64
 import hashlib
 import json
 from dataclasses import replace
@@ -929,8 +928,9 @@ async def test_read_file_agent_schema_requires_nullable_line_range(tmp_path: Pat
     assert set(schema["required"]) == {"path", "version", "line_range"}
     assert schema["additionalProperties"] is False
     assert schema["$defs"]["ModelLineRange"]["additionalProperties"] is False
-    assert diff_tool.strict_json_schema is True
-    assert set(diff_tool.params_json_schema["required"]) == {"path", "cursor"}
+    assert diff_tool.strict_json_schema is False
+    assert set(diff_tool.params_json_schema["required"]) == {"path"}
+    assert "cursor" in diff_tool.params_json_schema["properties"]
 
 
 async def test_tools_reject_oversized_snapshot_sources_before_reading(
@@ -1038,18 +1038,30 @@ async def test_get_diff_pages_directory_in_stable_path_order(tmp_path: Path) -> 
     }
 
 
-async def test_get_diff_cursor_is_bound_to_the_requested_scope(tmp_path: Path) -> None:
-    snapshot = await _snapshot(tmp_path)
-    tools = FilesystemReviewTools(snapshot, GitCli(), max_tool_calls=20)
-    cursor = _tool_data(await tools.get_diff("src"))["next_cursor"]
+async def test_get_diff_cursor_is_readable_and_rejects_malformed_values(
+    tmp_path: Path,
+) -> None:
+    snapshot = await _multi_hunk_snapshot(tmp_path)
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_read_bytes=300),
+    )
+    cursor = _tool_data(await tools.get_diff("src/multi.py"))["next_cursor"]
+    assert isinstance(cursor, str)
+    # Cursor is a readable "file_index:hunk_index" position token, not opaque base64.
+    file_index, hunk_index = cursor.split(":")
+    assert file_index.isdigit()
+    assert hunk_index.isdigit()
 
-    if cursor is not None:
-        wrong_scope = json.loads(await tools.get_diff("", cursor=cursor))
-        assert wrong_scope["status"] == "rejected"
-        assert wrong_scope["diagnostics"][0]["code"] == "invalid_diff_cursor"
-    invalid = json.loads(await tools.get_diff("src", cursor="not-a-valid-cursor"))
-    assert invalid["status"] == "rejected"
-    assert invalid["diagnostics"][0]["code"] == "invalid_diff_cursor"
+    malformed = json.loads(await tools.get_diff("src/multi.py", cursor="not-a-valid-cursor"))
+    assert malformed["status"] == "rejected"
+    assert malformed["diagnostics"][0]["code"] == "invalid_diff_cursor"
+
+    out_of_range = json.loads(await tools.get_diff("src/multi.py", cursor="999:0"))
+    assert out_of_range["status"] == "rejected"
+    assert out_of_range["diagnostics"][0]["code"] == "invalid_diff_cursor"
 
 
 async def test_get_diff_pages_only_at_complete_hunk_boundaries(tmp_path: Path) -> None:
@@ -1134,7 +1146,7 @@ async def test_get_diff_cursor_skips_oversized_hunk_to_reach_later_hunks(
     assert remaining_page["data"]["next_cursor"] is None
 
 
-async def test_get_diff_cursor_rejects_position_and_snapshot_tampering(tmp_path: Path) -> None:
+async def test_get_diff_omitting_cursor_starts_from_first_page(tmp_path: Path) -> None:
     snapshot = await _multi_hunk_snapshot(tmp_path)
     tools = FilesystemReviewTools(
         snapshot,
@@ -1142,27 +1154,12 @@ async def test_get_diff_cursor_rejects_position_and_snapshot_tampering(tmp_path:
         max_tool_calls=20,
         tool_limits=ToolLimits(max_read_bytes=300),
     )
-    cursor = _tool_data(await tools.get_diff("src/multi.py"))["next_cursor"]
-    assert isinstance(cursor, str)
-    decoded = json.loads(base64.urlsafe_b64decode(cursor + "=" * (-len(cursor) % 4)))
-    decoded["payload"]["hunk_index"] += 1
-    tampered = (
-        base64.urlsafe_b64encode(json.dumps(decoded, separators=(",", ":")).encode())
-        .decode()
-        .rstrip("=")
-    )
 
-    tampered_result = json.loads(await tools.get_diff("src/multi.py", tampered))
-    other_snapshot_tools = FilesystemReviewTools(
-        replace(snapshot, snapshot_id="snapshot-other"),
-        GitCli(),
-        max_tool_calls=20,
-        tool_limits=ToolLimits(max_read_bytes=300),
-    )
-    other_snapshot_result = json.loads(await other_snapshot_tools.get_diff("src/multi.py", cursor))
-
-    assert tampered_result["diagnostics"][0]["code"] == "invalid_diff_cursor"
-    assert other_snapshot_result["diagnostics"][0]["code"] == "invalid_diff_cursor"
+    # Omitting cursor (None) and passing no cursor both start from the first page.
+    omitted = json.loads(await tools.get_diff("src/multi.py"))
+    explicit_none = json.loads(await tools.get_diff("src/multi.py", cursor=None))
+    assert omitted["data"]["returned_hunk_count"] == explicit_none["data"]["returned_hunk_count"]
+    assert omitted["data"]["files"][0]["hunks"] == explicit_none["data"]["files"][0]["hunks"]
 
 
 async def test_get_diff_distinguishes_empty_directory_and_non_review_file(
