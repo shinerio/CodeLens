@@ -1451,6 +1451,7 @@ export function SettingsPage() {
                     <option value="openai">OpenAI</option>
                     <option value="deepseek">DeepSeek</option>
                     <option value="zhipu">智谱 AI</option>
+                    <option value="qwen">通义千问</option>
                   </select>
                 </label>
                 <label className="settings-field">

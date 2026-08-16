@@ -717,7 +717,7 @@ class CreateModelGatewayRequest(StrictDto):
     api_key: SecretStr
     model: GatewayModel
     base_url: AnyHttpUrl
-    vendor: Literal["openai", "deepseek", "zhipu"] = "openai"
+    vendor: Literal["openai", "deepseek", "zhipu", "qwen"] = "openai"
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
@@ -746,7 +746,7 @@ class UpdateModelGatewayRequest(StrictDto):
     api_key: SecretStr | None = None
     model: GatewayModel
     base_url: AnyHttpUrl
-    vendor: Literal["openai", "deepseek", "zhipu"] = "openai"
+    vendor: Literal["openai", "deepseek", "zhipu", "qwen"] = "openai"
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
@@ -786,7 +786,7 @@ class ModelGatewayResponse(StrictDto):
     name: str
     model: str
     base_url: str
-    vendor: Literal["openai", "deepseek", "zhipu"]
+    vendor: Literal["openai", "deepseek", "zhipu", "qwen"]
     is_active: bool
     api_type: Literal["responses", "chat_completions"]
     max_tokens: int

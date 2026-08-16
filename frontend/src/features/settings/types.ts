@@ -1,5 +1,5 @@
 export type GatewayApiType = "responses" | "chat_completions";
-export type ModelProviderVendor = "openai" | "deepseek" | "zhipu";
+export type ModelProviderVendor = "openai" | "deepseek" | "zhipu" | "qwen";
 export type ThinkingLevel = "disabled" | "low" | "medium" | "high";
 
 export type ModelGateway = {

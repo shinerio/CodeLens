@@ -61,3 +61,26 @@ def test_zhipu_adapter_enables_thinking_with_configured_effort() -> None:
     assert behavior.model_settings.reasoning is not None
     assert behavior.model_settings.reasoning.effort == "low"
     assert behavior.model_settings.extra_body == {"thinking": {"type": "enabled"}}
+
+
+def test_qwen_adapter_uses_chat_and_disables_thinking_via_extra_body() -> None:
+    behavior = (
+        ModelProviderAdapterRegistry().resolve("qwen").request_behavior(_config(vendor="qwen"))
+    )
+
+    assert behavior.model_class is OpenAIChatCompletionsModel
+    assert behavior.model_settings.reasoning is None
+    assert behavior.model_settings.extra_body == {"enable_thinking": False}
+
+
+def test_qwen_adapter_enables_thinking_with_configured_effort() -> None:
+    behavior = (
+        ModelProviderAdapterRegistry()
+        .resolve("qwen")
+        .request_behavior(_config(vendor="qwen", thinking="high"))
+    )
+
+    assert behavior.model_class is OpenAIChatCompletionsModel
+    assert behavior.model_settings.reasoning is not None
+    assert behavior.model_settings.reasoning.effort == "high"
+    assert behavior.model_settings.extra_body == {"enable_thinking": True}

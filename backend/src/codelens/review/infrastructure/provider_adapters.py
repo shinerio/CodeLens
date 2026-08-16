@@ -79,6 +79,23 @@ class ZhipuProviderAdapter:
         )
 
 
+class QwenProviderAdapter:
+    """Follow Qwen's DashScope OpenAI-compatible thinking controls."""
+
+    vendor = "qwen"
+
+    def request_behavior(self, config: ModelProviderConfig) -> ProviderRequestBehavior:
+        enabled = config.thinking_level != "disabled"
+        return ProviderRequestBehavior(
+            OpenAIChatCompletionsModel,
+            ModelSettings(
+                max_tokens=config.max_tokens,
+                reasoning=_reasoning(config.thinking_level),
+                extra_body={"enable_thinking": enabled},
+            ),
+        )
+
+
 class ModelProviderAdapterRegistry:
     """Open registry so new vendors do not change review orchestration."""
 
@@ -87,6 +104,7 @@ class ModelProviderAdapterRegistry:
             OpenAIProviderAdapter(),
             DeepSeekProviderAdapter(),
             ZhipuProviderAdapter(),
+            QwenProviderAdapter(),
         )
         self._adapters = {adapter.vendor: adapter for adapter in resolved}
 
