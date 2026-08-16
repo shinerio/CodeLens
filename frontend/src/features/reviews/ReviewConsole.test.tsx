@@ -3,6 +3,7 @@ import { expect, it } from "vitest";
 
 import { ReviewConsole } from "./ReviewConsole";
 import { ReviewProcessReport } from "./ReviewProcessReport";
+import type { TranscriptEntry } from "./api";
 
 it("hides global lifecycle entries by default and places their filter last", () => {
   render(
@@ -99,7 +100,7 @@ it("renders final model output as Markdown after streaming completes", () => {
     />,
   );
 
-  expect(screen.getByText("# Partial result").tagName).toBe("PRE");
+  expect(screen.getByRole("heading", { name: "Partial result", level: 1 })).toBeInTheDocument();
   expect(screen.getByRole("heading", { name: "Review summary", level: 1 })).toBeInTheDocument();
   expect(screen.getByText("Critical").tagName).toBe("STRONG");
   expect(screen.getByRole("link", { name: "Reference" })).toHaveAttribute("href", "https://example.com");
@@ -404,6 +405,33 @@ it("selects a stage and then one reviewer timeline", () => {
           truncated: false,
           metadata: { agent: "review-verifier:v2", message_id: "verifier-output" },
         },
+        {
+          sequence: 4,
+          kind: "model_completed",
+          content: "",
+          created_at: "2026-07-22T00:00:03Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "security:v2" },
+        },
+        {
+          sequence: 5,
+          kind: "model_completed",
+          content: "",
+          created_at: "2026-07-22T00:00:04Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "performance:v2" },
+        },
+        {
+          sequence: 6,
+          kind: "model_completed",
+          content: "",
+          created_at: "2026-07-22T00:00:05Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "review-verifier:v2" },
+        },
       ]}
     />,
   );
@@ -439,6 +467,24 @@ it("selects reviewers for a fixed team whose legacy execution has no persisted p
           redacted: false,
           truncated: false,
           metadata: { agent: "security:v2", message_id: "security-output" },
+        },
+        {
+          sequence: 3,
+          kind: "model_completed",
+          content: "",
+          created_at: "2026-08-03T00:00:02Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "correctness:v2" },
+        },
+        {
+          sequence: 4,
+          kind: "model_completed",
+          content: "",
+          created_at: "2026-08-03T00:00:03Z",
+          redacted: false,
+          truncated: false,
+          metadata: { agent: "security:v2" },
         },
       ]}
       plan={null}
@@ -562,6 +608,8 @@ it("coalesces interleaved streaming deltas independently for each reviewer", () 
         { sequence: 2, kind: "model_output_delta", content: "Correctness ", created_at: "2026-08-03T00:00:01Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2", message_id: "provider-message" } },
         { sequence: 3, kind: "model_output_delta", content: "complete", created_at: "2026-08-03T00:00:02Z", redacted: false, truncated: false, metadata: { agent: "security:v2", message_id: "provider-message" } },
         { sequence: 4, kind: "model_output_delta", content: "complete", created_at: "2026-08-03T00:00:03Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2", message_id: "provider-message" } },
+        { sequence: 5, kind: "model_completed", content: "", created_at: "2026-08-03T00:00:04Z", redacted: false, truncated: false, metadata: { agent: "security:v2" } },
+        { sequence: 6, kind: "model_completed", content: "", created_at: "2026-08-03T00:00:05Z", redacted: false, truncated: false, metadata: { agent: "correctness:v2" } },
       ]}
       plan={null}
       reviewerReferences={["correctness:v2", "security:v2"]}
@@ -575,7 +623,7 @@ it("coalesces interleaved streaming deltas independently for each reviewer", () 
 });
 
 it("shows first 10 and last 10 events with a load-more gap in between", () => {
-  const entries = Array.from({ length: 25 }, (_, i) => ({
+  const entries: TranscriptEntry[] = Array.from({ length: 25 }, (_, i) => ({
     sequence: i + 1,
     kind: "model_output_delta" as const,
     content: `Event ${i + 1}`,
@@ -584,6 +632,15 @@ it("shows first 10 and last 10 events with a load-more gap in between", () => {
     truncated: false,
     metadata: { message_id: `message-${i + 1}` },
   }));
+  entries.push({
+    sequence: 26,
+    kind: "model_completed",
+    content: "",
+    created_at: "2026-08-05T00:00:25Z",
+    redacted: false,
+    truncated: false,
+    metadata: {},
+  });
 
   render(<ReviewConsole entries={entries} />);
 
@@ -597,7 +654,7 @@ it("shows first 10 and last 10 events with a load-more gap in between", () => {
 });
 
 it("loads more events from start and end independently", () => {
-  const entries = Array.from({ length: 50 }, (_, i) => ({
+  const entries: TranscriptEntry[] = Array.from({ length: 50 }, (_, i) => ({
     sequence: i + 1,
     kind: "model_output_delta" as const,
     content: `Event ${i + 1}`,
@@ -606,6 +663,15 @@ it("loads more events from start and end independently", () => {
     truncated: false,
     metadata: { message_id: `message-${i + 1}` },
   }));
+  entries.push({
+    sequence: 51,
+    kind: "model_completed",
+    content: "",
+    created_at: "2026-08-05T00:00:50Z",
+    redacted: false,
+    truncated: false,
+    metadata: {},
+  });
 
   render(<ReviewConsole entries={entries} />);
 

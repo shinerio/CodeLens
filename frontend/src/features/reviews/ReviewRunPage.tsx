@@ -470,10 +470,6 @@ export function ReviewRunPage() {
                 <dd>{connectionState}</dd>
               </div>
               <div>
-                <dt>{t("run.liveEventsReceived")}</dt>
-                <dd>{events.length}</dd>
-              </div>
-              <div>
                 <dt>{t("run.findings")}</dt>
                 <dd>{findingsQuery.data.length}</dd>
               </div>
@@ -595,6 +591,7 @@ export function ReviewRunPage() {
                 entries={transcriptQuery.data}
                 plan={reviewQuery.data?.review_plan ?? null}
                 reviewerReferences={reviewQuery.data?.selected_agents ?? []}
+                isFinalizedTranscript={TERMINAL_STATUSES.has(currentStatus)}
               />
             ) : <p className="event-log__empty">{t("run.waitingEvents")}</p>}
           </article>

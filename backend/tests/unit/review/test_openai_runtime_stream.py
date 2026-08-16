@@ -21,8 +21,10 @@ class _LockBearingToolResultItem:
     agent_lock: object = field(default_factory=threading.RLock)
 
 
-def test_stream_events_include_message_boundaries_for_markdown_rendering() -> None:
-    output_delta = _visible_event(
+def test_stream_events_emit_full_text_on_done_and_skip_token_deltas() -> None:
+    """Token deltas are skipped; the full text is emitted once on ``*.done``."""
+
+    output_delta_events = _visible_event(
         RawResponsesStreamEvent(
             data=SimpleNamespace(
                 type="response.output_text.delta",
@@ -32,16 +34,17 @@ def test_stream_events_include_message_boundaries_for_markdown_rendering() -> No
             )
         )
     )
-    output_completed = _visible_event(
+    output_done_events = _visible_event(
         RawResponsesStreamEvent(
             data=SimpleNamespace(
                 type="response.output_text.done",
+                text="# Result",
                 item_id="output-1",
                 content_index=0,
             )
         )
     )
-    reasoning_delta = _visible_event(
+    reasoning_delta_events = _visible_event(
         RawResponsesStreamEvent(
             data=SimpleNamespace(
                 type="response.reasoning_summary_text.delta",
@@ -51,36 +54,41 @@ def test_stream_events_include_message_boundaries_for_markdown_rendering() -> No
             )
         )
     )
-    reasoning_completed = _visible_event(
+    reasoning_done_events = _visible_event(
         RawResponsesStreamEvent(
             data=SimpleNamespace(
                 type="response.reasoning_summary_text.done",
+                summary="## Plan",
                 item_id="reasoning-1",
                 summary_index=0,
             )
         )
     )
 
-    assert output_delta is not None
-    assert output_completed is not None
-    assert reasoning_delta is not None
-    assert reasoning_completed is not None
-    assert (output_delta.kind, output_delta.metadata) == (
-        "model_output_delta",
-        {"message_id": "output-1:0"},
-    )
-    assert (output_completed.kind, output_completed.metadata) == (
-        "model_output_completed",
-        {"message_id": "output-1:0"},
-    )
-    assert (reasoning_delta.kind, reasoning_delta.metadata) == (
-        "model_reasoning_delta",
-        {"message_id": "reasoning-1:0"},
-    )
-    assert (reasoning_completed.kind, reasoning_completed.metadata) == (
-        "model_reasoning_completed",
-        {"message_id": "reasoning-1:0"},
-    )
+    assert output_delta_events == []
+    assert reasoning_delta_events == []
+    assert len(output_done_events) == 2
+    assert len(reasoning_done_events) == 2
+
+    output_delta, output_completed = output_done_events
+    assert output_delta.kind == "model_output_delta"
+    assert output_delta.content == "# Result"
+    assert output_delta.metadata == {"message_id": "output-1:0"}
+    assert output_completed.kind == "model_output_completed"
+    assert output_completed.metadata == {
+        "message_id": "output-1:0",
+        "event_role": "marker",
+    }
+
+    reasoning_delta, reasoning_completed = reasoning_done_events
+    assert reasoning_delta.kind == "model_reasoning_delta"
+    assert reasoning_delta.content == "## Plan"
+    assert reasoning_delta.metadata == {"message_id": "reasoning-1:0"}
+    assert reasoning_completed.kind == "model_reasoning_completed"
+    assert reasoning_completed.metadata == {
+        "message_id": "reasoning-1:0",
+        "event_role": "marker",
+    }
 
 
 def test_stream_events_ignore_incremental_tool_arguments() -> None:
@@ -93,7 +101,7 @@ def test_stream_events_ignore_incremental_tool_arguments() -> None:
         )
     )
 
-    assert event is None
+    assert event == []
 
 
 def test_stream_response_boundaries_expose_live_provider_usage() -> None:
@@ -123,15 +131,20 @@ def test_stream_response_boundaries_expose_live_provider_usage() -> None:
         )
     )
 
-    assert started is not None
-    assert started.kind == "model_started"
-    assert started.metadata == {"response_id": "resp-1", "usage_scope": "provider_call"}
-    assert completed is not None
-    assert completed.kind == "model_completed"
-    assert completed.metadata == {
+    assert len(started) == 1
+    assert len(completed) == 1
+    assert started[0].kind == "model_started"
+    assert started[0].metadata == {
+        "response_id": "resp-1",
+        "usage_scope": "provider_call",
+        "event_role": "marker",
+    }
+    assert completed[0].kind == "model_completed"
+    assert completed[0].metadata == {
         "response_id": "resp-1",
         "usage_scope": "provider_call",
         "model_name": "gpt-5.1",
+        "event_role": "marker",
         "llm_call_count": "1",
         "input_tokens": "120",
         "cached_input_tokens": "80",
@@ -143,7 +156,7 @@ def test_stream_response_boundaries_expose_live_provider_usage() -> None:
 
 def test_stream_tool_events_include_stable_name_and_call_identity() -> None:
     raw_call = SimpleNamespace(name="read_file", call_id="call-1")
-    tool_call = _visible_event(
+    tool_call_events = _visible_event(
         RunItemStreamEvent(
             name="tool_called",
             item=SimpleNamespace(raw_item=raw_call),
@@ -152,7 +165,7 @@ def test_stream_tool_events_include_stable_name_and_call_identity() -> None:
     result = (
         '{"schema_version":"2","tool":"read_file","status":"success","data":{},"diagnostics":[]}'
     )
-    tool_result = _visible_event(
+    tool_result_events = _visible_event(
         RunItemStreamEvent(
             name="tool_output",
             item=SimpleNamespace(
@@ -162,8 +175,10 @@ def test_stream_tool_events_include_stable_name_and_call_identity() -> None:
         )
     )
 
-    assert tool_call is not None
-    assert tool_result is not None
+    assert len(tool_call_events) == 1
+    assert len(tool_result_events) == 1
+    tool_call = tool_call_events[0]
+    tool_result = tool_result_events[0]
     assert tool_call.metadata == {"tool_call_id": "call-1", "tool_name": "read_file"}
     assert tool_result.content == result
     assert tool_result.metadata == {
@@ -174,7 +189,7 @@ def test_stream_tool_events_include_stable_name_and_call_identity() -> None:
 
 
 def test_stream_tool_result_records_bounded_rejection_reason() -> None:
-    tool_result = _visible_event(
+    tool_result_events = _visible_event(
         RunItemStreamEvent(
             name="tool_output",
             item=_LockBearingToolResultItem(
@@ -187,8 +202,8 @@ def test_stream_tool_result_records_bounded_rejection_reason() -> None:
         )
     )
 
-    assert tool_result is not None
-    assert tool_result.metadata == {
+    assert len(tool_result_events) == 1
+    assert tool_result_events[0].metadata == {
         "tool_call_id": "call-rejected",
         "tool_outcome": "unclassified",
         "non_json_tool_result": "true",
@@ -197,13 +212,13 @@ def test_stream_tool_result_records_bounded_rejection_reason() -> None:
 
 def test_stream_tool_events_exclude_non_serializable_sdk_runtime_state() -> None:
     raw_call = {"name": "read_file", "call_id": "call-1", "arguments": '{"path":"a.py"}'}
-    tool_call = _visible_event(
+    tool_call_events = _visible_event(
         RunItemStreamEvent(
             name="tool_called",
             item=_LockBearingToolCallItem(raw_item=raw_call),
         )
     )
-    tool_result = _visible_event(
+    tool_result_events = _visible_event(
         RunItemStreamEvent(
             name="tool_output",
             item=_LockBearingToolResultItem(
@@ -213,8 +228,10 @@ def test_stream_tool_events_exclude_non_serializable_sdk_runtime_state() -> None
         )
     )
 
-    assert tool_call is not None
-    assert tool_result is not None
+    assert len(tool_call_events) == 1
+    assert len(tool_result_events) == 1
+    tool_call = tool_call_events[0]
+    tool_result = tool_result_events[0]
     assert json.loads(tool_call.content) == raw_call
     assert json.loads(tool_result.content) == {"content": "bounded", "path": "a.py"}
     assert tool_result.metadata["tool_outcome"] == "unclassified"

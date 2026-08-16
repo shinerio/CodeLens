@@ -532,6 +532,7 @@ class OpenAIAgentRuntime:
                                         "response_id": response_id,
                                         "usage_scope": "provider_call",
                                         "model_phase": "checkpoint_compaction",
+                                        "event_role": "marker",
                                     },
                                 )
                             )
@@ -544,6 +545,7 @@ class OpenAIAgentRuntime:
                                         "usage_scope": "provider_call",
                                         "model_phase": "checkpoint_compaction",
                                         "model_name": provider_config.model,
+                                        "event_role": "marker",
                                         "llm_call_count": "1",
                                         "input_tokens": str(diagnostic.input_tokens),
                                         "cached_input_tokens": str(
@@ -874,7 +876,7 @@ class OpenAIAgentRuntime:
             AgentRuntimeEvent(
                 "model_started",
                 "",
-                {"agent_name": agent.name, "usage_scope": "agent_run"},
+                {"agent_name": agent.name, "usage_scope": "agent_run", "event_role": "marker"},
             )
         )
         stream = cast(Any, self._runner).run_streamed(
@@ -889,68 +891,79 @@ class OpenAIAgentRuntime:
         }
         async with asyncio.timeout(timeout_seconds):
             async for event in stream.stream_events():
-                emitted = _visible_event(event)
-                if emitted is None:
-                    continue
-                if emitted.kind == "tool_call":
-                    call_id = emitted.metadata.get("tool_call_id")
-                    name = emitted.metadata.get("tool_name")
-                    if name and name not in allowed_tool_names:
-                        if call_id:
-                            invalid_tool_names[call_id] = name
-                        emitted = AgentRuntimeEvent(
-                            "invalid_tool_call",
-                            emitted.content,
-                            emitted.metadata,
-                        )
-                        await sink(emitted)
-                        continue
-                    if call_id and name:
-                        tool_names[call_id] = name
-                elif emitted.kind == "tool_result":
-                    call_id = emitted.metadata.get("tool_call_id")
-                    if call_id and call_id in invalid_tool_names:
-                        emitted = AgentRuntimeEvent(
-                            "invalid_tool_result",
-                            emitted.content,
-                            {**emitted.metadata, "tool_name": invalid_tool_names[call_id]},
-                        )
-                    elif call_id and call_id in tool_names and "tool_name" not in emitted.metadata:
-                        emitted.metadata["tool_name"] = tool_names[call_id]
-                await sink(emitted)
+                for emitted in _visible_event(event):
+                    if emitted.kind == "tool_call":
+                        call_id = emitted.metadata.get("tool_call_id")
+                        name = emitted.metadata.get("tool_name")
+                        if name and name not in allowed_tool_names:
+                            if call_id:
+                                invalid_tool_names[call_id] = name
+                            emitted = AgentRuntimeEvent(
+                                "invalid_tool_call",
+                                emitted.content,
+                                emitted.metadata,
+                            )
+                            await sink(emitted)
+                            continue
+                        if call_id and name:
+                            tool_names[call_id] = name
+                    elif emitted.kind == "tool_result":
+                        call_id = emitted.metadata.get("tool_call_id")
+                        if call_id and call_id in invalid_tool_names:
+                            emitted = AgentRuntimeEvent(
+                                "invalid_tool_result",
+                                emitted.content,
+                                {**emitted.metadata, "tool_name": invalid_tool_names[call_id]},
+                            )
+                        elif (
+                            call_id
+                            and call_id in tool_names
+                            and "tool_name" not in emitted.metadata
+                        ):
+                            emitted.metadata["tool_name"] = tool_names[call_id]
+                    await sink(emitted)
         await sink(
             AgentRuntimeEvent(
                 "model_completed",
                 "",
-                {"agent_name": agent.name, "usage_scope": "agent_run"},
+                {"agent_name": agent.name, "usage_scope": "agent_run", "event_role": "marker"},
             )
         )
         return stream
 
 
-def _visible_event(event: object) -> AgentRuntimeEvent | None:
-    """Map streamed output and provider-issued reasoning summaries to console records."""
+def _visible_event(event: object) -> list[AgentRuntimeEvent]:
+    """Map streamed output and provider-issued reasoning summaries to console records.
+
+    Token-level deltas are skipped; the full text is emitted once when the
+    corresponding ``*.done`` event arrives. Marker events (model_started,
+    model_completed, model_output_completed, model_reasoning_completed) are
+    tagged with ``event_role: "marker"`` so display layers can filter them
+    uniformly.
+    """
 
     if isinstance(event, RawResponsesStreamEvent):
         payload = event.data
         event_type = getattr(payload, "type", "")
         if event_type == "response.created":
             response = getattr(payload, "response", None)
-            return AgentRuntimeEvent(
+            return [AgentRuntimeEvent(
                 "model_started",
                 "",
                 {
                     "response_id": str(getattr(response, "id", "")),
                     "usage_scope": "provider_call",
+                    "event_role": "marker",
                 },
-            )
+            )]
         if event_type == "response.completed":
             response = getattr(payload, "response", None)
             usage = getattr(response, "usage", None)
-            metadata = {
+            metadata: dict[str, str] = {
                 "response_id": str(getattr(response, "id", "")),
                 "usage_scope": "provider_call",
                 "model_name": str(getattr(response, "model", "")),
+                "event_role": "marker",
             }
             if usage is not None:
                 cached_tokens, cache_write_tokens = _cache_token_details(usage)
@@ -964,35 +977,37 @@ def _visible_event(event: object) -> AgentRuntimeEvent | None:
                         "total_tokens": str(getattr(usage, "total_tokens", "")),
                     }
                 )
-            return AgentRuntimeEvent("model_completed", "", metadata)
+            return [AgentRuntimeEvent("model_completed", "", metadata)]
         if event_type == "response.output_text.delta":
-            return AgentRuntimeEvent(
-                "model_output_delta",
-                str(getattr(payload, "delta", "")),
-                _message_metadata(payload, "content_index"),
-            )
+            return []
         if event_type == "response.output_text.done":
-            return AgentRuntimeEvent(
-                "model_output_completed", "", _message_metadata(payload, "content_index")
-            )
+            text = str(getattr(payload, "text", ""))
+            msg_meta = _message_metadata(payload, "content_index")
+            return [
+                AgentRuntimeEvent("model_output_delta", text, msg_meta),
+                AgentRuntimeEvent(
+                    "model_output_completed", "", {**msg_meta, "event_role": "marker"},
+                ),
+            ]
         if event_type == "response.reasoning_summary_text.delta":
-            return AgentRuntimeEvent(
-                "model_reasoning_delta",
-                str(getattr(payload, "delta", "")),
-                _message_metadata(payload, "summary_index"),
-            )
+            return []
         if event_type == "response.reasoning_summary_text.done":
-            return AgentRuntimeEvent(
-                "model_reasoning_completed", "", _message_metadata(payload, "summary_index")
-            )
-        return None
+            text = str(getattr(payload, "summary", "")) or str(getattr(payload, "text", ""))
+            msg_meta = _message_metadata(payload, "summary_index")
+            return [
+                AgentRuntimeEvent("model_reasoning_delta", text, msg_meta),
+                AgentRuntimeEvent(
+                    "model_reasoning_completed", "", {**msg_meta, "event_role": "marker"},
+                ),
+            ]
+        return []
     if isinstance(event, RunItemStreamEvent):
         if event.name == "tool_called":
-            return AgentRuntimeEvent(
+            return [AgentRuntimeEvent(
                 "tool_call",
                 _json_value(getattr(event.item, "raw_item", event.item)),
                 _tool_metadata(event.item, include_name=True),
-            )
+            )]
         if event.name == "tool_output":
             output = getattr(event.item, "output", event.item)
             content = output if isinstance(output, str) else _json_value(output)
@@ -1006,12 +1021,12 @@ def _visible_event(event: object) -> AgentRuntimeEvent | None:
                 metadata["non_json_tool_result"] = "true"
             else:
                 metadata["tool_result_status"] = result.status.value
-            return AgentRuntimeEvent(
+            return [AgentRuntimeEvent(
                 "tool_result",
                 content,
                 metadata,
-            )
-    return None
+            )]
+    return []
 
 
 def _message_metadata(payload: object, index_name: str) -> dict[str, str]:

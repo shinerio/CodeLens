@@ -7,7 +7,7 @@ import type { TranscriptEntry } from "./api";
 import { failureDetails } from "./failure-details";
 import type { ReviewPlanNodeRole, ReviewPlanProjection } from "./types";
 
-type ConsoleMessage = TranscriptEntry & { content: string; messageKey: string; sequence: number };
+type ConsoleMessage = TranscriptEntry & { content: string; messageKey: string; sequence: number; followingToolName?: string };
 type StreamingTranscriptEntry = TranscriptEntry & {
   kind: "model_reasoning_delta" | "model_output_delta";
 };
@@ -50,10 +50,12 @@ export function ReviewConsole({
   entries,
   plan,
   reviewerReferences: fallbackReviewerReferences = [],
+  isFinalizedTranscript = false,
 }: {
   entries: TranscriptEntry[];
   plan?: ReviewPlanProjection | null;
   reviewerReferences?: readonly string[];
+  isFinalizedTranscript?: boolean;
 }) {
   const { locale, t } = useI18n();
   const [query, setQuery] = useState("");
@@ -95,11 +97,12 @@ export function ReviewConsole({
     }),
     [allMessages, nodeRoleByAgent, selectedReviewer, selectedStage],
   );
-  const completedMessages = useMemo(() => completedMessageKeys(entries), [entries]);
+  const finalizedSet = useMemo(() => finalizedDeltaSequences(entries, isFinalizedTranscript), [entries, isFinalizedTranscript]);
   const matchesActiveFilters = (entry: ConsoleMessage) =>
     (isToolEntry(entry) ? visibility.tools : isVisible(entry, visibility))
     && entry.content.toLocaleLowerCase().includes(query.toLocaleLowerCase())
-    && !(entry.kind === "model_output_delta" && !entry.content.trim());
+    && !(entry.kind === "model_output_delta" && !entry.content.trim())
+    && !(isDelta(entry) && !finalizedSet.has(entry.sequence));
   const visibleMessages = allMessages.filter(matchesActiveFilters);
   const filtered = messages.filter(matchesActiveFilters);
   const parseFailed = messages.some((e) => e.kind === "model_raw_output" && e.metadata?.parse_failed === "true");
@@ -125,9 +128,7 @@ export function ReviewConsole({
     const isTool = isToolEntry(entry);
     const isReasoning = entry.kind === "model_reasoning_delta";
     const isModel = isReasoning || entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_completed" || entry.kind === "model_raw_output";
-    const isFinalizedStream = isDelta(entry)
-      && entry.metadata.message_id !== undefined
-      && completedMessages.has(entry.metadata.message_id);
+    const isFinalizedStream = isDelta(entry) && finalizedSet.has(entry.sequence);
     return <li className={`review-console__message review-console__message--${isTool ? "tool" : isModel ? "model" : "system"}`} key={entry.messageKey}>
       <button className="review-console__message-head" type="button" onClick={() => toggle(entry.messageKey)} aria-expanded={!isCollapsed}>
         {isCollapsed ? <ChevronRight aria-hidden="true" /> : <ChevronDown aria-hidden="true" />}
@@ -286,6 +287,7 @@ function coalesceDeltas(entries: TranscriptEntry[]): ConsoleMessage[] {
       result.push({
         ...entry,
         messageKey: `${entry.sequence}:${entry.created_at}:${entry.kind}:${index}`,
+        followingToolName: nextToolNameAfter(entries, index, agentKey),
       });
       activeByKind[entry.kind] = {
         messageId: entry.metadata.message_id,
@@ -303,26 +305,67 @@ function coalesceDeltas(entries: TranscriptEntry[]): ConsoleMessage[] {
   return result;
 }
 
-function completedMessageKeys(entries: TranscriptEntry[]): Set<string> {
-  const completedAgents = new Set(entries.flatMap((entry) => (
-    entry.kind === "model_completed" && entry.metadata.agent !== undefined ? [entry.metadata.agent] : []
-  )));
-  return new Set(entries.flatMap((entry) => (
-    (entry.kind === "model_reasoning_completed" || entry.kind === "model_output_completed") && entry.metadata.message_id
-      ? [entry.metadata.message_id]
-      : isDelta(entry) && entry.metadata.message_id && completedAgents.has(entry.metadata.agent)
-        ? [entry.metadata.message_id]
-        : []
-  )));
+const MARKER_KINDS = new Set([
+  "model_started",
+  "model_completed",
+  "model_output_completed",
+  "model_reasoning_completed",
+]);
+
+function isMarkerEntry(entry: TranscriptEntry): boolean {
+  return MARKER_KINDS.has(entry.kind);
+}
+
+/** Find the tool name of the next tool_call from the same agent, skipping marker events. */
+function nextToolNameAfter(entries: TranscriptEntry[], fromIndex: number, agentKey: string): string | undefined {
+  for (let i = fromIndex + 1; i < entries.length; i++) {
+    const next = entries[i];
+    if ((next.metadata.agent ?? "<global>") !== agentKey) continue;
+    if (isMarkerEntry(next)) continue;
+    if (next.kind === "tool_call") return next.metadata.tool_name;
+    return undefined;
+  }
+  return undefined;
+}
+
+/** Determine which delta entries are finalized by tracking per-agent pending sequences. */
+function finalizedDeltaSequences(entries: TranscriptEntry[], isFinalizedTranscript: boolean): Set<number> {
+  const finalized = new Set<number>();
+  const pendingByAgent = new Map<string, number[]>();
+  for (const entry of entries) {
+    const agent = entry.metadata.agent ?? "<global>";
+    if (isDelta(entry)) {
+      let pending = pendingByAgent.get(agent);
+      if (pending === undefined) {
+        pending = [];
+        pendingByAgent.set(agent, pending);
+      }
+      pending.push(entry.sequence);
+    } else {
+      const pending = pendingByAgent.get(agent);
+      if (pending !== undefined) {
+        for (const seq of pending) finalized.add(seq);
+        pendingByAgent.delete(agent);
+      }
+    }
+  }
+  if (isFinalizedTranscript) {
+    for (const pending of pendingByAgent.values()) {
+      for (const seq of pending) finalized.add(seq);
+    }
+  }
+  return finalized;
 }
 
 function isVisible(entry: ConsoleMessage, visibility: ConsoleVisibility) {
   if (entry.kind === "prompt") return visibility.prompt;
-  if (entry.kind === "model_reasoning_delta" || entry.kind === "model_reasoning_completed") return visibility.reasoning;
-  if (entry.kind === "model_output" || entry.kind === "model_output_delta" || entry.kind === "model_output_completed" || entry.kind === "model_completed") return visibility.output;
+  if (entry.kind === "model_reasoning_delta") return visibility.reasoning;
+  if (entry.kind === "model_output" || entry.kind === "model_output_delta") return visibility.output;
   if (entry.kind === "model_raw_output") {
     return entry.metadata.parse_failed === "true" ? visibility.output : visibility.rawResponses;
   }
+  // Marker events (model_started, model_completed, model_reasoning_completed,
+  // model_output_completed) fall through to system, hidden by default.
   return visibility.system;
 }
 
@@ -354,7 +397,12 @@ function ConsoleContent({ entry, locale, isFinalizedStream, parseFailed }: { ent
   if (entry.kind === "lifecycle" && entry.metadata.error_code !== undefined) return <FailureContent metadata={entry.metadata} fallback={entry.content} locale={locale} />;
   if (entry.kind === "prompt") return <PromptContent content={entry.content} />;
   if (entry.kind === "model_output") return <ModelOutputContent content={entry.content} parseFailed={parseFailed} />;
-  if (isDelta(entry) && isFinalizedStream) return <MarkdownContent content={entry.content} />;
+  if (isDelta(entry) && isFinalizedStream) {
+    const toolHint = entry.followingToolName !== undefined
+      ? <p className="review-console__tool-hint">→ calling {entry.followingToolName}</p>
+      : null;
+    return <div><MarkdownContent content={entry.content} />{toolHint}</div>;
+  }
   return <pre className={entry.kind === "model_reasoning_delta" ? "review-console__content review-console__content--thinking" : "review-console__content"}>{entry.content}</pre>;
 }
 

@@ -29,6 +29,15 @@ _STABLE_REVIEW_TOOL_NAMES = frozenset(
     }
 )
 
+_HIDDEN_TRANSCRIPT_KINDS = frozenset(
+    {
+        "model_started",
+        "model_completed",
+        "model_output_completed",
+        "model_reasoning_completed",
+    }
+)
+
 
 @dataclass(frozen=True)
 class ProcessTranscriptEntry:
@@ -417,7 +426,9 @@ def build_process_report(
         loop_abort_count=loop_abort_count,
         tool_result_status_counts=tool_result_status_counts,
         finding_count=finding_count,
-        transcript_entry_count=len(ordered),
+        transcript_entry_count=sum(
+            1 for entry in ordered if entry.kind not in _HIDDEN_TRANSCRIPT_KINDS
+        ),
         started_at=started_at,
         completed_at=completed_at,
         duration_ms=_duration_ms(started_at, completed_at),

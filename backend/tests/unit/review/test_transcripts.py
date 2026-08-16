@@ -137,10 +137,10 @@ async def test_worker_transcript_assigns_contiguous_sequences_across_batches(
     assert [entry.sequence for entry in entries] == [1, 2, 3, 4, 5]
 
 
-async def test_worker_transcript_persists_one_logical_event_for_interleaved_deltas(
+async def test_worker_transcript_appends_each_delta_without_merging(
     tmp_path: Path,
 ) -> None:
-    """Concurrent Reviewers must not turn token chunks into durable transcript rows."""
+    """Each delta is stored as a separate entry; the backend emits full text per call."""
 
     durable = ExecutionTranscriptStore(tmp_path / "artifacts")
     worker_store = WorkerTranscriptStore(durable)
@@ -178,19 +178,23 @@ async def test_worker_transcript_persists_one_logical_event_for_interleaved_delt
     )
 
     active_entries = await worker_store.list(task_id)
-    assert [entry.sequence for entry in active_entries] == [1, 2]
+    assert [entry.sequence for entry in active_entries] == [1, 2, 3, 4]
     assert [entry.content for entry in active_entries] == [
-        "Security complete",
-        "Correctness complete",
+        "Security ",
+        "Correctness ",
+        "complete",
+        "complete",
     ]
 
     await worker_store.finalize(task_id)
 
     durable_entries = await durable.list(task_id)
-    assert [entry.sequence for entry in durable_entries] == [1, 2]
+    assert [entry.sequence for entry in durable_entries] == [1, 2, 3, 4]
     assert [entry.content for entry in durable_entries] == [
-        "Security complete",
-        "Correctness complete",
+        "Security ",
+        "Correctness ",
+        "complete",
+        "complete",
     ]
 
 

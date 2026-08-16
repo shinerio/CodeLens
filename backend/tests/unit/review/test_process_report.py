@@ -81,7 +81,7 @@ def test_process_report_aggregates_llm_tokens_agents_and_tools() -> None:
     ]
     assert report.agent_run_count == 1
     assert report.finding_count == 2
-    assert report.transcript_entry_count == 7
+    assert report.transcript_entry_count == 5
     assert report.duration_ms == 6_000
     assert report.usage_is_complete
     assert report.agents[0].agent == agent

@@ -33,10 +33,6 @@ TranscriptKind = Literal[
     "model_raw_output",
     "checkpoint_compaction",
 ]
-StreamingTranscriptKind = Literal["model_reasoning_delta", "model_output_delta"]
-_STREAMING_TRANSCRIPT_KINDS: frozenset[str] = frozenset(
-    {"model_reasoning_delta", "model_output_delta"}
-)
 _LOGGER = logging.getLogger("codelens.worker.transcripts")
 
 _SECRET_PATTERN = re.compile(
@@ -175,12 +171,12 @@ class ExecutionTranscriptStore:
 
 
 class WorkerTranscriptStore:
-    """Keep active transcripts in memory and persist logical model events at completion.
+    """Keep active transcripts in memory and persist them at task completion.
 
-    Provider token deltas are merged per Agent, stream kind, and message identity. Events
-    from concurrent Agents do not split an active response; the next non-stream event from
-    that same Agent closes its response boundary. This preserves complete visible content
-    without persisting one transcript entry per provider token.
+    Each model call produces one ``model_output_delta`` (or ``model_reasoning_delta``)
+    entry with the full text — token-level chunking is handled upstream in
+    ``openai_runtime._visible_event``. This store simply appends entries in arrival
+    order and flushes them to the durable store on ``finalize()``.
     """
 
     def __init__(
@@ -193,13 +189,6 @@ class WorkerTranscriptStore:
         self._model_log = model_log
         self._rejection_events = rejection_events
         self._entries: dict[str, list[TranscriptEntry]] = {}
-        self._active_streams: dict[
-            str,
-            dict[
-                tuple[str, StreamingTranscriptKind],
-                tuple[str | None, int],
-            ],
-        ] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
     async def append(
@@ -220,43 +209,11 @@ class WorkerTranscriptStore:
         lock = self._locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             collected = self._entries.setdefault(task_id, [])
-            active_streams = self._active_streams.setdefault(task_id, {})
             for kind, content, metadata in entries:
                 safe_content, redacted = _redact(content)
                 safe_metadata = dict(metadata or {})
                 if kind == "tool_result" and "tool_outcome" not in safe_metadata:
                     safe_metadata.update(outcome_metadata(classify_tool_result(safe_content)))
-                agent = safe_metadata.get("agent", "<global>")
-                if kind in _STREAMING_TRANSCRIPT_KINDS:
-                    streaming_kind = _streaming_kind(kind)
-                    stream_key = (agent, streaming_kind)
-                    message_id = safe_metadata.get("message_id")
-                    active_stream = active_streams.get(stream_key)
-                    if active_stream is not None and active_stream[0] == message_id:
-                        entry_index = active_stream[1]
-                        previous = collected[entry_index]
-                        collected[entry_index] = previous.model_copy(
-                            update={
-                                "content": previous.content + safe_content,
-                                "redacted": previous.redacted or redacted,
-                            }
-                        )
-                        continue
-                    collected.append(
-                        _transcript_entry(
-                            sequence=len(collected) + 1,
-                            kind=kind,
-                            content=safe_content,
-                            redacted=redacted,
-                            metadata=safe_metadata,
-                        )
-                    )
-                    active_streams[stream_key] = (message_id, len(collected) - 1)
-                    continue
-
-                for stream_key in tuple(active_streams):
-                    if stream_key[0] == agent:
-                        del active_streams[stream_key]
                 collected.append(
                     _transcript_entry(
                         sequence=len(collected) + 1,
@@ -305,17 +262,10 @@ class WorkerTranscriptStore:
         lock = self._locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             entries = self._entries.pop(task_id, [])
-            self._active_streams.pop(task_id, None)
             if entries:
                 await self._durable_store.replace(task_id, entries)
                 if self._model_log is not None:
                     await self._model_log.write(task_id, entries)
-
-
-def _streaming_kind(kind: TranscriptKind) -> StreamingTranscriptKind:
-    if kind == "model_reasoning_delta" or kind == "model_output_delta":
-        return kind
-    raise ValueError(f"Transcript kind is not a streaming delta: {kind}")
 
 
 def _transcript_entry(
