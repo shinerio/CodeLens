@@ -1077,7 +1077,7 @@ async def test_runtime_rejects_a_model_run_without_an_accepted_task_done_call() 
         runner=NonCompletingRunner(FakeResult({}, ())),
     )
 
-    with pytest.raises(PermanentAgentOutputError) as captured:
+    with pytest.raises(TransientAgentRuntimeError) as captured:
         await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
 
     assert captured.value.reason_code == "review_completion_not_declared"

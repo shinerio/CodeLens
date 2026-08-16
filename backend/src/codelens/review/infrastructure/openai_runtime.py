@@ -412,6 +412,7 @@ class OpenAIAgentRuntime:
         )
         model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)
+        tool_names = tuple(str(getattr(tool, "name", "")) for tool in model_tools)
         instruction_sections = [prompts.review_policy, repository_instructions]
         if is_reviewer:
             instruction_sections.append(prompts.review_workflow)
@@ -433,7 +434,7 @@ class OpenAIAgentRuntime:
             tool_not_found_behavior="return_error_to_model",
             tool_error_formatter=_tool_error_formatter(
                 prompts.tool_not_found,
-                tuple(str(getattr(tool, "name", "")) for tool in model_tools),
+                tool_names,
             ),
         )
         investigation: object | None = None
@@ -445,6 +446,10 @@ class OpenAIAgentRuntime:
         skills_emitted = sink is None
         prompt_emitted = sink is None
         for attempt in range(max_retries + 1):
+            if attempt > 0:
+                model_tools = CapabilityToolAssembler().assemble(
+                    execution_spec, tool_context
+                )
             client = AsyncOpenAI(
                 api_key=provider_config.api_key,
                 base_url=provider_config.base_url,
@@ -568,6 +573,13 @@ class OpenAIAgentRuntime:
                                     },
                                 )
                             )
+                    if not tool_context.is_completed:
+                        attempt_failure = TransientAgentRuntimeError(
+                            "Agent execution ended without an accepted output submission.",
+                            phase="investigation",
+                            reason_code="review_completion_not_declared",
+                            retryable=True,
+                        )
                 except APIStatusError as provider_error:
                     attempt_failure = self._status_failure(provider_error, phase)
                 except APITimeoutError:
@@ -626,10 +638,7 @@ class OpenAIAgentRuntime:
 
             await client.close()
 
-            is_retryable = (
-                isinstance(attempt_failure, TransientAgentRuntimeError)
-                and attempt_failure.retryable
-            )
+            is_retryable = isinstance(attempt_failure, TransientAgentRuntimeError)
             if not is_retryable or attempt >= max_retries:
                 failure = attempt_failure
                 investigation = None
@@ -665,24 +674,8 @@ class OpenAIAgentRuntime:
 
         if failure is not None:
             raise failure from None
-        if investigation is None:
-            await client.close()
-            raise self._failure(
-                "investigation",
-                "missing_model_output",
-                "model returned no structured output",
-                retryable=False,
-            )
 
         result = cast(RunResult, investigation)
-        if not tool_context.is_completed:
-            await client.close()
-            raise TransientAgentRuntimeError(
-                "Agent execution ended without an accepted output submission.",
-                phase="investigation",
-                reason_code="review_completion_not_declared",
-                retryable=True,
-            ) from None
         try:
             if planner_codec is not None:
                 final_output = tool_context.final_output()
