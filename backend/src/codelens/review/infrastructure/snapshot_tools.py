@@ -180,6 +180,8 @@ class FilesystemReviewTools:
         )
         self._review_files_by_path = {item.path: item for item in review_files}
         self._reviewed_paths: set[str] = set()
+        # Cache for file payloads to avoid repeated disk reads within the same agent run
+        self._file_payload_cache: dict[tuple[str, str], bytes] = {}
 
     async def find_files(self, path: str = "", pattern: str = "**") -> str:
         """Find visible files under one normalized directory using the shared v2 Glob."""
@@ -1218,6 +1220,11 @@ class FilesystemReviewTools:
     async def _file_payload(self, path: str, version: _FileVersion) -> bytes:
         """Read one hash-verified Snapshot version and reject binary content."""
 
+        # Check cache first to avoid repeated disk reads
+        cache_key = (path, version)
+        if cache_key in self._file_payload_cache:
+            return self._file_payload_cache[cache_key]
+
         entry = self._entry(path)
         if version == "current":
             payload = await self._payload(entry)
@@ -1226,6 +1233,9 @@ class FilesystemReviewTools:
             payload = await self._revision_payload(path, version)
         if b"\0" in payload:
             raise ValueError("Snapshot file is binary")
+
+        # Cache the payload for subsequent reads
+        self._file_payload_cache[cache_key] = payload
         return payload
 
     async def _revision_payload(self, path: str, version: Literal["base", "head"]) -> bytes:

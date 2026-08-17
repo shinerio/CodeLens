@@ -16,7 +16,7 @@ freeze candidate input
   -> complete / partial / failed
 ```
 
-- Fixed 由宿主直接编译；Adaptive 只允许 `review-planner:v2` 选择冻结 Catalog 中的 v2 Reviewer。
+- Fixed 由宿主直接编译；Adaptive 只允许 `review-planner:v2` 选择冻结 Catalog 中的 v2 Reviewer（不含 `correctness:v2`）。`ReviewPlanCompiler` 在 Planner 选择后确定性注入 `correctness:v2`，保证正确性维度始终覆盖。
 - Reviewer 彼此隔离并持久化 checkpoint。多 Specialist 全部终态后运行单个 Verifier。
 - `ReviewFileScope` 在模型调用前持久化，重启不会重新读取当前文件排除设置。
 - 全部 Candidate 文件被排除时跳过模型节点并以 0 Findings 完成。

@@ -34,10 +34,20 @@ def test_planner_output_accepts_general_alone() -> None:
     assert selection.reviewer_references == ("general:v2",)
 
 
+def test_planner_output_accepts_single_specialist() -> None:
+    codec = PlannerOutputCodec(
+        eligible_reviewer_references=("security:v2", "performance:v2", "general:v2"),
+        unavailable_reviewer_references=(),
+    )
+
+    selection = codec.decode_references(["security:v2"])
+
+    assert selection.reviewer_references == ("security:v2",)
+
+
 @pytest.mark.parametrize(
     "reviewer_references",
     [
-        ["security:v2"],
         ["general:v2", "security:v2"],
         ["security:v2", "security:v2"],
         ["security:v2", "unknown:v2"],

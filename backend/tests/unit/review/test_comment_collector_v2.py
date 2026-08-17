@@ -157,7 +157,7 @@ def test_incomplete_completion_reports_host_derived_coverage_progress() -> None:
     repeated_completion = json.loads(collector.complete("Still incomplete."))
     assert repeated_completion["status"] == "needs_action"
     assert repeated_completion["diagnostics"][0]["code"] == "missing_review_files"
-    assert "Do not call task_done again" in repeated_completion["diagnostics"][0]["message"]
+    assert "You must read every file in" in repeated_completion["diagnostics"][0]["message"]
 
 
 def test_complete_completion_reports_host_derived_coverage_progress() -> None:

@@ -42,8 +42,8 @@ class PlannerOutputCodec:
             raise ValueError(f"Planner selected unavailable Reviewers: {sorted(unavailable)}")
         if "general:v2" in selected and selected != {"general:v2"}:
             raise ValueError("General reviewer must run alone")
-        if "general:v2" not in selected and len(selected) < 2:
-            raise ValueError("Planner specialist team requires at least two Reviewers")
+        if "general:v2" not in selected and len(selected) < 1:
+            raise ValueError("Planner specialist team requires at least one Reviewer")
         return PlannerSelection(
             schema_version=self._SCHEMA_VERSION,
             reviewer_references=references,

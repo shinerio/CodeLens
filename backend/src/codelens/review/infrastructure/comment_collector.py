@@ -544,14 +544,19 @@ class ReviewCommentCollector:
         if incomplete:
             self._incomplete_retry_count += 1
             if self._incomplete_retry_count <= self.max_incomplete_review_retries:
-                diagnostic_message = (
-                    "Review evidence is still missing for one or more files."
-                    if self._incomplete_retry_count == 1
-                    else (
-                        "Review evidence is still missing. Do not call task_done again "
-                        "until every missing_review_files entry has evidence."
+                # 提供更明确的指导，告诉 reviewer 需要先读取所有文件
+                if self._incomplete_retry_count == 1:
+                    diagnostic_message = (
+                        f"You have only reviewed {reviewed_file_count} out of {total_review_file_count} files. "
+                        f"Please read all {missing_file_count} missing file(s) listed in missing_review_files "
+                        f"before calling task_done again. Complete review of all files first, then submit."
                     )
-                )
+                else:
+                    diagnostic_message = (
+                        f"Still missing {missing_file_count} file(s). You must read every file in "
+                        f"missing_review_files before calling task_done. Do not submit until all "
+                        f"{total_review_file_count} files have been reviewed."
+                    )
                 return ToolResult(
                     "task_done",
                     ToolResultStatus.NEEDS_ACTION,

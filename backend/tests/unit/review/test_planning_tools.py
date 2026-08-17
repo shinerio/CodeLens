@@ -28,7 +28,7 @@ async def test_finalize_plan_returns_success_envelope_and_rejects_repeat() -> No
 async def test_finalize_plan_rejects_invalid_business_selection() -> None:
     collector = _collector()
 
-    result = json.loads(await collector.finalize(["security:v2"]))
+    result = json.loads(await collector.finalize([]))
 
     assert result["status"] == "rejected"
     assert result["diagnostics"][0]["code"] == "invalid_reviewer_selection"

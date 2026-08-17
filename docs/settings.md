@@ -63,7 +63,7 @@ Review Profile 将 reviewer 选择策略保存为可复用配置。任务创建�
 | --- | --- | --- |
 | Profile 名称 | 标识一组审查策略，最长 120 个字符。 | 按范围命名，例如 `Backend security`、`General fast pass`。 |
 | 默认 Profile | 新建 Review 时优先使用的 profile；系统要求始终恰好有一个默认项。 | 将最常用、风险适中的策略设为默认。 |
-| 自适应选择（`adaptive`） | 由宿主规划器根据变更内容选择 reviewer。 | 变更类型多样、希望自动覆盖时使用。 |
+| 自适应选择（`adaptive`） | 由宿主规划器根据变更内容选择 reviewer；框架自动注入 `correctness:v2` 保证正确性覆盖。 | 变更类型多样、希望自动覆盖时使用。 |
 | 固定选择（`fixed`） | 明确指定至少一个 reviewer，结果更可预测。 | 合规、专项审查或基准评测使用；`general:v2` 必须单独运行，不能与其他 reviewer 混用。 |
 
 ## 6. 文件排除

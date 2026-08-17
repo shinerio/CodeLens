@@ -13,7 +13,7 @@
 | `comment:v2` | `comments` | 每项独立校验；接受项返回 Run 内唯一 `candidate_id` |
 | `retract_comment:v2` | `candidate_ids`、`reason` | 当前 Reviewer/Run 内幂等撤销；保留审计，最终只发布 active Candidate |
 | `task_done:v2` | `summary` | 首次输入提供 `review_file_count`；未覆盖时返回宿主计算的已读/缺失/总数和 `needs_action`，只有 `success` 结束 Reviewer Loop |
-| `finalize_plan:v2` | Planner 完整选择 | 一次提交并校验 General 单独或至少两个专项 Reviewer |
+| `finalize_plan:v2` | Planner 完整选择 | 一次提交并校验 General 单独或至少一个专项 Reviewer |
 | `verdict:v2` | `cluster_ids`、`action` | Accept/Deny 已有 Cluster，批量不构成隐式 merge |
 | `merge:v2` | Cluster IDs 与完整 Comment 字段 | 合并或重写已有 Cluster，允许单 Cluster |
 | `finalize_verdicts:v2` | 完成声明 | 每个 Cluster 必须恰好覆盖一次 |

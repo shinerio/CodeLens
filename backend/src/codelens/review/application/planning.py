@@ -139,6 +139,47 @@ class PlannerSelection:
     reviewer_references: tuple[str, ...]
 
 
+MANDATORY_ADAPTIVE_REVIEWERS: tuple[str, ...] = ("correctness:v2",)
+"""Reviewer references the framework always injects into adaptive plans.
+
+Correctness is non-negotiable: an adaptive review that omits the correctness
+perspective cannot guarantee that changes behave as intended. When the Planner
+does not select correctness (and does not select general, whose dimensions
+include correctness), the framework appends correctness:v2 before validation.
+"""
+
+
+def ensure_mandatory_adaptive_reviewers(
+    references: list[str] | tuple[str, ...],
+    catalog: Mapping[str, AgentVersion],
+) -> tuple[str, ...]:
+    """Append mandatory Reviewers the Planner omitted from an adaptive selection.
+
+    Args:
+        references: The Planner's raw reviewer references, before validation.
+        catalog: The frozen Agent catalog used to resolve reviewer eligibility.
+
+    Returns:
+        The augmented reference tuple. If ``general:v2`` is present the input is
+        returned unchanged because general covers every dimension including
+        correctness. Otherwise each mandatory reference that is public and
+        Planner-eligible is appended when absent.
+    """
+    augmented = list(references)
+    selected = set(augmented)
+    if "general:v2" in selected:
+        return tuple(augmented)
+    for reference in MANDATORY_ADAPTIVE_REVIEWERS:
+        if reference in selected:
+            continue
+        agent = catalog.get(reference)
+        if agent is None or not agent.is_public or not agent.planner_eligible:
+            continue
+        augmented.append(reference)
+        selected.add(reference)
+    return tuple(augmented)
+
+
 class PlannerPort(Protocol):
     async def select(
         self,
@@ -204,6 +245,8 @@ class ReviewPlanCompiler:
     ) -> ReviewPlan:
         try:
             reviewers = self._validate_team(reviewer_references, selection_mode, readiness)
+            if selection_mode == "adaptive":
+                reviewers = ensure_mandatory_adaptive_reviewers(reviewers, self._catalog)
             required = list(reviewers)
             if selection_mode == "adaptive":
                 required.append("review-planner:v2")
@@ -252,8 +295,8 @@ class ReviewPlanCompiler:
         if "general:v2" in references and references != ("general:v2",):
             raise ValueError("General reviewer must run alone")
         if selection_mode == "adaptive" and references != ("general:v2",):
-            if len(references) < 2:
-                raise ValueError("Adaptive specialist team requires at least two reviewers")
+            if len(references) < 1:
+                raise ValueError("Adaptive specialist team requires at least one reviewer")
         return tuple(agent.reference for agent in agents)
 
     @staticmethod
@@ -289,8 +332,15 @@ class ReviewPlanCompiler:
         if selection_mode == "adaptive":
             if planner_selection is None:
                 raise ValueError("Adaptive plan requires Planner output")
-            if planner_selection.reviewer_references != reviewers:
-                raise ValueError("host cannot add or remove Planner selections")
+            planner_refs = set(planner_selection.reviewer_references)
+            final_refs = set(reviewers)
+            if not planner_refs.issubset(final_refs):
+                raise ValueError("host cannot remove Planner selections")
+            unauthorized = final_refs - planner_refs - set(MANDATORY_ADAPTIVE_REVIEWERS)
+            if unauthorized:
+                raise ValueError(
+                    f"host can only add mandatory reviewers: {sorted(unauthorized)}"
+                )
             planner_node = self._node(
                 task_id,
                 ReviewPlanNodeType.PLANNER,

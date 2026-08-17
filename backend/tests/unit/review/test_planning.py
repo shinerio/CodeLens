@@ -11,6 +11,7 @@ from codelens.review.application.planning import (
     PlannerSelection,
     ReviewPlanCompiler,
     ReviewPlanningService,
+    ensure_mandatory_adaptive_reviewers,
 )
 from codelens.review.domain.ports import ReviewPlanRecord
 from codelens.review.domain.review_strategy import (
@@ -185,6 +186,7 @@ async def test_existing_plan_prevents_adaptive_planner_reinvocation() -> None:
             "review-planner:v2",
             "security:v2",
             "performance:v2",
+            "correctness:v2",
             "review-verifier:v2",
         ),
         readiness=_ready(),
@@ -199,37 +201,102 @@ async def test_existing_plan_prevents_adaptive_planner_reinvocation() -> None:
     assert first_planner.call_count == 1
 
 
-def test_adaptive_compiler_accepts_two_or_more_specialists_only() -> None:
-    specialist_selection = PlannerSelection(
-        "2",
-        ("security:v2", "performance:v2"),
-    )
-    specialists = _compiler().compile(
+def test_adaptive_compiler_injects_correctness_into_specialist_team() -> None:
+    selection = PlannerSelection("2", ("security:v2", "performance:v2"))
+
+    plan = _compiler().compile(
         task_id=TASK_ID,
         selection_mode="adaptive",
-        reviewer_references=specialist_selection.reviewer_references,
-        planner_selection=specialist_selection,
+        reviewer_references=selection.reviewer_references,
+        planner_selection=selection,
         execution_specs=_specs(
             "review-planner:v2",
             "security:v2",
             "performance:v2",
+            "correctness:v2",
             "review-verifier:v2",
         ),
         readiness=_ready(),
     )
-    assert specialists.reviewer_references == ("performance:v2", "security:v2")
 
-    one_specialist = PlannerSelection(
-        "2",
-        ("security:v2",),
+    assert "correctness:v2" in plan.reviewer_references
+    assert set(plan.reviewer_references) == {
+        "security:v2",
+        "performance:v2",
+        "correctness:v2",
+    }
+
+
+def test_adaptive_compiler_accepts_single_specialist_and_injects_correctness() -> None:
+    selection = PlannerSelection("2", ("security:v2",))
+
+    plan = _compiler().compile(
+        task_id=TASK_ID,
+        selection_mode="adaptive",
+        reviewer_references=selection.reviewer_references,
+        planner_selection=selection,
+        execution_specs=_specs(
+            "review-planner:v2",
+            "security:v2",
+            "correctness:v2",
+            "review-verifier:v2",
+        ),
+        readiness=_ready(),
     )
-    with pytest.raises(InvalidReviewPlanError, match="at least two"):
+
+    assert set(plan.reviewer_references) == {"security:v2", "correctness:v2"}
+
+
+def test_adaptive_compiler_skips_injection_when_general_selected() -> None:
+    selection = PlannerSelection("2", ("general:v2",))
+
+    plan = _compiler().compile(
+        task_id=TASK_ID,
+        selection_mode="adaptive",
+        reviewer_references=selection.reviewer_references,
+        planner_selection=selection,
+        execution_specs=_specs("review-planner:v2", "general:v2"),
+        readiness=_ready(),
+    )
+
+    assert plan.reviewer_references == ("general:v2",)
+
+
+def test_adaptive_compiler_rejects_removal_of_planner_selection() -> None:
+    selection = PlannerSelection("2", ("security:v2", "performance:v2"))
+
+    with pytest.raises(InvalidReviewPlanError, match="cannot remove"):
         _compiler().compile(
             task_id=TASK_ID,
             selection_mode="adaptive",
             reviewer_references=("security:v2",),
-            planner_selection=one_specialist,
-            execution_specs=_specs("review-planner:v2", "security:v2"),
+            planner_selection=selection,
+            execution_specs=_specs(
+                "review-planner:v2",
+                "security:v2",
+                "correctness:v2",
+                "review-verifier:v2",
+            ),
+            readiness=_ready(),
+        )
+
+
+def test_adaptive_compiler_rejects_unauthorized_addition() -> None:
+    selection = PlannerSelection("2", ("security:v2",))
+
+    with pytest.raises(InvalidReviewPlanError, match="only add mandatory"):
+        _compiler().compile(
+            task_id=TASK_ID,
+            selection_mode="adaptive",
+            reviewer_references=("security:v2", "architecture:v2"),
+            planner_selection=selection,
+            execution_specs=_specs(
+                "review-planner:v2",
+                "security:v2",
+                "architecture:v2",
+                "correctness:v2",
+                "review-verifier:v2",
+            ),
             readiness=_ready(),
         )
 
@@ -289,3 +356,45 @@ async def test_adaptive_planner_failure_has_no_host_fallback() -> None:
             catalog_version="builtin-v1",
             capability_fingerprint="e" * 64,
         )
+
+
+# --- mandatory adaptive reviewer augmentation ---
+
+
+def test_ensure_mandatory_appends_correctness_when_planner_omitted_it() -> None:
+    catalog = builtin_agent_catalog()
+
+    augmented = ensure_mandatory_adaptive_reviewers(
+        ["security:v2", "performance:v2"], catalog
+    )
+
+    assert "correctness:v2" in augmented
+    assert augmented == ("security:v2", "performance:v2", "correctness:v2")
+
+
+def test_ensure_mandatory_preserves_correctness_when_already_selected() -> None:
+    catalog = builtin_agent_catalog()
+
+    augmented = ensure_mandatory_adaptive_reviewers(
+        ["correctness:v2", "security:v2"], catalog
+    )
+
+    assert augmented.count("correctness:v2") == 1
+    assert set(augmented) == {"correctness:v2", "security:v2"}
+
+
+def test_ensure_mandatory_skips_when_general_covers_correctness() -> None:
+    catalog = builtin_agent_catalog()
+
+    augmented = ensure_mandatory_adaptive_reviewers(["general:v2"], catalog)
+
+    assert augmented == ("general:v2",)
+
+
+def test_ensure_mandatory_appends_correctness_to_single_specialist() -> None:
+    catalog = builtin_agent_catalog()
+
+    augmented = ensure_mandatory_adaptive_reviewers(["security:v2"], catalog)
+
+    assert set(augmented) == {"security:v2", "correctness:v2"}
+    assert len(augmented) == 2

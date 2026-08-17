@@ -33,6 +33,7 @@ from codelens.review.application.orchestrator import (
     ReviewOrchestrator,
 )
 from codelens.review.application.planning import (
+    MANDATORY_ADAPTIVE_REVIEWERS,
     CapabilityReadiness,
     ChangeRiskSummary,
     PlannerSelection,
@@ -694,9 +695,16 @@ class WorkerReviewExecutor:
         eligible = tuple(
             reference
             for reference, agent in catalog.items()
-            if agent.is_public and agent.planner_eligible
+            if agent.is_public
+            and agent.planner_eligible
+            and reference not in MANDATORY_ADAPTIVE_REVIEWERS
         )
-        required_references = (*eligible, "review-planner:v2", "review-verifier:v2")
+        required_references = (
+            *eligible,
+            *MANDATORY_ADAPTIVE_REVIEWERS,
+            "review-planner:v2",
+            "review-verifier:v2",
+        )
         specs_by_reference = {spec.agent.reference: spec for spec in stored_specs.values()}
         missing = tuple(
             reference for reference in required_references if reference not in specs_by_reference
@@ -716,7 +724,10 @@ class WorkerReviewExecutor:
                 ),
             )
             specs_by_reference.update((spec.agent.reference, spec) for spec in generated)
-        readiness = {reference: CapabilityReadiness("ready", ()) for reference in eligible}
+        readiness = {
+            reference: CapabilityReadiness("ready", ())
+            for reference in (*eligible, *MANDATORY_ADAPTIVE_REVIEWERS)
+        }
         base_input = self._context_builder.build(snapshot, instructions).canonical_bytes()
         risk_summary = ChangeRiskSummary.from_snapshot(snapshot)
         planner_input = build_planner_input_payload(

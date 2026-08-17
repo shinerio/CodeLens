@@ -134,19 +134,46 @@ class VerdictSubmissionCollector:
                 side,
                 existing_code,
             )
-        except ValueError:
+        except ValueError as error:
+            # 根据实际错误消息提供更具体的诊断，帮助 verifier 理解问题
+            error_msg = str(error)
+            if "existing_code cannot be resolved" in error_msg:
+                # existing_code 无法在 diff 或文件中定位
+                diagnostic = ToolDiagnostic(
+                    "existing_code_unresolvable",
+                    "The existing_code cannot be resolved to a line range. It may contain content from multiple files or lines that don't match the diff.",
+                    True,
+                    "existing_code",
+                )
+            elif "existing_code must quote only consecutive" in error_msg:
+                # existing_code 包含了 diff 标记或非连续变更行
+                diagnostic = ToolDiagnostic(
+                    "comment_outside_diff",
+                    error_msg,  # 使用原始消息，已经足够清晰
+                    True,
+                    "existing_code",
+                )
+            elif "location path is outside" in error_msg:
+                # path 不在审查范围内
+                diagnostic = ToolDiagnostic(
+                    "path_outside_review",
+                    "The path is outside the review scope.",
+                    True,
+                    "path",
+                )
+            else:
+                # 其他位置解析错误
+                diagnostic = ToolDiagnostic(
+                    "invalid_merge_location",
+                    "The merge location is not valid evidence.",
+                    True,
+                    "path",
+                )
             return ToolResult(
                 "merge",
                 ToolResultStatus.REJECTED,
                 {},
-                (
-                    ToolDiagnostic(
-                        "invalid_merge_location",
-                        "The merge location is not valid evidence.",
-                        True,
-                        "path",
-                    ),
-                ),
+                (diagnostic,),
             ).to_json()
         decision = VerdictDecision.merge(
             cluster_ids=validated_ids,

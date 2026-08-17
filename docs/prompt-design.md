@@ -76,7 +76,7 @@ Agent 专属 Prompt 位于 `prompts/<prompt_key>/<locale>.md`。内置目录映�
 
 | Agent reference | 角色 | `prompt_key` | Prompt 关注点 |
 | --- | --- | --- | --- |
-| `review-planner:v1` | PLANNER | `review-planner` | 选择 General Reviewer，或至少两个专项 Reviewer；不得创建 Finding |
+| `review-planner:v1` | PLANNER | `review-planner` | 选择 General Reviewer，或至少一个专项 Reviewer；不得创建 Finding |
 | `correctness:v1` | REVIEWER | `correctness` | 旧版正确性审查；隐藏、不可供 Planner 选择 |
 | `correctness:v2` | REVIEWER | `correctness-v2` | 业务逻辑、状态转换、边界、错误与控制流 |
 | `security:v1` | REVIEWER | `security` | 认证授权、注入、Secret、敏感数据与信任边界 |
@@ -204,13 +204,14 @@ PLANNER 的已定义输入构造器是 [`build_planner_input_payload()`](../back
       ]
     },
     "eligible_reviewer_references": [
-      "correctness:v2",
-      "security:v1"
+      "security:v2",
+      "performance:v2"
     ],
     "reviewer_catalog": [
-      {"reference": "correctness:v2", "dimensions": ["correctness"]}
+      {"reference": "security:v2", "dimensions": ["security"]},
+      {"reference": "performance:v2", "dimensions": ["performance"]}
     ],
-    "unavailable_reviewer_references": ["security:v1"]
+    "unavailable_reviewer_references": ["security:v2"]
   }
 }
 ```
@@ -222,7 +223,7 @@ PLANNER 的已定义输入构造器是 [`build_planner_input_payload()`](../back
 - `reviewer_catalog` 也是调用方传入的有界字典投影；当前构造器只复制每个字典，不规定其内部必须有哪些键。
 - `unavailable_reviewer_references` 从 eligible 列表中过滤得到：readiness 缺失或状态为 `unavailable` 的 Reviewer 会进入该数组；`ready` 和 `degraded` 不进入。`CapabilityReadiness.reason_codes` 当前不会直接写入 PLANNER 的 `role_context`。
 
-运行时的 `_planner_codec()` 要求 `eligible_reviewer_references` 和 `unavailable_reviewer_references` 存在且为字符串数组；只允许额外出现 `change_risk_summary`、`reviewer_catalog`。这些列表同时约束 Planner 的结构化输出，防止选择未授权或不可用 Reviewer。
+运行时的 `_planner_codec()` 要求 `eligible_reviewer_references` 和 `unavailable_reviewer_references` 存在且为字符串数组；只允许额外出现 `change_risk_summary`、`reviewer_catalog`。这些列表同时约束 Planner 的结构化输出，防止选择未授权或不可用 Reviewer。`correctness:v2` 不出现在 `eligible_reviewer_references` 中，由 `ReviewPlanCompiler` 在 Planner 选择后确定性注入，不受 Planner 输出约束限制。
 
 因此，按已定义契约，PLANNER 最终传给 `Runner.input` 的 `user_input` 是：
 
@@ -251,7 +252,7 @@ PLANNER 的已定义输入构造器是 [`build_planner_input_payload()`](../back
       ],
       "risk_signals": []
     },
-    "eligible_reviewer_references": ["correctness:v2"],
+    "eligible_reviewer_references": ["security:v2"],
     "reviewer_catalog": [{"reference": "correctness:v2"}],
     "unavailable_reviewer_references": []
   }
