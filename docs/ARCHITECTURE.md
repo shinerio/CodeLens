@@ -257,7 +257,7 @@ frontend/src/
 - 每个系统语言包必须包含 `checkpoint-compaction.md`，由 `I18nPromptLoader` 在启动时完整校验并加载，用于 checkpoint 语义摘要调用。自然语言随 locale 变化，JSON 字段、版本 marker、工具名、ID 和错误码不本地化；运行时不得在代码中拼接压缩指令。逐项证据占位、replay allowance 和旧 `context-compaction.md` 不得重新进入主路径。
 - Context Runtime 应按模型 input token、上下文上限和预留 output token 使用软、硬水位：软水位异步准备 checkpoint，硬水位在下一次可能越界的主调用前同步切换。软/硬水位以本地 tiktoken 估算的 token 计，包含系统提示+工具定义+对话历史，对非 OpenAI 模型使用 cl100k_base 近似。字节限制只约束单个或单批工具结果，不能作为长期上下文容量的唯一判断。Epoch 切换只能替换旧 checkpoint 和已被其覆盖的完整 rounds，不能修改原始用户输入或积累多份摘要；切换后从相同 Immutable Prefix、单一新 checkpoint 和可选最近完整 rounds 继续。
 - Context Checkpoint 是兜底而非主要降本手段。证据工具必须先在源头执行分页、续读、范围合并、去重和总输出限制；原始大结果通过当前 Agent Run 可见的稳定 `evidence_id` 留在 Artifact/Transcript，模型仅接收当前判断所需片段并可按相同 Tool Contract 重取。一次模型响应中的多个独立只读工具允许有界并行，但同轮全部结果必须按原调用顺序一次性返回；状态或完成工具不得与只读证据调用组成并行批次，Agent Run 级 Limiter 必须同时限制并行度、总调用、timeout 和批次总输出。
-- 过程报告必须分别统计主 Agent 和 checkpoint 的调用、input/output/cache read/cache write token，并返回 Epoch 数、checkpoint 成功/失败/超时/校验失败、切换前后有效 token、Immutable Prefix token、最早缓存差异点、被覆盖 round/结果/token、evidence 重取以及批量工具调用和并行度指标。
+- 过程报告必须分别统计主 Agent 和 checkpoint 的调用、input/output/cache read token，并返回 Epoch 数、checkpoint 成功/失败/超时/校验失败、切换前后有效 token、Immutable Prefix token、最早缓存差异点、被覆盖 round/结果/token、evidence 重取以及批量工具调用和并行度指标。
 - 工具统计必须只按 Tool Result status 区分尝试、逐 status 数量、已接受、已拒绝和 unclassified，并返回 non-JSON result 与 loop abort 数；非法工具名另行统计，不得计入正常工具。拒绝原因以有界元数据写入脱敏 Transcript、模型日志和持久化 outbox，普通日志只记录相同的有界诊断字段。Transcript 保存模型实际看到的单层 Tool Result，不得二次 JSON 编码。一次逻辑 Agent Run 内的 provider 重试不增加 Agent Run 数；只有每次 provider 尝试都具有完整 usage 时 `usage_is_complete` 才能为 true，任一重试尝试缺少 usage 时必须标记为 false，不能把最终成功尝试的 usage 冒充整个逻辑 Run 的完整用量。
 - 模型产生的工具名不在当前冻结 allowlist 时，Runtime 必须记录独立的非法工具调用事件；过程报告返回非法工具名及次数，且不得把它计入正常工具调用与结果统计。
 

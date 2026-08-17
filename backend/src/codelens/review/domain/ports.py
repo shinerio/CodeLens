@@ -99,7 +99,6 @@ class AgentResponseDiagnostic:
     output_tokens: int
     output_item_count: int
     cached_input_tokens: int = 0
-    cache_write_input_tokens: int = 0
     phase: Literal["agent", "checkpoint_compaction"] = "agent"
 
 
@@ -133,12 +132,6 @@ class UnvalidatedAgentOutput:
         """Return provider-reported cache-hit input tokens across model requests."""
 
         return sum(item.cached_input_tokens for item in self.diagnostics)
-
-    @property
-    def cache_write_input_tokens(self) -> int:
-        """Return provider-reported cache-write input tokens across model requests."""
-
-        return sum(item.cache_write_input_tokens for item in self.diagnostics)
 
     @property
     def checkpoint_llm_call_count(self) -> int:

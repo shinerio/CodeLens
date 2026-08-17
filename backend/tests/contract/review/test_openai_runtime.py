@@ -60,7 +60,6 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 @dataclass(frozen=True)
 class FakeInputTokenDetails:
     cached_tokens: int
-    cache_write_tokens: int
 
 
 @dataclass(frozen=True)
@@ -693,7 +692,7 @@ async def test_successful_provider_responses_are_not_marked_as_parse_failures() 
                 FakeResponse(
                     "resp_1",
                     "req_1",
-                    FakeUsage(11, 1, FakeInputTokenDetails(7, 3)),
+                    FakeUsage(11, 1, FakeInputTokenDetails(7)),
                     (),
                 ),
             ),
@@ -719,7 +718,6 @@ async def test_successful_provider_responses_are_not_marked_as_parse_failures() 
     assert len(raw_events) == 1
     assert raw_events[0].metadata == {"parse_failed": "false", "response_index": "1"}
     assert output.cached_input_tokens == 7
-    assert output.cache_write_input_tokens == 3
 
 
 async def test_accepted_task_done_stops_the_agent_without_another_model_turn() -> None:

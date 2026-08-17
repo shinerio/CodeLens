@@ -510,7 +510,6 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         llm_call_count: 9,
         input_tokens: 480,
         cached_input_tokens: 120,
-        cache_write_input_tokens: 30,
         context_compaction_count: 2,
         context_compaction_failure_count: 1,
         context_compacted_result_count: 5,
@@ -547,9 +546,9 @@ it("restores usage metrics and filters tokens and tools with the selected stage 
         rejected_tool_calls: [],
         invalid_tools: [{ tool_name: "grep_create_triggered", call_count: 1 }],
         agents: [
-          { agent: "security:v2", model_name: "model", llm_call_count: 2, input_tokens: 80, cached_input_tokens: 20, cache_write_input_tokens: 5, output_tokens: 20, total_tokens: 100, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
-          { agent: "performance:v2", model_name: "model", llm_call_count: 3, input_tokens: 160, cached_input_tokens: 40, cache_write_input_tokens: 10, output_tokens: 40, total_tokens: 200, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
-          { agent: "review-verifier:v2", model_name: "model", llm_call_count: 4, input_tokens: 240, cached_input_tokens: 60, cache_write_input_tokens: 15, output_tokens: 60, total_tokens: 300, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
+          { agent: "security:v2", model_name: "model", llm_call_count: 2, input_tokens: 80, cached_input_tokens: 20, output_tokens: 20, total_tokens: 100, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:02Z", duration_ms: 2_000 },
+          { agent: "performance:v2", model_name: "model", llm_call_count: 3, input_tokens: 160, cached_input_tokens: 40, output_tokens: 40, total_tokens: 200, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:00Z", completed_at: "2026-08-03T00:00:03Z", duration_ms: 3_000 },
+          { agent: "review-verifier:v2", model_name: "model", llm_call_count: 4, input_tokens: 240, cached_input_tokens: 60, output_tokens: 60, total_tokens: 300, tool_call_count: 1, accepted_tool_call_count: 1, rejected_tool_call_count: 0, unclassified_tool_call_count: 0, started_at: "2026-08-03T00:00:03Z", completed_at: "2026-08-03T00:00:06Z", duration_ms: 3_000 },
         ],
       }}
       plan={{

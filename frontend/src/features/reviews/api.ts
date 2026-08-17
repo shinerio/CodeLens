@@ -105,7 +105,6 @@ export interface AgentProcessSummary {
   input_tokens: number;
   checkpoint_input_tokens?: number;
   cached_input_tokens: number;
-  cache_write_input_tokens: number;
   context_compaction_count?: number;
   context_compacted_result_count?: number;
   context_compaction_original_tokens?: number;
@@ -135,7 +134,6 @@ export interface ReviewProcessReport {
   input_tokens: number;
   checkpoint_input_tokens?: number;
   cached_input_tokens: number;
-  cache_write_input_tokens: number;
   context_compaction_count?: number;
   context_compacted_result_count?: number;
   context_compaction_original_tokens?: number;

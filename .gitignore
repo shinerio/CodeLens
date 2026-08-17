@@ -28,3 +28,4 @@ integration-tests/playwright-report/
 integration-tests/test-results/
 .codegraph
 CodeLensReview
+.cac

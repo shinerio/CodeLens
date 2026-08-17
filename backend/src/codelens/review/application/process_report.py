@@ -92,7 +92,6 @@ class AgentProcessSummary:
     input_tokens: int
     checkpoint_input_tokens: int
     cached_input_tokens: int
-    cache_write_input_tokens: int
     context_compaction_count: int
     context_compacted_result_count: int
     context_compaction_original_tokens: int
@@ -125,7 +124,6 @@ class ReviewProcessReport:
     input_tokens: int
     checkpoint_input_tokens: int
     cached_input_tokens: int
-    cache_write_input_tokens: int
     context_compaction_count: int
     context_compacted_result_count: int
     context_compaction_original_tokens: int
@@ -165,7 +163,6 @@ class _AgentAccumulator:
     input_tokens: int = 0
     checkpoint_input_tokens: int = 0
     cached_input_tokens: int = 0
-    cache_write_input_tokens: int = 0
     context_compaction_count: int = 0
     context_compacted_result_count: int = 0
     context_compaction_original_tokens: int = 0
@@ -321,7 +318,6 @@ def build_process_report(
             input_tokens=value.input_tokens,
             checkpoint_input_tokens=value.checkpoint_input_tokens,
             cached_input_tokens=value.cached_input_tokens,
-            cache_write_input_tokens=value.cache_write_input_tokens,
             context_compaction_count=value.context_compaction_count,
             context_compacted_result_count=value.context_compacted_result_count,
             context_compaction_original_tokens=value.context_compaction_original_tokens,
@@ -390,7 +386,6 @@ def build_process_report(
             agent.checkpoint_input_tokens for agent in agent_summaries
         ),
         cached_input_tokens=sum(agent.cached_input_tokens for agent in agent_summaries),
-        cache_write_input_tokens=sum(agent.cache_write_input_tokens for agent in agent_summaries),
         context_compaction_count=sum(agent.context_compaction_count for agent in agent_summaries),
         context_compacted_result_count=sum(
             agent.context_compacted_result_count for agent in agent_summaries
@@ -464,7 +459,6 @@ def _accumulate_usage(accumulator: _AgentAccumulator, metadata: dict[str, str]) 
     accumulator.llm_call_count += _non_negative_int(metadata, "llm_call_count")
     accumulator.input_tokens += _non_negative_int(metadata, "input_tokens")
     accumulator.cached_input_tokens += _non_negative_int(metadata, "cached_input_tokens")
-    accumulator.cache_write_input_tokens += _non_negative_int(metadata, "cache_write_input_tokens")
     accumulator.context_compaction_count = max(
         accumulator.context_compaction_count,
         _non_negative_int(metadata, "context_compaction_count"),
@@ -621,7 +615,6 @@ def _has_activity(value: _AgentAccumulator) -> bool:
             value.llm_call_count,
             value.input_tokens,
             value.cached_input_tokens,
-            value.cache_write_input_tokens,
             value.context_compaction_count,
             value.context_compacted_result_count,
             value.context_compaction_original_tokens,

@@ -281,7 +281,6 @@ def test_process_report_exposes_live_provider_usage_without_agent_output() -> No
                 "llm_call_count": "1",
                 "input_tokens": "120",
                 "cached_input_tokens": "80",
-                "cache_write_input_tokens": "10",
                 "output_tokens": "30",
                 "total_tokens": "150",
             },
@@ -299,7 +298,6 @@ def test_process_report_exposes_live_provider_usage_without_agent_output() -> No
     assert report.llm_call_count == 1
     assert report.input_tokens == 120
     assert report.cached_input_tokens == 80
-    assert report.cache_write_input_tokens == 10
     assert report.output_tokens == 30
     assert report.total_tokens == 150
     assert report.duration_ms == 2_000
@@ -331,7 +329,6 @@ def test_process_report_separates_checkpoint_provider_usage() -> None:
                 "llm_call_count": "1",
                 "input_tokens": "90",
                 "cached_input_tokens": "0",
-                "cache_write_input_tokens": "0",
                 "output_tokens": "10",
                 "total_tokens": "100",
             },
@@ -362,7 +359,6 @@ def test_process_report_does_not_double_count_live_and_terminal_usage() -> None:
         "llm_call_count": "1",
         "input_tokens": "120",
         "cached_input_tokens": "80",
-        "cache_write_input_tokens": "10",
         "output_tokens": "30",
         "total_tokens": "150",
     }
@@ -385,7 +381,6 @@ def test_process_report_does_not_double_count_live_and_terminal_usage() -> None:
                 "llm_call_count": "1",
                 "input_tokens": "120",
                 "cached_input_tokens": "80",
-                "cache_write_input_tokens": "10",
                 "output_tokens": "30",
                 "total_tokens": "150",
             },
@@ -463,7 +458,6 @@ def test_process_report_marks_retry_usage_incomplete_without_every_attempt_usage
                 "llm_call_count": "8",
                 "input_tokens": "417692",
                 "cached_input_tokens": "12000",
-                "cache_write_input_tokens": "3000",
                 "context_compaction_count": "2",
                 "context_compacted_result_count": "5",
                 "context_compaction_original_tokens": "1000",
@@ -489,7 +483,6 @@ def test_process_report_marks_retry_usage_incomplete_without_every_attempt_usage
     assert report.agent_run_count == 1
     assert report.usage_is_complete is False
     assert report.cached_input_tokens == 12_000
-    assert report.cache_write_input_tokens == 3_000
     assert report.context_compaction_count == 2
     assert report.context_compacted_result_count == 5
     assert report.context_compaction_original_tokens == 1_000

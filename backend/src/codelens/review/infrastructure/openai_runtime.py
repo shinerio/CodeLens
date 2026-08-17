@@ -153,13 +153,12 @@ def _wrapped_agent_failure(error: BaseException) -> _AgentFailure | None:
     return None
 
 
-def _cache_token_details(usage: object) -> tuple[int, int]:
-    """Read optional provider cache counters without treating omission as an error."""
+def _cached_input_token_count(usage: object) -> int:
+    """Read optional provider cache-hit counter without treating omission as an error."""
 
     details = getattr(usage, "input_tokens_details", None)
     cached = getattr(details, "cached_tokens", 0) if details is not None else 0
-    cache_write = getattr(details, "cache_write_tokens", 0) if details is not None else 0
-    return int(cached or 0), int(cache_write or 0)
+    return int(cached or 0)
 
 
 def _response_diagnostic(
@@ -169,7 +168,7 @@ def _response_diagnostic(
 ) -> AgentResponseDiagnostic:
     """Normalize bounded usage metadata for main and checkpoint model calls."""
 
-    cached_tokens, cache_write_tokens = _cache_token_details(response.usage)
+    cached_tokens = _cached_input_token_count(response.usage)
     return AgentResponseDiagnostic(
         response_id=response.response_id,
         request_id=response.request_id,
@@ -177,7 +176,6 @@ def _response_diagnostic(
         output_tokens=response.usage.output_tokens,
         output_item_count=len(response.output),
         cached_input_tokens=cached_tokens,
-        cache_write_input_tokens=cache_write_tokens,
         phase=phase,
     )
 
@@ -560,9 +558,6 @@ class OpenAIAgentRuntime:
                                         "input_tokens": str(diagnostic.input_tokens),
                                         "cached_input_tokens": str(
                                             diagnostic.cached_input_tokens
-                                        ),
-                                        "cache_write_input_tokens": str(
-                                            diagnostic.cache_write_input_tokens
                                         ),
                                         "output_tokens": str(diagnostic.output_tokens),
                                         "total_tokens": str(
@@ -1136,13 +1131,12 @@ def _visible_event(event: object) -> list[AgentRuntimeEvent]:
                 "event_role": "marker",
             }
             if usage is not None:
-                cached_tokens, cache_write_tokens = _cache_token_details(usage)
+                cached_tokens = _cached_input_token_count(usage)
                 metadata.update(
                     {
                         "llm_call_count": "1",
                         "input_tokens": str(getattr(usage, "input_tokens", "")),
                         "cached_input_tokens": str(cached_tokens),
-                        "cache_write_input_tokens": str(cache_write_tokens),
                         "output_tokens": str(getattr(usage, "output_tokens", "")),
                         "total_tokens": str(getattr(usage, "total_tokens", "")),
                     }

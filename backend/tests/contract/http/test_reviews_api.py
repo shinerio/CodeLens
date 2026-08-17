@@ -1055,7 +1055,6 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
                         "llm_call_count": "2",
                         "input_tokens": "80",
                         "cached_input_tokens": "30",
-                        "cache_write_input_tokens": "10",
                         "context_compaction_count": "1",
                         "context_compacted_result_count": "3",
                         "context_compaction_original_tokens": "9000",
@@ -1089,7 +1088,6 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
     assert body["status"] == "completed"
     assert body["llm_call_count"] == 2
     assert body["cached_input_tokens"] == 30
-    assert body["cache_write_input_tokens"] == 10
     assert body["context_compaction_count"] == 1
     assert body["context_compacted_result_count"] == 3
     assert body["context_compaction_original_tokens"] == 9000

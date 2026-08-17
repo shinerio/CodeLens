@@ -466,7 +466,6 @@ async def test_streamed_model_events_publish_the_prompt_before_completion() -> N
             "input_tokens": "11",
             "checkpoint_input_tokens": "0",
         "cached_input_tokens": "0",
-        "cache_write_input_tokens": "0",
         "context_compaction_count": "0",
         "context_compacted_result_count": "0",
         "context_compaction_original_tokens": "0",

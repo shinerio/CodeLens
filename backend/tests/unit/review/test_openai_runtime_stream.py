@@ -103,7 +103,6 @@ def test_stream_response_boundaries_expose_live_provider_usage() -> None:
                         total_tokens=150,
                         input_tokens_details=SimpleNamespace(
                             cached_tokens=80,
-                            cache_write_tokens=10,
                         ),
                     ),
                 ),
@@ -128,7 +127,6 @@ def test_stream_response_boundaries_expose_live_provider_usage() -> None:
         "llm_call_count": "1",
         "input_tokens": "120",
         "cached_input_tokens": "80",
-        "cache_write_input_tokens": "10",
         "output_tokens": "30",
         "total_tokens": "150",
     }

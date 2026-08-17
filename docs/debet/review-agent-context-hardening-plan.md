@@ -882,7 +882,6 @@ hard watermark = min(model_context_limit - safety_margin, byte_hard_watermark)
 
 ```text
 cached_input_tokens
-cache_write_input_tokens
 checkpoint_input_tokens
 active_context_estimate
 immutable_prefix_bytes
