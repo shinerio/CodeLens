@@ -23,7 +23,7 @@ class _ToolLimitsPayload(TypedDict):
     long_text_max: int
     task_summary_max: int
     context_compaction_enabled: bool
-    context_compaction_trigger_bytes: int
+    context_compaction_trigger_tokens: int
     context_compaction_keep_recent_evidence_results: int
     context_compaction_max_retries: int
     context_compaction_retry_backoff_base: float
@@ -43,7 +43,7 @@ _INT_FIELDS = (
     "short_text_max",
     "long_text_max",
     "task_summary_max",
-    "context_compaction_trigger_bytes",
+    "context_compaction_trigger_tokens",
     "context_compaction_keep_recent_evidence_results",
     "context_compaction_max_retries",
     "context_compaction_max_consecutive_failures",
@@ -116,7 +116,7 @@ class FilesystemToolLimitsStore:
             "long_text_max": limits.long_text_max,
             "task_summary_max": limits.task_summary_max,
             "context_compaction_enabled": limits.context_compaction_enabled,
-            "context_compaction_trigger_bytes": limits.context_compaction_trigger_bytes,
+            "context_compaction_trigger_tokens": limits.context_compaction_trigger_tokens,
             "context_compaction_keep_recent_evidence_results": (
                 limits.context_compaction_keep_recent_evidence_results
             ),

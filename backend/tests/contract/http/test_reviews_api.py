@@ -1058,8 +1058,8 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
                         "cache_write_input_tokens": "10",
                         "context_compaction_count": "1",
                         "context_compacted_result_count": "3",
-                        "context_compaction_original_bytes": "9000",
-                        "context_compaction_compressed_bytes": "600",
+                        "context_compaction_original_tokens": "9000",
+                        "context_compaction_compressed_tokens": "600",
                         "output_tokens": "20",
                         "total_tokens": "100",
                     },
@@ -1092,8 +1092,8 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
     assert body["cache_write_input_tokens"] == 10
     assert body["context_compaction_count"] == 1
     assert body["context_compacted_result_count"] == 3
-    assert body["context_compaction_original_bytes"] == 9000
-    assert body["context_compaction_compressed_bytes"] == 600
+    assert body["context_compaction_original_tokens"] == 9000
+    assert body["context_compaction_compressed_tokens"] == 600
     assert body["total_tokens"] == 100
     assert body["tool_call_count"] == 1
     assert body["invalid_tool_call_count"] == 1

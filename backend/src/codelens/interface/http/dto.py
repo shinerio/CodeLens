@@ -200,7 +200,7 @@ class ToolLimitsResponse(StrictDto):
     long_text_max: Annotated[int, Field(ge=256, le=64_000)]
     task_summary_max: Annotated[int, Field(ge=256, le=64_000)]
     context_compaction_enabled: bool
-    context_compaction_trigger_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
+    context_compaction_trigger_tokens: Annotated[int, Field(ge=512, le=500000)]
     context_compaction_keep_recent_evidence_results: Annotated[int, Field(ge=0, le=100)]
     context_compaction_max_retries: Annotated[int, Field(ge=0, le=10)]
     context_compaction_retry_backoff_base: Annotated[float, Field(ge=0.1, le=60.0)]
@@ -224,8 +224,8 @@ class UpdateToolLimitsRequest(StrictDto):
     long_text_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
     task_summary_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
     context_compaction_enabled: bool | None = None
-    context_compaction_trigger_bytes: Annotated[
-        int | None, Field(ge=1024, le=100 * 1024 * 1024)
+    context_compaction_trigger_tokens: Annotated[
+        int | None, Field(ge=512, le=500000)
     ] = None
     context_compaction_keep_recent_evidence_results: Annotated[int | None, Field(ge=0, le=100)] = (
         None
@@ -627,8 +627,8 @@ class AgentProcessResponse(StrictDto):
     cache_write_input_tokens: Annotated[int, Field(ge=0)]
     context_compaction_count: Annotated[int, Field(ge=0)]
     context_compacted_result_count: Annotated[int, Field(ge=0)]
-    context_compaction_original_bytes: Annotated[int, Field(ge=0)]
-    context_compaction_compressed_bytes: Annotated[int, Field(ge=0)]
+    context_compaction_original_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_compressed_tokens: Annotated[int, Field(ge=0)]
     context_compaction_failure_count: Annotated[int, Field(ge=0)]
     compaction_replay_registered_count: Annotated[int, Field(ge=0)]
     compaction_replay_consumed_count: Annotated[int, Field(ge=0)]
@@ -659,8 +659,8 @@ class ReviewProcessReportResponse(StrictDto):
     cache_write_input_tokens: Annotated[int, Field(ge=0)]
     context_compaction_count: Annotated[int, Field(ge=0)]
     context_compacted_result_count: Annotated[int, Field(ge=0)]
-    context_compaction_original_bytes: Annotated[int, Field(ge=0)]
-    context_compaction_compressed_bytes: Annotated[int, Field(ge=0)]
+    context_compaction_original_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_compressed_tokens: Annotated[int, Field(ge=0)]
     context_compaction_failure_count: Annotated[int, Field(ge=0)]
     compaction_replay_registered_count: Annotated[int, Field(ge=0)]
     compaction_replay_consumed_count: Annotated[int, Field(ge=0)]

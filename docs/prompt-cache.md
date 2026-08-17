@@ -165,7 +165,7 @@ Immutable Prefix + Checkpoint N + Active Tail + Round A + Round B
 
 ### 6.2 触发阶段
 
-目标设计优先使用供应商报告的 input token 和模型上下文上限；缺少可靠 usage 时才使用与模型适配的本地 token 估算。字节数可以作为工具单次输出边界，但不能作为长期上下文容量的唯一判断依据。当前实现使用 `context_compaction_trigger_bytes` 作为兼容水位——该值基于全活跃上下文字节数（包括模型输出、工具调用和工具结果），而不只是证据 Tool Result 正文。一旦活跃字节数超过触发水位，所有可压缩的完整 round 都会被压缩；不再设 `target_bytes` 上限来提前终止压缩。切换到可靠 token 水位前，`context_compaction_trigger_bytes` 仍需保留在 UI 和稳定设置契约中。
+目标设计优先使用供应商报告的 input token 和模型上下文上限；缺少可靠 usage 时才使用与模型适配的本地 token 估算。当前实现使用本地 tiktoken（cl100k_base 编码）估算活跃上下文 token 数，包含系统提示、工具定义、模型输出、工具调用和工具结果。一旦活跃 token 数超过 `context_compaction_trigger_tokens` 触发水位，所有可压缩的完整 round 都会被压缩；不再设 `target_bytes` 上限来提前终止压缩。固定开销（系统提示+工具定义）在首次计算后缓存，后续仅计算活动对话部分的增量 token。
 
 采用软、硬两个水位：
 

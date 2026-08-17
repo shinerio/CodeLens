@@ -403,7 +403,7 @@ async def test_runtime_freezes_context_compaction_settings_once_per_agent_run() 
         def __init__(self) -> None:
             self.calls = 0
             self.limits = ToolLimits(
-                context_compaction_trigger_bytes=2048,
+                context_compaction_trigger_tokens=2048,
                 context_compaction_keep_recent_evidence_results=0,
             )
 

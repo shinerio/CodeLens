@@ -904,11 +904,11 @@ class WorkerReviewExecutor:
                 "context_compacted_result_count": str(
                     output.context_compacted_result_count
                 ),
-                "context_compaction_original_bytes": str(
-                    output.context_compaction_original_bytes
+                "context_compaction_original_tokens": str(
+                    output.context_compaction_original_tokens
                 ),
-                "context_compaction_compressed_bytes": str(
-                    output.context_compaction_compressed_bytes
+                "context_compaction_compressed_tokens": str(
+                    output.context_compaction_compressed_tokens
                 ),
                 "output_tokens": str(output.output_tokens),
                 "total_tokens": str(output.input_tokens + output.output_tokens),

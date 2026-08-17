@@ -4,6 +4,7 @@ from typing import Any
 from agents import Agent
 from agents.run_config import CallModelData, ModelInputData
 
+from codelens.review.domain.canonical_json import canonical_json
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.infrastructure.context_checkpoint import (
     CHECKPOINT_SCHEMA_VERSION,
@@ -18,6 +19,24 @@ from codelens.review.infrastructure.context_checkpoint import (
     checkpoint_summary_from_text,
 )
 from codelens.review.infrastructure.evidence_replay import ToolLoopResetSignal
+
+
+class FakeTokenCounter:
+    """Test double that returns character length as token count.
+
+    A 1:1 mapping with the former byte-based counts keeps every existing
+    threshold and output_size meaningful without rescaling, while still
+    exercising the token-counter code path.
+    """
+
+    def count(self, text: str) -> int:
+        return len(text)
+
+    def count_json(self, value: object) -> int:
+        return len(canonical_json(value))
+
+
+_FAKE_TOKEN_COUNTER = FakeTokenCounter()
 
 
 class RecordingSummarizer:
@@ -110,11 +129,12 @@ async def test_checkpoint_preserves_initial_input_and_complete_parallel_rounds()
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=6000,
+            context_compaction_trigger_tokens=6000,
             context_compaction_keep_recent_evidence_results=1,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=summarizer,
     )
 
@@ -140,11 +160,12 @@ async def test_checkpoint_bytes_stay_identical_until_next_epoch() -> None:
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=1,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=summarizer,
     )
 
@@ -167,11 +188,12 @@ async def test_next_epoch_replaces_checkpoint_and_carries_previous_summary() -> 
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=1,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=summarizer,
     )
 
@@ -210,11 +232,12 @@ async def test_checkpoint_prose_does_not_treat_generic_evidence_words_as_ids() -
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=ProseSummarizer(),
     )
 
@@ -246,12 +269,13 @@ async def test_invalid_checkpoint_keeps_existing_context_and_is_not_retried_unch
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=0,
             context_compaction_max_retries=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=InvalidSummarizer(),
     )
 
@@ -277,12 +301,13 @@ async def test_invalid_checkpoint_fails_explicitly_beyond_hard_watermark() -> No
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=0,
             context_compaction_max_retries=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=FailingSummarizer(),
     )
 
@@ -311,12 +336,13 @@ async def test_provider_capability_rejection_disables_checkpoint_for_the_run() -
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=0,
             context_compaction_max_retries=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=summarizer,
     )
 
@@ -347,13 +373,14 @@ async def test_repeated_checkpoint_failures_open_circuit_after_three_attempts() 
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=0,
             context_compaction_max_retries=0,
             context_compaction_max_consecutive_failures=3,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=summarizer,
     )
 
@@ -373,8 +400,8 @@ def test_reset_context_drops_metrics_from_an_abandoned_attempt() -> None:
     tracker = ContextCheckpointTracker(
         checkpoint_count=2,
         compacted_result_count=7,
-        original_bytes=123_456,
-        compressed_bytes=2_048,
+        original_tokens=123_456,
+        compressed_tokens=2_048,
         covered_item_count=9,
         immutable_prefix_count=1,
         checkpoint_item={"type": "message", "role": "user", "content": "old"},
@@ -382,7 +409,7 @@ def test_reset_context_drops_metrics_from_an_abandoned_attempt() -> None:
             evidence_id="evidence_" + "a" * 24,
             tool_name="read_file",
             arguments={"path": "src/example.py"},
-            original_bytes=100,
+            original_tokens=100,
         ),),
         failure_count=2,
         consecutive_failure_count=1,
@@ -394,8 +421,8 @@ def test_reset_context_drops_metrics_from_an_abandoned_attempt() -> None:
 
     assert tracker.checkpoint_count == 0
     assert tracker.compacted_result_count == 0
-    assert tracker.original_bytes == 0
-    assert tracker.compressed_bytes == 0
+    assert tracker.original_tokens == 0
+    assert tracker.compressed_tokens == 0
     assert tracker.checkpoint_payloads == []
     assert tracker.covered_item_count == 0
     assert tracker.immutable_prefix_count == 0
@@ -431,7 +458,7 @@ async def test_checkpoint_retry_recovers_after_transient_empty_output() -> None:
     tracker = ContextCheckpointTracker()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=0,
             context_compaction_max_retries=2,
             context_compaction_retry_backoff_base=0.1,
@@ -439,6 +466,7 @@ async def test_checkpoint_retry_recovers_after_transient_empty_output() -> None:
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=summarizer,
     )
 
@@ -518,11 +546,12 @@ async def test_loop_reset_signal_triggers_after_successful_compaction() -> None:
     signal = ToolLoopResetSignal()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=summarizer,
         loop_reset_signal=signal,
     )
@@ -547,12 +576,13 @@ async def test_loop_reset_signal_does_not_trigger_on_compaction_failure() -> Non
     signal = ToolLoopResetSignal()
     input_filter = build_context_checkpoint_filter(
         limits=ToolLimits(
-            context_compaction_trigger_bytes=3000,
+            context_compaction_trigger_tokens=3000,
             context_compaction_keep_recent_evidence_results=0,
             context_compaction_max_retries=0,
         ),
         prompt="Create a checkpoint.",
         tracker=tracker,
+        token_counter=_FAKE_TOKEN_COUNTER,
         summarizer=FailingSummarizer(),
         loop_reset_signal=signal,
     )

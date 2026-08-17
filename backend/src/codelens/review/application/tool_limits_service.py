@@ -33,7 +33,7 @@ class ToolLimitsService:
         long_text_max: int | None = None,
         task_summary_max: int | None = None,
         context_compaction_enabled: bool | None = None,
-        context_compaction_trigger_bytes: int | None = None,
+        context_compaction_trigger_tokens: int | None = None,
         context_compaction_keep_recent_evidence_results: int | None = None,
         context_compaction_max_retries: int | None = None,
         context_compaction_retry_backoff_base: float | None = None,
@@ -73,10 +73,10 @@ class ToolLimitsService:
                 if context_compaction_enabled is not None
                 else current.context_compaction_enabled
             ),
-            context_compaction_trigger_bytes=(
-                context_compaction_trigger_bytes
-                if context_compaction_trigger_bytes is not None
-                else current.context_compaction_trigger_bytes
+            context_compaction_trigger_tokens=(
+                context_compaction_trigger_tokens
+                if context_compaction_trigger_tokens is not None
+                else current.context_compaction_trigger_tokens
             ),
             context_compaction_keep_recent_evidence_results=(
                 context_compaction_keep_recent_evidence_results

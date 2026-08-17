@@ -101,7 +101,7 @@ def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
         long_text_max=limits.long_text_max,
         task_summary_max=limits.task_summary_max,
         context_compaction_enabled=limits.context_compaction_enabled,
-        context_compaction_trigger_bytes=limits.context_compaction_trigger_bytes,
+        context_compaction_trigger_tokens=limits.context_compaction_trigger_tokens,
         context_compaction_keep_recent_evidence_results=(
             limits.context_compaction_keep_recent_evidence_results
         ),
@@ -459,7 +459,7 @@ async def update_tool_limits(
             long_text_max=request.long_text_max,
             task_summary_max=request.task_summary_max,
             context_compaction_enabled=request.context_compaction_enabled,
-            context_compaction_trigger_bytes=request.context_compaction_trigger_bytes,
+            context_compaction_trigger_tokens=request.context_compaction_trigger_tokens,
             context_compaction_keep_recent_evidence_results=(
                 request.context_compaction_keep_recent_evidence_results
             ),
@@ -540,7 +540,7 @@ async def reset_all_settings(
         long_text_max=default_tool_limits.long_text_max,
         task_summary_max=default_tool_limits.task_summary_max,
         context_compaction_enabled=default_tool_limits.context_compaction_enabled,
-        context_compaction_trigger_bytes=default_tool_limits.context_compaction_trigger_bytes,
+        context_compaction_trigger_tokens=default_tool_limits.context_compaction_trigger_tokens,
         context_compaction_keep_recent_evidence_results=(
             default_tool_limits.context_compaction_keep_recent_evidence_results
         ),

@@ -29,7 +29,7 @@ def test_tool_limits_returns_defaults_initially(tmp_path: Path) -> None:
     assert data["long_text_max"] == 8000
     assert data["task_summary_max"] == 8000
     assert data["context_compaction_enabled"] is True
-    assert data["context_compaction_trigger_bytes"] == 131072
+    assert data["context_compaction_trigger_tokens"] == 160000
     assert data["context_compaction_keep_recent_evidence_results"] == 6
     assert data["context_compaction_max_retries"] == 3
     assert data["context_compaction_retry_backoff_base"] == 2.0
@@ -56,7 +56,7 @@ def test_tool_limits_update_and_persist(tmp_path: Path) -> None:
                 "long_text_max": 16000,
                 "task_summary_max": 16000,
                 "context_compaction_enabled": False,
-                "context_compaction_trigger_bytes": 262144,
+                "context_compaction_trigger_tokens": 262144,
                 "context_compaction_keep_recent_evidence_results": 4,
                 "context_compaction_max_retries": 5,
                 "context_compaction_retry_backoff_base": 1.5,

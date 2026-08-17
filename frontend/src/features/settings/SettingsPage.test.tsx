@@ -61,7 +61,7 @@ function toolLimitsResponse() {
     long_text_max: 8000,
     task_summary_max: 8000,
     context_compaction_enabled: true,
-    context_compaction_trigger_bytes: 131072,
+    context_compaction_trigger_tokens: 160000,
     context_compaction_keep_recent_evidence_results: 6,
     context_compaction_max_retries: 3,
     context_compaction_retry_backoff_base: 2.0,
@@ -114,7 +114,7 @@ it("shows context and tool sizes in KB with compaction enabled by default", asyn
   expect(await screen.findByRole("spinbutton", { name: "Max read size (KB)" })).toHaveValue(64);
   expect(screen.getByRole("spinbutton", { name: "Max scan size (KB)" })).toHaveValue(1024);
   expect(screen.getByRole("spinbutton", { name: "Max source size (KB)" })).toHaveValue(1024);
-  expect(screen.getByRole("spinbutton", { name: "Context compaction trigger (KB)" })).toHaveValue(128);
+  expect(screen.getByRole("spinbutton", { name: "Context compaction trigger (tokens)" })).toHaveValue(160000);
   expect(
     screen.getByRole("checkbox", { name: "Enable deterministic context compaction" }),
   ).toBeChecked();

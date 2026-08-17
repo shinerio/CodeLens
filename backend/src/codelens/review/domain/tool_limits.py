@@ -15,7 +15,7 @@ DEFAULT_SHORT_TEXT_MAX = 240
 DEFAULT_LONG_TEXT_MAX = 8000
 DEFAULT_TASK_SUMMARY_MAX = 8000
 DEFAULT_CONTEXT_COMPACTION_ENABLED = True
-DEFAULT_CONTEXT_COMPACTION_TRIGGER_BYTES = 128 * 1024
+DEFAULT_CONTEXT_COMPACTION_TRIGGER_TOKENS = 160000
 DEFAULT_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 6
 DEFAULT_CONTEXT_COMPACTION_MAX_RETRIES = 3
 DEFAULT_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE = 2.0
@@ -46,8 +46,8 @@ MIN_LONG_TEXT_MAX = 1
 MAX_LONG_TEXT_MAX = 64_000
 MIN_TASK_SUMMARY_MAX = 1
 MAX_TASK_SUMMARY_MAX = 64_000
-MIN_CONTEXT_COMPACTION_BYTES = 1024
-MAX_CONTEXT_COMPACTION_BYTES = 100 * 1024 * 1024
+MIN_CONTEXT_COMPACTION_TOKENS = 512
+MAX_CONTEXT_COMPACTION_TOKENS = 500000
 MIN_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 0
 MAX_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS = 100
 MIN_CONTEXT_COMPACTION_MAX_RETRIES = 0
@@ -77,7 +77,7 @@ class ToolLimits:
     long_text_max: int = DEFAULT_LONG_TEXT_MAX
     task_summary_max: int = DEFAULT_TASK_SUMMARY_MAX
     context_compaction_enabled: bool = DEFAULT_CONTEXT_COMPACTION_ENABLED
-    context_compaction_trigger_bytes: int = DEFAULT_CONTEXT_COMPACTION_TRIGGER_BYTES
+    context_compaction_trigger_tokens: int = DEFAULT_CONTEXT_COMPACTION_TRIGGER_TOKENS
     context_compaction_keep_recent_evidence_results: int = (
         DEFAULT_CONTEXT_COMPACTION_KEEP_RECENT_EVIDENCE_RESULTS
     )
@@ -132,10 +132,10 @@ class ToolLimits:
                 MAX_TASK_SUMMARY_MAX,
             ),
             (
-                "context_compaction_trigger_bytes",
-                self.context_compaction_trigger_bytes,
-                MIN_CONTEXT_COMPACTION_BYTES,
-                MAX_CONTEXT_COMPACTION_BYTES,
+                "context_compaction_trigger_tokens",
+                self.context_compaction_trigger_tokens,
+                MIN_CONTEXT_COMPACTION_TOKENS,
+                MAX_CONTEXT_COMPACTION_TOKENS,
             ),
             (
                 "context_compaction_keep_recent_evidence_results",

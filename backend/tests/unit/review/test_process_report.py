@@ -466,8 +466,8 @@ def test_process_report_marks_retry_usage_incomplete_without_every_attempt_usage
                 "cache_write_input_tokens": "3000",
                 "context_compaction_count": "2",
                 "context_compacted_result_count": "5",
-                "context_compaction_original_bytes": "1000",
-                "context_compaction_compressed_bytes": "200",
+                "context_compaction_original_tokens": "1000",
+                "context_compaction_compressed_tokens": "200",
                 "context_compaction_failure_count": "1",
                 "checkpoint_llm_call_count": "2",
                 "checkpoint_input_tokens": "3000",
@@ -492,8 +492,8 @@ def test_process_report_marks_retry_usage_incomplete_without_every_attempt_usage
     assert report.cache_write_input_tokens == 3_000
     assert report.context_compaction_count == 2
     assert report.context_compacted_result_count == 5
-    assert report.context_compaction_original_bytes == 1_000
-    assert report.context_compaction_compressed_bytes == 200
+    assert report.context_compaction_original_tokens == 1_000
+    assert report.context_compaction_compressed_tokens == 200
     assert report.context_compaction_failure_count == 1
     assert report.checkpoint_llm_call_count == 2
     assert report.checkpoint_input_tokens == 3_000

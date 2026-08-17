@@ -1291,17 +1291,18 @@ export function SettingsPage() {
                   />
                 </label>
                 <label className="settings-field">
-                  <span className="settings-field__label">{t("settings.contextCompactionTriggerBytes")}</span>
+                  <span className="settings-field__label">{t("settings.contextCompactionTriggerTokens")}</span>
                   <input
                     type="number"
-                    min={1}
-                    max={102400}
-                    value={toolLimitsDraft.context_compaction_trigger_bytes / BYTES_PER_KILOBYTE}
+                    min={512}
+                    max={500000}
+                    step={500}
+                    value={toolLimitsDraft.context_compaction_trigger_tokens}
                     onChange={(event) =>
                       setToolLimitsDraft({
                         ...toolLimitsDraft,
-                        context_compaction_trigger_bytes:
-                          Number(event.currentTarget.value) * BYTES_PER_KILOBYTE,
+                        context_compaction_trigger_tokens:
+                          Number(event.currentTarget.value),
                       })
                     }
                   />

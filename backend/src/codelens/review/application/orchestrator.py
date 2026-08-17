@@ -530,11 +530,11 @@ class ReviewOrchestrator:
                     "cache_write_input_tokens": str(output.cache_write_input_tokens),
                     "context_compaction_count": str(output.context_compaction_count),
                     "context_compacted_result_count": str(output.context_compacted_result_count),
-                    "context_compaction_original_bytes": str(
-                        output.context_compaction_original_bytes
+                    "context_compaction_original_tokens": str(
+                        output.context_compaction_original_tokens
                     ),
-                    "context_compaction_compressed_bytes": str(
-                        output.context_compaction_compressed_bytes
+                    "context_compaction_compressed_tokens": str(
+                        output.context_compaction_compressed_tokens
                     ),
                     "context_compaction_failure_count": str(
                         output.context_compaction_failure_count

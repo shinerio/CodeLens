@@ -66,6 +66,7 @@ from codelens.review.domain.ports import (
     AgentRuntimeEventSink,
     UnvalidatedAgentOutput,
 )
+from codelens.review.domain.token_counter import TokenCounterPort
 from codelens.review.domain.tool_invocation import classify_tool_result, outcome_metadata
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.domain.tool_results import (
@@ -93,6 +94,7 @@ from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
+from codelens.review.infrastructure.token_counter import TiktokenCounterAdapter
 from codelens.review.infrastructure.verdict_tools import VerdictSubmissionCollector
 from codelens.reviewer_catalog.domain.models import AgentRole
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
@@ -278,6 +280,7 @@ class OpenAIAgentRuntime:
         completion_settings: ReviewCompletionSettingsService | None = None,
         tool_limits_service: ToolLimitsService | None = None,
         checkpoint_summarizer: CheckpointSummarizerPort | None = None,
+        token_counter: TokenCounterPort | None = None,
     ) -> None:
         self._config_store = config_store
         self._git = git
@@ -286,6 +289,7 @@ class OpenAIAgentRuntime:
         self._completion_settings = completion_settings
         self._tool_limits_service = tool_limits_service
         self._checkpoint_summarizer = checkpoint_summarizer or _SdkCheckpointSummarizer()
+        self._token_counter = token_counter or TiktokenCounterAdapter()
 
     async def invoke(
         self,
@@ -434,6 +438,7 @@ class OpenAIAgentRuntime:
                 tracker=checkpoint_tracker,
                 summarizer=self._checkpoint_summarizer,
                 loop_reset_signal=loop_reset_signal,
+                token_counter=self._token_counter,
             ),
             tool_not_found_behavior="return_error_to_model",
             tool_error_formatter=_tool_error_formatter(
@@ -730,8 +735,8 @@ class OpenAIAgentRuntime:
             incomplete_review_files=tool_context.incomplete_review_files,
             context_compaction_count=checkpoint_tracker.checkpoint_count,
             context_compacted_result_count=checkpoint_tracker.compacted_result_count,
-            context_compaction_original_bytes=checkpoint_tracker.original_bytes,
-            context_compaction_compressed_bytes=checkpoint_tracker.compressed_bytes,
+            context_compaction_original_tokens=checkpoint_tracker.original_tokens,
+            context_compaction_compressed_tokens=checkpoint_tracker.compressed_tokens,
             context_compaction_failure_count=checkpoint_tracker.failure_count,
             compaction_replay_registered_count=0,
             compaction_replay_consumed_count=0,
@@ -1049,11 +1054,11 @@ class OpenAIAgentRuntime:
                         emitted.metadata["context_compacted_result_count"] = str(
                             checkpoint_tracker.compacted_result_count
                         )
-                        emitted.metadata["context_compaction_original_bytes"] = str(
-                            checkpoint_tracker.original_bytes
+                        emitted.metadata["context_compaction_original_tokens"] = str(
+                            checkpoint_tracker.original_tokens
                         )
-                        emitted.metadata["context_compaction_compressed_bytes"] = str(
-                            checkpoint_tracker.compressed_bytes
+                        emitted.metadata["context_compaction_compressed_tokens"] = str(
+                            checkpoint_tracker.compressed_tokens
                         )
                     await sink(emitted)
         # Flush remaining accumulated text for providers that never emit

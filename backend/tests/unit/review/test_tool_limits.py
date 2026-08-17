@@ -72,7 +72,7 @@ def test_default_tool_limits_are_within_bounds() -> None:
     assert limits.long_text_max == DEFAULT_LONG_TEXT_MAX
     assert limits.task_summary_max == DEFAULT_TASK_SUMMARY_MAX
     assert limits.context_compaction_enabled is True
-    assert limits.context_compaction_trigger_bytes == 128 * 1024
+    assert limits.context_compaction_trigger_tokens == 160000
     assert limits.context_compaction_keep_recent_evidence_results == 6
     assert (
         limits.context_compaction_max_retries

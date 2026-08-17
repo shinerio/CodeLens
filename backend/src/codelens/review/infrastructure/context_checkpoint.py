@@ -16,7 +16,9 @@ from agents.items import TResponseInputItem
 from agents.run_config import CallModelData, ModelInputData
 from pydantic import BaseModel, ConfigDict, Field
 
+from codelens.review.domain.canonical_json import canonical_json
 from codelens.review.domain.ports import AgentResponseDiagnostic
+from codelens.review.domain.token_counter import TokenCounterPort
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.review.domain.tool_results import JsonValue
 from codelens.review.infrastructure.evidence_replay import (
@@ -26,7 +28,7 @@ from codelens.review.infrastructure.evidence_replay import (
 
 CHECKPOINT_SCHEMA_VERSION = "codelens_review_checkpoint_v1"
 _LOGGER = logging.getLogger(__name__)
-_MINIMUM_HARD_WATERMARK_GAP_BYTES = 64 * 1024
+_MINIMUM_HARD_WATERMARK_GAP_TOKENS = 16000
 _PROVIDER_CAPABILITY_REJECTION_STATUS_CODES = frozenset({400, 404, 422})
 _EVIDENCE_ID_PATTERN = re.compile(r"\bevidence_[a-f0-9]{24}\b")
 
@@ -75,7 +77,7 @@ class CheckpointEvidenceReference(BaseModel):
     evidence_id: str
     tool_name: str
     arguments: dict[str, JsonValue]
-    original_bytes: int = Field(ge=0)
+    original_tokens: int = Field(ge=0)
 
 
 @dataclass(frozen=True)
@@ -90,7 +92,7 @@ class CheckpointSummaryRequest:
     def model_input(self) -> str:
         """Serialize source history with explicit trust boundaries and stable ordering."""
 
-        return _canonical_json(
+        return canonical_json(
             {
                 "previous_checkpoint": (
                     None
@@ -132,8 +134,8 @@ class ContextCheckpointTracker:
 
     checkpoint_count: int = 0
     compacted_result_count: int = 0
-    original_bytes: int = 0
-    compressed_bytes: int = 0
+    original_tokens: int = 0
+    compressed_tokens: int = 0
     covered_item_count: int = 0
     immutable_prefix_count: int = 0
     checkpoint_item: TResponseInputItem | None = None
@@ -146,6 +148,7 @@ class ContextCheckpointTracker:
     last_failure_item_count: int | None = None
     is_disabled: bool = False
     disabled_reason: str | None = None
+    fixed_overhead_tokens: int | None = None
 
     def effective_input(
         self, raw_items: list[TResponseInputItem]
@@ -171,15 +174,15 @@ class ContextCheckpointTracker:
         self.last_failure_item_count = None
         self.checkpoint_count = 0
         self.compacted_result_count = 0
-        self.original_bytes = 0
-        self.compressed_bytes = 0
+        self.original_tokens = 0
+        self.compressed_tokens = 0
         self.checkpoint_payloads.clear()
 
 
 @dataclass(frozen=True)
 class _EvidenceOutput:
     reference: CheckpointEvidenceReference
-    encoded_size: int
+    token_count: int
 
 
 @dataclass(frozen=True)
@@ -196,6 +199,7 @@ def build_context_checkpoint_filter(
     tracker: ContextCheckpointTracker,
     summarizer: CheckpointSummarizerPort,
     loop_reset_signal: ToolLoopResetSignal | None = None,
+    token_counter: TokenCounterPort,
 ) -> Callable[[CallModelData[object]], Awaitable[ModelInputData]]:
     """Build an async pre-call filter that advances only on complete old rounds."""
 
@@ -208,15 +212,20 @@ def build_context_checkpoint_filter(
             tracker.immutable_prefix_count = _immutable_prefix_count(raw_items)
             tracker.covered_item_count = tracker.immutable_prefix_count
 
-        rounds = _complete_rounds(raw_items, tracker.covered_item_count)
+        if tracker.fixed_overhead_tokens is None:
+            instructions_tokens = token_counter.count(data.model_data.instructions or "")
+            tools_tokens = token_counter.count_json(_serialize_tool_definitions(data.agent))
+            tracker.fixed_overhead_tokens = instructions_tokens + tools_tokens
+
+        rounds = _complete_rounds(raw_items, tracker.covered_item_count, token_counter)
         evidence_outputs = [evidence for round_ in rounds for evidence in round_.evidence]
-        active_bytes = sum(
-            len(_json_text(item).encode("utf-8"))
-            for item in raw_items[tracker.covered_item_count :]
+        active_tokens = sum(
+            token_counter.count_json(item) for item in raw_items[tracker.covered_item_count :]
         )
         hard_watermark = _hard_watermark(limits)
+        fixed_overhead_tokens = tracker.fixed_overhead_tokens
         if tracker.is_disabled:
-            if active_bytes >= hard_watermark:
+            if fixed_overhead_tokens + active_tokens >= hard_watermark:
                 raise ContextCheckpointError(
                     "checkpoint compaction is disabled beyond the hard context watermark"
                 )
@@ -224,7 +233,7 @@ def build_context_checkpoint_filter(
                 input=tracker.effective_input(raw_items),
                 instructions=data.model_data.instructions,
             )
-        if active_bytes < limits.context_compaction_trigger_bytes:
+        if fixed_overhead_tokens + active_tokens < limits.context_compaction_trigger_tokens:
             return ModelInputData(
                 input=tracker.effective_input(raw_items),
                 instructions=data.model_data.instructions,
@@ -240,7 +249,7 @@ def build_context_checkpoint_filter(
             len(evidence_outputs) - limits.context_compaction_keep_recent_evidence_results,
         )
         selected_result_count = 0
-        selected_bytes = 0
+        selected_tokens = 0
         covered_end = tracker.covered_item_count
         for round_ in rounds:
             round_result_count = len(round_.evidence)
@@ -249,7 +258,7 @@ def build_context_checkpoint_filter(
             if selected_result_count + round_result_count > compactable_result_count:
                 break
             selected_result_count += round_result_count
-            selected_bytes += sum(item.encoded_size for item in round_.evidence)
+            selected_tokens += sum(item.token_count for item in round_.evidence)
             covered_end = round_.end
 
         if selected_result_count == 0 or covered_end <= tracker.covered_item_count:
@@ -315,7 +324,7 @@ def build_context_checkpoint_filter(
             ):
                 tracker.is_disabled = True
                 tracker.disabled_reason = "checkpoint_failure_circuit_open"
-            if active_bytes >= hard_watermark:
+            if fixed_overhead_tokens + active_tokens >= hard_watermark:
                 raise ContextCheckpointError(
                     "checkpoint compaction failed beyond the hard context watermark"
                 ) from last_error
@@ -336,8 +345,8 @@ def build_context_checkpoint_filter(
 
         tracker.checkpoint_count += 1
         tracker.compacted_result_count += selected_result_count
-        tracker.original_bytes += selected_bytes
-        tracker.compressed_bytes += len(_canonical_json(checkpoint_item).encode("utf-8"))
+        tracker.original_tokens += selected_tokens
+        tracker.compressed_tokens += token_counter.count_json(checkpoint_item)
         tracker.covered_item_count = covered_end
         tracker.checkpoint_item = checkpoint_item
         tracker.previous_summary = result.summary
@@ -385,8 +394,8 @@ def checkpoint_summary_from_text(payload: str) -> CheckpointSummary:
 
 def _hard_watermark(limits: ToolLimits) -> int:
     return max(
-        limits.context_compaction_trigger_bytes * 2,
-        limits.context_compaction_trigger_bytes + _MINIMUM_HARD_WATERMARK_GAP_BYTES,
+        limits.context_compaction_trigger_tokens * 2,
+        limits.context_compaction_trigger_tokens + _MINIMUM_HARD_WATERMARK_GAP_TOKENS,
     )
 
 
@@ -414,7 +423,9 @@ def _immutable_prefix_count(items: list[TResponseInputItem]) -> int:
 
 
 def _complete_rounds(
-    items: list[TResponseInputItem], start: int
+    items: list[TResponseInputItem],
+    start: int,
+    token_counter: TokenCounterPort,
 ) -> tuple[_CompleteRound, ...]:
     calls_by_id: dict[str, tuple[str, object]] = {}
     for item in items[start:]:
@@ -444,16 +455,16 @@ def _complete_rounds(
                 tool_name, arguments = calls_by_id[call_id]
                 if tool_name in EVIDENCE_TOOL_NAMES:
                     output = output_item.get("output", "")
-                    encoded_size = len(_json_text(output).encode("utf-8"))
+                    token_count = token_counter.count_json(output)
                     reference = _evidence_reference(
                         call_id,
                         tool_name,
                         arguments,
                         output,
-                        encoded_size,
+                        token_count,
                     )
                     if reference is not None:
-                        evidence.append(_EvidenceOutput(reference, encoded_size))
+                        evidence.append(_EvidenceOutput(reference, token_count))
             output_end += 1
         rounds.append(_CompleteRound(round_start, output_end, tuple(evidence)))
         round_start = output_end
@@ -466,7 +477,7 @@ def _evidence_reference(
     tool_name: str,
     arguments: object,
     output: object,
-    encoded_size: int,
+    token_count: int,
 ) -> CheckpointEvidenceReference | None:
     if not isinstance(arguments, str):
         return None
@@ -479,7 +490,7 @@ def _evidence_reference(
     ):
         return None
     canonical_arguments = cast(dict[str, JsonValue], parsed_arguments)
-    identity = _canonical_json(
+    identity = canonical_json(
         {
             "call_id": call_id,
             "tool_name": tool_name,
@@ -492,7 +503,7 @@ def _evidence_reference(
         evidence_id=evidence_id,
         tool_name=tool_name,
         arguments=canonical_arguments,
-        original_bytes=encoded_size,
+        original_tokens=token_count,
     )
 
 
@@ -539,12 +550,31 @@ def _checkpoint_content(
         },
         "semantic_summary": summary.model_dump(mode="json"),
     }
-    return f"<review-checkpoint>\n{_canonical_json(payload)}\n</review-checkpoint>"
+    return f"<review-checkpoint>\n{canonical_json(payload)}\n</review-checkpoint>"
 
 
-def _json_text(value: object) -> str:
-    return value if isinstance(value, str) else _canonical_json(value)
+def _serialize_tool_definitions(agent: Agent[Any]) -> str:
+    """Serialize agent tool definitions to canonical JSON for token counting.
 
+    Only ``FunctionTool`` instances carry a JSON-schema contract that the model
+    sees as part of its input; other tool types are excluded so the fixed
+    overhead estimate matches what the provider actually receives.
+    """
 
-def _canonical_json(value: object) -> str:
-    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+    from agents.tool import FunctionTool
+
+    tools_json: list[object] = []
+    for tool in agent.tools:
+        if isinstance(tool, FunctionTool):
+            tools_json.append(
+                {
+                    "type": "function",
+                    "function": {
+                        "name": tool.name,
+                        "description": tool.description,
+                        "parameters": tool.params_json_schema,
+                        "strict": tool.strict_json_schema,
+                    },
+                }
+            )
+    return canonical_json(tools_json)

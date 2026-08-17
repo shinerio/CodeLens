@@ -95,8 +95,8 @@ class AgentProcessSummary:
     cache_write_input_tokens: int
     context_compaction_count: int
     context_compacted_result_count: int
-    context_compaction_original_bytes: int
-    context_compaction_compressed_bytes: int
+    context_compaction_original_tokens: int
+    context_compaction_compressed_tokens: int
     context_compaction_failure_count: int
     compaction_replay_registered_count: int
     compaction_replay_consumed_count: int
@@ -128,8 +128,8 @@ class ReviewProcessReport:
     cache_write_input_tokens: int
     context_compaction_count: int
     context_compacted_result_count: int
-    context_compaction_original_bytes: int
-    context_compaction_compressed_bytes: int
+    context_compaction_original_tokens: int
+    context_compaction_compressed_tokens: int
     context_compaction_failure_count: int
     compaction_replay_registered_count: int
     compaction_replay_consumed_count: int
@@ -168,8 +168,8 @@ class _AgentAccumulator:
     cache_write_input_tokens: int = 0
     context_compaction_count: int = 0
     context_compacted_result_count: int = 0
-    context_compaction_original_bytes: int = 0
-    context_compaction_compressed_bytes: int = 0
+    context_compaction_original_tokens: int = 0
+    context_compaction_compressed_tokens: int = 0
     context_compaction_failure_count: int = 0
     compaction_replay_registered_count: int = 0
     compaction_replay_consumed_count: int = 0
@@ -324,8 +324,8 @@ def build_process_report(
             cache_write_input_tokens=value.cache_write_input_tokens,
             context_compaction_count=value.context_compaction_count,
             context_compacted_result_count=value.context_compacted_result_count,
-            context_compaction_original_bytes=value.context_compaction_original_bytes,
-            context_compaction_compressed_bytes=value.context_compaction_compressed_bytes,
+            context_compaction_original_tokens=value.context_compaction_original_tokens,
+            context_compaction_compressed_tokens=value.context_compaction_compressed_tokens,
             context_compaction_failure_count=value.context_compaction_failure_count,
             compaction_replay_registered_count=value.compaction_replay_registered_count,
             compaction_replay_consumed_count=value.compaction_replay_consumed_count,
@@ -395,11 +395,11 @@ def build_process_report(
         context_compacted_result_count=sum(
             agent.context_compacted_result_count for agent in agent_summaries
         ),
-        context_compaction_original_bytes=sum(
-            agent.context_compaction_original_bytes for agent in agent_summaries
+        context_compaction_original_tokens=sum(
+            agent.context_compaction_original_tokens for agent in agent_summaries
         ),
-        context_compaction_compressed_bytes=sum(
-            agent.context_compaction_compressed_bytes for agent in agent_summaries
+        context_compaction_compressed_tokens=sum(
+            agent.context_compaction_compressed_tokens for agent in agent_summaries
         ),
         context_compaction_failure_count=sum(
             agent.context_compaction_failure_count for agent in agent_summaries
@@ -474,14 +474,14 @@ def _accumulate_usage(accumulator: _AgentAccumulator, metadata: dict[str, str]) 
             metadata, "context_compacted_result_count"
         )
     )
-    accumulator.context_compaction_original_bytes = max(
-        accumulator.context_compaction_original_bytes, _non_negative_int(
-            metadata, "context_compaction_original_bytes"
+    accumulator.context_compaction_original_tokens = max(
+        accumulator.context_compaction_original_tokens, _non_negative_int(
+            metadata, "context_compaction_original_tokens"
         )
     )
-    accumulator.context_compaction_compressed_bytes = max(
-        accumulator.context_compaction_compressed_bytes, _non_negative_int(
-            metadata, "context_compaction_compressed_bytes"
+    accumulator.context_compaction_compressed_tokens = max(
+        accumulator.context_compaction_compressed_tokens, _non_negative_int(
+            metadata, "context_compaction_compressed_tokens"
         )
     )
     accumulator.context_compaction_failure_count = max(
@@ -532,14 +532,14 @@ def _accumulate_run_diagnostics(accumulator: _AgentAccumulator, metadata: dict[s
             metadata, "context_compacted_result_count"
         )
     )
-    accumulator.context_compaction_original_bytes = max(
-        accumulator.context_compaction_original_bytes, _non_negative_int(
-            metadata, "context_compaction_original_bytes"
+    accumulator.context_compaction_original_tokens = max(
+        accumulator.context_compaction_original_tokens, _non_negative_int(
+            metadata, "context_compaction_original_tokens"
         )
     )
-    accumulator.context_compaction_compressed_bytes = max(
-        accumulator.context_compaction_compressed_bytes, _non_negative_int(
-            metadata, "context_compaction_compressed_bytes"
+    accumulator.context_compaction_compressed_tokens = max(
+        accumulator.context_compaction_compressed_tokens, _non_negative_int(
+            metadata, "context_compaction_compressed_tokens"
         )
     )
     accumulator.context_compaction_failure_count = max(
@@ -624,8 +624,8 @@ def _has_activity(value: _AgentAccumulator) -> bool:
             value.cache_write_input_tokens,
             value.context_compaction_count,
             value.context_compacted_result_count,
-            value.context_compaction_original_bytes,
-            value.context_compaction_compressed_bytes,
+            value.context_compaction_original_tokens,
+            value.context_compaction_compressed_tokens,
             value.compaction_replay_registered_count,
             value.compaction_replay_consumed_count,
             value.output_tokens,

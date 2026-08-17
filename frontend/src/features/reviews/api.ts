@@ -108,8 +108,8 @@ export interface AgentProcessSummary {
   cache_write_input_tokens: number;
   context_compaction_count?: number;
   context_compacted_result_count?: number;
-  context_compaction_original_bytes?: number;
-  context_compaction_compressed_bytes?: number;
+  context_compaction_original_tokens?: number;
+  context_compaction_compressed_tokens?: number;
   context_compaction_failure_count?: number;
   compaction_replay_registered_count?: number;
   compaction_replay_consumed_count?: number;
@@ -138,8 +138,8 @@ export interface ReviewProcessReport {
   cache_write_input_tokens: number;
   context_compaction_count?: number;
   context_compacted_result_count?: number;
-  context_compaction_original_bytes?: number;
-  context_compaction_compressed_bytes?: number;
+  context_compaction_original_tokens?: number;
+  context_compaction_compressed_tokens?: number;
   context_compaction_failure_count?: number;
   compaction_replay_registered_count?: number;
   compaction_replay_consumed_count?: number;

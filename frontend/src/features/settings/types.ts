@@ -120,7 +120,7 @@ export type ToolLimits = {
   long_text_max: number;
   task_summary_max: number;
   context_compaction_enabled: boolean;
-  context_compaction_trigger_bytes: number;
+  context_compaction_trigger_tokens: number;
   context_compaction_keep_recent_evidence_results: number;
   context_compaction_max_retries: number;
   context_compaction_retry_backoff_base: number;

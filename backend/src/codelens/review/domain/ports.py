@@ -116,8 +116,8 @@ class UnvalidatedAgentOutput:
     incomplete_review_files: tuple[str, ...] = ()
     context_compaction_count: int = 0
     context_compacted_result_count: int = 0
-    context_compaction_original_bytes: int = 0
-    context_compaction_compressed_bytes: int = 0
+    context_compaction_original_tokens: int = 0
+    context_compaction_compressed_tokens: int = 0
     context_compaction_failure_count: int = 0
     compaction_replay_registered_count: int = 0
     compaction_replay_consumed_count: int = 0
