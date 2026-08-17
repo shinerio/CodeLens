@@ -48,11 +48,17 @@ class RepositoryCommit:
 
 @dataclass(frozen=True)
 class RepositoryCatalog:
-    """Return branch choices and one page of recent commit summaries."""
+    """Return branch choices, the selected branch tip, and one page of recent commit summaries.
+
+    ``commits`` excludes the tip because the tip is the review target, not a base
+    candidate; its metadata is exposed separately via ``target_commit`` so callers
+    can render a readable label instead of a bare object id.
+    """
 
     branches: tuple[RepositoryBranch, ...]
     commits: tuple[RepositoryCommit, ...]
     next_commit_offset: int | None
+    target_commit: RepositoryCommit | None = None
 
 
 @dataclass(frozen=True)

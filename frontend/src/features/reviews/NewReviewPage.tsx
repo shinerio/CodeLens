@@ -536,7 +536,11 @@ export function NewReviewPage() {
                       aria-label={t("review.targetCommit")}
                       className="field__control"
                       readOnly
-                      value={commitTargetRef}
+                      value={
+                        catalog?.target_commit
+                          ? commitLabel(catalog.target_commit)
+                          : commitTargetRef
+                      }
                     />
                   </label>
                 </>

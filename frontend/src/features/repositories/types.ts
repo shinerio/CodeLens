@@ -27,6 +27,7 @@ export type RepositoryCatalog = {
   branches: RepositoryBranch[];
   commits: RepositoryCommit[];
   next_commit_offset: number | null;
+  target_commit: RepositoryCommit | null;
 };
 
 export type RecentRepository = {

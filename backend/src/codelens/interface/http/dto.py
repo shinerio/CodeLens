@@ -397,11 +397,12 @@ class RepositoryCommitResponse(StrictDto):
 
 
 class RepositoryCatalogResponse(StrictDto):
-    """Expose branch options and a paginated commit summary page."""
+    """Expose branch options, the selected branch tip, and a paginated commit summary page."""
 
     branches: list[RepositoryBranchResponse]
     commits: list[RepositoryCommitResponse]
     next_commit_offset: int | None
+    target_commit: RepositoryCommitResponse | None = None
 
 
 class DirectoryBrowseRequest(StrictDto):

@@ -65,6 +65,13 @@ def test_repository_catalog_lists_selected_branch_history_and_paginates_commit_s
     assert newest["author"] == "Test User"
     assert newest["message"] == "catalog commit 11"
     assert newest["committed_at"]
+    target_commit = first.json()["target_commit"]
+    assert target_commit is not None
+    assert target_commit["oid"] == feature_tip
+    assert target_commit["short_oid"] == feature_tip[: len(target_commit["short_oid"])]
+    assert target_commit["author"] == "Test User"
+    assert target_commit["message"] == "feature-only commit"
+    assert target_commit["committed_at"]
     returned_oids = {commit["oid"] for commit in first.json()["commits"] + second.json()["commits"]}
     assert feature_tip not in returned_oids
     assert main_tip not in returned_oids
