@@ -12,6 +12,8 @@ from collections import Counter
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from codelens.review.domain.tool_results import parse_tool_result
 from codelens.review.infrastructure.model_paths import match_model_glob, parse_model_glob
 from codelens.testing.correctness_fixture import (
@@ -26,6 +28,8 @@ _TRANSCRIPT_PATH = (
 
 
 def _records() -> list[dict[str, Any]]:
+    if not _TRANSCRIPT_PATH.exists():
+        pytest.skip(f"transcript fixture missing: {_TRANSCRIPT_PATH}")
     decoded = json.loads(_TRANSCRIPT_PATH.read_text(encoding="utf-8"))
     assert isinstance(decoded, list)
     return [record for record in decoded if isinstance(record, dict)]

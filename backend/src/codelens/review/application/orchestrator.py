@@ -419,6 +419,15 @@ class ReviewOrchestrator:
             }
             if isinstance(error, AgentRuntimeError):
                 failure_metadata.update(error.failure_metadata())
+                # Persist partial candidates if available
+                if error.partial_candidates is not None:
+                    try:
+                        await self._completion.persist_partial_candidates(
+                            task_id, node.node_id, error.partial_candidates
+                        )
+                    except Exception:
+                        # Don't let persistence failure mask the original error
+                        pass
             checkpoint = await self._checkpoints.get(task_id, node.node_id)
             if checkpoint.status in {"running", "validating"}:
                 await self._checkpoints.mark_failed(

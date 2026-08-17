@@ -20,7 +20,10 @@ from codelens.review.infrastructure.evidence_replay import (
     ToolLoopResetSignal,
 )
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
-from codelens.review.infrastructure.tool_contract import enforce_tool_execution_limits
+from codelens.review.infrastructure.tool_contract import (
+    ReviewCoverageProbe,
+    enforce_tool_execution_limits,
+)
 from codelens.workspace.domain.models import ReviewSnapshot
 from codelens.workspace.infrastructure.git_cli import GitCli
 
@@ -33,6 +36,9 @@ class ToolExecutionLimits:
     max_identical_tool_results: int
     tool_timeout_seconds: float
     tool_loop_warning_template: str
+    no_progress_rounds_threshold: int | None = None
+    no_progress_nudge_template: str | None = None
+    all_files_reviewed_nudge_template: str | None = None
 
     def __post_init__(self) -> None:
         if self.max_tool_calls < 1:
@@ -136,6 +142,7 @@ class RuntimeToolContext:
     loop_reset_signal: ToolLoopResetSignal | None = None
     logical_run_id: str | None = None
     review_feedback: str | None = None
+    coverage_probe: ReviewCoverageProbe | None = None
     collector_contract_version: str | None = field(default=None, init=False)
     reviewer_output: ReviewerOutputState | None = field(default=None, init=False)
     role_output_state: RoleOutputState | None = field(default=None, init=False)
@@ -248,6 +255,12 @@ class CapabilityToolAssembler:
             tool_loop_warning_template=context.call_limits.tool_loop_warning_template,
             evidence_replay_registry=context.evidence_replay_registry,
             loop_reset_signal=context.loop_reset_signal,
+            no_progress_rounds_threshold=context.call_limits.no_progress_rounds_threshold,
+            no_progress_nudge_template=context.call_limits.no_progress_nudge_template,
+            all_files_reviewed_nudge_template=(
+                context.call_limits.all_files_reviewed_nudge_template
+            ),
+            coverage_probe=context.coverage_probe,
         )
 
     @staticmethod
@@ -261,6 +274,7 @@ class CapabilityToolAssembler:
             max_tool_calls=None,
             tool_limits=context.tool_limits,
         )
+        context.coverage_probe = evidence
         available = {
             (tool.name, 2): tool for tool in evidence.as_agent_tools(context.tool_descriptions)
         }

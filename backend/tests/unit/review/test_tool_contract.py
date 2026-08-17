@@ -289,23 +289,36 @@ async def test_valid_tool_result_content_is_never_reclassified_as_argument_error
     assert result["data"]["content"] == source_text
 
 
-async def test_non_consecutive_a_b_a_calls_reset_the_streak() -> None:
+async def test_non_consecutive_a_b_a_calls_detected_as_repetition() -> None:
+    """A B A pattern: the second A must be detected as a repetition."""
+
     @function_tool
     async def stable_lookup(query: str) -> str:
         return _success("stable_lookup", {"result": "same"})
 
     tool = enforce_tool_execution_limits(
         [stable_lookup],
-        max_tool_calls=3,
-        max_identical_tool_results=2,
+        max_tool_calls=20,
+        max_identical_tool_results=3,
         tool_timeout_seconds=1,
         tool_loop_warning_template="Repeated {repeated_count}; {remaining} remain.",
     )[0]
 
-    for query in ("A", "B", "A"):
-        arguments = json.dumps({"query": query})
-        result = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
-        assert json.loads(result)["diagnostics"] == []
+    # A: first call, no warning
+    arguments_a = json.dumps({"query": "A"})
+    first = await tool.on_invoke_tool(_context(tool.name, arguments_a), arguments_a)
+    assert json.loads(first)["diagnostics"] == []
+
+    # B: different fingerprint, no warning
+    arguments_b = json.dumps({"query": "B"})
+    second = await tool.on_invoke_tool(_context(tool.name, arguments_b), arguments_b)
+    assert json.loads(second)["diagnostics"] == []
+
+    # A: same fingerprint as first call → repeated_count=2 → warning
+    third = await tool.on_invoke_tool(_context(tool.name, arguments_a), arguments_a)
+    third_payload = json.loads(third)
+    assert third_payload["diagnostics"][0]["code"] == "repeated_identical_call"
+    assert "2" in third_payload["diagnostics"][0]["message"]
 
 
 async def test_canonical_json_key_order_counts_as_the_same_call() -> None:
@@ -600,3 +613,271 @@ async def test_read_file_chunked_ranges_do_not_trigger_loop_detection() -> None:
         arguments = json.dumps({"path": "src/example.py", "start_line": start, "end_line": end})
         result = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
         assert "WARNING" not in result
+
+
+async def test_a_b_a_pattern_trips_breaker_at_threshold() -> None:
+    """A B A with max=2: second A reaches threshold and trips the breaker."""
+
+    @function_tool
+    async def stable_lookup(query: str) -> str:
+        return _success("stable_lookup", {"result": "same"})
+
+    tool = enforce_tool_execution_limits(
+        [stable_lookup],
+        max_tool_calls=20,
+        max_identical_tool_results=2,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="Repeated {repeated_count}; {remaining} remain.",
+    )[0]
+
+    arguments_a = json.dumps({"query": "A"})
+    arguments_b = json.dumps({"query": "B"})
+
+    # A: count=1, no warning
+    await tool.on_invoke_tool(_context(tool.name, arguments_a), arguments_a)
+    # B: different fingerprint, count=1
+    await tool.on_invoke_tool(_context(tool.name, arguments_b), arguments_b)
+    # A: same as first → count=2 → 2>=2 → ToolLoopDetectedError
+    with pytest.raises(ToolLoopDetectedError):
+        await tool.on_invoke_tool(_context(tool.name, arguments_a), arguments_a)
+
+
+async def test_window_cleared_after_loop_reset_signal() -> None:
+    """After compaction reset, the fingerprint window is cleared."""
+
+    @function_tool
+    async def stable_lookup(query: str) -> str:
+        return _success("stable_lookup", {"query": query, "matches": []})
+
+    signal = ToolLoopResetSignal()
+    tool = enforce_tool_execution_limits(
+        [stable_lookup],
+        max_tool_calls=20,
+        max_identical_tool_results=3,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count} times, {remaining} attempt(s) left",
+        loop_reset_signal=signal,
+    )[0]
+    arguments = json.dumps({"query": "test"})
+
+    # Build up to warning
+    await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    second = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    assert "WARNING" in second
+
+    # Reset
+    signal.trigger()
+
+    # Window cleared — first two calls after reset should not warn
+    first_after = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    assert "WARNING" not in first_after
+    second_after = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    assert "WARNING" in second_after
+
+
+# ---------------------------------------------------------------------------
+# No-progress rounds nudge
+# ---------------------------------------------------------------------------
+
+
+class _CoverageProbe:
+    """Minimal ReviewCoverageProbe implementation for testing."""
+
+    def __init__(self, files: tuple[str, ...], reviewed: set[str] | None = None) -> None:
+        self._files = files
+        self._reviewed = reviewed or set()
+
+    @property
+    def review_file_paths(self) -> tuple[str, ...]:
+        return self._files
+
+    @property
+    def reviewed_paths(self) -> frozenset[str]:
+        return frozenset(self._reviewed)
+
+    def mark_reviewed(self, path: str) -> None:
+        self._reviewed.add(path)
+
+
+async def test_no_progress_nudge_emitted_after_threshold_evidence_calls() -> None:
+    @function_tool
+    async def read_file(path: str) -> str:
+        return _success("read_file", {"path": path, "lines": []})
+
+    tool = enforce_tool_execution_limits(
+        [read_file],
+        max_tool_calls=50,
+        max_identical_tool_results=99,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count} times, {remaining} left",
+        no_progress_rounds_threshold=3,
+        no_progress_nudge_template="No progress for {no_progress_rounds} rounds.",
+    )[0]
+
+    arguments = json.dumps({"path": "src/a.py"})
+
+    # 2 calls below threshold — no nudge
+    for _ in range(2):
+        result = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+        assert "no_progress_rounds" not in result
+
+    # 3rd call reaches threshold — nudge attached
+    result = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+    payload = json.loads(result)
+    nudge_diags = [d for d in payload["diagnostics"] if d["code"] == "no_progress_rounds"]
+    assert len(nudge_diags) == 1
+    assert "No progress for 3 rounds." in nudge_diags[0]["message"]
+
+
+async def test_no_progress_nudge_resets_on_output_tool() -> None:
+    @function_tool
+    async def read_file(path: str) -> str:
+        return _success("read_file", {"path": path, "lines": []})
+
+    @function_tool
+    async def comment(content: str) -> str:
+        return _success("comment", {"comment_id": "c1"})
+
+    tools = enforce_tool_execution_limits(
+        [read_file, comment],
+        max_tool_calls=50,
+        max_identical_tool_results=99,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count} times, {remaining} left",
+        no_progress_rounds_threshold=3,
+        no_progress_nudge_template="No progress for {no_progress_rounds} rounds.",
+    )
+    reader = tools[0]
+    commenter = tools[1]
+
+    # Use different paths to avoid loop detection on identical calls
+    for i in range(3):
+        args = json.dumps({"path": f"src/file_{i}.py"})
+        result = await reader.on_invoke_tool(_context(reader.name, args), args)
+        if i < 2:
+            assert "no_progress_rounds" not in result
+        else:
+            assert "no_progress_rounds" in result
+
+    # Call comment — should reset the counter
+    comment_args = json.dumps({"content": "test finding"})
+    comment_result = await commenter.on_invoke_tool(
+        _context(commenter.name, comment_args), comment_args
+    )
+    assert "no_progress_rounds" not in comment_result
+
+    # Next read call should start from 0 again — 1 round, below threshold
+    read_args = json.dumps({"path": "src/next.py"})
+    result = await reader.on_invoke_tool(_context(reader.name, read_args), read_args)
+    assert "no_progress_rounds" not in result
+
+
+async def test_no_progress_disabled_when_threshold_is_none() -> None:
+    @function_tool
+    async def read_file(path: str) -> str:
+        return _success("read_file", {"path": path, "lines": []})
+
+    tool = enforce_tool_execution_limits(
+        [read_file],
+        max_tool_calls=50,
+        max_identical_tool_results=99,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count}",
+    )[0]
+
+    arguments = json.dumps({"path": "src/a.py"})
+    for _ in range(20):
+        result = await tool.on_invoke_tool(_context(tool.name, arguments), arguments)
+        assert "no_progress_rounds" not in result
+
+
+# ---------------------------------------------------------------------------
+# All-files-reviewed coverage nudge
+# ---------------------------------------------------------------------------
+
+
+async def test_coverage_nudge_emitted_when_all_files_reviewed() -> None:
+    probe = _CoverageProbe(("src/a.py", "src/b.py"))
+
+    @function_tool
+    async def read_file(path: str) -> str:
+        probe.mark_reviewed(path)
+        return _success("read_file", {"path": path, "lines": []})
+
+    tool = enforce_tool_execution_limits(
+        [read_file],
+        max_tool_calls=50,
+        max_identical_tool_results=99,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count}",
+        all_files_reviewed_nudge_template="All files reviewed. Submit findings or call task_done.",
+        coverage_probe=probe,
+    )[0]
+
+    # Read first file — not all reviewed yet
+    result = await tool.on_invoke_tool(
+        _context(tool.name, json.dumps({"path": "src/a.py"})),
+        json.dumps({"path": "src/a.py"}),
+    )
+    assert "all_files_reviewed" not in result
+
+    # Read second file — now all reviewed
+    result = await tool.on_invoke_tool(
+        _context(tool.name, json.dumps({"path": "src/b.py"})),
+        json.dumps({"path": "src/b.py"}),
+    )
+    payload = json.loads(result)
+    codes = {d["code"] for d in payload["diagnostics"]}
+    assert "all_files_reviewed" in codes
+
+    # Subsequent evidence call — nudge not re-emitted
+    result = await tool.on_invoke_tool(
+        _context(tool.name, json.dumps({"path": "src/a.py"})),
+        json.dumps({"path": "src/a.py"}),
+    )
+    assert "all_files_reviewed" not in result
+
+
+async def test_coverage_nudge_resets_after_output_tool() -> None:
+    probe = _CoverageProbe(("src/a.py",))
+
+    @function_tool
+    async def read_file(path: str) -> str:
+        probe.mark_reviewed(path)
+        return _success("read_file", {"path": path, "lines": []})
+
+    @function_tool
+    async def comment(content: str) -> str:
+        return _success("comment", {"comment_id": "c1"})
+
+    tools = enforce_tool_execution_limits(
+        [read_file, comment],
+        max_tool_calls=50,
+        max_identical_tool_results=99,
+        tool_timeout_seconds=1,
+        tool_loop_warning_template="WARNING: {repeated_count}",
+        all_files_reviewed_nudge_template="All files reviewed.",
+        coverage_probe=probe,
+    )
+    reader = tools[0]
+    commenter = tools[1]
+
+    # Read the only file — all reviewed
+    result = await reader.on_invoke_tool(
+        _context(reader.name, json.dumps({"path": "src/a.py"})),
+        json.dumps({"path": "src/a.py"}),
+    )
+    assert "all_files_reviewed" in result
+
+    # Call comment — resets the flag
+    await commenter.on_invoke_tool(
+        _context(commenter.name, json.dumps({"content": "test"})),
+        json.dumps({"content": "test"}),
+    )
+
+    # Read again — nudge re-emitted
+    result = await reader.on_invoke_tool(
+        _context(reader.name, json.dumps({"path": "src/a.py"})),
+        json.dumps({"path": "src/a.py"}),
+    )
+    assert "all_files_reviewed" in result

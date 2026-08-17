@@ -518,6 +518,16 @@ class AgentRunCompletionPort(Protocol):
 
         raise NotImplementedError
 
+    async def persist_partial_candidates(
+        self,
+        task_id: str,
+        node_key: str,
+        candidates: CandidateFindingBatch,
+    ) -> None:
+        """Persist partial Candidates from a failed Agent Run without completing it."""
+
+        raise NotImplementedError
+
 
 class ToolLimitsStorePort(Protocol):
     """Persist and provide configurable tool-level limits for Agent evidence operations."""

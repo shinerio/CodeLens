@@ -20,6 +20,7 @@ export type ModelGateway = {
   max_retries: number;
   retry_backoff_base: number;
   retry_max_delay: number;
+  no_progress_rounds_threshold: number;
 };
 
 export type ModelGatewayCatalog = {
@@ -79,6 +80,7 @@ export type CreateModelGateway = {
   max_retries: number;
   retry_backoff_base: number;
   retry_max_delay: number;
+  no_progress_rounds_threshold: number;
 };
 
 export type UpdateModelGateway = {
@@ -98,6 +100,7 @@ export type UpdateModelGateway = {
   max_retries: number;
   retry_backoff_base: number;
   retry_max_delay: number;
+  no_progress_rounds_threshold: number;
 };
 
 export type GatewayTestResult = {

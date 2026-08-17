@@ -25,6 +25,9 @@ class LocalizedSystemPrompts:
     review_feedback: str
     checkpoint_compaction: str
     tool_not_found: str
+    no_progress_nudge: str
+    completion_nudge: str
+    all_files_reviewed_nudge: str
 
 
 class I18nPromptLoaderPort(Protocol):

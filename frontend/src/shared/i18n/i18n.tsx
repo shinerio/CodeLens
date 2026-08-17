@@ -76,6 +76,9 @@ const EN_MESSAGES = {
   "settings.maxIdenticalToolResults": "Identical result limit",
   "settings.maxIdenticalToolResultsHint":
     "Stops the run when the same tool arguments return the same result repeatedly.",
+  "settings.noProgressRoundsThreshold": "No-progress rounds threshold",
+  "settings.noProgressRoundsThresholdHint":
+    "Nudges the model to converge or ends the run after this many consecutive rounds make no progress.",
   "settings.toolTimeoutSeconds": "Tool timeout (s)",
   "settings.maxRetries": "Max retries",
   "settings.maxRetriesHint": "Maximum retry attempts for transient model API errors (429, 5xx, timeout).",
@@ -728,6 +731,9 @@ const ZH_MESSAGES: Record<TranslationKey, string> = {
   "settings.maxIdenticalToolResults": "相同结果熔断阈值",
   "settings.maxIdenticalToolResultsHint":
     "相同工具参数累计得到相同结果达到阈值时终止本次运行。",
+  "settings.noProgressRoundsThreshold": "无进展轮次阈值",
+  "settings.noProgressRoundsThresholdHint":
+    "连续多轮未积累新证据或未推进任务时，提示模型收敛或提前结束运行。",
   "settings.toolTimeoutSeconds": "单次工具超时（秒）",
   "settings.maxRetries": "最大重试次数",
   "settings.maxRetriesHint": "模型 API 瞬时错误（429、5xx、超时）的最大重试次数。",

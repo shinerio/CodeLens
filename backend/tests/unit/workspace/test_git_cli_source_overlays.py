@@ -27,6 +27,7 @@ async def test_git_reader_applies_verified_tracked_overlay_to_pinned_target(tmp_
     repository = tmp_path / "repository"
     repository.mkdir()
     await git.run(repository, "init")
+    await git.run(repository, "config", "core.autocrlf", "false")
     await git.run(repository, "config", "user.email", "test@example.com")
     await git.run(repository, "config", "user.name", "Test")
     source = repository / "src" / "example.py"
@@ -49,6 +50,7 @@ async def test_git_reader_reads_overlay_entry_and_tracked_deletion(tmp_path: Pat
     repository = tmp_path / "repository"
     repository.mkdir()
     await git.run(repository, "init")
+    await git.run(repository, "config", "core.autocrlf", "false")
     await git.run(repository, "config", "user.email", "test@example.com")
     await git.run(repository, "config", "user.name", "Test")
     source = repository / "src" / "example.py"
@@ -81,6 +83,7 @@ async def test_git_reader_resolves_rename_old_path(tmp_path: Path) -> None:
     repository = tmp_path / "repository"
     repository.mkdir()
     await git.run(repository, "init")
+    await git.run(repository, "config", "core.autocrlf", "false")
     await git.run(repository, "config", "user.email", "test@example.com")
     await git.run(repository, "config", "user.name", "Test")
     old = repository / "src" / "old.py"

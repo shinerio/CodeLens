@@ -199,6 +199,7 @@ class GitCli:
         with tempfile.TemporaryDirectory(prefix="codelens-overlay-preview-") as directory:
             root = Path(directory)
             await self.run(root, "init")
+            await self.run(root, "config", "core.autocrlf", "false")
             destination = root / path
             destination.parent.mkdir(parents=True, exist_ok=True)
             preimage = await self.read_revision_optional(repository, revision, path)

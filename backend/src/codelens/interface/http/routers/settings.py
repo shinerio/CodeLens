@@ -80,6 +80,7 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
                 max_retries=gateway.max_retries,
                 retry_backoff_base=gateway.retry_backoff_base,
                 retry_max_delay=gateway.retry_max_delay,
+                no_progress_rounds_threshold=gateway.no_progress_rounds_threshold,
             )
             for gateway in view.gateways
         ],
@@ -336,6 +337,7 @@ async def create_model_gateway(
             max_retries=request.max_retries,
             retry_backoff_base=request.retry_backoff_base,
             retry_max_delay=request.retry_max_delay,
+            no_progress_rounds_threshold=request.no_progress_rounds_threshold,
         )
     )
 
@@ -367,6 +369,7 @@ async def update_model_gateway(
             max_retries=request.max_retries,
             retry_backoff_base=request.retry_backoff_base,
             retry_max_delay=request.retry_max_delay,
+            no_progress_rounds_threshold=request.no_progress_rounds_threshold,
         )
     )
 
@@ -598,6 +601,7 @@ async def reset_all_settings(
                 max_retries=10,
                 retry_backoff_base=1.0,
                 retry_max_delay=30.0,
+                no_progress_rounds_threshold=10,
             )
 
     return ResetAllSettingsResponse(

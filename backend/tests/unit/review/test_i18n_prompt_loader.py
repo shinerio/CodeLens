@@ -11,6 +11,9 @@ EXPECTED_BUNDLE_FILES = {
     "tool-not-found.md",
     "tool-loop-warning.md",
     "tools.json",
+    "no-progress-nudge.md",
+    "completion-nudge.md",
+    "all-files-reviewed-nudge.md",
 }
 
 

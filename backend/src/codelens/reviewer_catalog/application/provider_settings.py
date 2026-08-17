@@ -44,6 +44,7 @@ class ModelGatewayView:
     max_retries: int
     retry_backoff_base: float
     retry_max_delay: float
+    no_progress_rounds_threshold: int
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,7 @@ class ModelGatewaySettingsService:
         max_retries: int = 10,
         retry_backoff_base: float = 1.0,
         retry_max_delay: float = 30.0,
+        no_progress_rounds_threshold: int = 10,
     ) -> ModelGatewayCatalogView:
         """Append a gateway; the first created gateway becomes active automatically."""
 
@@ -116,6 +118,7 @@ class ModelGatewaySettingsService:
                 max_retries=max_retries,
                 retry_backoff_base=retry_backoff_base,
                 retry_max_delay=retry_max_delay,
+                no_progress_rounds_threshold=no_progress_rounds_threshold,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id or gateway.gateway_id,
@@ -144,6 +147,7 @@ class ModelGatewaySettingsService:
         max_retries: int = 10,
         retry_backoff_base: float = 1.0,
         retry_max_delay: float = 30.0,
+        no_progress_rounds_threshold: int = 10,
     ) -> ModelGatewayCatalogView:
         """Replace gateway metadata while retaining an omitted write-only API key."""
 
@@ -168,6 +172,7 @@ class ModelGatewaySettingsService:
                 max_retries=max_retries,
                 retry_backoff_base=retry_backoff_base,
                 retry_max_delay=retry_max_delay,
+                no_progress_rounds_threshold=no_progress_rounds_threshold,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id,
@@ -252,6 +257,7 @@ class ModelGatewaySettingsService:
                     max_retries=gateway.max_retries,
                     retry_backoff_base=gateway.retry_backoff_base,
                     retry_max_delay=gateway.retry_max_delay,
+                    no_progress_rounds_threshold=gateway.no_progress_rounds_threshold,
                 )
                 for gateway in catalog.gateways
             ),

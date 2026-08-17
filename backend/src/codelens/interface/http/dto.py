@@ -717,6 +717,7 @@ ToolTimeoutSeconds = Annotated[int, Field(ge=1, le=300)]
 MaxRetries = Annotated[int, Field(ge=0, le=10)]
 RetryBackoffBase = Annotated[float, Field(ge=0.1, le=60.0)]
 RetryMaxDelay = Annotated[float, Field(ge=1.0, le=300.0)]
+NoProgressRoundsThreshold = Annotated[int, Field(ge=1, le=100)]
 
 
 class CreateModelGatewayRequest(StrictDto):
@@ -738,6 +739,7 @@ class CreateModelGatewayRequest(StrictDto):
     max_retries: MaxRetries = 10
     retry_backoff_base: RetryBackoffBase = 1.0
     retry_max_delay: RetryMaxDelay = 30.0
+    no_progress_rounds_threshold: NoProgressRoundsThreshold = 10
 
     @field_validator("api_key")
     @classmethod
@@ -767,6 +769,7 @@ class UpdateModelGatewayRequest(StrictDto):
     max_retries: MaxRetries = 10
     retry_backoff_base: RetryBackoffBase = 1.0
     retry_max_delay: RetryMaxDelay = 30.0
+    no_progress_rounds_threshold: NoProgressRoundsThreshold = 10
 
     @field_validator("api_key")
     @classmethod
@@ -808,6 +811,7 @@ class ModelGatewayResponse(StrictDto):
     max_retries: int
     retry_backoff_base: float
     retry_max_delay: float
+    no_progress_rounds_threshold: int
 
 
 class ModelGatewayCatalogResponse(StrictDto):

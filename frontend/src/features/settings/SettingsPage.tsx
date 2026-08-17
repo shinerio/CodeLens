@@ -69,6 +69,7 @@ const DEFAULT_TOOL_TIMEOUT_SECONDS = 30;
 const DEFAULT_MAX_RETRIES = 10;
 const DEFAULT_RETRY_BACKOFF_BASE = 1.0;
 const DEFAULT_RETRY_MAX_DELAY = 30.0;
+const DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD = 10;
 const BYTES_PER_KILOBYTE = 1024;
 
 export function SettingsPage() {
@@ -93,6 +94,7 @@ export function SettingsPage() {
   const [maxRetriesDraft, setMaxRetriesDraft] = useState("10");
   const [retryBackoffBaseDraft, setRetryBackoffBaseDraft] = useState("1");
   const [retryMaxDelayDraft, setRetryMaxDelayDraft] = useState("30");
+  const [noProgressRoundsThresholdDraft, setNoProgressRoundsThresholdDraft] = useState("10");
   const [recentRepositoryLimitDraft, setRecentRepositoryLimitDraft] = useState("10");
   const [rootInstructionLimitDraft, setRootInstructionLimitDraft] = useState("500");
   const [nestedInstructionLimitDraft, setNestedInstructionLimitDraft] = useState("200");
@@ -255,6 +257,12 @@ export function SettingsPage() {
     setRetryMaxDelayDraft(
       String(runtimeGateway.retry_max_delay ?? DEFAULT_RETRY_MAX_DELAY),
     );
+    setNoProgressRoundsThresholdDraft(
+      String(
+        runtimeGateway.no_progress_rounds_threshold ??
+          DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD,
+      ),
+    );
   }, [runtimeGateway]);
 
   useEffect(() => {
@@ -316,6 +324,7 @@ export function SettingsPage() {
         max_retries: DEFAULT_MAX_RETRIES,
         retry_backoff_base: DEFAULT_RETRY_BACKOFF_BASE,
         retry_max_delay: DEFAULT_RETRY_MAX_DELAY,
+        no_progress_rounds_threshold: DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD,
       };
       if (editingGatewayId === null) {
         return createModelGateway({ ...common, api_key: apiKey });
@@ -346,6 +355,9 @@ export function SettingsPage() {
         retry_max_delay:
           gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.retry_max_delay ??
           DEFAULT_RETRY_MAX_DELAY,
+        no_progress_rounds_threshold:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)
+            ?.no_progress_rounds_threshold ?? DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD,
         ...(apiKey.trim() === "" ? {} : { api_key: apiKey }),
       });
     },
@@ -422,6 +434,7 @@ export function SettingsPage() {
   const parsedMaxRetries = Number(maxRetriesDraft);
   const parsedRetryBackoffBase = Number(retryBackoffBaseDraft);
   const parsedRetryMaxDelay = Number(retryMaxDelayDraft);
+  const parsedNoProgressRoundsThreshold = Number(noProgressRoundsThresholdDraft);
   const areExecutionLimitsValid =
     Number.isInteger(parsedAgentTimeout) &&
     parsedAgentTimeout >= 60 &&
@@ -444,7 +457,10 @@ export function SettingsPage() {
     parsedRetryBackoffBase >= 0.1 &&
     parsedRetryBackoffBase <= 60 &&
     parsedRetryMaxDelay >= 1 &&
-    parsedRetryMaxDelay <= 300;
+    parsedRetryMaxDelay <= 300 &&
+    Number.isInteger(parsedNoProgressRoundsThreshold) &&
+    parsedNoProgressRoundsThreshold >= 1 &&
+    parsedNoProgressRoundsThreshold <= 100;
   const areExecutionLimitsUnchanged =
     runtimeGateway !== undefined &&
     parsedAgentTimeout === (runtimeGateway.agent_timeout ?? DEFAULT_AGENT_TIMEOUT) &&
@@ -458,7 +474,10 @@ export function SettingsPage() {
     parsedMaxRetries === (runtimeGateway.max_retries ?? DEFAULT_MAX_RETRIES) &&
     parsedRetryBackoffBase ===
       (runtimeGateway.retry_backoff_base ?? DEFAULT_RETRY_BACKOFF_BASE) &&
-    parsedRetryMaxDelay === (runtimeGateway.retry_max_delay ?? DEFAULT_RETRY_MAX_DELAY);
+    parsedRetryMaxDelay === (runtimeGateway.retry_max_delay ?? DEFAULT_RETRY_MAX_DELAY) &&
+    parsedNoProgressRoundsThreshold ===
+      (runtimeGateway.no_progress_rounds_threshold ??
+        DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD);
 
   const executionLimitsMutation = useMutation({
     mutationFn: async () => {
@@ -481,6 +500,7 @@ export function SettingsPage() {
         max_retries: parsedMaxRetries,
         retry_backoff_base: parsedRetryBackoffBase,
         retry_max_delay: parsedRetryMaxDelay,
+        no_progress_rounds_threshold: parsedNoProgressRoundsThreshold,
       });
     },
     onSuccess: updateCatalog,
@@ -926,6 +946,22 @@ export function SettingsPage() {
                   onChange={(event) => setRetryMaxDelayDraft(event.currentTarget.value)}
                 />
                 <small>{t("settings.retryMaxDelayHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.noProgressRoundsThreshold")}</span>
+                <input
+                  aria-label={t("settings.noProgressRoundsThreshold")}
+                  disabled={runtimeGateway === undefined}
+                  min={1}
+                  max={100}
+                  step={1}
+                  type="number"
+                  value={noProgressRoundsThresholdDraft}
+                  onChange={(event) =>
+                    setNoProgressRoundsThresholdDraft(event.currentTarget.value)
+                  }
+                />
+                <small>{t("settings.noProgressRoundsThresholdHint")}</small>
               </label>
             </div>
             <div className="settings-panel__actions">

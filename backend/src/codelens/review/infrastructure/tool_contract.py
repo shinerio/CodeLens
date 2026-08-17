@@ -4,7 +4,7 @@ import asyncio
 import hashlib
 import json
 import logging
-from typing import Any
+from typing import Any, Protocol
 
 from agents import FunctionTool, Tool
 from agents.exceptions import ModelBehaviorError
@@ -165,6 +165,34 @@ _EVIDENCE_TOOL_NAMES = frozenset(
 )
 """Read-only tools whose effects must become visible before state mutations."""
 
+_OUTPUT_TOOL_NAMES = frozenset(
+    (
+        "comment",
+        "retract_comment",
+        "task_done",
+        "verdict",
+        "merge",
+        "finalize_verdicts",
+        "finalize_plan",
+        "review_ignore",
+    )
+)
+"""Tools that produce findings or declare completion, resetting no-progress state."""
+
+
+class ReviewCoverageProbe(Protocol):
+    """Expose review file coverage for the all-files-reviewed nudge."""
+
+    @property
+    def review_file_paths(self) -> tuple[str, ...]:
+        """Return the stable canonical review target paths."""
+        ...
+
+    @property
+    def reviewed_paths(self) -> frozenset[str]:
+        """Return review paths exposed through read_file or get_diff."""
+        ...
+
 
 class ToolBatchPhaseCoordinator:
     """Schedule read-only evidence ahead of state changes in one SDK tool batch.
@@ -259,6 +287,10 @@ class ToolExecutionLimiter:
         tool_loop_warning_template: str,
         evidence_replay_registry: CompactedEvidenceReplayRegistry | None = None,
         loop_reset_signal: ToolLoopResetSignal | None = None,
+        no_progress_rounds_threshold: int | None = None,
+        no_progress_nudge_template: str | None = None,
+        all_files_reviewed_nudge_template: str | None = None,
+        coverage_probe: ReviewCoverageProbe | None = None,
     ) -> None:
         if max_tool_calls <= 0:
             raise ValueError("tool call budget must be positive")
@@ -273,8 +305,13 @@ class ToolExecutionLimiter:
         self._evidence_replay_registry = evidence_replay_registry
         self._loop_reset_signal = loop_reset_signal
         self._last_reset_generation: int | None = None
-        self._last_fingerprint: str | None = None
-        self._consecutive_identical_count = 0
+        self._fingerprint_counts: dict[str, int] = {}
+        self._no_progress_rounds_threshold = no_progress_rounds_threshold
+        self._no_progress_nudge_template = no_progress_nudge_template
+        self._no_progress_rounds = 0
+        self._all_files_reviewed_nudge_template = all_files_reviewed_nudge_template
+        self._coverage_probe = coverage_probe
+        self._all_files_reviewed_nudge_emitted = False
         self._lock = asyncio.Lock()
 
     def wrap(self, tool: FunctionTool) -> FunctionTool:
@@ -295,10 +332,29 @@ class ToolExecutionLimiter:
                     retryable=False,
                 ) from None
             normalized_result = ensure_tool_result(tool.name, result)
-            warning = await self._observe_result(tool.name, arguments, normalized_result)
-            if warning is not None:
-                return self._attach_warning(normalized_result, warning)
-            return normalized_result
+
+            loop_warning = await self._observe_result(
+                tool.name, arguments, normalized_result
+            )
+            progress_warning = await self._observe_progress(tool.name)
+            coverage_warning = await self._observe_coverage(
+                tool.name, normalized_result
+            )
+
+            diagnostics: list[tuple[str, str]] = []
+            if loop_warning is not None:
+                diagnostics.append(("repeated_identical_call", loop_warning))
+            if progress_warning is not None:
+                diagnostics.append(("no_progress_rounds", progress_warning))
+            if coverage_warning is not None:
+                diagnostics.append(("all_files_reviewed", coverage_warning))
+
+            if not diagnostics or not isinstance(normalized_result, str):
+                return normalized_result
+            parsed = parse_tool_result(normalized_result)
+            for code, message in diagnostics:
+                parsed = parsed.with_diagnostic(ToolDiagnostic(code, message, True))
+            return parsed.to_json()
 
         tool.on_invoke_tool = invoke_limited
         return tool
@@ -317,18 +373,21 @@ class ToolExecutionLimiter:
     async def _observe_result(self, tool_name: str, arguments: str, result: object) -> str | None:
         """Check for repeated tool calls and return a warning if detected.
 
-        Returns a warning message on first detection of repetition (count == 2),
-        or raises ToolLoopDetectedError if the threshold is reached. Resets the
-        counters when a ToolLoopResetSignal generation change indicates that
-        context compaction succeeded, so post-compaction re-reads are not flagged.
+        Tracks per-fingerprint occurrence counts across the entire run so that
+        non-consecutive repetition (A B C D E F A) is detected the same as
+        consecutive (A A). Returns a warning when a fingerprint appears 2+ times,
+        or raises ToolLoopDetectedError if the threshold is reached. Resets all
+        counts when a ToolLoopResetSignal generation change indicates that context
+        compaction succeeded, so post-compaction re-reads are not flagged.
         """
         if self._loop_reset_signal is not None:
             current_generation = self._loop_reset_signal.generation
             if current_generation != self._last_reset_generation:
                 async with self._lock:
                     self._last_reset_generation = current_generation
-                    self._last_fingerprint = None
-                    self._consecutive_identical_count = 0
+                    self._fingerprint_counts.clear()
+                    self._no_progress_rounds = 0
+                    self._all_files_reviewed_nudge_emitted = False
         if (
             self._evidence_replay_registry is not None
             and isinstance(result, str)
@@ -337,17 +396,14 @@ class ToolExecutionLimiter:
             and self._evidence_replay_registry.consume(tool_name, arguments)
         ):
             async with self._lock:
-                self._last_fingerprint = None
-                self._consecutive_identical_count = 0
+                self._fingerprint_counts.clear()
+                self._no_progress_rounds = 0
+                self._all_files_reviewed_nudge_emitted = False
             return None
         fingerprint = self._fingerprint(tool_name, arguments, result)
         async with self._lock:
-            if fingerprint == self._last_fingerprint:
-                self._consecutive_identical_count += 1
-            else:
-                self._last_fingerprint = fingerprint
-                self._consecutive_identical_count = 1
-            repeated_count = self._consecutive_identical_count
+            repeated_count = self._fingerprint_counts.get(fingerprint, 0) + 1
+            self._fingerprint_counts[fingerprint] = repeated_count
 
             # Threshold reached: fail the run
             if repeated_count >= self._max_identical_tool_results:
@@ -368,20 +424,71 @@ class ToolExecutionLimiter:
 
             return None
 
-    @staticmethod
-    def _attach_warning(result: object, warning: str) -> str:
-        """Append a stable Diagnostic through the canonical Tool Result serializer."""
+    async def _observe_progress(self, tool_name: str) -> str | None:
+        """Track consecutive evidence-only rounds and nudge when threshold is reached.
 
-        if not isinstance(result, str):
-            raise ToolResultError("limiter requires a serialized Tool Result")
-        parsed = parse_tool_result(result)
-        return parsed.with_diagnostic(
-            ToolDiagnostic(
-                "repeated_identical_call",
-                warning,
-                True,
-            )
-        ).to_json()
+        Evidence tool calls increment the counter; output tool calls reset it.
+        When the threshold is reached, the nudge is emitted once and the counter
+        resets to zero, so the next nudge fires after another full threshold
+        cycle rather than on every subsequent call.  The counter is also cleared
+        on context compaction and evidence-replay resets.
+        """
+
+        if (
+            self._no_progress_rounds_threshold is None
+            or self._no_progress_nudge_template is None
+        ):
+            return None
+        async with self._lock:
+            if tool_name in _OUTPUT_TOOL_NAMES:
+                self._no_progress_rounds = 0
+                return None
+            if tool_name not in _EVIDENCE_TOOL_NAMES:
+                return None
+            self._no_progress_rounds += 1
+            if self._no_progress_rounds >= self._no_progress_rounds_threshold:
+                self._no_progress_rounds = 0
+                return self._no_progress_nudge_template.format(
+                    no_progress_rounds=self._no_progress_rounds_threshold
+                )
+            return None
+
+    async def _observe_coverage(self, tool_name: str, result: str) -> str | None:
+        """Nudge the model when all review files have been read.
+
+        After a successful evidence call, checks whether every review target path
+        has been visited.  Emits the nudge once per coverage cycle; output tool
+        calls reset the flag so the nudge can fire again after new output.
+        """
+
+        if (
+            self._coverage_probe is None
+            or self._all_files_reviewed_nudge_template is None
+        ):
+            return None
+        async with self._lock:
+            if tool_name in _OUTPUT_TOOL_NAMES:
+                self._all_files_reviewed_nudge_emitted = False
+                return None
+            if tool_name not in _EVIDENCE_TOOL_NAMES:
+                return None
+            if self._all_files_reviewed_nudge_emitted:
+                return None
+        try:
+            parsed = parse_tool_result(result)
+        except ToolResultError:
+            return None
+        if parsed.status not in {ToolResultStatus.SUCCESS, ToolResultStatus.PARTIAL}:
+            return None
+        review_files = set(self._coverage_probe.review_file_paths)
+        if not review_files:
+            return None
+        reviewed = set(self._coverage_probe.reviewed_paths)
+        if reviewed >= review_files:
+            async with self._lock:
+                self._all_files_reviewed_nudge_emitted = True
+            return self._all_files_reviewed_nudge_template
+        return None
 
     @classmethod
     def _fingerprint(cls, tool_name: str, arguments: str, result: object) -> str:
@@ -459,6 +566,10 @@ def enforce_tool_execution_limits(
     tool_loop_warning_template: str,
     evidence_replay_registry: CompactedEvidenceReplayRegistry | None = None,
     loop_reset_signal: ToolLoopResetSignal | None = None,
+    no_progress_rounds_threshold: int | None = None,
+    no_progress_nudge_template: str | None = None,
+    all_files_reviewed_nudge_template: str | None = None,
+    coverage_probe: ReviewCoverageProbe | None = None,
 ) -> list[Tool]:
     """Apply one shared execution limiter to every function tool in an Agent run."""
 
@@ -469,6 +580,10 @@ def enforce_tool_execution_limits(
         tool_loop_warning_template=tool_loop_warning_template,
         evidence_replay_registry=evidence_replay_registry,
         loop_reset_signal=loop_reset_signal,
+        no_progress_rounds_threshold=no_progress_rounds_threshold,
+        no_progress_nudge_template=no_progress_nudge_template,
+        all_files_reviewed_nudge_template=all_files_reviewed_nudge_template,
+        coverage_probe=coverage_probe,
     )
     coordinator = ToolBatchPhaseCoordinator()
     limited: list[Tool] = []

@@ -57,6 +57,7 @@ from codelens.review.application.settings import (
 from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.domain.errors import (
     AgentMaxTurnsExceededError,
+    AgentRuntimeError,
     PermanentAgentOutputError,
     TransientAgentRuntimeError,
 )
@@ -409,6 +410,17 @@ class OpenAIAgentRuntime:
                 max_identical_tool_results=provider_config.max_identical_tool_results,
                 tool_timeout_seconds=provider_config.tool_timeout_seconds,
                 tool_loop_warning_template=prompts.tool_loop_warning,
+                no_progress_rounds_threshold=(
+                    provider_config.no_progress_rounds_threshold
+                    if is_reviewer
+                    else None
+                ),
+                no_progress_nudge_template=(
+                    prompts.no_progress_nudge if is_reviewer else None
+                ),
+                all_files_reviewed_nudge_template=(
+                    prompts.all_files_reviewed_nudge if is_reviewer else None
+                ),
             ),
             role_output_tools=role_output_tools,
             logical_run_id=_host_run_id(role_context),
@@ -452,7 +464,8 @@ class OpenAIAgentRuntime:
         retry_max_delay = provider_config.retry_max_delay
         skills_emitted = sink is None
         prompt_emitted = sink is None
-        for attempt in range(max_retries + 1):
+        attempt = 0
+        while attempt <= max_retries:
             if attempt > 0:
                 model_tools = CapabilityToolAssembler().assemble(
                     execution_spec, tool_context
@@ -581,12 +594,83 @@ class OpenAIAgentRuntime:
                                 )
                             )
                     if not tool_context.is_completed:
-                        attempt_failure = TransientAgentRuntimeError(
-                            "Agent execution ended without an accepted output submission.",
-                            phase="investigation",
-                            reason_code="review_completion_not_declared",
-                            retryable=True,
-                        )
+                        if investigation is not None and not any(
+                            getattr(resp, "output", None)
+                            for resp in cast(
+                                RunResult, investigation
+                            ).raw_responses
+                        ):
+                            attempt_failure = self._failure(
+                                phase,
+                                "empty_provider_response",
+                                "provider returned an empty response",
+                                retryable=True,
+                            )
+                        elif not is_reviewer or investigation is None:
+                            attempt_failure = PermanentAgentOutputError(
+                                "Agent run produced no result and did not "
+                                "declare completion.",
+                                phase="investigation",
+                                reason_code="review_completion_not_declared",
+                                retryable=False,
+                            )
+                        else:
+                            nudge_tools = CapabilityToolAssembler().assemble(
+                                execution_spec, tool_context
+                            )
+                            nudge_agent: Agent[None] = Agent(
+                                name=f"{agent.agent_id}:v{agent.version}",
+                                instructions="\n\n".join(instruction_sections),
+                                model=behavior.model_class(
+                                    model=provider_config.model,
+                                    openai_client=client,
+                                ),
+                                model_settings=behavior.model_settings,
+                                tools=nudge_tools,
+                                tool_use_behavior=_completion_tool_use_behavior(
+                                    tool_context
+                                ),
+                            )
+                            history = cast(
+                                RunResult, investigation
+                            ).to_input_list()
+                            history.append(
+                                {"role": "user", "content": prompts.completion_nudge}
+                            )
+                            nudge_result = await self._run_observable(
+                                agent=nudge_agent,
+                                input_value=history,
+                                max_turns=1,
+                                run_config=run_config,
+                                sink=sink,
+                                timeout_seconds=(
+                                    execution_spec.execution_limits.timeout_seconds
+                                ),
+                                checkpoint_tracker=checkpoint_tracker,
+                            )
+                            if tool_context.is_completed:
+                                investigation = cast(RunResult, nudge_result)
+                            elif nudge_result is not None and not any(
+                                getattr(resp, "output", None)
+                                for resp in cast(
+                                    RunResult, nudge_result
+                                ).raw_responses
+                            ):
+                                # Nudge got empty response — retryable, not permanent
+                                attempt_failure = self._failure(
+                                    phase,
+                                    "empty_provider_response",
+                                    "provider returned an empty response during nudge",
+                                    retryable=True,
+                                )
+                            else:
+                                attempt_failure = PermanentAgentOutputError(
+                                    "Agent execution ended without declaring "
+                                    "completion after nudge.",
+                                    phase="investigation",
+                                    reason_code="review_completion_not_declared",
+                                    retryable=False,
+                                )
                 except APIStatusError as provider_error:
                     attempt_failure = self._status_failure(provider_error, phase)
                 except APITimeoutError:
@@ -598,6 +682,13 @@ class OpenAIAgentRuntime:
                         phase, "agent_run_timeout", "agent run timed out", retryable=True
                     )
                 except APIConnectionError:
+                    attempt_failure = self._failure(
+                        phase,
+                        "provider_connection_error",
+                        "provider connection error",
+                        retryable=True,
+                    )
+                except httpx.RemoteProtocolError:
                     attempt_failure = self._failure(
                         phase,
                         "provider_connection_error",
@@ -636,7 +727,20 @@ class OpenAIAgentRuntime:
                         "model returned unusable output",
                         retryable=True,
                     )
-            except BaseException:
+            except BaseException as exc:
+                # Extract partial candidates from tool_context before re-raising
+                if (
+                    isinstance(exc, AgentRuntimeError)
+                    and exc.partial_candidates is None
+                    and tool_context.reviewer_output is not None
+                ):
+                    try:
+                        partial_output = tool_context.reviewer_output.final_output()
+                        if isinstance(partial_output, CandidateFindingBatch):
+                            exc.partial_candidates = partial_output
+                    except Exception:
+                        # Don't let extraction failure mask the original error
+                        pass
                 await client.close()
                 raise
 
@@ -648,6 +752,20 @@ class OpenAIAgentRuntime:
             is_retryable = isinstance(attempt_failure, TransientAgentRuntimeError)
             if not is_retryable or attempt >= max_retries:
                 failure = attempt_failure
+                # Extract partial candidates from tool_context before raising
+                if (
+                    isinstance(failure, AgentRuntimeError)
+                    and failure.partial_candidates is None
+                    and "tool_context" in locals()
+                    and tool_context.reviewer_output is not None
+                ):
+                    try:
+                        partial_output = tool_context.reviewer_output.final_output()
+                        if isinstance(partial_output, CandidateFindingBatch):
+                            failure.partial_candidates = partial_output
+                    except Exception:
+                        # Don't let extraction failure mask the original error
+                        pass
                 investigation = None
                 break
 
@@ -678,6 +796,28 @@ class OpenAIAgentRuntime:
                     )
                 )
             await asyncio.sleep(delay)
+
+            # 检测是否恢复了非空响应
+            recovered = (
+                investigation is not None
+                and any(
+                    getattr(resp, "output", None)
+                    for resp in cast(RunResult, investigation).raw_responses
+                )
+            )
+
+            if recovered:
+                # 恢复了非空响应，重置重试计数
+                _LOGGER.info(
+                    "Resetting retry counter after provider recovery",
+                    extra={
+                        "phase": phase,
+                        "reason_code": retry_reason,
+                    },
+                )
+                attempt = 0
+            else:
+                attempt += 1
 
         if failure is not None:
             raise failure from None

@@ -15,12 +15,15 @@ _DEFAULT_TOOL_TIMEOUT_SECONDS: int = 30
 _DEFAULT_MAX_RETRIES: int = 10
 _DEFAULT_RETRY_BACKOFF_BASE: float = 1.0
 _DEFAULT_RETRY_MAX_DELAY: float = 30.0
+_DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD: int = 10
 _MIN_MAX_RETRIES: int = 0
 _MAX_MAX_RETRIES: int = 10
 _MIN_RETRY_BACKOFF_BASE: float = 0.1
 _MAX_RETRY_BACKOFF_BASE: float = 60.0
 _MIN_RETRY_MAX_DELAY: float = 1.0
 _MAX_RETRY_MAX_DELAY: float = 300.0
+_MIN_NO_PROGRESS_ROUNDS_THRESHOLD: int = 1
+_MAX_NO_PROGRESS_ROUNDS_THRESHOLD: int = 100
 
 
 @dataclass(frozen=True)
@@ -42,6 +45,7 @@ class ModelProviderConfig:
     max_retries: int = _DEFAULT_MAX_RETRIES
     retry_backoff_base: float = _DEFAULT_RETRY_BACKOFF_BASE
     retry_max_delay: float = _DEFAULT_RETRY_MAX_DELAY
+    no_progress_rounds_threshold: int = _DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD
 
     def __post_init__(self) -> None:
         if (
@@ -60,6 +64,12 @@ class ModelProviderConfig:
             or self.retry_max_delay > _MAX_RETRY_MAX_DELAY
         ):
             raise ValueError("retry_max_delay must be between 1.0 and 300.0")
+        if (
+            isinstance(self.no_progress_rounds_threshold, bool)
+            or self.no_progress_rounds_threshold < _MIN_NO_PROGRESS_ROUNDS_THRESHOLD
+            or self.no_progress_rounds_threshold > _MAX_NO_PROGRESS_ROUNDS_THRESHOLD
+        ):
+            raise ValueError("no_progress_rounds_threshold must be between 1 and 100")
 
 
 @dataclass(frozen=True)
@@ -83,6 +93,7 @@ class ModelGateway:
     max_retries: int = _DEFAULT_MAX_RETRIES
     retry_backoff_base: float = _DEFAULT_RETRY_BACKOFF_BASE
     retry_max_delay: float = _DEFAULT_RETRY_MAX_DELAY
+    no_progress_rounds_threshold: int = _DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD
 
     @property
     def provider_config(self) -> ModelProviderConfig:
@@ -104,6 +115,7 @@ class ModelGateway:
             max_retries=self.max_retries,
             retry_backoff_base=self.retry_backoff_base,
             retry_max_delay=self.retry_max_delay,
+            no_progress_rounds_threshold=self.no_progress_rounds_threshold,
         )
 
 

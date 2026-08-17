@@ -2579,6 +2579,54 @@ class SqlReviewStore:
             result_summary=result_summary,
         )
 
+    async def persist_partial_candidates(
+        self,
+        task_id: str,
+        node_key: str,
+        candidates: CandidateFindingBatch,
+    ) -> None:
+        """Persist partial candidates from a failed Agent Run without completing it."""
+
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> None:
+            checkpoint = (
+                (
+                    await session.execute(
+                        select(dag_checkpoints).where(
+                            dag_checkpoints.c.task_id == task_id,
+                            dag_checkpoints.c.node_key == node_key,
+                        )
+                    )
+                )
+                .mappings()
+                .one()
+            )
+            run_id = checkpoint["run_id"]
+            if run_id is None:
+                raise InvalidAgentRunStateError("AgentRun lacks a stable run ID")
+            for candidate in candidates.candidates:
+                if candidate.task_id != task_id or candidate.run_id != str(run_id):
+                    raise ValueError("Candidate provenance does not match the AgentRun")
+                payload = _candidate_payload(candidate)
+                await session.execute(
+                    sqlite_insert(candidate_findings)
+                    .values(
+                        candidate_id=candidate.candidate_id,
+                        task_id=task_id,
+                        node_key=node_key,
+                        run_id=candidate.run_id,
+                        snapshot_id=candidate.snapshot_id,
+                        reviewer_reference=candidate.reviewer_reference,
+                        fingerprint=candidate.fingerprint,
+                        payload_json=payload,
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(index_elements=(candidate_findings.c.candidate_id,))
+                )
+
+        await self._database.run_transaction(operation)
+
     async def complete_with_verdicts(
         self,
         task_id: str,

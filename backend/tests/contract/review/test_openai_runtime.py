@@ -2,7 +2,7 @@ import asyncio
 import hashlib
 import json
 import traceback
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -81,9 +81,10 @@ class FakeResponse:
 class FakeResult:
     final_output: object
     raw_responses: tuple[FakeResponse, ...]
+    _input_list: list[object] = field(default_factory=list)
 
-    def to_input_list(self) -> str:
-        return "controlled tool history"
+    def to_input_list(self) -> list[object]:
+        return list(self._input_list)
 
 
 class FakeRunner:
@@ -111,7 +112,14 @@ class FakeRunner:
         if isinstance(self.result, Exception):
             raise self.result
         await self.complete_review(starting_agent)
-        return self.result
+        base_input = (
+            list(input)
+            if isinstance(input, list)
+            else [{"role": "user", "content": str(input)}]
+        )
+        base_input.append({"role": "assistant", "content": "tool call"})
+        base_input.append({"role": "tool", "content": "tool result"})
+        return replace(self.result, _input_list=base_input)
 
     @staticmethod
     async def complete_review(starting_agent: Agent[None]) -> None:
@@ -845,7 +853,72 @@ async def test_uses_active_gateway_execution_limits(
         "max_tool_calls": 41,
         "max_identical_tool_results": 4,
         "tool_timeout_seconds": 12,
+        "no_progress_rounds_threshold": 10,
     }
+
+
+async def test_planner_does_not_receive_reviewer_nudges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = PlannerRunner(
+        FakeResult(
+            final_output=None,
+            raw_responses=(FakeResponse("resp-plan", "req-plan", FakeUsage(3, 2), ()),),
+        )
+    )
+    observed_limits: dict[str, object] = {}
+
+    def record_limits(tools: list[object], **limits: object) -> list[object]:
+        observed_limits.update(limits)
+        return tools
+
+    monkeypatch.setattr(
+        "codelens.review.infrastructure.capability_tools.enforce_tool_execution_limits",
+        record_limits,
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    await runtime.invoke(_planner_spec(), _planner_runtime_input(), _snapshot(), "en")
+
+    assert observed_limits.get("no_progress_nudge_template") is None
+    assert observed_limits.get("all_files_reviewed_nudge_template") is None
+
+
+async def test_verifier_does_not_receive_reviewer_nudges(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    runner = VerifierRunner(
+        FakeResult(
+            final_output=None,
+            raw_responses=(FakeResponse("resp-verdict", "req-verdict", FakeUsage(3, 2), ()),),
+        )
+    )
+    observed_limits: dict[str, object] = {}
+
+    def record_limits(tools: list[object], **limits: object) -> list[object]:
+        observed_limits.update(limits)
+        return tools
+
+    monkeypatch.setattr(
+        "codelens.review.infrastructure.capability_tools.enforce_tool_execution_limits",
+        record_limits,
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    await runtime.invoke(_verifier_spec(), _verifier_runtime_input(), _snapshot(), "en")
+
+    assert observed_limits.get("no_progress_nudge_template") is None
+    assert observed_limits.get("all_files_reviewed_nudge_template") is None
 
 
 async def test_non_streamed_run_uses_active_gateway_timeout() -> None:
@@ -977,6 +1050,7 @@ async def test_streaming_investigation_closes_client_after_a_non_streaming_run(
     "failure",
     [
         APIConnectionError(request=httpx.Request("POST", "https://api.openai.com")),
+        httpx.RemoteProtocolError("peer closed connection without sending complete message body"),
         RateLimitError(
             "rate limited",
             response=httpx.Response(
@@ -1066,19 +1140,138 @@ async def test_runtime_rejects_a_model_run_without_an_accepted_task_done_call() 
             assert input
             assert max_turns > 0
             assert run_config is not None
-            return FakeResult({}, ())
+            base_input = (
+                list(input)
+                if isinstance(input, list)
+                else [{"role": "user", "content": str(input)}]
+            )
+            base_input.append({"role": "assistant", "content": "text only"})
+            return replace(self.result, _input_list=base_input)
 
     runtime = OpenAIAgentRuntime(
         config_store=StaticProviderConfigStore(_provider_config()),
         git=GitCli(),
         prompt_loader=_prompt_loader(),
-        runner=NonCompletingRunner(FakeResult({}, ())),
+        runner=NonCompletingRunner(
+            FakeResult(
+                {},
+                (
+                    FakeResponse(
+                        "resp-1",
+                        "req-1",
+                        FakeUsage(3, 5),
+                        ({"type": "output_text", "text": "text only"},),
+                    ),
+                ),
+            )
+        ),
+    )
+
+    with pytest.raises(PermanentAgentOutputError) as captured:
+        await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
+
+    assert captured.value.reason_code == "review_completion_not_declared"
+
+
+async def test_completion_nudge_succeeds_when_model_calls_task_done_after_nudge() -> None:
+    """The lightweight nudge call lets the model declare completion in one turn."""
+
+    class NudgeCompletingRunner(FakeRunner):
+        """Skip task_done on the first run; complete on the nudge (second) call."""
+
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            self.starting_agent = starting_agent
+            self.input_payload = input
+            self.max_turns = max_turns
+            self.run_config = run_config
+            self.calls.append((starting_agent, input, max_turns))
+            base_input = (
+                list(input)
+                if isinstance(input, list)
+                else [{"role": "user", "content": str(input)}]
+            )
+            if len(self.calls) == 1:
+                base_input.append({"role": "assistant", "content": "text only"})
+                return replace(self.result, _input_list=base_input)
+            await self.complete_review(starting_agent)
+            base_input.append({"role": "assistant", "content": "tool call"})
+            base_input.append({"role": "tool", "content": "tool result"})
+            return replace(self.result, _input_list=base_input)
+
+    runner = NudgeCompletingRunner(
+        FakeResult(
+            None,
+            (
+                FakeResponse(
+                    "resp-1",
+                    "req-1",
+                    FakeUsage(3, 5),
+                    ({"type": "output_text", "text": "text only"},),
+                ),
+            ),
+        )
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
+    )
+
+    await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
+
+    assert len(runner.calls) == 2
+    assert runner.calls[0][2] > 1  # initial run with full max_turns
+    assert runner.calls[1][2] == 1  # nudge call with max_turns=1
+
+
+async def test_empty_provider_response_triggers_retryable_error() -> None:
+    """An empty provider response (output_tokens=0) is retryable, not permanent."""
+
+    class EmptyResponseRunner(FakeRunner):
+        async def run(
+            self,
+            starting_agent: Agent[None],
+            input: str,
+            *,
+            max_turns: int,
+            run_config: RunConfig,
+        ) -> FakeResult:
+            self.calls.append((starting_agent, input, max_turns))
+            return self.result
+
+    runner = EmptyResponseRunner(
+        FakeResult(
+            None,
+            (
+                FakeResponse(
+                    "resp-empty",
+                    "req-empty",
+                    FakeUsage(0, 0),
+                    (),
+                ),
+            ),
+        )
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(_provider_config()),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=runner,
     )
 
     with pytest.raises(TransientAgentRuntimeError) as captured:
         await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
 
-    assert captured.value.reason_code == "review_completion_not_declared"
+    assert captured.value.reason_code == "empty_provider_response"
+    assert captured.value.retryable is True
 
 
 def test_builtin_correctness_agent_is_immutable_and_content_addressed() -> None:

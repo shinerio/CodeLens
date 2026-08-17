@@ -140,6 +140,7 @@ def test_model_execution_limits_are_validated_and_persisted_per_gateway(
                 "max_tool_calls": 240,
                 "max_identical_tool_results": 4,
                 "tool_timeout_seconds": 20,
+                "no_progress_rounds_threshold": 7,
             },
         )
         gateway = created.json()["gateways"][0]
@@ -152,6 +153,15 @@ def test_model_execution_limits_are_validated_and_persisted_per_gateway(
                 "max_identical_tool_results": 1,
             },
         )
+        invalid_no_progress = client.put(
+            f"/api/settings/model-gateways/{gateway['gateway_id']}",
+            json={
+                "name": gateway["name"],
+                "model": gateway["model"],
+                "base_url": gateway["base_url"],
+                "no_progress_rounds_threshold": 0,
+            },
+        )
 
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
         persisted = client.get("/api/settings/model-gateways").json()["gateways"][0]
@@ -162,7 +172,9 @@ def test_model_execution_limits_are_validated_and_persisted_per_gateway(
     assert gateway["max_tool_calls"] == 240
     assert gateway["max_identical_tool_results"] == 4
     assert gateway["tool_timeout_seconds"] == 20
+    assert gateway["no_progress_rounds_threshold"] == 7
     assert invalid.status_code == 422
+    assert invalid_no_progress.status_code == 422
     assert persisted == gateway
 
 

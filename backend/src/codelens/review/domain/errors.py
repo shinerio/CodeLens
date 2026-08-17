@@ -1,6 +1,9 @@
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from codelens.shared.domain.errors import DomainError
+
+if TYPE_CHECKING:
+    from codelens.findings.domain.candidates import CandidateFindingBatch
 
 
 class AgentRuntimeError(DomainError):
@@ -16,12 +19,14 @@ class AgentRuntimeError(DomainError):
         reason_code: str = "unknown_agent_failure",
         retryable: bool = False,
         provider_status_code: int | None = None,
+        partial_candidates: "CandidateFindingBatch | None" = None,
     ) -> None:
         super().__init__(message)
         self.phase = phase
         self.reason_code = reason_code
         self.retryable = retryable
         self.provider_status_code = provider_status_code
+        self.partial_candidates = partial_candidates
 
     def failure_metadata(self) -> dict[str, str]:
         """Return user-visible diagnostics without provider response content."""
@@ -34,6 +39,10 @@ class AgentRuntimeError(DomainError):
         }
         if self.provider_status_code is not None:
             metadata["provider_status_code"] = str(self.provider_status_code)
+        if self.partial_candidates is not None:
+            metadata["partial_candidate_count"] = str(
+                len(self.partial_candidates.candidates)
+            )
         return metadata
 
 

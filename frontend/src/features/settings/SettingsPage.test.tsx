@@ -202,6 +202,7 @@ it("creates the first persistent model gateway without retaining its API key", a
     max_retries: 10,
     retry_backoff_base: 1.0,
     retry_max_delay: 30.0,
+    no_progress_rounds_threshold: 10,
   });
   expect(await screen.findByText("Active gateway")).toBeInTheDocument();
   expect(screen.getByLabelText("API Key")).toHaveValue("");
@@ -352,6 +353,7 @@ it("updates the selected model execution limits from the runtime rail", async ()
     max_retries: 10,
     retry_backoff_base: 1.0,
     retry_max_delay: 30.0,
+    no_progress_rounds_threshold: 10,
   };
   fetchMock
     .mockResolvedValueOnce(
@@ -397,6 +399,7 @@ it("updates the selected model execution limits from the runtime rail", async ()
   expect(screen.getByLabelText("Maximum tool calls")).toHaveValue(240);
   expect(screen.getByLabelText("Identical result limit")).toHaveValue(3);
   expect(screen.getByLabelText("Tool timeout (s)")).toHaveValue(30);
+  expect(screen.getByLabelText("No-progress rounds threshold")).toHaveValue(10);
   const saveButton = screen.getByRole("button", { name: "Save model execution limits" });
   expect(saveButton).toBeEnabled();
   await user.click(saveButton);
@@ -429,6 +432,7 @@ it("updates the selected model execution limits from the runtime rail", async ()
     max_retries: 10,
     retry_backoff_base: 1.0,
     retry_max_delay: 30.0,
+    no_progress_rounds_threshold: 10,
   });
 });
 
