@@ -599,13 +599,10 @@ class Supervisor:
         frontend_port: int,
     ) -> None:
         """Print the ready message with service addresses."""
-        display_backend_host = _resolve_health_host(backend_host)
-        display_frontend_host = _resolve_health_host(frontend_host)
-
         print("\nCodeLens is ready. Open these addresses:")
-        print(f"  Frontend:  http://{display_frontend_host}:{frontend_port}")
-        print(f"  Backend:   http://{display_backend_host}:{backend_port}")
-        print(f"  OpenAPI:   http://{display_backend_host}:{backend_port}/docs")
+        print(f"  Frontend:  http://{frontend_host}:{frontend_port}")
+        print(f"  Backend:   http://{backend_host}:{backend_port}")
+        print(f"  OpenAPI:   http://{backend_host}:{backend_port}/docs")
         print("\nAll locally accessible Git repositories are allowed by default.")
         print("Choose a repository and configure model gateways in the Web UI.")
         print("Run 'codelens-review stop' to stop all services.\n")

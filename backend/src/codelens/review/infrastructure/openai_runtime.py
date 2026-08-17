@@ -466,6 +466,7 @@ class OpenAIAgentRuntime:
         prompt_emitted = sink is None
         attempt = 0
         while attempt <= max_retries:
+            investigation = None
             if attempt > 0:
                 model_tools = CapabilityToolAssembler().assemble(
                     execution_spec, tool_context

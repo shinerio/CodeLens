@@ -99,7 +99,7 @@ class BinaryFileClassifier:
     @staticmethod
     def _read_current(repository: Path, path: str) -> bytes:
         absolute = repository / path
-        if absolute.is_symlink():
+        if absolute.is_symlink() or absolute.is_dir():
             return b""
         try:
             with absolute.open("rb") as source:

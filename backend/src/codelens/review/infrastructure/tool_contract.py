@@ -486,6 +486,8 @@ class ToolExecutionLimiter:
         reviewed = set(self._coverage_probe.reviewed_paths)
         if reviewed >= review_files:
             async with self._lock:
+                if self._all_files_reviewed_nudge_emitted:
+                    return None
                 self._all_files_reviewed_nudge_emitted = True
             return self._all_files_reviewed_nudge_template
         return None

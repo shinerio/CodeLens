@@ -1,4 +1,4 @@
 # Repository roots are intentionally empty by default. On POSIX hosts this means
 # filesystem roots; on Windows it means all local disks.
 [repository]
-roots = []
+roots = ["/root/code"]

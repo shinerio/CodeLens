@@ -12,9 +12,17 @@ the event loop without offloading to a thread.
 
 from __future__ import annotations
 
-import tiktoken
+import os
+from pathlib import Path
 
-from codelens.review.domain.canonical_json import canonical_json
+# Point tiktoken at the bundled offline cache so it never attempts a network
+# download (the Huawei proxy blocks openaipublic.blob.core.windows.net).
+_tiktoken_cache_dir = str(Path(__file__).resolve().parents[4] / ".tiktoken_cache")
+os.environ.setdefault("TIKTOKEN_CACHE_DIR", _tiktoken_cache_dir)
+
+import tiktoken  # noqa: E402  (must follow TIKTOKEN_CACHE_DIR setup)
+
+from codelens.review.domain.canonical_json import canonical_json  # noqa: E402
 
 
 class TiktokenCounterAdapter:
