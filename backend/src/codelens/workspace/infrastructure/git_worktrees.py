@@ -10,7 +10,7 @@ import uuid
 from pathlib import Path
 from typing import Any
 
-from codelens.shared.domain.errors import WorktreeOwnershipError
+from codelens.shared.domain.errors import InvalidRepositoryError, WorktreeOwnershipError
 from codelens.workspace.domain.models import TaskWorktree
 from codelens.workspace.domain.ports import WorktreeRegistryPort
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -168,7 +168,7 @@ class GitReviewWorktreeManager:
             marker = await asyncio.to_thread(_read_marker, marker_path)
             root = await asyncio.to_thread(worktree.root.resolve)
             common_dir = await self._common_dir(worktree.root)
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+        except (OSError, ValueError, json.JSONDecodeError, InvalidRepositoryError) as error:
             await self._quarantine(worktree)
             raise WorktreeOwnershipError("worktree ownership metadata is unreadable") from error
 
@@ -202,7 +202,7 @@ class GitReviewWorktreeManager:
         try:
             marker = await asyncio.to_thread(_read_marker, marker_path)
             common_dir = await self._common_dir(repository)
-        except (OSError, ValueError, json.JSONDecodeError) as error:
+        except (OSError, ValueError, json.JSONDecodeError, InvalidRepositoryError) as error:
             await self._quarantine(worktree)
             raise WorktreeOwnershipError("missing worktree metadata is unreadable") from error
         expected = {

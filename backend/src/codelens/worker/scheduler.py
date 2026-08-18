@@ -125,8 +125,11 @@ class ReviewScheduler:
             await self._singleton.acquire()
             acquired = True
             _LOGGER.info("Worker singleton acquired")
-            await self._recover()
-            _LOGGER.info("Worker recovery completed")
+            try:
+                await self._recover()
+                _LOGGER.info("Worker recovery completed")
+            except Exception:
+                _LOGGER.exception("Worker recovery failed; continuing with poll loop")
             await self._poll(stop_event)
         finally:
             if acquired:

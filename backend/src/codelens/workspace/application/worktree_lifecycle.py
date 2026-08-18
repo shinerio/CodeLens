@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from codelens.shared.domain.errors import WorktreeOwnershipError
+from codelens.shared.domain.errors import DomainError, WorktreeOwnershipError
 from codelens.workspace.domain.models import CapturedReviewInput, TaskWorktree
 from codelens.workspace.domain.ports import (
     InputArtifactPort,
@@ -95,8 +95,9 @@ class ReviewWorktreeRecoveryService:
                 if await self._recovery.is_present(record):
                     try:
                         await self._lifecycle.remove_owned(record)
-                    except WorktreeOwnershipError:
-                        # Orphaned worktree with invalid ownership; force cleanup
+                    except (WorktreeOwnershipError, DomainError):
+                        # Orphaned worktree with invalid ownership or corrupted Git
+                        # metadata; force cleanup so recovery can continue.
                         await self._registry.remove(task_id)
                 else:
                     await self._registry.remove(task_id)
@@ -106,9 +107,10 @@ class ReviewWorktreeRecoveryService:
                     await self._recovery.verify_ownership(record)
                     recovered[task_id] = record
                     continue
-                except WorktreeOwnershipError:
-                    # Ownership marker mismatch; verify_ownership already quarantined
-                    # the physical worktree, so we just clean up the registry and recreate
+                except (WorktreeOwnershipError, DomainError):
+                    # Ownership marker mismatch or corrupted Git metadata;
+                    # verify_ownership already quarantined the physical worktree,
+                    # so we just clean up the registry and recreate.
                     await self._registry.remove(task_id)
                     recovered[task_id] = await self._lifecycle.create(
                         task_id,
