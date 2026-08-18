@@ -1,4 +1,7 @@
 import asyncio
+import base64
+import json
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 
@@ -26,7 +29,7 @@ class GitCli:
         self,
         *,
         timeout_seconds: float = 30.0,
-        max_output_bytes: int = 1024 * 1024,
+        max_output_bytes: int = 2 * 1024 * 1024,
         max_input_bytes: int = 8 * 1024 * 1024,
     ) -> None:
         if timeout_seconds <= 0:
@@ -117,6 +120,106 @@ class GitCli:
             ok_codes=(0, 128),
         )
         return result.stdout if result.returncode == 0 else None
+
+    async def resolve_old_path_optional(
+        self,
+        repository: Path,
+        base_revision: str,
+        target_revision: str,
+        path: str,
+    ) -> str | None:
+        """Return the pre-rename path at base revision for a target-side path."""
+
+        self._validate_revision_path(path)
+        result = await self.run(
+            repository,
+            "diff",
+            "--name-status",
+            "-z",
+            "--find-renames",
+            base_revision,
+            target_revision,
+        )
+        fields = tuple(field for field in result.stdout.split(b"\0") if field)
+        index = 0
+        while index < len(fields):
+            status = fields[index]
+            field_count = 3 if status.startswith(b"R") else 2
+            if len(fields) < index + field_count:
+                raise InvalidRepositoryError("rename lookup returned truncated output")
+            if field_count == 3:
+                old_path = fields[index + 1]
+                new_path = fields[index + 2]
+                if new_path.decode("utf-8", errors="strict") == path:
+                    return old_path.decode("utf-8", errors="strict")
+            index += field_count
+        return None
+
+    async def read_overlay_optional(
+        self,
+        repository: Path,
+        revision: str,
+        path: str,
+        payload: bytes,
+    ) -> bytes | None:
+        """Read one file after applying its trusted, hash-verified overlay entry."""
+
+        self._validate_revision_path(path)
+        try:
+            decoded = json.loads(payload)
+        except (UnicodeDecodeError, json.JSONDecodeError):
+            raise ValueError("overlay Artifact is not valid JSON") from None
+        if not isinstance(decoded, dict) or decoded.get("schema_version") != 2:
+            raise ValueError("unsupported overlay Artifact schema")
+        entries = decoded.get("entries")
+        if not isinstance(entries, list):
+            raise ValueError("invalid overlay Artifact entries")
+        for entry in entries:
+            if not isinstance(entry, dict) or entry.get("path") != path:
+                continue
+            if entry.get("kind") not in {"file", "symlink"}:
+                raise ValueError("unknown overlay entry kind")
+            content = entry.get("content")
+            if not isinstance(content, str):
+                raise ValueError("invalid overlay entry content")
+            try:
+                return base64.b64decode(content, validate=True)
+            except (ValueError, TypeError) as error:
+                raise ValueError("invalid overlay entry content") from error
+        encoded_patch = decoded.get("tracked_patch")
+        if not isinstance(encoded_patch, str):
+            raise ValueError("invalid overlay tracked patch")
+        try:
+            patch = base64.b64decode(encoded_patch, validate=True)
+        except (ValueError, TypeError) as error:
+            raise ValueError("invalid overlay tracked patch") from error
+        if not patch:
+            return await self.read_revision_optional(repository, revision, path)
+
+        with tempfile.TemporaryDirectory(prefix="codelens-overlay-preview-") as directory:
+            root = Path(directory)
+            await self.run(root, "init")
+            await self.run(root, "config", "core.autocrlf", "false")
+            destination = root / path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            preimage = await self.read_revision_optional(repository, revision, path)
+            if preimage is not None:
+                destination.write_bytes(preimage)
+            result = await self.run(
+                root,
+                "apply",
+                "--binary",
+                "--whitespace=nowarn",
+                f"--include={path}",
+                "-",
+                stdin=patch,
+                ok_codes=(0, 128),
+            )
+            if result.returncode == 128:
+                raise ValueError("overlay tracked patch does not match its pinned preimage")
+            if result.returncode != 0:
+                raise ValueError("overlay tracked patch is invalid")
+            return destination.read_bytes() if destination.exists() else None
 
     @staticmethod
     def _validate_revision_path(path: str) -> None:

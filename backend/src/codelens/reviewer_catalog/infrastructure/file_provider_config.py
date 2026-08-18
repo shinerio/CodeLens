@@ -10,8 +10,12 @@ from codelens.reviewer_catalog.domain.provider_config import (
     _DEFAULT_API_TYPE,
     _DEFAULT_MAX_AGENT_TURNS,
     _DEFAULT_MAX_IDENTICAL_TOOL_RESULTS,
+    _DEFAULT_MAX_RETRIES,
     _DEFAULT_MAX_TOKENS,
     _DEFAULT_MAX_TOOL_CALLS,
+    _DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD,
+    _DEFAULT_RETRY_BACKOFF_BASE,
+    _DEFAULT_RETRY_MAX_DELAY,
     _DEFAULT_THINKING_LEVEL,
     _DEFAULT_TOOL_TIMEOUT_SECONDS,
     GatewayApiType,
@@ -39,6 +43,10 @@ class _StoredGateway(_StoredProviderConfig):
     max_tool_calls: int
     max_identical_tool_results: int
     tool_timeout_seconds: int
+    max_retries: int
+    retry_backoff_base: float
+    retry_max_delay: float
+    no_progress_rounds_threshold: int
     vendor: ModelProviderVendor
     api_type: GatewayApiType
 
@@ -104,7 +112,7 @@ class FilesystemModelProviderConfigAdapter:
                 raise ValueError("model gateway catalog is invalid")
             raw_api_type = item.get("api_type", _DEFAULT_API_TYPE)
             raw_vendor = item.get("vendor", "openai")
-            if raw_vendor not in ("openai", "deepseek", "zhipu"):
+            if raw_vendor not in ("openai", "deepseek", "zhipu", "qwen"):
                 raise ValueError("model gateway catalog is invalid")
             if raw_api_type not in ("responses", "chat_completions"):
                 raise ValueError("model gateway catalog is invalid")
@@ -128,13 +136,23 @@ class FilesystemModelProviderConfigAdapter:
             raw_tool_timeout_seconds = item.get(
                 "tool_timeout_seconds", _DEFAULT_TOOL_TIMEOUT_SECONDS
             )
+            raw_max_retries = item.get("max_retries", _DEFAULT_MAX_RETRIES)
+            raw_retry_backoff_base = item.get("retry_backoff_base", _DEFAULT_RETRY_BACKOFF_BASE)
+            raw_retry_max_delay = item.get("retry_max_delay", _DEFAULT_RETRY_MAX_DELAY)
+            raw_no_progress_rounds_threshold = item.get(
+                "no_progress_rounds_threshold", _DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD
+            )
             cls._validate_execution_limit(raw_agent_timeout, minimum=60, maximum=7200)
             cls._validate_execution_limit(raw_max_agent_turns, minimum=1, maximum=500)
             cls._validate_execution_limit(raw_max_tool_calls, minimum=1, maximum=5000)
-            cls._validate_execution_limit(
-                raw_max_identical_tool_results, minimum=2, maximum=20
-            )
+            cls._validate_execution_limit(raw_max_identical_tool_results, minimum=2, maximum=20)
             cls._validate_execution_limit(raw_tool_timeout_seconds, minimum=1, maximum=300)
+            cls._validate_execution_limit(raw_max_retries, minimum=0, maximum=10)
+            cls._validate_float_limit(raw_retry_backoff_base, minimum=0.1, maximum=60.0)
+            cls._validate_float_limit(raw_retry_max_delay, minimum=1.0, maximum=300.0)
+            cls._validate_execution_limit(
+                raw_no_progress_rounds_threshold, minimum=1, maximum=100
+            )
             gateways.append(
                 ModelGateway(
                     gateway_id=cast(str, item["gateway_id"]),
@@ -151,14 +169,28 @@ class FilesystemModelProviderConfigAdapter:
                     max_tool_calls=raw_max_tool_calls,
                     max_identical_tool_results=raw_max_identical_tool_results,
                     tool_timeout_seconds=raw_tool_timeout_seconds,
+                    max_retries=raw_max_retries,
+                    retry_backoff_base=raw_retry_backoff_base,
+                    retry_max_delay=raw_retry_max_delay,
+                    no_progress_rounds_threshold=raw_no_progress_rounds_threshold,
                 )
             )
-        return ModelGatewayCatalog(cast(str | None, active_gateway_id), tuple(gateways))
+        return ModelGatewayCatalog(active_gateway_id, tuple(gateways))
 
     @staticmethod
     def _validate_execution_limit(value: object, *, minimum: int, maximum: int) -> None:
         if (
             not isinstance(value, int)
+            or isinstance(value, bool)
+            or value < minimum
+            or value > maximum
+        ):
+            raise ValueError("model gateway catalog is invalid")
+
+    @staticmethod
+    def _validate_float_limit(value: object, *, minimum: float, maximum: float) -> None:
+        if (
+            not isinstance(value, int | float)
             or isinstance(value, bool)
             or value < minimum
             or value > maximum
@@ -189,6 +221,10 @@ class FilesystemModelProviderConfigAdapter:
                     "max_tool_calls": gateway.max_tool_calls,
                     "max_identical_tool_results": gateway.max_identical_tool_results,
                     "tool_timeout_seconds": gateway.tool_timeout_seconds,
+                    "max_retries": gateway.max_retries,
+                    "retry_backoff_base": gateway.retry_backoff_base,
+                    "retry_max_delay": gateway.retry_max_delay,
+                    "no_progress_rounds_threshold": gateway.no_progress_rounds_threshold,
                 }
                 for gateway in catalog.gateways
             ],

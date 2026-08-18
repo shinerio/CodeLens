@@ -73,9 +73,7 @@ class LocalFilesystemBrowserAdapter:
         if os.name != "nt":
             return (Path("/"),)
         return tuple(
-            root
-            for letter in string.ascii_uppercase
-            if (root := Path(f"{letter}:\\")).exists()
+            root for letter in string.ascii_uppercase if (root := Path(f"{letter}:\\")).exists()
         )
 
     @staticmethod

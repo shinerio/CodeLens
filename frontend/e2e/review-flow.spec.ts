@@ -92,15 +92,20 @@ test("streams the correctness fixture from inspect to validated findings", async
   await expect(page.locator(".review-run-page__subtitle")).toContainText("completed", {
     timeout: 15000,
   });
+  await page.getByRole("tab", { name: /Runtime overview/ }).click();
   await expect(page.getByRole("heading", { name: "Process report" })).toBeVisible({
     timeout: 15000,
   });
+  const processReport = page.getByRole("article", { name: "Process report" });
+  await expect(processReport).toBeVisible();
+  await page.getByRole("tab", { name: /Logs/ }).click();
+  const console = page.getByRole("region", { name: "Review execution console" });
+  await expect(console.getByRole("button", { name: /Reviewers/ })).toBeVisible();
+  await expect(console.getByRole("button", { name: /Verifier/ })).toHaveCount(0);
+  await expect(console.getByText("review-verifier:v2", { exact: true })).toHaveCount(0);
+  expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBeTruthy();
 
-  const toolUsage = page.getByRole("region", { name: "Tool usage" });
-  await expect(toolUsage).toContainText("comment");
-  await expect(toolUsage).toContainText("task_done");
-
-  await page.getByRole("button", { name: /Findings/ }).click();
+  await page.getByRole("tab", { name: /Findings/ }).click();
   await page
     .getByRole("button", { name: /Inverted transition guard allows invalid states/ })
     .click();

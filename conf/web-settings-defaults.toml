@@ -1,0 +1,41 @@
+[repositories]
+recent_repository_limit = 10
+
+[instruction_files]
+root_max_lines = 1000
+nested_max_lines = 500
+
+[file_exclusions]
+suffixes = []
+path_regexes = []
+
+[review_completion]
+max_incomplete_review_retries = 3
+
+[trigger_idempotency]
+enabled = false
+
+[logging]
+level = "info"
+model_output_enabled = true
+
+[tool_limits]
+max_results = 200
+max_read_bytes = 65536
+max_scan_bytes = 1048576
+max_source_bytes = 1048576
+max_lines = 1000
+max_path_chars = 1024
+max_pattern_chars = 512
+regex_timeout_seconds = 30.0
+comment_batch_size = 20
+short_text_max = 240
+long_text_max = 8000
+task_summary_max = 8000
+context_compaction_enabled = true
+context_compaction_trigger_tokens = 160000
+context_compaction_keep_recent_evidence_results = 6
+context_compaction_max_retries = 3
+context_compaction_retry_backoff_base = 2.0
+context_compaction_retry_max_delay = 30.0
+context_compaction_max_consecutive_failures = 3

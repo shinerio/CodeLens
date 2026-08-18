@@ -1,5 +1,5 @@
 export type GatewayApiType = "responses" | "chat_completions";
-export type ModelProviderVendor = "openai" | "deepseek" | "zhipu";
+export type ModelProviderVendor = "openai" | "deepseek" | "zhipu" | "qwen";
 export type ThinkingLevel = "disabled" | "low" | "medium" | "high";
 
 export type ModelGateway = {
@@ -17,6 +17,10 @@ export type ModelGateway = {
   max_tool_calls: number;
   max_identical_tool_results: number;
   tool_timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_base: number;
+  retry_max_delay: number;
+  no_progress_rounds_threshold: number;
 };
 
 export type ModelGatewayCatalog = {
@@ -26,8 +30,15 @@ export type ModelGatewayCatalog = {
 
 export type RuntimeLogLevel = "debug" | "info" | "warning" | "error";
 
-export type RuntimeLogLevelSettings = {
+export type RuntimeLoggingSettings = {
+  default_level: RuntimeLogLevel;
   level: RuntimeLogLevel;
+  model_output_enabled: boolean;
+};
+
+export type UpdateRuntimeLoggingSettings = {
+  level: RuntimeLogLevel;
+  model_output_enabled: boolean;
 };
 
 export type RecentRepositorySettings = {
@@ -37,6 +48,11 @@ export type RecentRepositorySettings = {
 export type InstructionFileSettings = {
   root_max_lines: number;
   nested_max_lines: number;
+};
+
+export type FileExclusionSettings = {
+  suffixes: string[];
+  path_regexes: string[];
 };
 
 export type ReviewCompletionSettings = {
@@ -61,6 +77,10 @@ export type CreateModelGateway = {
   max_tool_calls: number;
   max_identical_tool_results: number;
   tool_timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_base: number;
+  retry_max_delay: number;
+  no_progress_rounds_threshold: number;
 };
 
 export type UpdateModelGateway = {
@@ -77,6 +97,10 @@ export type UpdateModelGateway = {
   max_tool_calls: number;
   max_identical_tool_results: number;
   tool_timeout_seconds: number;
+  max_retries: number;
+  retry_backoff_base: number;
+  retry_max_delay: number;
+  no_progress_rounds_threshold: number;
 };
 
 export type GatewayTestResult = {
@@ -95,18 +119,25 @@ export type ToolLimits = {
   max_pattern_chars: number;
   regex_timeout_seconds: number;
   comment_batch_size: number;
-  reviewed_files_batch: number;
   short_text_max: number;
   long_text_max: number;
   task_summary_max: number;
+  context_compaction_enabled: boolean;
+  context_compaction_trigger_tokens: number;
+  context_compaction_keep_recent_evidence_results: number;
+  context_compaction_max_retries: number;
+  context_compaction_retry_backoff_base: number;
+  context_compaction_retry_max_delay: number;
+  context_compaction_max_consecutive_failures: number;
 };
 
 export type ResetAllSettingsResponse = {
   instruction_files: InstructionFileSettings;
+  file_exclusions: FileExclusionSettings;
   review_completion: ReviewCompletionSettings;
   trigger_idempotency: TriggerIdempotencySettings;
   recent_repositories: RecentRepositorySettings;
   tool_limits: ToolLimits;
-  logging: RuntimeLogLevelSettings;
+  logging: RuntimeLoggingSettings;
   model_gateways: ModelGatewayCatalog;
 };

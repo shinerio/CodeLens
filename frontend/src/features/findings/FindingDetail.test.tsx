@@ -120,3 +120,16 @@ it("expands only the code reading area and exits with Escape", async () => {
   );
   expect(document.body).not.toHaveStyle({ overflow: "hidden" });
 });
+
+it("renders Comment v2 categorical confidence without a percentage", () => {
+  render(<FindingDetail finding={{
+    ...finding,
+    confidence: null,
+    evidence_strength: "strong",
+    verification_state: "verified",
+  }} source={null} />, { wrapper: TestProviders });
+
+  expect(screen.getByText("strong")).toBeInTheDocument();
+  expect(screen.getByText("verified")).toBeInTheDocument();
+  expect(screen.queryByText("90%")).not.toBeInTheDocument();
+});

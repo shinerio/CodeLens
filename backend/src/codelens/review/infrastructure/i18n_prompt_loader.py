@@ -19,8 +19,12 @@ _REQUIRED_TOOL_NAMES = frozenset(
         "read_file",
         "get_diff",
         "comment",
-        "review_file_done",
+        "retract_comment",
         "task_done",
+        "finalize_plan",
+        "verdict",
+        "merge",
+        "finalize_verdicts",
     }
 )
 
@@ -98,10 +102,30 @@ class I18nPromptLoader(I18nPromptLoaderPort):
             raise SystemPromptLoadError(
                 "system tool prompts must define the complete stable tool set"
             )
+        tool_not_found = read_markdown("tool-not-found.md")
+        try:
+            tool_not_found.format(tool_name="example", available_tools="read_file")
+        except (KeyError, ValueError) as error:
+            raise SystemPromptLoadError(
+                f"invalid tool-not-found template: {directory / 'tool-not-found.md'}"
+            ) from error
+        no_progress_nudge = read_markdown("no-progress-nudge.md")
+        try:
+            no_progress_nudge.format(no_progress_rounds=1)
+        except (KeyError, ValueError) as error:
+            raise SystemPromptLoadError(
+                f"invalid no-progress-nudge template: {directory / 'no-progress-nudge.md'}"
+            ) from error
         return LocalizedSystemPrompts(
             locale=directory.name,
             review_policy=read_markdown("review-policy.md"),
             review_workflow=read_markdown("review-workflow.md"),
             tool_loop_warning=read_markdown("tool-loop-warning.md"),
             tools=MappingProxyType(tools),
+            review_feedback=read_markdown("review-feedback.md"),
+            checkpoint_compaction=read_markdown("checkpoint-compaction.md"),
+            tool_not_found=tool_not_found,
+            no_progress_nudge=no_progress_nudge,
+            completion_nudge=read_markdown("completion-nudge.md"),
+            all_files_reviewed_nudge=read_markdown("all-files-reviewed-nudge.md"),
         )

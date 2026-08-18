@@ -19,10 +19,16 @@ class _ToolLimitsPayload(TypedDict):
     max_pattern_chars: int
     regex_timeout_seconds: float
     comment_batch_size: int
-    reviewed_files_batch: int
     short_text_max: int
     long_text_max: int
     task_summary_max: int
+    context_compaction_enabled: bool
+    context_compaction_trigger_tokens: int
+    context_compaction_keep_recent_evidence_results: int
+    context_compaction_max_retries: int
+    context_compaction_retry_backoff_base: float
+    context_compaction_retry_max_delay: float
+    context_compaction_max_consecutive_failures: int
 
 
 _INT_FIELDS = (
@@ -34,38 +40,56 @@ _INT_FIELDS = (
     "max_path_chars",
     "max_pattern_chars",
     "comment_batch_size",
-    "reviewed_files_batch",
     "short_text_max",
     "long_text_max",
     "task_summary_max",
+    "context_compaction_trigger_tokens",
+    "context_compaction_keep_recent_evidence_results",
+    "context_compaction_max_retries",
+    "context_compaction_max_consecutive_failures",
+)
+
+_FLOAT_FIELDS = (
+    "regex_timeout_seconds",
+    "context_compaction_retry_backoff_base",
+    "context_compaction_retry_max_delay",
 )
 
 
 class FilesystemToolLimitsStore:
     """Store tool limits in the local CodeLens data directory."""
 
-    def __init__(self, data_dir: Path) -> None:
+    def __init__(self, data_dir: Path, defaults: ToolLimits | None = None) -> None:
         self._path = data_dir.expanduser().resolve() / "tool-limits.json"
+        self._defaults = defaults or ToolLimits()
 
     def get_tool_limits(self) -> ToolLimits:
         """Load persisted limits, using product defaults before first save."""
 
         if not self._path.exists():
-            return ToolLimits()
+            return self._defaults
         raw: object = json.loads(self._path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
             raise ValueError("tool limits are invalid")
         payload = cast(dict[object, object], raw)
         kwargs: dict[str, int | float] = {}
+        defaults = self._defaults
         for field in _INT_FIELDS:
-            value = payload.get(field)
+            value = payload.get(field, getattr(defaults, field))
             if not isinstance(value, int) or isinstance(value, bool):
                 raise ValueError(f"tool limits field {field} is invalid")
             kwargs[field] = value
-        timeout = payload.get("regex_timeout_seconds")
-        if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
-            raise ValueError("tool limits field regex_timeout_seconds is invalid")
-        kwargs["regex_timeout_seconds"] = float(timeout)
+        for field in _FLOAT_FIELDS:
+            value = payload.get(field, getattr(defaults, field))
+            if isinstance(value, bool) or not isinstance(value, (int, float)):
+                raise ValueError(f"tool limits field {field} is invalid")
+            kwargs[field] = float(value)
+        enabled = payload.get(
+            "context_compaction_enabled", defaults.context_compaction_enabled
+        )
+        if not isinstance(enabled, bool):
+            raise ValueError("tool limits field context_compaction_enabled is invalid")
+        kwargs["context_compaction_enabled"] = enabled
         return ToolLimits(**kwargs)  # type: ignore[arg-type]
 
     def save_tool_limits(self, limits: ToolLimits) -> None:
@@ -88,10 +112,24 @@ class FilesystemToolLimitsStore:
             "max_pattern_chars": limits.max_pattern_chars,
             "regex_timeout_seconds": limits.regex_timeout_seconds,
             "comment_batch_size": limits.comment_batch_size,
-            "reviewed_files_batch": limits.reviewed_files_batch,
             "short_text_max": limits.short_text_max,
             "long_text_max": limits.long_text_max,
             "task_summary_max": limits.task_summary_max,
+            "context_compaction_enabled": limits.context_compaction_enabled,
+            "context_compaction_trigger_tokens": limits.context_compaction_trigger_tokens,
+            "context_compaction_keep_recent_evidence_results": (
+                limits.context_compaction_keep_recent_evidence_results
+            ),
+            "context_compaction_max_retries": limits.context_compaction_max_retries,
+            "context_compaction_retry_backoff_base": (
+                limits.context_compaction_retry_backoff_base
+            ),
+            "context_compaction_retry_max_delay": (
+                limits.context_compaction_retry_max_delay
+            ),
+            "context_compaction_max_consecutive_failures": (
+                limits.context_compaction_max_consecutive_failures
+            ),
         }
         try:
             with os.fdopen(descriptor, "w", encoding="utf-8") as stream:

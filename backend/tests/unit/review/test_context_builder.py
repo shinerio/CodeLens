@@ -28,6 +28,7 @@ from codelens.workspace.domain.models import (
     SnapshotManifest,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
 def _hash(payload: bytes) -> str:
@@ -35,7 +36,7 @@ def _hash(payload: bytes) -> str:
 
 
 def _snapshot() -> tuple[ReviewSnapshot, ResolvedInstructionSet]:
-    target_paths = (
+    candidate_paths = (
         "src/renamed.py",
         "src/original.py",
         "src/deleted.py",
@@ -61,7 +62,7 @@ def _snapshot() -> tuple[ReviewSnapshot, ResolvedInstructionSet]:
             None,
             "target",
         )
-        for path in target_paths
+        for path in candidate_paths
     ) + (
         SnapshotEntry(
             "AGENTS.md",
@@ -86,10 +87,8 @@ def _snapshot() -> tuple[ReviewSnapshot, ResolvedInstructionSet]:
         target=ReviewTarget("d" * 40, "b" * 40, None),
         fingerprint=RepositoryFingerprint("b" * 40, "e" * 64, "f" * 64),
         manifest=SnapshotManifest(
-            target_paths=target_paths,
-            context_paths=(),
+            review_scope=ReviewFileScope.include_all(candidate_paths),
             instruction_paths=("AGENTS.md",),
-            excluded_paths=(),
             entries=entries,
         ),
         change_index=ChangeIndex(
@@ -120,7 +119,7 @@ def _snapshot() -> tuple[ReviewSnapshot, ResolvedInstructionSet]:
                 100,
             ),
         ),
-        chains=tuple(InstructionChain(path, ("AGENTS.md",)) for path in target_paths)
+        chains=tuple(InstructionChain(path, ("AGENTS.md",)) for path in candidate_paths)
         + (InstructionChain("unrelated/file.py", ("unrelated/REVIEW.md",)),),
         excludes=(),
         warnings=(),
@@ -170,7 +169,7 @@ def test_serializes_complete_review_files_and_active_repository_instructions() -
                 "old_ranges": [],
                 "path": "src/renamed.py",
             },
-        ]
+        ],
     }
     serialized = agent_input.canonical_bytes()
     for forbidden in (
@@ -294,7 +293,7 @@ def test_rejects_active_instruction_metadata_that_is_not_exactly_frozen() -> Non
 
     stale = replace(
         instructions,
-        documents=(replace(instructions.documents[0], content="Changed after freeze."),),
+        documents=(replace(instructions.documents[0], content_hash="0" * 64),),
     )
     with pytest.raises(ContextIntegrityError, match="instruction content"):
         ContextBuilder().build(snapshot, stale)

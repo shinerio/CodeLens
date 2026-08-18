@@ -4,7 +4,9 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any, Literal, Protocol
 
+from codelens.findings.domain.existing_findings import ExistingFinding
 from codelens.review.application.settings import TriggerIdempotencySettingsService
 from codelens.review.domain.agent_run import InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
@@ -14,8 +16,12 @@ from codelens.review.domain.ports import (
     ReviewRecord,
     ReviewStorePort,
 )
+from codelens.review.domain.review_strategy import FixedReviewerSelection, ReviewProfileSnapshot
 from codelens.shared.domain.errors import DomainError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
+from codelens.workspace.application.file_exclusion_settings import (
+    ReviewFileExclusionPolicyProviderPort,
+)
 from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.domain.models import ReviewScope, UncommittedScope
 from codelens.workspace.domain.ports import (
@@ -24,6 +30,7 @@ from codelens.workspace.domain.ports import (
     ReviewWorktreePort,
     WorktreeRegistryPort,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
 _LOGGER = logging.getLogger("codelens.review.commands")
 
@@ -34,16 +41,25 @@ class ReviewNotFoundError(DomainError):
     code = "review_not_found"
 
 
+class ExistingFindingsProviderPort(Protocol):
+    """Load structured historical issues before a Review task is frozen."""
+
+    async def load(self, repository_path: Path) -> tuple[ExistingFinding, ...]: ...
+
+
 @dataclass(frozen=True)
 class CreateReviewCommand:
     """Carry only validated repository metadata and public review selections."""
 
     repository: RepositoryInfo
     scope: ReviewScope
-    selected_agent_versions: tuple[str, ...]
+    review_profile: ReviewProfileSnapshot
+    trigger_source: Literal["manual", "plugin"] = "manual"
+    supersede_policy: Literal["latest_snapshot", "preserve_all"] | None = None
     prompt_locale: str = "en"
-    external_context: dict | None = None
+    external_context: dict[str, Any] | None = None
     skip_if_duplicate: bool = False
+    existing_findings: tuple[ExistingFinding, ...] = ()
 
 
 class CreateReviewHandler:
@@ -59,6 +75,8 @@ class CreateReviewHandler:
         id_factory: Callable[[], str] | None = None,
         clock: Callable[[], datetime] | None = None,
         idempotency_settings: TriggerIdempotencySettingsService | None = None,
+        file_exclusion_settings: ReviewFileExclusionPolicyProviderPort | None = None,
+        existing_findings_provider: ExistingFindingsProviderPort | None = None,
     ) -> None:
         self._planner = planner
         self._capture = capture
@@ -67,6 +85,8 @@ class CreateReviewHandler:
         self._id_factory = id_factory or (lambda: f"review_{uuid.uuid4().hex}")
         self._clock = clock or (lambda: datetime.now(UTC))
         self._idempotency_settings = idempotency_settings
+        self._file_exclusion_settings = file_exclusion_settings
+        self._existing_findings_provider = existing_findings_provider
 
     async def handle(self, command: CreateReviewCommand) -> ReviewRecord:
         """Create a task only after all mutable repository input is frozen."""
@@ -75,7 +95,7 @@ class CreateReviewHandler:
         scope_plan = await self._planner.plan(command.repository.path, command.scope)
         _LOGGER.info(
             "Review scope planned",
-            extra={"target_path_count": len(scope_plan.target_paths)},
+            extra={"target_path_count": len(scope_plan.candidate_paths)},
         )
         captured = await self._capture.capture(command.repository.path, scope_plan)
         artifact = captured.overlay_artifact
@@ -106,21 +126,48 @@ class CreateReviewHandler:
                     )
                     return existing
 
-        task = ReviewTask.create(
-            task_id=self._id_factory(),
-            repository_id=command.repository.repository_id,
-            repository_realpath_hash=command.repository.repository_realpath_hash,
-            git_common_dir_hash=command.repository.git_common_dir_hash,
-            scope=command.scope,
-            target=captured.target,
-            repository_path=command.repository.path,
-            target_paths=scope_plan.target_paths,
-            selected_agent_versions=command.selected_agent_versions,
-            prompt_locale=command.prompt_locale,
-            created_at=self._clock(),
-            overlay_artifact_ref=artifact.reference if artifact is not None else None,
-            external_context=command.external_context,
+        file_exclusion_policy = (
+            await self._file_exclusion_settings.get()
+            if self._file_exclusion_settings is not None
+            else ReviewFileExclusionPolicy()
         )
+        try:
+            provided_existing_findings = (
+                await self._existing_findings_provider.load(command.repository.path)
+                if self._existing_findings_provider is not None
+                else ()
+            )
+            task = ReviewTask.create(
+                task_id=self._id_factory(),
+                repository_id=command.repository.repository_id,
+                repository_realpath_hash=command.repository.repository_realpath_hash,
+                git_common_dir_hash=command.repository.git_common_dir_hash,
+                scope=command.scope,
+                target=captured.target,
+                repository_path=command.repository.path,
+                candidate_paths=scope_plan.candidate_paths,
+                selected_agent_versions=(
+                    command.review_profile.reviewer_selection.reviewer_versions
+                    if isinstance(
+                        command.review_profile.reviewer_selection,
+                        FixedReviewerSelection,
+                    )
+                    else ()
+                ),
+                review_profile=command.review_profile,
+                trigger_source=command.trigger_source,
+                supersede_policy=command.supersede_policy,
+                prompt_locale=command.prompt_locale,
+                created_at=self._clock(),
+                overlay_artifact_ref=artifact.reference if artifact is not None else None,
+                external_context=command.external_context,
+                existing_findings=(*provided_existing_findings, *command.existing_findings),
+                file_exclusion_policy=file_exclusion_policy,
+            )
+        except BaseException:
+            if artifact is not None:
+                await self._input_artifacts.discard(artifact.reference)
+            raise
         try:
             await self._store.create_with_job(task)
         except BaseException:

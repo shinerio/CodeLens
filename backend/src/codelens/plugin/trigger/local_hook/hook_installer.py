@@ -37,14 +37,6 @@ class HookInstaller:
         'else "$(cd "$(dirname "$0")" && pwd)/{script_name}" '
         '"$(basename "$0")" "$@" < /dev/null || true; fi'
     )
-    NULL_STDIN_INJECTION_LINE_TEMPLATE = (
-        '"$(cd "$(dirname "$0")" && pwd)/{script_name}" '
-        '"$(basename "$0")" "$@" < /dev/null || true'
-    )
-    LEGACY_INJECTION_LINE_TEMPLATE = (
-        '"$(cd "$(dirname "$0")" && pwd)/{script_name}" '
-        '"$(basename "$0")" "$@" || true'
-    )
     SHEBANG = "#!/usr/bin/env bash"
 
     def __init__(self, plugin_dir: Path) -> None:
@@ -78,21 +70,15 @@ class HookInstaller:
         await asyncio.to_thread(hooks_dir.mkdir, parents=True, exist_ok=True)
 
         # Write standalone script
-        template_content = await asyncio.to_thread(
-            self._template_path.read_text, encoding="utf-8"
-        )
+        template_content = await asyncio.to_thread(self._template_path.read_text, encoding="utf-8")
         hook_content = template_content.replace("__PORT__", str(port))
         standalone_path = hooks_dir / self.STANDALONE_SCRIPT_NAME
-        await asyncio.to_thread(
-            self._write_standalone_script, standalone_path, hook_content
-        )
+        await asyncio.to_thread(self._write_standalone_script, standalone_path, hook_content)
 
         # Install each event hook
         for event in events:
             hook_path = hooks_dir / event.value
-            await asyncio.to_thread(
-                self._install_single_hook, hook_path, standalone_path
-            )
+            await asyncio.to_thread(self._install_single_hook, hook_path, standalone_path)
 
     async def uninstall_hooks(self, repository_path: Path) -> None:
         """Uninstall all CodeLens hook scripts from a repository.
@@ -137,9 +123,7 @@ class HookInstaller:
         result: dict[HookEvent, bool] = {}
         for event in HookEvent:
             hook_path = hooks_dir / event.value
-            installed = await asyncio.to_thread(
-                self._is_codelens_hook, hook_path, standalone_path
-            )
+            installed = await asyncio.to_thread(self._is_codelens_hook, hook_path, standalone_path)
             result[event] = installed
         return result
 
@@ -178,7 +162,7 @@ class HookInstaller:
         If no hook exists, creates a new hook file that calls the standalone script.
         Shell hooks receive a call after their shebang. Non-shell hooks and user
         symlinks use a reversible wrapper so their interpreter, contents, permissions,
-        and link target can be restored. Legacy CodeLens symlinks become regular files.
+        and link target can be restored.
 
         Args:
             hook_path: Path where the hook should be installed.
@@ -188,13 +172,6 @@ class HookInstaller:
         full_injection = f"{self.MARKER_COMMENT}\n{injection_line}"
 
         if hook_path.is_symlink():
-            if self._is_legacy_codelens_symlink(hook_path, standalone_path):
-                hook_path.unlink()
-                self._write_executable_hook(
-                    hook_path,
-                    f"{self.SHEBANG}\n{full_injection}\n",
-                )
-                return
             self._wrap_user_hook(hook_path, full_injection)
             return
 
@@ -240,9 +217,7 @@ class HookInstaller:
             if self._has_codelens_injection(hook_path):
                 backup_path.replace(hook_path)
                 return
-            raise FileExistsError(
-                f"Git hook changed while CodeLens backup exists: {hook_path}"
-            )
+            raise FileExistsError(f"Git hook changed while CodeLens backup exists: {hook_path}")
 
         if hook_path.is_symlink() or not hook_path.exists():
             return
@@ -297,9 +272,7 @@ class HookInstaller:
         backup_path = self._user_hook_backup_path(hook_path)
         if self._path_entry_exists(backup_path):
             raise FileExistsError(f"Git hook backup already exists: {backup_path}")
-        original_hook_line = (
-            f'"$(cd "$(dirname "$0")" && pwd)/{backup_path.name}" "$@"'
-        )
+        original_hook_line = f'"$(cd "$(dirname "$0")" && pwd)/{backup_path.name}" "$@"'
         descriptor, temporary_name = tempfile.mkstemp(
             dir=hook_path.parent,
             prefix=f".{hook_path.name}-",
@@ -359,31 +332,11 @@ class HookInstaller:
         except (OSError, UnicodeDecodeError):
             return False
 
-    def _is_legacy_codelens_symlink(
-        self,
-        hook_path: Path,
-        standalone_path: Path,
-    ) -> bool:
-        try:
-            return hook_path.resolve(strict=False) == standalone_path.resolve(strict=False)
-        except OSError:
-            return False
-
     def _injection_line(self) -> str:
-        return self.INJECTION_LINE_TEMPLATE.format(
-            script_name=self.STANDALONE_SCRIPT_NAME
-        )
+        return self.INJECTION_LINE_TEMPLATE.format(script_name=self.STANDALONE_SCRIPT_NAME)
 
     def _known_injection_lines(self) -> set[str]:
-        return {
-            self._injection_line(),
-            self.NULL_STDIN_INJECTION_LINE_TEMPLATE.format(
-                script_name=self.STANDALONE_SCRIPT_NAME
-            ),
-            self.LEGACY_INJECTION_LINE_TEMPLATE.format(
-                script_name=self.STANDALONE_SCRIPT_NAME
-            ),
-        }
+        return {self._injection_line()}
 
     @staticmethod
     def _is_shell_shebang(line: str) -> bool:

@@ -70,7 +70,7 @@ class Finding:
     title: str
     severity: FindingSeverity
     disposition: FindingDisposition
-    confidence: float
+    confidence: float | None
     primary_location: SourceLocation
     related_locations: tuple[SourceLocation, ...]
     changed_hunk_id: str | None
@@ -81,6 +81,9 @@ class Finding:
     reproduction: str | None
     recommendation: str
     rule_sources: tuple[RuleReference, ...]
+    primary_dimension: str | None = None
+    evidence_strength: str | None = None
+    source_reviewer_references: tuple[str, ...] = ()
 
 
 @dataclass(frozen=True)

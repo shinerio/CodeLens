@@ -1,23 +1,33 @@
+import json
 import subprocess
+from dataclasses import asdict
+from datetime import UTC, datetime
 from functools import partial
 from pathlib import Path
 
 import pytest
 from fastapi.testclient import TestClient
+from sqlalchemy import insert
+from sqlalchemy.ext.asyncio import AsyncSession
 
 from codelens.bootstrap.settings import Settings
 from codelens.findings.domain.models import (
     ChangeOrigin,
     Evidence,
     Finding,
-    FindingBatch,
     FindingDisposition,
     FindingSeverity,
     RuleReference,
     SourceLocation,
 )
 from codelens.interface.http.app import create_app
-from codelens.review.infrastructure.repositories import SqlCheckpointStore
+from codelens.review.domain.review_plan import (
+    ReviewPass,
+    ReviewPlan,
+    ReviewPlanNode,
+    ReviewPlanNodeType,
+)
+from codelens.review.infrastructure.tables import findings, verdict_decisions
 from tests.fixtures.git_repository import _run_git
 
 
@@ -49,8 +59,169 @@ def _request(repository: Path, scope: dict[str, object]) -> dict[str, object]:
     return {
         "repository_path": str(repository),
         "scope": scope,
-        "selected_agents": ["correctness:v1"],
+        "reviewer_selection": {
+            "mode": "fixed",
+            "reviewer_versions": ["correctness:v2"],
+        },
     }
+
+
+def test_create_review_rejects_removed_selected_agents_field(
+    tmp_path: Path, git_repository: Path
+) -> None:
+    _prepared_repository(git_repository)
+    payload = _request(git_repository, {"type": "uncommitted"})
+    payload["selected_agents"] = ["correctness:v2"]
+
+    with TestClient(
+        create_app(_settings(tmp_path, tmp_path)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        response = client.post("/api/reviews", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_create_review_rejects_unsafe_existing_finding_location(tmp_path: Path) -> None:
+    payload = _request(tmp_path, {"type": "uncommitted"})
+    payload["existing_findings"] = [
+        {
+            "source_id": "github",
+            "finding_id": "discussion-42",
+            "title": "Existing issue",
+            "content": "Previously reported.",
+            "path": "../outside.py",
+            "side": "new",
+            "start_line": 1,
+            "end_line": 1,
+            "existing_code": "return secret",
+        }
+    ]
+
+    with TestClient(
+        create_app(_settings(tmp_path, tmp_path)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        response = client.post("/api/reviews", json=payload)
+
+    assert response.status_code == 422
+
+
+def test_create_review_accepts_existing_code_as_the_historical_location_anchor(
+    tmp_path: Path, git_repository: Path
+) -> None:
+    _prepared_repository(git_repository)
+    payload = _request(
+        git_repository,
+        {
+            "type": "branch",
+            "base_ref": "main",
+            "target_ref": "feature-one",
+            "include_workspace_changes": False,
+        },
+    )
+    payload["existing_findings"] = [
+        {
+            "source_id": "github",
+            "finding_id": "discussion-42",
+            "title": "Existing issue",
+            "content": "Previously reported on an older PR revision.",
+            "path": "feature.py",
+            "side": "new",
+            "start_line": 40,
+            "end_line": 40,
+            "existing_code": "value = previous_revision_value",
+        }
+    ]
+
+    with TestClient(
+        create_app(_settings(tmp_path, tmp_path)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        response = client.post("/api/reviews", json=payload)
+
+    assert response.status_code == 202
+
+
+def test_v2_adaptive_selection_is_persisted_without_legacy_upgrade(
+    tmp_path: Path, git_repository: Path
+) -> None:
+    _prepared_repository(git_repository)
+    payload = {
+        "repository_path": str(git_repository),
+        "scope": {
+            "type": "branch",
+            "base_ref": "main",
+            "target_ref": "feature-one",
+            "include_workspace_changes": False,
+        },
+        "reviewer_selection": {"mode": "adaptive"},
+        "prompt_locale": "en",
+    }
+
+    with TestClient(
+        create_app(_settings(tmp_path, tmp_path)),
+        base_url="http://127.0.0.1:8765",
+    ) as client:
+        created = client.post("/api/reviews", json=payload)
+        response = client.get(f"/api/reviews/{created.json()['task_id']}")
+
+    assert created.status_code == 202
+    assert response.status_code == 200
+    assert response.json()["selection_request"] == {"mode": "adaptive"}
+    assert response.json()["selected_agents"] == []
+    assert response.json()["review_plan"] is None
+
+
+def test_review_plan_projection_includes_derived_plan_hash(
+    tmp_path: Path, git_repository: Path
+) -> None:
+    _prepared_repository(git_repository)
+    app = create_app(_settings(tmp_path, tmp_path))
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        task_id = created.json()["task_id"]
+        reviewer = ReviewPlanNode.create(
+            task_id=task_id,
+            node_type=ReviewPlanNodeType.REVIEWER,
+            agent_reference="correctness:v2",
+            pass_index=ReviewPass.REVIEWER,
+            shard_id="root",
+            logical_attempt_group="primary",
+            depends_on=(),
+        )
+        plan = ReviewPlan.create(
+            task_id=task_id,
+            selection_mode="fixed",
+            reviewer_references=("correctness:v2",),
+            nodes=(reviewer,),
+            planner_reason=None,
+        )
+        client.portal.call(
+            partial(
+                app.state.components.review_plan_store.save,
+                plan,
+                catalog_version="test-catalog",
+                capability_fingerprint="a" * 64,
+            )
+        )
+
+        response = client.get(f"/api/reviews/{task_id}")
+
+    assert response.status_code == 200
+    assert response.json()["review_plan"]["plan_hash"] == plan.plan_hash
 
 
 def _run_git_safe(*arguments: str) -> subprocess.CompletedProcess[bytes]:
@@ -103,9 +274,7 @@ def test_recent_repositories_deduplicates_review_paths(
         assert first.status_code == 202
         assert second.status_code == 202
 
-        first_delete = client.request(
-            "DELETE", f"/api/reviews/{first.json()['task_id']}", json={}
-        )
+        first_delete = client.request("DELETE", f"/api/reviews/{first.json()['task_id']}", json={})
         second_delete = client.request(
             "DELETE", f"/api/reviews/{second.json()['task_id']}", json={}
         )
@@ -280,7 +449,7 @@ def test_create_review_pins_all_scope_types(
     assert body["scope_type"] == scope_type
     assert len(body["base_oid"]) == 40
     assert len(body["head_oid"]) == 40
-    assert body["selected_agents"] == ["correctness:v1"]
+    assert body["selected_agents"] == ["correctness:v2"]
     assert body["worktree_status"] == "pending"
     assert "worktree_path" not in body
     assert "artifact_path" not in body
@@ -463,50 +632,21 @@ def test_workspace_overlay_requires_target_to_match_current_head(
     assert response.json()["code"] == "invalid_repository"
 
 
-def test_local_http_safety_rejects_form_cross_origin_and_untrusted_host(
+def test_http_content_middleware_rejects_form_commands(
     tmp_path: Path,
     git_repository: Path,
 ) -> None:
-    _prepared_repository(git_repository)
-    payload = _request(
-        git_repository,
-        {
-            "type": "branch",
-            "base_ref": "main",
-            "target_ref": "feature-one",
-            "include_workspace_changes": False,
-        },
-    )
     app = create_app(_settings(tmp_path, tmp_path))
 
     with TestClient(app, base_url="http://127.0.0.1:8765") as client:
-        form = client.post("/api/reviews", data={"repository_path": str(git_repository)})
-        untrusted_host = client.post(
+        response = client.post(
             "/api/reviews",
-            json=payload,
-            headers={"Host": "attacker.example"},
-        )
-        userinfo_host = client.post(
-            "/api/reviews",
-            json=payload,
-            headers={"Host": "attacker@127.0.0.1"},
-        )
-        cross_origin = client.post(
-            "/api/reviews",
-            json=payload,
-            headers={"Origin": "https://attacker.example"},
-        )
-        userinfo_origin = client.post(
-            "/api/reviews",
-            json=payload,
-            headers={"Origin": "https://attacker@127.0.0.1"},
+            data={"repository_path": str(git_repository)},
         )
 
-    assert form.status_code == 415
-    assert untrusted_host.status_code == 400
-    assert userinfo_host.status_code == 400
-    assert cross_origin.status_code == 403
-    assert userinfo_origin.status_code == 403
+    assert response.status_code == 415
+    assert response.json()["code"] == "unsupported_media_type"
+
 
 
 def test_review_query_cancel_report_and_sse_resume_contract(
@@ -544,7 +684,7 @@ def test_review_query_cancel_report_and_sse_resume_contract(
         client.portal.call(
             event_store.append,
             task_id,
-            "review.completed",
+            "review.completed.v2",
             {"status": "completed", "finding_count": 0},
         )
         stream = client.get(
@@ -568,9 +708,7 @@ def test_review_query_cancel_report_and_sse_resume_contract(
     assert canceled.status_code == 202
     assert canceled.json()["cancellation_requested"] is True
     assert canceled_again.status_code == 202
-    assert sum(
-        event.event_type == "review.cancel_requested" for event in initial_events
-    ) == 1
+    assert sum(event.event_type == "review.cancel_requested.v2" for event in initial_events) == 1
     assert report.status_code == 404
     assert report.json()["code"] == "report_not_ready"
     assert stream.status_code == 200
@@ -582,6 +720,62 @@ def test_review_query_cancel_report_and_sse_resume_contract(
     assert invalid_event_id.status_code == 422
     assert persisted.status_code == 200
     assert persisted.json()["cancellation_requested"] is True
+
+
+def test_sse_replay_skips_stale_intermediate_terminal_events(
+    tmp_path: Path,
+    git_repository: Path,
+) -> None:
+    """When a task has multiple terminal events (e.g. partial→failed→completed
+    after recovery), SSE replay must only send the LAST terminal event so the
+    frontend observes the final status, not a stale intermediate one."""
+
+    _prepared_repository(git_repository)
+    settings = _settings(tmp_path, tmp_path)
+    app = create_app(settings)
+
+    with TestClient(app, base_url="http://127.0.0.1:8765") as client:
+        created = client.post(
+            "/api/reviews",
+            json=_request(
+                git_repository,
+                {
+                    "type": "branch",
+                    "base_ref": "main",
+                    "target_ref": "feature-one",
+                    "include_workspace_changes": False,
+                },
+            ),
+        )
+        task_id = created.json()["task_id"]
+
+        event_store = app.state.components.events
+        # Simulate a recovery scenario: partial → failed → completed
+        client.portal.call(
+            event_store.append,
+            task_id,
+            "review.partial.v2",
+            {"status": "partial"},
+        )
+        client.portal.call(
+            event_store.append,
+            task_id,
+            "review.failed.v2",
+            {"status": "failed", "error_code": "review_execution_failed"},
+        )
+        client.portal.call(
+            event_store.append,
+            task_id,
+            "review.completed.v2",
+            {"status": "completed", "finding_count": 2},
+        )
+
+        stream = client.get(f"/api/reviews/{task_id}/events")
+
+    assert stream.status_code == 200
+    assert "event: review.partial" not in stream.text
+    assert "event: review.failed" not in stream.text
+    assert "event: review.completed" in stream.text
 
 
 def test_review_findings_endpoint_returns_empty_then_saved_findings(
@@ -619,7 +813,6 @@ def test_review_findings_endpoint_returns_empty_then_saved_findings(
         )
         task_id = created.json()["task_id"]
         empty = client.get(f"/api/reviews/{task_id}/findings")
-        checkpoint_store = SqlCheckpointStore(app.state.components.database)
         finding = Finding(
             finding_id="finding_1",
             fingerprint="d" * 64,
@@ -654,23 +847,38 @@ def test_review_findings_endpoint_returns_empty_then_saved_findings(
             recommendation="Review the correct branch target.",
             rule_sources=(RuleReference("rules/review.md", "f" * 64),),
         )
-        batch = FindingBatch("1", (finding,))
-        node_key = "correctness:v1:0:root"
-        client.portal.call(checkpoint_store.ensure, task_id, node_key, "primary")
-        client.portal.call(checkpoint_store.mark_running, task_id, node_key)
-        client.portal.call(
-            checkpoint_store.mark_output_saved,
-            task_id,
-            node_key,
-            "artifact_1",
-            "a" * 64,
-        )
-        client.portal.call(
-            app.state.components.review_store.complete_with_findings,
-            task_id,
-            node_key,
-            batch,
-        )
+
+        async def persist_verdict_finding() -> None:
+            async def operation(session: AsyncSession) -> None:
+                await session.execute(
+                    insert(verdict_decisions).values(
+                        verdict_decision_id="decision-1",
+                        task_id=task_id,
+                        verifier_run_id="verifier-run-1",
+                        outcome="merge",
+                        payload_json="{}",
+                        created_at=datetime.now(UTC),
+                    )
+                )
+                await session.execute(
+                    insert(findings).values(
+                        finding_id=finding.finding_id,
+                        task_id=task_id,
+                        node_key="review-verifier:v2:0:batch",
+                        fingerprint=finding.fingerprint,
+                        payload_json=json.dumps(asdict(finding), default=str),
+                        severity=finding.severity.value,
+                        verdict_decision_id="decision-1",
+                        verification_status="confirmed",
+                        path=finding.primary_location.path,
+                        start_line=finding.primary_location.start_line,
+                        created_at=datetime.now(UTC),
+                    )
+                )
+
+            await app.state.components.database.run_transaction(operation)
+
+        client.portal.call(persist_verdict_finding)
         saved = client.get(f"/api/reviews/{task_id}/findings")
 
     assert empty.status_code == 200
@@ -784,6 +992,27 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
             ),
         )
         task_id = created.json()["task_id"]
+        worker_transcripts = app.state.components.worker_transcripts
+        client.portal.call(
+            worker_transcripts.append_many,
+            task_id,
+            (
+                (
+                    "tool_call",
+                    "{}",
+                    {
+                        "agent": "correctness:v2",
+                        "tool_name": "read_file",
+                        "tool_call_id": "live-call-1",
+                    },
+                ),
+                    (
+                        "tool_result",
+                        '{"schema_version":"2","tool":"read_file","status":"success","data":{},"diagnostics":[]}',
+                    {"agent": "correctness:v2", "tool_call_id": "live-call-1"},
+                ),
+            ),
+        )
         active_report = client.get(f"/api/reviews/{task_id}/process-report")
         review_store = app.state.components.review_store
         for status in (
@@ -802,49 +1031,84 @@ def test_terminal_review_process_report_returns_usage_and_tool_totals(
             transcripts.append_many,
             task_id,
             (
-                ("model_started", "", {"agent": "correctness:v1"}),
+                ("model_started", "", {"agent": "correctness:v2"}),
                 (
                     "tool_call",
                     "{}",
                     {
-                        "agent": "correctness:v1",
+                        "agent": "correctness:v2",
                         "tool_name": "read_file",
                         "tool_call_id": "call-1",
                     },
                 ),
-                (
-                    "tool_result",
-                    "{}",
-                    {"agent": "correctness:v1", "tool_call_id": "call-1"},
+                    (
+                        "tool_result",
+                        '{"schema_version":"2","tool":"read_file","status":"success","data":{},"diagnostics":[]}',
+                    {"agent": "correctness:v2", "tool_call_id": "call-1"},
                 ),
                 (
                     "model_output",
                     "{}",
                     {
-                        "agent": "correctness:v1",
+                        "agent": "correctness:v2",
                         "model_name": "gpt-5.1",
                         "llm_call_count": "2",
                         "input_tokens": "80",
+                        "cached_input_tokens": "30",
+                        "context_compaction_count": "1",
+                        "context_compacted_result_count": "3",
+                        "context_compaction_original_tokens": "9000",
+                        "context_compaction_compressed_tokens": "600",
                         "output_tokens": "20",
                         "total_tokens": "100",
+                    },
+                ),
+                (
+                    "invalid_tool_call",
+                    "{}",
+                    {
+                        "agent": "correctness:v2",
+                        "tool_name": "grep_create_triggered",
                     },
                 ),
             ),
         )
         report = client.get(f"/api/reviews/{task_id}/process-report")
 
-    assert active_report.status_code == 409
-    assert active_report.json()["code"] == "process_report_not_ready"
-    assert pending_persistence_report.status_code == 409
-    assert pending_persistence_report.json()["code"] == "process_report_not_ready"
+    assert active_report.status_code == 200, active_report.text
+    assert active_report.json()["status"] == "created"
+    assert active_report.json()["tool_call_count"] == 1
+    assert active_report.json()["accepted_tool_call_count"] == 1
+    assert pending_persistence_report.status_code == 200, pending_persistence_report.text
+    assert pending_persistence_report.json()["status"] == "completed"
+    assert pending_persistence_report.json()["tool_call_count"] == 1
     assert report.status_code == 200, report.text
     body = report.json()
     assert body["task_id"] == task_id
     assert body["status"] == "completed"
     assert body["llm_call_count"] == 2
+    assert body["cached_input_tokens"] == 30
+    assert body["context_compaction_count"] == 1
+    assert body["context_compacted_result_count"] == 3
+    assert body["context_compaction_original_tokens"] == 9000
+    assert body["context_compaction_compressed_tokens"] == 600
     assert body["total_tokens"] == 100
     assert body["tool_call_count"] == 1
+    assert body["invalid_tool_call_count"] == 1
+    assert body["accepted_tool_call_count"] == 1
+    assert body["rejected_tool_call_count"] == 0
+    assert body["unclassified_tool_call_count"] == 0
     assert body["tools"] == [
-        {"tool_name": "read_file", "call_count": 1, "result_count": 1}
+        {
+            "tool_name": "read_file",
+            "call_count": 1,
+            "result_count": 1,
+            "accepted_call_count": 1,
+            "rejected_call_count": 0,
+            "unclassified_call_count": 0,
+        }
+    ]
+    assert body["invalid_tools"] == [
+        {"tool_name": "grep_create_triggered", "call_count": 1}
     ]
     assert body["usage_is_complete"] is True

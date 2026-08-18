@@ -452,6 +452,49 @@
   margin-top: 8px;
 }
 
+.plugin-review-strategy {
+  display: grid;
+  gap: 14px;
+  padding: 18px;
+  border: 1px solid color-mix(in srgb, var(--accent, #d97706) 28%, var(--border));
+  background: color-mix(in srgb, var(--surface, #fff) 92%, #f5ead8);
+}
+
+.plugin-review-strategy > header,
+.plugin-profile-copy {
+  display: flex;
+  align-items: end;
+  justify-content: space-between;
+  gap: 16px;
+}
+
+.plugin-review-strategy > header div {
+  display: grid;
+  gap: 3px;
+}
+
+.plugin-review-strategy > header span,
+.plugin-review-strategy > header small {
+  color: var(--text-muted);
+}
+
+.plugin-profile-copy .profile-picker {
+  flex: 1;
+}
+
+.plugin-profile-copy button {
+  min-height: 38px;
+  padding: 0 14px;
+}
+
+.plugin-profile-drift {
+  margin: 0;
+  padding: 10px 12px;
+  border-left: 3px solid #d97706;
+  background: #fff7ed;
+  color: #9a3412;
+}
+
 /* Config Fields */
 .config-field {
   margin-bottom: 12px;

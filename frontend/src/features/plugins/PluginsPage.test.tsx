@@ -10,7 +10,7 @@ let hookIsInstalled = true;
 let hookInstallFailures = 0;
 let installRequest: RequestInit | undefined;
 let configRequest: RequestInit | undefined;
-let pluginsPayload: unknown[];
+let pluginsPayload: Array<Record<string, unknown>>;
 
 function jsonResponse(payload: unknown): Response {
   return new Response(JSON.stringify(payload), {
@@ -55,7 +55,11 @@ beforeEach(() => {
         scope_type: "commit",
         base_ref: null,
         target_ref: null,
-        selected_agents: ["correctness:v1"],
+        reviewer_selection: {
+          mode: "fixed",
+          reviewer_versions: ["correctness:v2"],
+        },
+        supersede_policy: "latest_snapshot",
         prompt_locale: "en",
         debounce_seconds: 10,
       },
@@ -81,6 +85,35 @@ beforeEach(() => {
     }
     if (url.endsWith("/api/plugins")) {
       return jsonResponse(pluginsPayload);
+    }
+    if (url.endsWith("/api/review-profiles")) {
+      return jsonResponse([
+        {
+          profile_id: "profile-adaptive",
+          revision: 2,
+          name: "Adaptive deep",
+          is_default: true,
+          reviewer_selection: { mode: "adaptive" },
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-02T00:00:00Z",
+        },
+      ]);
+    }
+    if (url.endsWith("/api/reviewer-catalog")) {
+      return jsonResponse([
+        {
+          reference: "security:v2",
+          agent_id: "security",
+          version: 1,
+          dimensions: ["security"],
+          planner_eligible: true,
+          capability_readiness: "ready",
+        },
+      ]);
+    }
+    if (url.endsWith("/api/plugins/local/trigger/config")) {
+      configRequest = init;
+      return jsonResponse(pluginsPayload[0]);
     }
     if (url.endsWith("/api/plugins/external/report/config")) {
       configRequest = init;
@@ -226,5 +259,44 @@ it("submits numeric schema fields as numbers", async () => {
   await waitFor(() => expect(configRequest).toBeDefined());
   expect(JSON.parse(String(configRequest?.body))).toEqual({
     config: { retries: 3 },
+  });
+});
+
+it("copies a Profile into a v2 plugin policy with separate provenance", async () => {
+  const localPlugin = pluginsPayload[0];
+  if (localPlugin === undefined) throw new Error("Local plugin fixture missing");
+  pluginsPayload = [
+    {
+      ...localPlugin,
+      plugin_api_version: "2",
+      profile_source: null,
+      trigger_config: {
+        repository_paths: ["/workspace/repository"],
+        events: ["post-commit"],
+        scope_type: "commit",
+        reviewer_selection: {
+          mode: "fixed",
+          reviewer_versions: ["security:v2"],
+        },
+        supersede_policy: "latest_snapshot",
+        prompt_locale: "en",
+        debounce_seconds: 10,
+      },
+    },
+  ];
+  const user = userEvent.setup();
+  render(<PluginsPage />, { wrapper: TestProviders });
+
+  await user.click(await screen.findByRole("button", { name: "Reload from profile" }));
+  await user.click(screen.getByRole("button", { name: "Save configuration" }));
+
+  await waitFor(() => expect(configRequest).toBeDefined());
+  const body = JSON.parse(String(configRequest?.body));
+  expect(body.config.reviewer_selection).toEqual({ mode: "adaptive" });
+  expect(body.config.profile_source).toBeUndefined();
+  expect(body.profile_source).toEqual({
+    profile_id: "profile-adaptive",
+    profile_name: "Adaptive deep",
+    profile_revision: 2,
   });
 });

@@ -1,9 +1,13 @@
 {
-  "find_files": {"description": "查找一个目录下的可见文件。两个参数都必填：path 是 Git 风格的规范化仓库相对目录，在包括 Windows 的所有系统上都使用 /，仓库根目录使用空字符串；pattern 使用相同路径格式且相对于 path，* 匹配一个路径段，** 匹配任意层级，查找全部后代使用 **。不分页且返回有界结果集；truncated 为 true 时应缩小 path 或细化 pattern 后重试。"},
-  "grep": {"description": "在可见的 UTF-8 文本中执行无分页搜索。pattern、path 和 file_pattern 都必填：pattern 是有长度限制的 Python 正则表达式；path 是仓库相对文件或目录，仓库根目录使用空字符串；file_pattern 是相对于 path 且按路径段匹配的 glob，使用 ** 包含全部可见文件。扫描有界文本量并返回有界数量的匹配；truncated 为 true 时应缩小 pattern、path 或细化 file_pattern 后重试。"},
-  "read_file": {"description": "读取可见文件。path 和 current|base|head 的 version 必填；从 1 开始且首尾都包含的 start_line/end_line 可以同时省略以执行有界全文读取，否则必须同时提供。读取有界行数。current 是经过验证的冻结内容，可能包含捕获的 overlay；base 和 head 是固定 Git revision。拒绝二进制文件和过大的 Snapshot 源文件，输出有大小限制；truncated 为 true 时应使用更小的明确行范围重试。"},
-  "get_diff": {"description": "读取一个已变更可见 path 经过验证的 base-to-current diff。current 是冻结的 Review 内容，可能包含捕获的工作区 overlay；base 是固定的基线 revision。输出有大小限制。"},
-  "comment": {"description": "通过 comments 提交有界数量的具体 Finding。每项必须提供 path、side、existing_code、title、content、recommendation、category、severity 和 confidence。评论基准版本中被删除的 - 行使用 side=old，评论目标版本中新增的 + 行使用 side=new。existing_code 必须引用仅由对应侧实际变更行组成的最小精确连续片段，不包含 diff 标记。不得包含未修改的 diff 上下文行。severity 为 critical|high|medium|low|info，confidence 范围为 0 到 1。每项独立解析；rejected_comments 返回输入数组中从零开始的索引和原因。只重试被拒绝的索引，已接受项会保留。"},
-  "review_file_done": {"description": "声明一个或多个 Review 文件已经调查完成。reviewed_files 必须包含 review_files 中有界数量的精确路径。只有该路径已经成功通过模型可见的 get_diff 或 read_file 查看后才会记录；否则结果会在 missing_evidence_files 中拒绝该路径。重复路径具备幂等性。"},
-  "task_done": {"description": "尝试结束整个调查。summary 必填且有长度限制。当仍有 Review 文件未完成时会拒绝：missing_evidence_files 表示尚未成功通过 get_diff 或 read_file 查看；undeclared_files 表示已经查看但尚未通过 review_file_done 记录。继续调查后重新调用 task_done。达到配置的最大打回次数后，工具会接受完成并通过 incomplete_files 返回未完成文件，以便保留已有 Finding 并完成整理。"}
+  "find_files": {"description": "在必填的仓库相对目录 path 下查找可见文件，根目录使用空字符串。不含 / 的 pattern（如 *.py）递归匹配 basename；含 / 的 pattern 相对 path，递归必须使用完整 ** 路径段；**.py 非法。结果有界且不分页；partial 时缩小 path 或细化 pattern。"},
+  "grep": {"description": "使用必填 pattern、mode=literal|regex、仓库相对 path 和 file_pattern 搜索可见 UTF-8 文本。查符号和字符串优先使用 literal。不含 / 的 *.py 递归匹配 basename；**.py 非法。partial 时缩小 pattern、path 或 file_pattern。"},
+  "read_file": {"description": "使用必填 path、version=current|base|head 和可选 start_line/end_line（≥1 整数）读取可见文件。省略 start_line 和 end_line 表示有界全文读取。示例：start_line=10, end_line=20。partial 时原样使用返回的 next_line_range 中的 start_line 和 end_line 值。"},
+  "get_diff": {"description": "按完整 hunk 读取必填 path 下经过验证的 base-to-current diff。首次调用省略 cursor；status=partial 时以相同 path 原样传回 next_cursor。超大 hunk 必须按建议的 read_file 行范围读取，且不会计为已审查。"},
+  "comment": {"description": "批量提交有界 Finding。side=old 定位删除行，side=new 定位新增行；existing_code 必须引用最小且精确的连续变更行，不含 diff 标记和未变更上下文。每项独立解析，只重试 rejected_comments 中的索引。"},
+  "retract_comment": {"description": "后续证据推翻已提交 Comment 时，撤销当前 Run 的 candidate_ids，并提供非空 reason。只在 task_done 或最终文本中声称撤回不会改变 Candidate 状态。"},
+  "task_done": {"description": "只有宿主证据覆盖达到首次输入的 review_file_count 后，才用简短总结结束调查；不得用本工具试探是否完成。missing_review_files 会返回宿主计算的已读、缺失和总数；调查列出的每个文件后再重试。达到重试上限后可通过 incomplete_files 完成。"},
+  "finalize_plan": {"description": "一次提交并最终确定完整选择：General 单独运行或至少两个专项 Reviewer，二者不得混用。所有引用必须 eligible 且 available；恰好调用一次。"},
+  "verdict": {"description": "接受或拒绝 cluster_ids。accept 发布 canonical 字段；deny 抑制与快照矛盾、不可执行、重复，或证据链不足以建立缺陷的意见。仅 weak/inferred 不足以拒绝。"},
+  "merge": {"description": "仅将根因相同的 cluster_ids 合成一条 Finding。所有 Comment 字段和精确变更源码摘录均必填并成为最终值；每项主张、维度、位置、证据强度和严重级别都必须有证据支持。"},
+  "finalize_verdicts": {"description": "每个 Cluster 恰好被 accept、deny 或 merge 覆盖一次后完成裁决；未知、重复或未覆盖的 Cluster 会被拒绝。"}
 }

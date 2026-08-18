@@ -20,15 +20,21 @@ def test_tool_limits_returns_defaults_initially(tmp_path: Path) -> None:
     assert data["max_read_bytes"] == 65536
     assert data["max_scan_bytes"] == 1048576
     assert data["max_source_bytes"] == 1048576
-    assert data["max_lines"] == 500
+    assert data["max_lines"] == 1000
     assert data["max_path_chars"] == 1024
     assert data["max_pattern_chars"] == 512
     assert data["regex_timeout_seconds"] == 30.0
     assert data["comment_batch_size"] == 20
-    assert data["reviewed_files_batch"] == 2000
     assert data["short_text_max"] == 240
     assert data["long_text_max"] == 8000
     assert data["task_summary_max"] == 8000
+    assert data["context_compaction_enabled"] is True
+    assert data["context_compaction_trigger_tokens"] == 160000
+    assert data["context_compaction_keep_recent_evidence_results"] == 6
+    assert data["context_compaction_max_retries"] == 3
+    assert data["context_compaction_retry_backoff_base"] == 2.0
+    assert data["context_compaction_retry_max_delay"] == 30.0
+    assert data["context_compaction_max_consecutive_failures"] == 3
 
 
 def test_tool_limits_update_and_persist(tmp_path: Path) -> None:
@@ -46,14 +52,21 @@ def test_tool_limits_update_and_persist(tmp_path: Path) -> None:
                 "max_pattern_chars": 1024,
                 "regex_timeout_seconds": 60.0,
                 "comment_batch_size": 50,
-                "reviewed_files_batch": 5000,
                 "short_text_max": 480,
                 "long_text_max": 16000,
                 "task_summary_max": 16000,
+                "context_compaction_enabled": False,
+                "context_compaction_trigger_tokens": 262144,
+                "context_compaction_keep_recent_evidence_results": 4,
+                "context_compaction_max_retries": 5,
+                "context_compaction_retry_backoff_base": 1.5,
+                "context_compaction_retry_max_delay": 60.0,
+                "context_compaction_max_consecutive_failures": 5,
             },
         )
         assert update.status_code == 200
         assert update.json()["max_results"] == 500
+        assert update.json()["context_compaction_enabled"] is False
 
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
         persisted = client.get("/api/settings/tool-limits")
@@ -70,7 +83,7 @@ def test_tool_limits_partial_update(tmp_path: Path) -> None:
         assert update.status_code == 200
         data = update.json()
         assert data["max_results"] == 300
-        assert data["max_lines"] == 500  # unchanged
+        assert data["max_lines"] == 1000  # unchanged
 
 
 def test_tool_limits_rejects_invalid_range(tmp_path: Path) -> None:
@@ -80,6 +93,39 @@ def test_tool_limits_rejects_invalid_range(tmp_path: Path) -> None:
         too_large = client.put("/api/settings/tool-limits", json={"max_results": 99999})
         assert too_small.status_code == 422
         assert too_large.status_code == 422
+
+
+def test_tool_limits_rejects_invalid_retry_config_ranges(tmp_path: Path) -> None:
+    """The new retry config fields are validated at the API layer with proper ranges."""
+    settings = Settings(data_dir=tmp_path / "data")
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
+        # max_retries must be 0-10
+        response = client.put(
+            "/api/settings/tool-limits",
+            json={"context_compaction_max_retries": 11},
+        )
+        assert response.status_code == 422
+
+        # retry_backoff_base must be 0.1-60.0
+        response = client.put(
+            "/api/settings/tool-limits",
+            json={"context_compaction_retry_backoff_base": 0.01},
+        )
+        assert response.status_code == 422
+
+        # retry_max_delay must be 1.0-300.0
+        response = client.put(
+            "/api/settings/tool-limits",
+            json={"context_compaction_retry_max_delay": 0.5},
+        )
+        assert response.status_code == 422
+
+        # max_consecutive_failures must be 1-10
+        response = client.put(
+            "/api/settings/tool-limits",
+            json={"context_compaction_max_consecutive_failures": 0},
+        )
+        assert response.status_code == 422
 
 
 def test_reset_all_restores_defaults(tmp_path: Path) -> None:
@@ -97,6 +143,18 @@ def test_reset_all_restores_defaults(tmp_path: Path) -> None:
             "/api/settings/review-completion",
             json={"max_incomplete_review_retries": 10},
         )
+        client.post(
+            "/api/settings/model-gateways",
+            json={
+                "name": "Reset gateway",
+                "api_key": "sk-reset-test-secret",
+                "model": "gpt-reset",
+                "base_url": "https://reset.example/v1",
+                "agent_timeout": 900,
+                "max_agent_turns": 80,
+                "max_tool_calls": 240,
+            },
+        )
 
         # Reset all
         reset = client.post("/api/settings/reset-all", json={})
@@ -107,9 +165,13 @@ def test_reset_all_restores_defaults(tmp_path: Path) -> None:
         assert data["tool_limits"]["max_results"] == 200
         assert data["logging"]["level"] == "info"
         assert data["recent_repositories"]["recent_repository_limit"] == 10
-        assert data["instruction_files"]["root_max_lines"] == 500
-        assert data["instruction_files"]["nested_max_lines"] == 200
+        assert data["instruction_files"]["root_max_lines"] == 1000
+        assert data["instruction_files"]["nested_max_lines"] == 500
         assert data["review_completion"]["max_incomplete_review_retries"] == 3
+        reset_gateway = data["model_gateways"]["gateways"][0]
+        assert reset_gateway["agent_timeout"] == 3600
+        assert reset_gateway["max_agent_turns"] == 500
+        assert reset_gateway["max_tool_calls"] == 500
 
         # Verify persistence
         tool_limits = client.get("/api/settings/tool-limits")

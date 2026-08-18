@@ -5,11 +5,16 @@ from typing import Annotated
 from fastapi import APIRouter, Depends
 from pydantic import StringConstraints
 
-from codelens.bootstrap.logging import get_runtime_log_level, set_runtime_log_level
-from codelens.interface.http.dependencies import HttpComponents, get_components
+from codelens.bootstrap.logging import (
+    get_model_output_logging_enabled,
+    get_runtime_log_level,
+    update_runtime_logging,
+)
+from codelens.interface.http.dependencies import HttpComponents, HttpProblem, get_components
 from codelens.interface.http.dto import (
     ActivateModelGatewayRequest,
     CreateModelGatewayRequest,
+    FileExclusionSettingsResponse,
     GatewayAvailabilityTestResponse,
     GatewayConnectivityTestResponse,
     InstructionFileSettingsResponse,
@@ -18,19 +23,21 @@ from codelens.interface.http.dto import (
     RecentRepositorySettingsResponse,
     ResetAllSettingsResponse,
     ReviewCompletionSettingsResponse,
-    RuntimeLogLevelResponse,
+    RuntimeLoggingSettingsResponse,
     ToolLimitsResponse,
     TriggerIdempotencySettingsResponse,
+    UpdateFileExclusionSettingsRequest,
     UpdateInstructionFileSettingsRequest,
     UpdateModelGatewayRequest,
     UpdateRecentRepositorySettingsRequest,
     UpdateReviewCompletionSettingsRequest,
-    UpdateRuntimeLogLevelRequest,
+    UpdateRuntimeLoggingSettingsRequest,
     UpdateToolLimitsRequest,
     UpdateTriggerIdempotencySettingsRequest,
 )
 from codelens.review.domain.tool_limits import ToolLimits
 from codelens.reviewer_catalog.application.provider_settings import ModelGatewayCatalogView
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 _LOGGER = logging.getLogger("codelens.settings")
@@ -70,6 +77,10 @@ def _catalog_response(view: ModelGatewayCatalogView) -> ModelGatewayCatalogRespo
                 max_tool_calls=gateway.max_tool_calls,
                 max_identical_tool_results=gateway.max_identical_tool_results,
                 tool_timeout_seconds=gateway.tool_timeout_seconds,
+                max_retries=gateway.max_retries,
+                retry_backoff_base=gateway.retry_backoff_base,
+                retry_max_delay=gateway.retry_max_delay,
+                no_progress_rounds_threshold=gateway.no_progress_rounds_threshold,
             )
             for gateway in view.gateways
         ],
@@ -87,33 +98,110 @@ def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
         max_pattern_chars=limits.max_pattern_chars,
         regex_timeout_seconds=limits.regex_timeout_seconds,
         comment_batch_size=limits.comment_batch_size,
-        reviewed_files_batch=limits.reviewed_files_batch,
         short_text_max=limits.short_text_max,
         long_text_max=limits.long_text_max,
         task_summary_max=limits.task_summary_max,
+        context_compaction_enabled=limits.context_compaction_enabled,
+        context_compaction_trigger_tokens=limits.context_compaction_trigger_tokens,
+        context_compaction_keep_recent_evidence_results=(
+            limits.context_compaction_keep_recent_evidence_results
+        ),
+        context_compaction_max_retries=limits.context_compaction_max_retries,
+        context_compaction_retry_backoff_base=limits.context_compaction_retry_backoff_base,
+        context_compaction_retry_max_delay=limits.context_compaction_retry_max_delay,
+        context_compaction_max_consecutive_failures=(
+            limits.context_compaction_max_consecutive_failures
+        ),
     )
 
 
-@router.get("/logging", response_model=RuntimeLogLevelResponse)
-async def get_runtime_log_level_setting(
+def _file_exclusion_response(
+    policy: ReviewFileExclusionPolicy,
+) -> FileExclusionSettingsResponse:
+    return FileExclusionSettingsResponse(
+        suffixes=list(policy.suffixes),
+        path_regexes=list(policy.path_regexes),
+    )
+
+
+@router.get("/file-exclusions", response_model=FileExclusionSettingsResponse)
+async def get_file_exclusions(
     components: Annotated[HttpComponents, Depends(get_components)],
-) -> RuntimeLogLevelResponse:
-    """Return the persisted runtime log threshold without exposing log contents."""
+) -> FileExclusionSettingsResponse:
+    """Return the independently editable Web exclusion overlay."""
 
-    level = await asyncio.to_thread(get_runtime_log_level, components.settings.data_dir)
-    return RuntimeLogLevelResponse(level=level)
+    return _file_exclusion_response(await components.file_exclusion_settings.get_web())
 
 
-@router.put("/logging", response_model=RuntimeLogLevelResponse)
-async def update_runtime_log_level_setting(
-    request: UpdateRuntimeLogLevelRequest,
+@router.put("/file-exclusions", response_model=FileExclusionSettingsResponse)
+async def update_file_exclusions(
+    request: UpdateFileExclusionSettingsRequest,
     components: Annotated[HttpComponents, Depends(get_components)],
-) -> RuntimeLogLevelResponse:
-    """Persist a shared threshold used by every process on its next log event."""
+) -> FileExclusionSettingsResponse:
+    """Validate and atomically update the Web exclusion overlay."""
 
-    await asyncio.to_thread(set_runtime_log_level, components.settings.data_dir, request.level)
-    _LOGGER.info("Runtime log level updated", extra={"log_level": request.level})
-    return RuntimeLogLevelResponse(level=request.level)
+    try:
+        policy = await components.file_exclusion_settings.update_web(
+            suffixes=None if request.suffixes is None else tuple(request.suffixes),
+            path_regexes=(None if request.path_regexes is None else tuple(request.path_regexes)),
+        )
+    except ValueError as error:
+        raise HttpProblem(422, "invalid_file_exclusion_policy", str(error)) from error
+    return _file_exclusion_response(policy)
+
+
+@router.get("/logging", response_model=RuntimeLoggingSettingsResponse)
+async def get_runtime_logging_settings(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> RuntimeLoggingSettingsResponse:
+    """Return persisted logging controls without exposing log contents."""
+
+    data_directory = components.settings.data_dir
+    defaults = components.web_settings_defaults
+    level = await asyncio.to_thread(
+        get_runtime_log_level,
+        data_directory,
+        defaults.log_level,
+    )
+    model_output_enabled = await asyncio.to_thread(
+        get_model_output_logging_enabled,
+        data_directory,
+        defaults.model_output_enabled,
+    )
+    return RuntimeLoggingSettingsResponse(
+        default_level=defaults.log_level,
+        level=level,
+        model_output_enabled=model_output_enabled,
+    )
+
+
+@router.put("/logging", response_model=RuntimeLoggingSettingsResponse)
+async def update_runtime_logging_settings(
+    request: UpdateRuntimeLoggingSettingsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> RuntimeLoggingSettingsResponse:
+    """Persist controls used by every process on its next log event."""
+
+    data_directory = components.settings.data_dir
+    defaults = components.web_settings_defaults
+    await asyncio.to_thread(
+        update_runtime_logging,
+        data_directory,
+        level=request.level,
+        model_output_enabled=request.model_output_enabled,
+    )
+    _LOGGER.info(
+        "Runtime logging settings updated",
+        extra={
+            "log_level": request.level,
+            "model_output_enabled": request.model_output_enabled,
+        },
+    )
+    return RuntimeLoggingSettingsResponse(
+        default_level=defaults.log_level,
+        level=request.level,
+        model_output_enabled=request.model_output_enabled,
+    )
 
 
 @router.get("/repositories", response_model=RecentRepositorySettingsResponse)
@@ -246,6 +334,10 @@ async def create_model_gateway(
             max_tool_calls=request.max_tool_calls,
             max_identical_tool_results=request.max_identical_tool_results,
             tool_timeout_seconds=request.tool_timeout_seconds,
+            max_retries=request.max_retries,
+            retry_backoff_base=request.retry_backoff_base,
+            retry_max_delay=request.retry_max_delay,
+            no_progress_rounds_threshold=request.no_progress_rounds_threshold,
         )
     )
 
@@ -274,6 +366,10 @@ async def update_model_gateway(
             max_tool_calls=request.max_tool_calls,
             max_identical_tool_results=request.max_identical_tool_results,
             tool_timeout_seconds=request.tool_timeout_seconds,
+            max_retries=request.max_retries,
+            retry_backoff_base=request.retry_backoff_base,
+            retry_max_delay=request.retry_max_delay,
+            no_progress_rounds_threshold=request.no_progress_rounds_threshold,
         )
     )
 
@@ -351,21 +447,38 @@ async def update_tool_limits(
 ) -> ToolLimitsResponse:
     """Persist replacement tool limits for subsequent Agent runs."""
 
-    limits = await components.tool_limits.update(
-        max_results=request.max_results,
-        max_read_bytes=request.max_read_bytes,
-        max_scan_bytes=request.max_scan_bytes,
-        max_source_bytes=request.max_source_bytes,
-        max_lines=request.max_lines,
-        max_path_chars=request.max_path_chars,
-        max_pattern_chars=request.max_pattern_chars,
-        regex_timeout_seconds=request.regex_timeout_seconds,
-        comment_batch_size=request.comment_batch_size,
-        reviewed_files_batch=request.reviewed_files_batch,
-        short_text_max=request.short_text_max,
-        long_text_max=request.long_text_max,
-        task_summary_max=request.task_summary_max,
-    )
+    try:
+        limits = await components.tool_limits.update(
+            max_results=request.max_results,
+            max_read_bytes=request.max_read_bytes,
+            max_scan_bytes=request.max_scan_bytes,
+            max_source_bytes=request.max_source_bytes,
+            max_lines=request.max_lines,
+            max_path_chars=request.max_path_chars,
+            max_pattern_chars=request.max_pattern_chars,
+            regex_timeout_seconds=request.regex_timeout_seconds,
+            comment_batch_size=request.comment_batch_size,
+            short_text_max=request.short_text_max,
+            long_text_max=request.long_text_max,
+            task_summary_max=request.task_summary_max,
+            context_compaction_enabled=request.context_compaction_enabled,
+            context_compaction_trigger_tokens=request.context_compaction_trigger_tokens,
+            context_compaction_keep_recent_evidence_results=(
+                request.context_compaction_keep_recent_evidence_results
+            ),
+            context_compaction_max_retries=request.context_compaction_max_retries,
+            context_compaction_retry_backoff_base=(
+                request.context_compaction_retry_backoff_base
+            ),
+            context_compaction_retry_max_delay=(
+                request.context_compaction_retry_max_delay
+            ),
+            context_compaction_max_consecutive_failures=(
+                request.context_compaction_max_consecutive_failures
+            ),
+        )
+    except ValueError as error:
+        raise HttpProblem(422, "invalid_tool_limits", str(error)) from error
     return _tool_limits_response(limits)
 
 
@@ -379,36 +492,43 @@ async def reset_all_settings(
     or trigger plugin configurations.
     """
 
-    from codelens.bootstrap.logging import get_runtime_log_level, set_runtime_log_level
-    from codelens.instruction_policy.domain.models import (
-        DEFAULT_NESTED_INSTRUCTION_MAX_LINES,
-        DEFAULT_ROOT_INSTRUCTION_MAX_LINES,
+    from codelens.bootstrap.logging import (
+        get_model_output_logging_enabled,
+        get_runtime_log_level,
+        update_runtime_logging,
     )
-    from codelens.review.application.settings import DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
-    from codelens.review.domain.ports import DEFAULT_RECENT_REPOSITORY_LIMIT
-    from codelens.review.domain.tool_limits import ToolLimits
+    defaults = components.web_settings_defaults
 
     # Reset instruction file limits
     instruction_limits = await components.instruction_settings.update(
-        root_max_lines=DEFAULT_ROOT_INSTRUCTION_MAX_LINES,
-        nested_max_lines=DEFAULT_NESTED_INSTRUCTION_MAX_LINES,
+        root_max_lines=defaults.instruction_files.root_max_lines,
+        nested_max_lines=defaults.instruction_files.nested_max_lines,
+    )
+
+    file_exclusions = await components.file_exclusion_settings.update_web(
+        suffixes=defaults.file_exclusions.suffixes,
+        path_regexes=defaults.file_exclusions.path_regexes,
     )
 
     # Reset review completion settings
     review_completion = await components.review_completion_settings.update(
-        max_incomplete_review_retries=DEFAULT_MAX_INCOMPLETE_REVIEW_RETRIES
+        max_incomplete_review_retries=(
+            defaults.review_completion.max_incomplete_review_retries
+        )
     )
 
     # Reset trigger idempotency settings
-    trigger_idempotency = await components.trigger_idempotency_settings.update(enabled=False)
+    trigger_idempotency = await components.trigger_idempotency_settings.update(
+        enabled=defaults.trigger_idempotency.enabled
+    )
 
     # Reset recent repository limit
     recent_repo_limit = await components.update_recent_repository_settings.handle(
-        DEFAULT_RECENT_REPOSITORY_LIMIT
+        defaults.recent_repository_limit
     )
 
     # Reset tool limits
-    default_tool_limits = ToolLimits()
+    default_tool_limits = defaults.tool_limits
     tool_limits = await components.tool_limits.update(
         max_results=default_tool_limits.max_results,
         max_read_bytes=default_tool_limits.max_read_bytes,
@@ -419,15 +539,41 @@ async def reset_all_settings(
         max_pattern_chars=default_tool_limits.max_pattern_chars,
         regex_timeout_seconds=default_tool_limits.regex_timeout_seconds,
         comment_batch_size=default_tool_limits.comment_batch_size,
-        reviewed_files_batch=default_tool_limits.reviewed_files_batch,
         short_text_max=default_tool_limits.short_text_max,
         long_text_max=default_tool_limits.long_text_max,
         task_summary_max=default_tool_limits.task_summary_max,
+        context_compaction_enabled=default_tool_limits.context_compaction_enabled,
+        context_compaction_trigger_tokens=default_tool_limits.context_compaction_trigger_tokens,
+        context_compaction_keep_recent_evidence_results=(
+            default_tool_limits.context_compaction_keep_recent_evidence_results
+        ),
+        context_compaction_max_retries=default_tool_limits.context_compaction_max_retries,
+        context_compaction_retry_backoff_base=(
+            default_tool_limits.context_compaction_retry_backoff_base
+        ),
+        context_compaction_retry_max_delay=(
+            default_tool_limits.context_compaction_retry_max_delay
+        ),
+        context_compaction_max_consecutive_failures=(
+            default_tool_limits.context_compaction_max_consecutive_failures
+        ),
     )
 
-    # Reset log level
-    await asyncio.to_thread(set_runtime_log_level, components.settings.data_dir, "info")
-    log_level = await asyncio.to_thread(get_runtime_log_level, components.settings.data_dir)
+    # Reset logging controls
+    await asyncio.to_thread(
+        update_runtime_logging,
+        components.settings.data_dir,
+        level=defaults.log_level,
+        model_output_enabled=defaults.model_output_enabled,
+    )
+    log_level = await asyncio.to_thread(
+        get_runtime_log_level, components.settings.data_dir, defaults.log_level
+    )
+    model_output_enabled = await asyncio.to_thread(
+        get_model_output_logging_enabled,
+        components.settings.data_dir,
+        defaults.model_output_enabled,
+    )
 
     # Reset active gateway execution limits (if a gateway is active)
     gateway_catalog = await components.model_gateways.list()
@@ -447,11 +593,15 @@ async def reset_all_settings(
                 api_type=active_gw.api_type,
                 max_tokens=active_gw.max_tokens,
                 thinking_level=active_gw.thinking_level,
-                agent_timeout=1800,
-                max_agent_turns=100,
-                max_tool_calls=300,
+                agent_timeout=3600,
+                max_agent_turns=500,
+                max_tool_calls=500,
                 max_identical_tool_results=3,
                 tool_timeout_seconds=30,
+                max_retries=10,
+                retry_backoff_base=1.0,
+                retry_max_delay=30.0,
+                no_progress_rounds_threshold=10,
             )
 
     return ResetAllSettingsResponse(
@@ -459,6 +609,7 @@ async def reset_all_settings(
             instruction_limits.root_max_lines,
             instruction_limits.nested_max_lines,
         ),
+        file_exclusions=_file_exclusion_response(file_exclusions),
         review_completion=ReviewCompletionSettingsResponse(
             max_incomplete_review_retries=review_completion.max_incomplete_review_retries,
         ),
@@ -469,6 +620,10 @@ async def reset_all_settings(
             recent_repository_limit=recent_repo_limit,
         ),
         tool_limits=_tool_limits_response(tool_limits),
-        logging=RuntimeLogLevelResponse(level=log_level),
+        logging=RuntimeLoggingSettingsResponse(
+            default_level=defaults.log_level,
+            level=log_level,
+            model_output_enabled=model_output_enabled,
+        ),
         model_gateways=_catalog_response(gateway_catalog),
     )

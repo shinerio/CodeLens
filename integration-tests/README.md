@@ -99,7 +99,7 @@ pnpm --dir frontend dev
 3. 按第 2 步打印的绝对路径逐级进入目录，并选择 `simple-branch` Git 仓库。
 4. 选择 **Branch diff**。
 5. Base 分支选择 `main`，Target 分支选择 `fixture-change`。
-6. 不启用工作区改动；选择 `correctness:v1` Reviewer。
+6. 不启用工作区改动；选择 `correctness:v2` Reviewer，并由 `review-verifier:v2` 完成最终裁决。
 7. 点击 **Start review / 开始 Review**。
 
 页面应进入 Review 执行页并实时显示进度。任务终态应为 `completed` 或在覆盖不完整时明确显示 `partial`；随后可以在 **Findings** 和执行报告中检查真实模型产生并通过校验的结果。真实模型输出具有非确定性，因此 Finding 数量和措辞不要求与自动化测试固定的三个 Finding 完全一致；若任务为 `failed`，应在页面的执行过程和 `logs/worker.log` 中检查失败原因。

@@ -21,17 +21,19 @@ import {
   activateModelGateway,
   createModelGateway,
   deleteModelGateway,
+  getFileExclusionSettings,
   getInstructionFileSettings,
   getRecentRepositorySettings,
   getReviewCompletionSettings,
-  getRuntimeLogLevel,
+  getRuntimeLoggingSettings,
   getToolLimits,
   getTriggerIdempotencySettings,
   listModelGateways,
   resetAllSettings,
   testGatewayAvailability,
   testGatewayConnectivity,
-  updateRuntimeLogLevel,
+  updateRuntimeLoggingSettings,
+  updateFileExclusionSettings,
   updateInstructionFileSettings,
   updateRecentRepositoryLimit,
   updateReviewCompletionSettings,
@@ -39,7 +41,7 @@ import {
   updateToolLimits,
   updateTriggerIdempotencySettings,
 } from "./api";
-import type { ToolLimits as ToolLimitsType } from "./types";
+import type { FileExclusionSettings, ToolLimits as ToolLimitsType } from "./types";
 import type {
   GatewayApiType,
   GatewayTestResult,
@@ -47,21 +49,28 @@ import type {
   ModelGatewayCatalog,
   ModelProviderVendor,
   RuntimeLogLevel,
+  UpdateRuntimeLoggingSettings,
   ThinkingLevel,
 } from "./types";
 import "./SettingsPage.css";
 
 export const MODEL_GATEWAYS_QUERY_KEY = ["model-gateways"] as const;
-const RUNTIME_LOG_LEVEL_QUERY_KEY = ["runtime-log-level"] as const;
+const RUNTIME_LOGGING_SETTINGS_QUERY_KEY = ["runtime-logging-settings"] as const;
 const RECENT_REPOSITORY_SETTINGS_QUERY_KEY = ["recent-repository-settings"] as const;
 const INSTRUCTION_FILE_SETTINGS_QUERY_KEY = ["instruction-file-settings"] as const;
 const REVIEW_COMPLETION_SETTINGS_QUERY_KEY = ["review-completion-settings"] as const;
 const TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY = ["trigger-idempotency-settings"] as const;
-const DEFAULT_AGENT_TIMEOUT = 1800;
-const DEFAULT_MAX_AGENT_TURNS = 100;
-const DEFAULT_MAX_TOOL_CALLS = 300;
+const FILE_EXCLUSION_SETTINGS_QUERY_KEY = ["file-exclusion-settings"] as const;
+const DEFAULT_AGENT_TIMEOUT = 3600;
+const DEFAULT_MAX_AGENT_TURNS = 500;
+const DEFAULT_MAX_TOOL_CALLS = 500;
 const DEFAULT_MAX_IDENTICAL_TOOL_RESULTS = 3;
 const DEFAULT_TOOL_TIMEOUT_SECONDS = 30;
+const DEFAULT_MAX_RETRIES = 10;
+const DEFAULT_RETRY_BACKOFF_BASE = 1.0;
+const DEFAULT_RETRY_MAX_DELAY = 30.0;
+const DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD = 10;
+const BYTES_PER_KILOBYTE = 1024;
 
 export function SettingsPage() {
   const { t } = useI18n();
@@ -77,29 +86,35 @@ export function SettingsPage() {
   const [maxTokens, setMaxTokens] = useState(65536);
   const [thinkingLevel, setThinkingLevel] = useState<ThinkingLevel>("disabled");
   const [runtimeGatewayId, setRuntimeGatewayId] = useState("");
-  const [agentTimeoutDraft, setAgentTimeoutDraft] = useState("1800");
-  const [maxAgentTurnsDraft, setMaxAgentTurnsDraft] = useState("100");
-  const [maxToolCallsDraft, setMaxToolCallsDraft] = useState("300");
+  const [agentTimeoutDraft, setAgentTimeoutDraft] = useState("3600");
+  const [maxAgentTurnsDraft, setMaxAgentTurnsDraft] = useState("500");
+  const [maxToolCallsDraft, setMaxToolCallsDraft] = useState("500");
   const [maxIdenticalToolResultsDraft, setMaxIdenticalToolResultsDraft] = useState("3");
   const [toolTimeoutSecondsDraft, setToolTimeoutSecondsDraft] = useState("30");
+  const [maxRetriesDraft, setMaxRetriesDraft] = useState("10");
+  const [retryBackoffBaseDraft, setRetryBackoffBaseDraft] = useState("1");
+  const [retryMaxDelayDraft, setRetryMaxDelayDraft] = useState("30");
+  const [noProgressRoundsThresholdDraft, setNoProgressRoundsThresholdDraft] = useState("10");
   const [recentRepositoryLimitDraft, setRecentRepositoryLimitDraft] = useState("10");
   const [rootInstructionLimitDraft, setRootInstructionLimitDraft] = useState("500");
   const [nestedInstructionLimitDraft, setNestedInstructionLimitDraft] = useState("200");
   const [incompleteReviewRetryLimitDraft, setIncompleteReviewRetryLimitDraft] = useState("3");
   const [triggerIdempotencyEnabledDraft, setTriggerIdempotencyEnabledDraft] = useState(false);
   const [toolLimitsDraft, setToolLimitsDraft] = useState<ToolLimitsType | null>(null);
+  const [fileExclusionsDraft, setFileExclusionsDraft] =
+    useState<FileExclusionSettings | null>(null);
   const gatewayQuery = useQuery({
     queryKey: MODEL_GATEWAYS_QUERY_KEY,
     queryFn: listModelGateways,
   });
   const logLevelQuery = useQuery({
-    queryKey: RUNTIME_LOG_LEVEL_QUERY_KEY,
-    queryFn: getRuntimeLogLevel,
+    queryKey: RUNTIME_LOGGING_SETTINGS_QUERY_KEY,
+    queryFn: getRuntimeLoggingSettings,
   });
   const logLevelMutation = useMutation({
-    mutationFn: updateRuntimeLogLevel,
+    mutationFn: updateRuntimeLoggingSettings,
     onSuccess: (settings) => {
-      queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, settings);
+      queryClient.setQueryData(RUNTIME_LOGGING_SETTINGS_QUERY_KEY, settings);
     },
   });
   const recentRepositorySettingsQuery = useQuery({
@@ -170,17 +185,30 @@ export function SettingsPage() {
       setToolLimitsDraft(limits);
     },
   });
+  const fileExclusionsQuery = useQuery({
+    queryKey: FILE_EXCLUSION_SETTINGS_QUERY_KEY,
+    queryFn: getFileExclusionSettings,
+  });
+  const fileExclusionsMutation = useMutation({
+    mutationFn: updateFileExclusionSettings,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(FILE_EXCLUSION_SETTINGS_QUERY_KEY, settings);
+      setFileExclusionsDraft(settings);
+    },
+  });
   const resetAllMutation = useMutation({
     mutationFn: resetAllSettings,
     onSuccess: (response) => {
       queryClient.setQueryData(INSTRUCTION_FILE_SETTINGS_QUERY_KEY, response.instruction_files);
+      queryClient.setQueryData(FILE_EXCLUSION_SETTINGS_QUERY_KEY, response.file_exclusions);
       queryClient.setQueryData(REVIEW_COMPLETION_SETTINGS_QUERY_KEY, response.review_completion);
       queryClient.setQueryData(TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY, response.trigger_idempotency);
       queryClient.setQueryData(RECENT_REPOSITORY_SETTINGS_QUERY_KEY, response.recent_repositories);
       queryClient.setQueryData(["tool-limits"], response.tool_limits);
-      queryClient.setQueryData(RUNTIME_LOG_LEVEL_QUERY_KEY, response.logging);
+      queryClient.setQueryData(RUNTIME_LOGGING_SETTINGS_QUERY_KEY, response.logging);
       queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, response.model_gateways);
       setToolLimitsDraft(response.tool_limits);
+      setFileExclusionsDraft(response.file_exclusions);
       setRootInstructionLimitDraft(String(response.instruction_files.root_max_lines));
       setNestedInstructionLimitDraft(String(response.instruction_files.nested_max_lines));
       setIncompleteReviewRetryLimitDraft(String(response.review_completion.max_incomplete_review_retries));
@@ -222,6 +250,19 @@ export function SettingsPage() {
     setToolTimeoutSecondsDraft(
       String(runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS),
     );
+    setMaxRetriesDraft(String(runtimeGateway.max_retries ?? DEFAULT_MAX_RETRIES));
+    setRetryBackoffBaseDraft(
+      String(runtimeGateway.retry_backoff_base ?? DEFAULT_RETRY_BACKOFF_BASE),
+    );
+    setRetryMaxDelayDraft(
+      String(runtimeGateway.retry_max_delay ?? DEFAULT_RETRY_MAX_DELAY),
+    );
+    setNoProgressRoundsThresholdDraft(
+      String(
+        runtimeGateway.no_progress_rounds_threshold ??
+          DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD,
+      ),
+    );
   }, [runtimeGateway]);
 
   useEffect(() => {
@@ -243,6 +284,12 @@ export function SettingsPage() {
       setToolLimitsDraft(toolLimitsQuery.data);
     }
   }, [toolLimitsQuery.data]);
+
+  useEffect(() => {
+    if (fileExclusionsQuery.data !== undefined) {
+      setFileExclusionsDraft(fileExclusionsQuery.data);
+    }
+  }, [fileExclusionsQuery.data]);
 
   const updateCatalog = (catalog: ModelGatewayCatalog) => {
     queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, catalog);
@@ -274,6 +321,10 @@ export function SettingsPage() {
         max_tool_calls: DEFAULT_MAX_TOOL_CALLS,
         max_identical_tool_results: DEFAULT_MAX_IDENTICAL_TOOL_RESULTS,
         tool_timeout_seconds: DEFAULT_TOOL_TIMEOUT_SECONDS,
+        max_retries: DEFAULT_MAX_RETRIES,
+        retry_backoff_base: DEFAULT_RETRY_BACKOFF_BASE,
+        retry_max_delay: DEFAULT_RETRY_MAX_DELAY,
+        no_progress_rounds_threshold: DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD,
       };
       if (editingGatewayId === null) {
         return createModelGateway({ ...common, api_key: apiKey });
@@ -295,6 +346,18 @@ export function SettingsPage() {
         tool_timeout_seconds:
           gateways.find((gateway) => gateway.gateway_id === editingGatewayId)
             ?.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS,
+        max_retries:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.max_retries ??
+          DEFAULT_MAX_RETRIES,
+        retry_backoff_base:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.retry_backoff_base ??
+          DEFAULT_RETRY_BACKOFF_BASE,
+        retry_max_delay:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)?.retry_max_delay ??
+          DEFAULT_RETRY_MAX_DELAY,
+        no_progress_rounds_threshold:
+          gateways.find((gateway) => gateway.gateway_id === editingGatewayId)
+            ?.no_progress_rounds_threshold ?? DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD,
         ...(apiKey.trim() === "" ? {} : { api_key: apiKey }),
       });
     },
@@ -368,6 +431,10 @@ export function SettingsPage() {
   const parsedMaxToolCalls = Number(maxToolCallsDraft);
   const parsedMaxIdenticalToolResults = Number(maxIdenticalToolResultsDraft);
   const parsedToolTimeoutSeconds = Number(toolTimeoutSecondsDraft);
+  const parsedMaxRetries = Number(maxRetriesDraft);
+  const parsedRetryBackoffBase = Number(retryBackoffBaseDraft);
+  const parsedRetryMaxDelay = Number(retryMaxDelayDraft);
+  const parsedNoProgressRoundsThreshold = Number(noProgressRoundsThresholdDraft);
   const areExecutionLimitsValid =
     Number.isInteger(parsedAgentTimeout) &&
     parsedAgentTimeout >= 60 &&
@@ -383,7 +450,17 @@ export function SettingsPage() {
     parsedMaxIdenticalToolResults <= 20 &&
     Number.isInteger(parsedToolTimeoutSeconds) &&
     parsedToolTimeoutSeconds >= 1 &&
-    parsedToolTimeoutSeconds <= 300;
+    parsedToolTimeoutSeconds <= 300 &&
+    Number.isInteger(parsedMaxRetries) &&
+    parsedMaxRetries >= 0 &&
+    parsedMaxRetries <= 10 &&
+    parsedRetryBackoffBase >= 0.1 &&
+    parsedRetryBackoffBase <= 60 &&
+    parsedRetryMaxDelay >= 1 &&
+    parsedRetryMaxDelay <= 300 &&
+    Number.isInteger(parsedNoProgressRoundsThreshold) &&
+    parsedNoProgressRoundsThreshold >= 1 &&
+    parsedNoProgressRoundsThreshold <= 100;
   const areExecutionLimitsUnchanged =
     runtimeGateway !== undefined &&
     parsedAgentTimeout === (runtimeGateway.agent_timeout ?? DEFAULT_AGENT_TIMEOUT) &&
@@ -393,7 +470,14 @@ export function SettingsPage() {
     parsedMaxIdenticalToolResults ===
       (runtimeGateway.max_identical_tool_results ?? DEFAULT_MAX_IDENTICAL_TOOL_RESULTS) &&
     parsedToolTimeoutSeconds ===
-      (runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS);
+      (runtimeGateway.tool_timeout_seconds ?? DEFAULT_TOOL_TIMEOUT_SECONDS) &&
+    parsedMaxRetries === (runtimeGateway.max_retries ?? DEFAULT_MAX_RETRIES) &&
+    parsedRetryBackoffBase ===
+      (runtimeGateway.retry_backoff_base ?? DEFAULT_RETRY_BACKOFF_BASE) &&
+    parsedRetryMaxDelay === (runtimeGateway.retry_max_delay ?? DEFAULT_RETRY_MAX_DELAY) &&
+    parsedNoProgressRoundsThreshold ===
+      (runtimeGateway.no_progress_rounds_threshold ??
+        DEFAULT_NO_PROGRESS_ROUNDS_THRESHOLD);
 
   const executionLimitsMutation = useMutation({
     mutationFn: async () => {
@@ -413,6 +497,10 @@ export function SettingsPage() {
         max_tool_calls: parsedMaxToolCalls,
         max_identical_tool_results: parsedMaxIdenticalToolResults,
         tool_timeout_seconds: parsedToolTimeoutSeconds,
+        max_retries: parsedMaxRetries,
+        retry_backoff_base: parsedRetryBackoffBase,
+        retry_max_delay: parsedRetryMaxDelay,
+        no_progress_rounds_threshold: parsedNoProgressRoundsThreshold,
       });
     },
     onSuccess: updateCatalog,
@@ -425,11 +513,52 @@ export function SettingsPage() {
   const isIncompleteReviewRetryLimitUnchanged =
     parsedIncompleteReviewRetryLimit ===
     reviewCompletionSettingsQuery.data?.max_incomplete_review_retries;
+  const isTriggerIdempotencyUnchanged =
+    triggerIdempotencyEnabledDraft === triggerIdempotencySettingsQuery.data?.enabled;
+  const areReviewSettingsValid =
+    isRecentRepositoryLimitValid &&
+    areInstructionLimitsValid &&
+    isIncompleteReviewRetryLimitValid;
+  const areReviewSettingsUnchanged =
+    isRecentRepositoryLimitUnchanged &&
+    areInstructionLimitsUnchanged &&
+    isIncompleteReviewRetryLimitUnchanged &&
+    isTriggerIdempotencyUnchanged;
+  const areReviewSettingsPending =
+    recentRepositorySettingsQuery.isPending ||
+    instructionFileSettingsQuery.isPending ||
+    reviewCompletionSettingsQuery.isPending ||
+    triggerIdempotencySettingsQuery.isPending ||
+    recentRepositorySettingsMutation.isPending ||
+    instructionFileSettingsMutation.isPending ||
+    reviewCompletionSettingsMutation.isPending ||
+    triggerIdempotencySettingsMutation.isPending;
   const areToolLimitsValid = toolLimitsDraft !== null;
   const areToolLimitsUnchanged =
     toolLimitsDraft === null ||
     JSON.stringify(toolLimitsDraft) === JSON.stringify(toolLimitsQuery.data);
-
+  const normalizedFileExclusions =
+    fileExclusionsDraft === null
+      ? null
+      : {
+          suffixes: [...new Set(fileExclusionsDraft.suffixes.map((item) => item.trim()))].filter(
+            Boolean,
+          ),
+          path_regexes: [
+            ...new Set(fileExclusionsDraft.path_regexes.map((item) => item.trim())),
+          ].filter(Boolean),
+        };
+  let areFileExclusionsValid = normalizedFileExclusions !== null;
+  if (normalizedFileExclusions !== null) {
+    try {
+      normalizedFileExclusions.path_regexes.forEach((pattern) => new RegExp(pattern));
+    } catch {
+      areFileExclusionsValid = false;
+    }
+  }
+  const areFileExclusionsUnchanged =
+    normalizedFileExclusions === null ||
+    JSON.stringify(normalizedFileExclusions) === JSON.stringify(fileExclusionsQuery.data);
   function handleEdit(gateway: ModelGateway) {
     setEditingGatewayId(gateway.gateway_id);
     setName(gateway.name);
@@ -441,6 +570,28 @@ export function SettingsPage() {
     setMaxTokens(gateway.max_tokens);
     setThinkingLevel(gateway.thinking_level);
     setShowGatewayModal(true);
+  }
+
+  function handleSaveReviewSettings() {
+    if (!isRecentRepositoryLimitUnchanged) {
+      recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit);
+    }
+    if (!areInstructionLimitsUnchanged) {
+      instructionFileSettingsMutation.mutate({
+        root_max_lines: parsedRootInstructionLimit,
+        nested_max_lines: parsedNestedInstructionLimit,
+      });
+    }
+    if (!isIncompleteReviewRetryLimitUnchanged) {
+      reviewCompletionSettingsMutation.mutate({
+        max_incomplete_review_retries: parsedIncompleteReviewRetryLimit,
+      });
+    }
+    if (!isTriggerIdempotencyUnchanged) {
+      triggerIdempotencySettingsMutation.mutate({
+        enabled: triggerIdempotencyEnabledDraft,
+      });
+    }
   }
 
   function handleAddGateway() {
@@ -490,6 +641,7 @@ export function SettingsPage() {
           <h1>{t("settings.title")}</h1>
           <p>{t("settings.subtitle")}</p>
         </div>
+        <a className="settings-profile-link" href="/settings/review-profiles">{t("settings.reviewProfiles")}</a>
         <div
           className={gateways.length > 0 ? "provider-state provider-state--ready" : "provider-state"}
           aria-live="polite"
@@ -753,6 +905,64 @@ export function SettingsPage() {
                   onChange={(event) => setToolTimeoutSecondsDraft(event.currentTarget.value)}
                 />
               </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.maxRetries")}</span>
+                <input
+                  aria-label={t("settings.maxRetries")}
+                  disabled={runtimeGateway === undefined}
+                  min={0}
+                  max={10}
+                  step={1}
+                  type="number"
+                  value={maxRetriesDraft}
+                  onChange={(event) => setMaxRetriesDraft(event.currentTarget.value)}
+                />
+                <small>{t("settings.maxRetriesHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.retryBackoffBase")}</span>
+                <input
+                  aria-label={t("settings.retryBackoffBase")}
+                  disabled={runtimeGateway === undefined}
+                  min={0.1}
+                  max={60}
+                  step={0.1}
+                  type="number"
+                  value={retryBackoffBaseDraft}
+                  onChange={(event) => setRetryBackoffBaseDraft(event.currentTarget.value)}
+                />
+                <small>{t("settings.retryBackoffBaseHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.retryMaxDelay")}</span>
+                <input
+                  aria-label={t("settings.retryMaxDelay")}
+                  disabled={runtimeGateway === undefined}
+                  min={1}
+                  max={300}
+                  step={1}
+                  type="number"
+                  value={retryMaxDelayDraft}
+                  onChange={(event) => setRetryMaxDelayDraft(event.currentTarget.value)}
+                />
+                <small>{t("settings.retryMaxDelayHint")}</small>
+              </label>
+              <label className="settings-field">
+                <span className="settings-field__label">{t("settings.noProgressRoundsThreshold")}</span>
+                <input
+                  aria-label={t("settings.noProgressRoundsThreshold")}
+                  disabled={runtimeGateway === undefined}
+                  min={1}
+                  max={100}
+                  step={1}
+                  type="number"
+                  value={noProgressRoundsThresholdDraft}
+                  onChange={(event) =>
+                    setNoProgressRoundsThresholdDraft(event.currentTarget.value)
+                  }
+                />
+                <small>{t("settings.noProgressRoundsThresholdHint")}</small>
+              </label>
             </div>
             <div className="settings-panel__actions">
               <button
@@ -791,23 +1001,6 @@ export function SettingsPage() {
                   onChange={(event) => setRecentRepositoryLimitDraft(event.currentTarget.value)}
                 />
                 <small>{t("settings.recentRepositoryLimitHint")}</small>
-                <div style={{ marginTop: "8px" }}>
-                  <button
-                    aria-label={t("settings.saveRecentRepositoryLimit")}
-                    className="settings-panel__save-button"
-                    disabled={
-                      recentRepositorySettingsMutation.isPending ||
-                      !isRecentRepositoryLimitValid ||
-                      isRecentRepositoryLimitUnchanged
-                    }
-                    type="button"
-                    onClick={() =>
-                      recentRepositorySettingsMutation.mutate(parsedRecentRepositoryLimit)
-                    }
-                  >
-                    <Check aria-hidden="true" />
-                  </button>
-                </div>
               </div>
 
               <label className="settings-field">
@@ -861,82 +1054,106 @@ export function SettingsPage() {
                   }
                 />
                 <small>{t("settings.incompleteReviewRetryLimitHint")}</small>
-                <div style={{ marginTop: "8px" }}>
-                  <button
-                    aria-label={t("settings.saveReviewCompletion")}
-                    className="settings-panel__save-button"
-                    disabled={
-                      reviewCompletionSettingsMutation.isPending ||
-                      !isIncompleteReviewRetryLimitValid ||
-                      isIncompleteReviewRetryLimitUnchanged
-                    }
-                    type="button"
-                    onClick={() =>
-                      reviewCompletionSettingsMutation.mutate({
-                        max_incomplete_review_retries: parsedIncompleteReviewRetryLimit,
-                      })
-                    }
-                  >
-                    <Check aria-hidden="true" />
-                  </button>
-                </div>
               </div>
 
-              <div className="settings-field">
-                <label className="settings-field__label">
+              <label className="settings-field settings-field--checkbox">
+                <span>
                   <input
+                    aria-label={t("settings.triggerIdempotency")}
                     type="checkbox"
                     checked={triggerIdempotencyEnabledDraft}
                     onChange={(event) =>
                       setTriggerIdempotencyEnabledDraft(event.currentTarget.checked)
                     }
                     disabled={triggerIdempotencySettingsQuery.isPending}
-                    style={{ marginRight: "8px" }}
                   />
                   {t("settings.triggerIdempotency")}
-                </label>
+                </span>
                 <small>{t("settings.triggerIdempotencyHint")}</small>
-                <div style={{ marginTop: "8px" }}>
-                  <button
-                    aria-label={t("settings.saveTriggerIdempotency")}
-                    className="settings-panel__save-button"
-                    disabled={
-                      triggerIdempotencySettingsMutation.isPending ||
-                      triggerIdempotencyEnabledDraft === triggerIdempotencySettingsQuery.data?.enabled
-                    }
-                    type="button"
-                    onClick={() =>
-                      triggerIdempotencySettingsMutation.mutate({
-                        enabled: triggerIdempotencyEnabledDraft,
-                      })
-                    }
-                  >
-                    <Check aria-hidden="true" />
-                  </button>
-                </div>
-              </div>
+              </label>
             </div>
             <div className="settings-panel__actions">
               <button
                 className="settings-panel__save-button"
                 disabled={
-                  instructionFileSettingsMutation.isPending ||
-                  !areInstructionLimitsValid ||
-                  areInstructionLimitsUnchanged
+                  areReviewSettingsPending ||
+                  !areReviewSettingsValid ||
+                  areReviewSettingsUnchanged
                 }
                 type="button"
-                onClick={() =>
-                  instructionFileSettingsMutation.mutate({
-                    root_max_lines: parsedRootInstructionLimit,
-                    nested_max_lines: parsedNestedInstructionLimit,
-                  })
-                }
+                onClick={handleSaveReviewSettings}
               >
                 <Check aria-hidden="true" />
-                {t("settings.saveInstructionLimits")}
+                {t("settings.saveReviewSettings")}
               </button>
             </div>
           </section>
+
+          {fileExclusionsDraft !== null && (
+            <section className="settings-panel">
+              <header className="settings-panel__header">
+                <SlidersHorizontal className="settings-panel__icon" aria-hidden="true" />
+                <h2 className="settings-panel__title">{t("settings.fileExclusions")}</h2>
+              </header>
+              <div className="settings-panel__grid">
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.excludedSuffixes")}</span>
+                  <textarea
+                    aria-label={t("settings.excludedSuffixes")}
+                    rows={5}
+                    value={fileExclusionsDraft.suffixes.join("\n")}
+                    onChange={(event) =>
+                      setFileExclusionsDraft({
+                        ...fileExclusionsDraft,
+                        suffixes: event.currentTarget.value.split("\n"),
+                      })
+                    }
+                  />
+                  <small>{t("settings.excludedSuffixesHint")}</small>
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.excludedPathRegexes")}</span>
+                  <textarea
+                    aria-label={t("settings.excludedPathRegexes")}
+                    rows={5}
+                    value={fileExclusionsDraft.path_regexes.join("\n")}
+                    onChange={(event) =>
+                      setFileExclusionsDraft({
+                        ...fileExclusionsDraft,
+                        path_regexes: event.currentTarget.value.split("\n"),
+                      })
+                    }
+                  />
+                  <small>{t("settings.excludedPathRegexesHint")}</small>
+                </label>
+              </div>
+              {!areFileExclusionsValid ? (
+                <p role="alert">{t("settings.invalidFileExclusionRegex")}</p>
+              ) : null}
+              {fileExclusionsMutation.error !== null ? (
+                <p role="alert">{fileExclusionsMutation.error.message}</p>
+              ) : null}
+              <div className="settings-panel__actions">
+                <button
+                  className="settings-panel__save-button"
+                  disabled={
+                    fileExclusionsMutation.isPending ||
+                    !areFileExclusionsValid ||
+                    areFileExclusionsUnchanged
+                  }
+                  type="button"
+                  onClick={() => {
+                    if (normalizedFileExclusions !== null) {
+                      fileExclusionsMutation.mutate(normalizedFileExclusions);
+                    }
+                  }}
+                >
+                  <Check aria-hidden="true" />
+                  {t("settings.saveFileExclusions")}
+                </button>
+              </div>
+            </section>
+          )}
 
           {/* Tool Limits Panel */}
           {toolLimitsDraft !== null && (
@@ -965,11 +1182,11 @@ export function SettingsPage() {
                   <span className="settings-field__label">{t("settings.maxReadBytes")}</span>
                   <input
                     type="number"
-                    min={1024}
-                    max={10485760}
-                    value={toolLimitsDraft.max_read_bytes}
+                    min={1}
+                    max={10240}
+                    value={toolLimitsDraft.max_read_bytes / BYTES_PER_KILOBYTE}
                     onChange={(e) =>
-                      setToolLimitsDraft({ ...toolLimitsDraft, max_read_bytes: Number(e.currentTarget.value) })
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_read_bytes: Number(e.currentTarget.value) * BYTES_PER_KILOBYTE })
                     }
                   />
                 </label>
@@ -977,11 +1194,11 @@ export function SettingsPage() {
                   <span className="settings-field__label">{t("settings.maxScanBytes")}</span>
                   <input
                     type="number"
-                    min={1024}
-                    max={104857600}
-                    value={toolLimitsDraft.max_scan_bytes}
+                    min={1}
+                    max={102400}
+                    value={toolLimitsDraft.max_scan_bytes / BYTES_PER_KILOBYTE}
                     onChange={(e) =>
-                      setToolLimitsDraft({ ...toolLimitsDraft, max_scan_bytes: Number(e.currentTarget.value) })
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_scan_bytes: Number(e.currentTarget.value) * BYTES_PER_KILOBYTE })
                     }
                   />
                 </label>
@@ -989,11 +1206,11 @@ export function SettingsPage() {
                   <span className="settings-field__label">{t("settings.maxSourceBytes")}</span>
                   <input
                     type="number"
-                    min={1024}
-                    max={104857600}
-                    value={toolLimitsDraft.max_source_bytes}
+                    min={1}
+                    max={102400}
+                    value={toolLimitsDraft.max_source_bytes / BYTES_PER_KILOBYTE}
                     onChange={(e) =>
-                      setToolLimitsDraft({ ...toolLimitsDraft, max_source_bytes: Number(e.currentTarget.value) })
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_source_bytes: Number(e.currentTarget.value) * BYTES_PER_KILOBYTE })
                     }
                   />
                 </label>
@@ -1059,18 +1276,6 @@ export function SettingsPage() {
                   />
                 </label>
                 <label className="settings-field">
-                  <span className="settings-field__label">{t("settings.reviewedFilesBatch")}</span>
-                  <input
-                    type="number"
-                    min={1}
-                    max={10000}
-                    value={toolLimitsDraft.reviewed_files_batch}
-                    onChange={(e) =>
-                      setToolLimitsDraft({ ...toolLimitsDraft, reviewed_files_batch: Number(e.currentTarget.value) })
-                    }
-                  />
-                </label>
-                <label className="settings-field">
                   <span className="settings-field__label">{t("settings.shortTextMax")}</span>
                   <input
                     type="number"
@@ -1103,6 +1308,123 @@ export function SettingsPage() {
                     value={toolLimitsDraft.task_summary_max}
                     onChange={(e) =>
                       setToolLimitsDraft({ ...toolLimitsDraft, task_summary_max: Number(e.currentTarget.value) })
+                    }
+                  />
+                </label>
+                <label className="settings-field settings-field--toggle">
+                  <span className="settings-field__label">{t("settings.contextCompactionEnabled")}</span>
+                  <input
+                    aria-label={t("settings.contextCompactionEnabled")}
+                    className="settings-field__checkbox"
+                    type="checkbox"
+                    checked={toolLimitsDraft.context_compaction_enabled}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_enabled: event.currentTarget.checked,
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionTriggerTokens")}</span>
+                  <input
+                    type="number"
+                    min={512}
+                    max={500000}
+                    step={500}
+                    value={toolLimitsDraft.context_compaction_trigger_tokens}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_trigger_tokens:
+                          Number(event.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionKeepRecent")}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={100}
+                    value={toolLimitsDraft.context_compaction_keep_recent_evidence_results}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_keep_recent_evidence_results: Number(
+                          event.currentTarget.value,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionMaxRetries")}</span>
+                  <input
+                    type="number"
+                    min={0}
+                    max={10}
+                    value={toolLimitsDraft.context_compaction_max_retries}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_max_retries: Number(event.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionRetryBackoffBase")}</span>
+                  <input
+                    type="number"
+                    min={0.1}
+                    max={60}
+                    step={0.1}
+                    value={toolLimitsDraft.context_compaction_retry_backoff_base}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_retry_backoff_base: Number(
+                          event.currentTarget.value,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionRetryMaxDelay")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={300}
+                    step={1}
+                    value={toolLimitsDraft.context_compaction_retry_max_delay}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_retry_max_delay: Number(
+                          event.currentTarget.value,
+                        ),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.contextCompactionMaxConsecutiveFailures")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={10}
+                    value={toolLimitsDraft.context_compaction_max_consecutive_failures}
+                    onChange={(event) =>
+                      setToolLimitsDraft({
+                        ...toolLimitsDraft,
+                        context_compaction_max_consecutive_failures: Number(
+                          event.currentTarget.value,
+                        ),
+                      })
                     }
                   />
                 </label>
@@ -1142,15 +1464,41 @@ export function SettingsPage() {
                   aria-label={t("settings.runtimeLogLevel")}
                   disabled={logLevelQuery.isPending || logLevelMutation.isPending}
                   value={logLevelQuery.data?.level ?? "info"}
-                  onChange={(event) =>
-                    logLevelMutation.mutate(event.currentTarget.value as RuntimeLogLevel)
-                  }
+                  onChange={(event) => {
+                    if (logLevelQuery.data !== undefined) {
+                      const settings: UpdateRuntimeLoggingSettings = {
+                        level: event.currentTarget.value as RuntimeLogLevel,
+                        model_output_enabled: logLevelQuery.data.model_output_enabled,
+                      };
+                      logLevelMutation.mutate(settings);
+                    }
+                  }}
                 >
                   <option value="debug">{t("settings.logDebug")}</option>
                   <option value="info">{t("settings.logInfo")}</option>
                   <option value="warning">{t("settings.logWarning")}</option>
                   <option value="error">{t("settings.logError")}</option>
                 </select>
+              </label>
+              <label className="settings-field settings-field--inline">
+                <input
+                  aria-label={t("settings.modelOutputLogging")}
+                  checked={logLevelQuery.data?.model_output_enabled ?? true}
+                  disabled={logLevelQuery.isPending || logLevelMutation.isPending}
+                  type="checkbox"
+                  onChange={(event) => {
+                    if (logLevelQuery.data !== undefined) {
+                      const settings: UpdateRuntimeLoggingSettings = {
+                        level: logLevelQuery.data.level,
+                        model_output_enabled: event.currentTarget.checked,
+                      };
+                      logLevelMutation.mutate(settings);
+                    }
+                  }}
+                />
+                <span className="settings-field__label">
+                  {t("settings.modelOutputLogging")}
+                </span>
               </label>
             </div>
             <div className="settings-panel__actions">
@@ -1189,6 +1537,7 @@ export function SettingsPage() {
                     <option value="openai">OpenAI</option>
                     <option value="deepseek">DeepSeek</option>
                     <option value="zhipu">智谱 AI</option>
+                    <option value="qwen">通义千问</option>
                   </select>
                 </label>
                 <label className="settings-field">

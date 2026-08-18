@@ -6,6 +6,10 @@ from pathlib import Path
 from fastapi import Request
 
 from codelens.bootstrap.settings import Settings
+from codelens.bootstrap.web_settings_defaults import (
+    WebSettingsDefaults,
+    load_web_settings_defaults,
+)
 from codelens.instruction_policy.application.settings import InstructionSettingsService
 from codelens.instruction_policy.infrastructure.file_settings import (
     FilesystemInstructionLineLimitsStore,
@@ -33,6 +37,14 @@ from codelens.review.application.commands import (
     RetryReviewHandler,
     UpdateRecentRepositorySettingsHandler,
 )
+from codelens.review.application.review_profiles import (
+    CopyReviewProfileHandler,
+    CreateReviewProfileHandler,
+    DeleteReviewProfileHandler,
+    ListReviewProfilesHandler,
+    SetDefaultReviewProfileHandler,
+    UpdateReviewProfileHandler,
+)
 from codelens.review.application.settings import (
     ReviewCompletionSettingsService,
     TriggerIdempotencySettingsService,
@@ -47,9 +59,13 @@ from codelens.review.infrastructure.file_settings import (
 )
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.repositories import (
+    SqlCheckpointStore,
     SqlEventOutbox,
     SqlRecentRepositoryStore,
+    SqlReviewPlanStore,
+    SqlReviewProfileRepository,
     SqlReviewStore,
+    SqlVerdictStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.transcripts import (
@@ -75,9 +91,16 @@ from codelens.trigger.application.review_creator_adapter import (
 )
 from codelens.workspace.application.browse_directories import BrowseDirectoriesService
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
+from codelens.workspace.application.file_exclusion_settings import (
+    FileExclusionPolicyService,
+)
 from codelens.workspace.application.inspect_repository import RepositoryInspector
 from codelens.workspace.application.plan_scope import ScopePlanner
 from codelens.workspace.application.repository_catalog import RepositoryCatalogService
+from codelens.workspace.infrastructure.file_exclusion_settings import (
+    FilesystemFileExclusionPolicySource,
+    FilesystemFileExclusionPolicyStore,
+)
 from codelens.workspace.infrastructure.filesystem_browser import LocalFilesystemBrowserAdapter
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.git_overlay import GitReviewInputCaptureAdapter
@@ -98,6 +121,7 @@ class HttpComponents:
     """Hold interface dependencies while keeping construction at the outermost layer."""
 
     settings: Settings
+    web_settings_defaults: WebSettingsDefaults
     database: Database
     repository_inspector: RepositoryInspector
     repository_catalog: RepositoryCatalogService
@@ -109,16 +133,26 @@ class HttpComponents:
     delete_recent_repository: DeleteRecentRepositoryHandler
     get_recent_repository_settings: GetRecentRepositorySettingsHandler
     update_recent_repository_settings: UpdateRecentRepositorySettingsHandler
+    create_review_profile: CreateReviewProfileHandler
+    update_review_profile: UpdateReviewProfileHandler
+    copy_review_profile: CopyReviewProfileHandler
+    delete_review_profile: DeleteReviewProfileHandler
+    set_default_review_profile: SetDefaultReviewProfileHandler
+    list_review_profiles: ListReviewProfilesHandler
     instruction_settings: InstructionSettingsService
     review_completion_settings: ReviewCompletionSettingsService
     trigger_idempotency_settings: TriggerIdempotencySettingsService
     tool_limits: ToolLimitsService
+    file_exclusion_settings: FileExclusionPolicyService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
     retry_review: RetryReviewHandler
     events: SqlEventOutbox
     event_bus: InMemoryEventBus
     review_store: SqlReviewStore
+    review_plan_store: SqlReviewPlanStore
+    checkpoints: SqlCheckpointStore
+    verdict_store: SqlVerdictStore
     input_artifacts: FilesystemInputArtifactStore
     model_gateways: ModelGatewaySettingsService
     reviewer_prompts: ReviewerPromptSettingsService
@@ -136,7 +170,11 @@ class HttpComponents:
         """Create contained runtime directories and apply migrations before serving."""
 
         await asyncio.to_thread(self.settings.data_dir.mkdir, parents=True, exist_ok=True)
-        await self.database.migrate()
+        database_was_created = await self.database.migrate()
+        if database_was_created:
+            await self.update_recent_repository_settings.handle(
+                self.web_settings_defaults.recent_repository_limit
+            )
         references = await self.review_store.list_input_artifact_references()
         await self.input_artifacts.prune_orphans(references)
 
@@ -149,6 +187,9 @@ class HttpComponents:
 def build_components(settings: Settings) -> HttpComponents:
     """Compose application services with concrete outer adapters."""
 
+    web_settings_defaults = load_web_settings_defaults(
+        settings.web_settings_defaults_config
+    )
     database = Database(settings.resolved_database_url)
     event_bus = InMemoryEventBus()
     git = GitCli()
@@ -161,6 +202,7 @@ def build_components(settings: Settings) -> HttpComponents:
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     review_store = SqlReviewStore(database, event_bus=event_bus)
     recent_repository_store = SqlRecentRepositoryStore(database)
+    review_profile_repository = SqlReviewProfileRepository(database)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
     worktree_manager = GitReviewWorktreeManager(
         data_dir=settings.data_dir,
@@ -169,14 +211,32 @@ def build_components(settings: Settings) -> HttpComponents:
         locks=RepositoryLockRegistry(),
     )
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
-    instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
+    instruction_line_limits = FilesystemInstructionLineLimitsStore(
+        settings.data_dir, web_settings_defaults.instruction_files
+    )
     review_completion_settings = ReviewCompletionSettingsService(
-        FilesystemReviewCompletionSettingsStore(settings.data_dir)
+        FilesystemReviewCompletionSettingsStore(
+            settings.data_dir, web_settings_defaults.review_completion
+        )
     )
     trigger_idempotency_settings = TriggerIdempotencySettingsService(
-        FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
+        FilesystemTriggerIdempotencySettingsStore(
+            settings.data_dir, web_settings_defaults.trigger_idempotency
+        )
     )
-    tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
+    tool_limits = ToolLimitsService(
+        FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
+    )
+    file_exclusion_source = FilesystemFileExclusionPolicySource(
+        settings.file_exclusion_config
+    )
+    file_exclusion_source.get_policy()
+    file_exclusion_settings = FileExclusionPolicyService(
+        file_exclusion_source,
+        FilesystemFileExclusionPolicyStore(
+            settings.data_dir, web_settings_defaults.file_exclusions
+        ),
+    )
     transcripts = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(transcripts)
     plugins_dir = settings.data_dir / "plugins"
@@ -184,9 +244,7 @@ def build_components(settings: Settings) -> HttpComponents:
     plugin_store = FilesystemPluginStore(settings.data_dir)
     plugin_installer = GitPluginInstaller(git, plugins_dir)
     plugin_loader = CompositePluginLoader()
-    plugin_manager = PluginManager(
-        plugin_store, plugin_installer, plugins_dir, plugin_loader
-    )
+    plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir, plugin_loader)
     export_history = SqliteExportHistoryStore(settings.data_dir / "codelens.sqlite3")
     export_orchestrator = ExportOrchestrator(
         review_store,
@@ -194,6 +252,8 @@ def build_components(settings: Settings) -> HttpComponents:
         plugin_store,
         plugin_loader,
         export_history,
+        SqlReviewPlanStore(database),
+        SqlCheckpointStore(database),
     )
 
     async def _terminal_export_hook(task_id: str, _status: str) -> None:
@@ -210,14 +270,16 @@ def build_components(settings: Settings) -> HttpComponents:
     )
     review_creator_adapter = ReviewCreatorAdapter(
         CreateReviewHandler(
-            planner, capture, review_store, input_artifacts,
-            idempotency_settings=trigger_idempotency_settings
+            planner,
+            capture,
+            review_store,
+            input_artifacts,
+            idempotency_settings=trigger_idempotency_settings,
+            file_exclusion_settings=file_exclusion_settings,
         ),
         repository_inspector,
     )
-    trigger_orchestrator = TriggerOrchestrator(
-        plugin_store, review_creator_adapter, plugin_loader
-    )
+    trigger_orchestrator = TriggerOrchestrator(plugin_store, review_creator_adapter, plugin_loader)
     trigger_hooks = TriggerHookService(
         plugin_manager,
         hook_installer,
@@ -227,6 +289,7 @@ def build_components(settings: Settings) -> HttpComponents:
 
     return HttpComponents(
         settings=settings,
+        web_settings_defaults=web_settings_defaults,
         database=database,
         repository_inspector=repository_inspector,
         repository_catalog=RepositoryCatalogService(
@@ -234,7 +297,13 @@ def build_components(settings: Settings) -> HttpComponents:
             GitRepositoryCatalogAdapter(git),
         ),
         directory_browser=BrowseDirectoriesService(LocalFilesystemBrowserAdapter()),
-        create_review=CreateReviewHandler(planner, capture, review_store, input_artifacts),
+        create_review=CreateReviewHandler(
+            planner,
+            capture,
+            review_store,
+            input_artifacts,
+            file_exclusion_settings=file_exclusion_settings,
+        ),
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
         list_recent_repositories=ListRecentRepositoriesHandler(recent_repository_store),
@@ -243,10 +312,17 @@ def build_components(settings: Settings) -> HttpComponents:
         update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
             recent_repository_store
         ),
+        create_review_profile=CreateReviewProfileHandler(review_profile_repository),
+        update_review_profile=UpdateReviewProfileHandler(review_profile_repository),
+        copy_review_profile=CopyReviewProfileHandler(review_profile_repository),
+        delete_review_profile=DeleteReviewProfileHandler(review_profile_repository),
+        set_default_review_profile=SetDefaultReviewProfileHandler(review_profile_repository),
+        list_review_profiles=ListReviewProfilesHandler(review_profile_repository),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
         review_completion_settings=review_completion_settings,
         trigger_idempotency_settings=trigger_idempotency_settings,
         tool_limits=tool_limits,
+        file_exclusion_settings=file_exclusion_settings,
         delete_review=DeleteReviewHandler(
             review_store,
             worktree_registry,
@@ -257,6 +333,9 @@ def build_components(settings: Settings) -> HttpComponents:
         events=SqlEventOutbox(database, event_bus=event_bus),
         event_bus=event_bus,
         review_store=review_store,
+        review_plan_store=SqlReviewPlanStore(database),
+        checkpoints=SqlCheckpointStore(database),
+        verdict_store=SqlVerdictStore(database),
         input_artifacts=input_artifacts,
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()
@@ -266,7 +345,7 @@ def build_components(settings: Settings) -> HttpComponents:
         ),
         transcripts=transcripts,
         worker_transcripts=worker_transcripts,
-        finding_source_preview=FindingSourcePreviewService(review_store, git),
+        finding_source_preview=FindingSourcePreviewService(review_store, git, input_artifacts, git),
         plugin_manager=plugin_manager,
         export_orchestrator=export_orchestrator,
         export_history=export_history,

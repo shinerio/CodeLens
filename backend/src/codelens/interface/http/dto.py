@@ -14,8 +14,15 @@ from pydantic import (
     model_validator,
 )
 
+from codelens.findings.domain.existing_findings import ExistingFinding, ExistingFindingSet
 from codelens.review.application.process_report import ReviewProcessReport
 from codelens.review.domain.ports import RecentRepositoryRecord, ReviewRecord
+from codelens.review.domain.review_profile import ReviewProfile
+from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
+    FixedReviewerSelection,
+    ReviewProfileSnapshot,
+)
 from codelens.workspace.domain.models import (
     BranchScope,
     CommitScope,
@@ -30,6 +37,86 @@ class StrictDto(BaseModel):
     """Reject unknown public fields so clients cannot inject internal identifiers."""
 
     model_config = ConfigDict(extra="forbid")
+
+
+class AdaptiveReviewerSelectionDto(StrictDto):
+    mode: Literal["adaptive"]
+
+
+class FixedReviewerSelectionDto(StrictDto):
+    mode: Literal["fixed"]
+    reviewer_versions: Annotated[
+        list[
+            Annotated[
+                str,
+                StringConstraints(pattern=r"^[a-z][a-z0-9_.-]*:v2$"),
+            ]
+        ],
+        Field(min_length=1),
+    ]
+
+    @model_validator(mode="after")
+    def validate_reviewer_team(self) -> "FixedReviewerSelectionDto":
+        """Reject duplicate, non-v2, and General team combinations."""
+
+        if len(self.reviewer_versions) != len(set(self.reviewer_versions)):
+            raise ValueError("reviewer_versions must be unique")
+        if "general:v2" in self.reviewer_versions and self.reviewer_versions != ["general:v2"]:
+            raise ValueError("general:v2 must run alone")
+        return self
+
+
+type ReviewerSelectionDto = Annotated[
+    AdaptiveReviewerSelectionDto | FixedReviewerSelectionDto,
+    Field(discriminator="mode"),
+]
+
+
+class CreateReviewProfileRequest(StrictDto):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+    is_default: bool = False
+    reviewer_selection: ReviewerSelectionDto
+
+
+class UpdateReviewProfileRequest(CreateReviewProfileRequest):
+    revision: Annotated[int, Field(ge=1)]
+
+
+class CopyReviewProfileRequest(StrictDto):
+    name: Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=120)]
+
+
+class ReviewProfileResponse(StrictDto):
+    profile_id: str
+    revision: int
+    name: str
+    is_default: bool
+    reviewer_selection: ReviewerSelectionDto
+    created_at: datetime
+    updated_at: datetime
+
+    @classmethod
+    def from_domain(cls, profile: ReviewProfile) -> "ReviewProfileResponse":
+        """Project a profile without exposing its persistence representation."""
+
+        selection: AdaptiveReviewerSelectionDto | FixedReviewerSelectionDto
+        if isinstance(profile.reviewer_selection, AdaptiveReviewerSelection):
+            selection = AdaptiveReviewerSelectionDto(mode="adaptive")
+        else:
+            assert isinstance(profile.reviewer_selection, FixedReviewerSelection)
+            selection = FixedReviewerSelectionDto(
+                mode="fixed",
+                reviewer_versions=list(profile.reviewer_selection.reviewer_versions),
+            )
+        return cls(
+            profile_id=profile.profile_id,
+            revision=profile.revision,
+            name=profile.name,
+            is_default=profile.is_default,
+            reviewer_selection=selection,
+            created_at=profile.created_at,
+            updated_at=profile.updated_at,
+        )
 
 
 class PinnedSourceVersionResponse(StrictDto):
@@ -47,12 +134,15 @@ class FindingSourcePreviewResponse(StrictDto):
     highlight_end_line: int
 
 
-class RuntimeLogLevelResponse(StrictDto):
+class RuntimeLoggingSettingsResponse(StrictDto):
+    default_level: Literal["debug", "info", "warning", "error"]
     level: Literal["debug", "info", "warning", "error"]
+    model_output_enabled: bool
 
 
-class UpdateRuntimeLogLevelRequest(RuntimeLogLevelResponse):
-    pass
+class UpdateRuntimeLoggingSettingsRequest(StrictDto):
+    level: Literal["debug", "info", "warning", "error"]
+    model_output_enabled: bool
 
 
 class RecentRepositorySettingsResponse(StrictDto):
@@ -106,10 +196,16 @@ class ToolLimitsResponse(StrictDto):
     max_pattern_chars: Annotated[int, Field(ge=64, le=4096)]
     regex_timeout_seconds: Annotated[float, Field(ge=1.0, le=300.0)]
     comment_batch_size: Annotated[int, Field(ge=1, le=100)]
-    reviewed_files_batch: Annotated[int, Field(ge=1, le=10_000)]
     short_text_max: Annotated[int, Field(ge=64, le=2048)]
     long_text_max: Annotated[int, Field(ge=256, le=64_000)]
     task_summary_max: Annotated[int, Field(ge=256, le=64_000)]
+    context_compaction_enabled: bool
+    context_compaction_trigger_tokens: Annotated[int, Field(ge=512, le=500000)]
+    context_compaction_keep_recent_evidence_results: Annotated[int, Field(ge=0, le=100)]
+    context_compaction_max_retries: Annotated[int, Field(ge=0, le=10)]
+    context_compaction_retry_backoff_base: Annotated[float, Field(ge=0.1, le=60.0)]
+    context_compaction_retry_max_delay: Annotated[float, Field(ge=1.0, le=300.0)]
+    context_compaction_max_consecutive_failures: Annotated[int, Field(ge=1, le=10)]
 
 
 class UpdateToolLimitsRequest(StrictDto):
@@ -124,10 +220,40 @@ class UpdateToolLimitsRequest(StrictDto):
     max_pattern_chars: Annotated[int | None, Field(ge=64, le=4096)] = None
     regex_timeout_seconds: Annotated[float | None, Field(ge=1.0, le=300.0)] = None
     comment_batch_size: Annotated[int | None, Field(ge=1, le=100)] = None
-    reviewed_files_batch: Annotated[int | None, Field(ge=1, le=10_000)] = None
     short_text_max: Annotated[int | None, Field(ge=64, le=2048)] = None
     long_text_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
     task_summary_max: Annotated[int | None, Field(ge=256, le=64_000)] = None
+    context_compaction_enabled: bool | None = None
+    context_compaction_trigger_tokens: Annotated[
+        int | None, Field(ge=512, le=500000)
+    ] = None
+    context_compaction_keep_recent_evidence_results: Annotated[int | None, Field(ge=0, le=100)] = (
+        None
+    )
+    context_compaction_max_retries: Annotated[int | None, Field(ge=0, le=10)] = None
+    context_compaction_retry_backoff_base: Annotated[
+        float | None, Field(ge=0.1, le=60.0)
+    ] = None
+    context_compaction_retry_max_delay: Annotated[
+        float | None, Field(ge=1.0, le=300.0)
+    ] = None
+    context_compaction_max_consecutive_failures: Annotated[
+        int | None, Field(ge=1, le=10)
+    ] = None
+
+
+class FileExclusionSettingsResponse(StrictDto):
+    """Expose the Web-managed overlay for subsequent Review tasks."""
+
+    suffixes: Annotated[list[str], Field(max_length=128)]
+    path_regexes: Annotated[list[str], Field(max_length=128)]
+
+
+class UpdateFileExclusionSettingsRequest(StrictDto):
+    """Accept an atomic partial replacement of the Web-managed overlay."""
+
+    suffixes: Annotated[list[str] | None, Field(max_length=128)] = None
+    path_regexes: Annotated[list[str] | None, Field(max_length=128)] = None
 
 
 RefLabel = Annotated[str, StringConstraints(min_length=1, max_length=512)]
@@ -271,11 +397,12 @@ class RepositoryCommitResponse(StrictDto):
 
 
 class RepositoryCatalogResponse(StrictDto):
-    """Expose branch options and a paginated commit summary page."""
+    """Expose branch options, the selected branch tip, and a paginated commit summary page."""
 
     branches: list[RepositoryBranchResponse]
     commits: list[RepositoryCommitResponse]
     next_commit_offset: int | None
+    target_commit: RepositoryCommitResponse | None = None
 
 
 class DirectoryBrowseRequest(StrictDto):
@@ -303,12 +430,72 @@ class DirectoryListingResponse(StrictDto):
     is_truncated: bool
 
 
+class ExistingFindingRequest(StrictDto):
+    """Accept one bounded historical issue for duplicate suppression context."""
+
+    source_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    finding_id: Annotated[str, StringConstraints(min_length=1, max_length=256)]
+    title: Annotated[str, StringConstraints(min_length=1, max_length=500)]
+    content: Annotated[str, StringConstraints(min_length=1, max_length=8_000)]
+    path: str | None = None
+    side: Literal["old", "new"] | None = None
+    start_line: Annotated[int, Field(ge=1)] | None = None
+    end_line: Annotated[int, Field(ge=1)] | None = None
+    existing_code: Annotated[str, StringConstraints(min_length=1, max_length=8_000)] | None = None
+    fingerprint: Annotated[str, StringConstraints(pattern=r"^[0-9a-f]{64}$")] | None = None
+    recommendation: Annotated[str, StringConstraints(min_length=1, max_length=8_000)] | None = None
+    category: Annotated[str, StringConstraints(min_length=1, max_length=128)] | None = None
+    severity: Annotated[str, StringConstraints(min_length=1, max_length=64)] | None = None
+
+    def to_domain(self) -> ExistingFinding:
+        return ExistingFinding(**self.model_dump())
+
+    @model_validator(mode="after")
+    def validate_domain_invariants(self) -> "ExistingFindingRequest":
+        """Surface unsafe paths and incomplete locations as HTTP validation errors."""
+
+        self.to_domain()
+        return self
+
+
 class CreateReviewRequest(StrictDto):
     repository_path: Path
     scope: ScopeRequest
-    selected_agents: Annotated[list[AgentReference], Field(min_length=1, max_length=32)]
+    reviewer_selection: ReviewerSelectionDto
+    profile_source: "ReviewProfileSourceDto | None" = None
     prompt_locale: Literal["en", "zh-CN"] = "en"
     external_context: dict[str, Any] | None = None
+    existing_findings: Annotated[list[ExistingFindingRequest], Field(max_length=500)] = Field(
+        default_factory=list
+    )
+
+    @model_validator(mode="after")
+    def validate_existing_findings_budget(self) -> "CreateReviewRequest":
+        """Reject an oversized canonical set before entering the application layer."""
+
+        ExistingFindingSet.from_findings(
+            tuple(finding.to_domain() for finding in self.existing_findings)
+        )
+        return self
+
+    def review_profile_snapshot(self) -> ReviewProfileSnapshot:
+        selection = self.reviewer_selection
+        domain_selection = (
+            AdaptiveReviewerSelection()
+            if isinstance(selection, AdaptiveReviewerSelectionDto)
+            else FixedReviewerSelection(tuple(selection.reviewer_versions))
+        )
+        source = self.profile_source
+        return ReviewProfileSnapshot(
+            reviewer_selection=domain_selection,
+            source_profile_id=source.profile_id if source is not None else None,
+            source_profile_revision=source.revision if source is not None else None,
+        )
+
+
+class ReviewProfileSourceDto(StrictDto):
+    profile_id: Annotated[str, StringConstraints(min_length=1, max_length=128)]
+    revision: Annotated[int, Field(ge=1)]
 
 
 class UpdateReviewerPromptRequest(StrictDto):
@@ -342,9 +529,39 @@ class ReviewResponse(StrictDto):
     created_at: datetime
     finding_count: Annotated[int, Field(ge=0)] = 0
     external_context: dict[str, Any] | None = None
+    selection_request: dict[str, object]
+    profile_source: dict[str, object] | None = None
+    review_plan: dict[str, object] | None = None
+    coverage: dict[str, list[str]]
+    verdict_summary: dict[str, int]
 
     @classmethod
-    def from_domain(cls, review: ReviewRecord) -> "ReviewResponse":
+    def from_domain(
+        cls,
+        review: ReviewRecord,
+        *,
+        selected_agents: list[str] | None = None,
+        review_plan: dict[str, object] | None = None,
+        coverage: dict[str, list[str]] | None = None,
+        verdict_summary: dict[str, int] | None = None,
+    ) -> "ReviewResponse":
+        selection = review.review_profile.reviewer_selection
+        selection_request: dict[str, object] = (
+            {"mode": "adaptive"}
+            if isinstance(selection, AdaptiveReviewerSelection)
+            else {
+                "mode": "fixed",
+                "reviewer_versions": list(selection.reviewer_versions),
+            }
+        )
+        source: dict[str, object] | None = (
+            {
+                "profile_id": review.review_profile.source_profile_id,
+                "revision": review.review_profile.source_profile_revision,
+            }
+            if review.review_profile.source_profile_id is not None
+            else None
+        )
         return cls(
             task_id=review.task_id,
             status=review.status,
@@ -353,7 +570,7 @@ class ReviewResponse(StrictDto):
             head_oid=review.head_oid,
             base_ref=review.base_ref,
             target_ref=review.target_ref,
-            selected_agents=list(review.selected_agent_versions),
+            selected_agents=selected_agents or list(review.selected_agent_versions),
             repository_id=review.repository_id,
             repository_realpath_hash=review.repository_realpath_hash,
             git_common_dir_hash=review.git_common_dir_hash,
@@ -362,6 +579,11 @@ class ReviewResponse(StrictDto):
             created_at=review.created_at,
             finding_count=review.finding_count,
             external_context=review.external_context,
+            selection_request=selection_request,
+            profile_source=source,
+            review_plan=review_plan,
+            coverage=coverage or {"planned": [], "completed": [], "failed": [], "omitted": []},
+            verdict_summary=verdict_summary or {"accept": 0, "deny": 0, "merge": 0},
         )
 
 
@@ -371,6 +593,26 @@ class ToolUsageResponse(StrictDto):
     tool_name: str
     call_count: Annotated[int, Field(ge=0)]
     result_count: Annotated[int, Field(ge=0)]
+    accepted_call_count: Annotated[int, Field(ge=0)]
+    rejected_call_count: Annotated[int, Field(ge=0)]
+    unclassified_call_count: Annotated[int, Field(ge=0)]
+
+
+class RejectedToolCallResponse(StrictDto):
+    """Expose one safe rejected invocation reason without tool arguments or result text."""
+
+    agent: str
+    tool_name: str
+    tool_call_id: str | None
+    reason_code: str
+    reason: str
+
+
+class InvalidToolUsageResponse(StrictDto):
+    """Expose a provider-issued tool name rejected before dispatch."""
+
+    tool_name: str
+    call_count: Annotated[int, Field(ge=0)]
 
 
 class AgentProcessResponse(StrictDto):
@@ -379,35 +621,69 @@ class AgentProcessResponse(StrictDto):
     agent: str
     model_name: str | None
     llm_call_count: Annotated[int, Field(ge=0)]
+    checkpoint_llm_call_count: Annotated[int, Field(ge=0)]
     input_tokens: Annotated[int, Field(ge=0)]
+    checkpoint_input_tokens: Annotated[int, Field(ge=0)]
+    cached_input_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_count: Annotated[int, Field(ge=0)]
+    context_compacted_result_count: Annotated[int, Field(ge=0)]
+    context_compaction_original_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_compressed_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_failure_count: Annotated[int, Field(ge=0)]
+    compaction_replay_registered_count: Annotated[int, Field(ge=0)]
+    compaction_replay_consumed_count: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
+    checkpoint_output_tokens: Annotated[int, Field(ge=0)]
     total_tokens: Annotated[int, Field(ge=0)]
     tool_call_count: Annotated[int, Field(ge=0)]
+    accepted_tool_call_count: Annotated[int, Field(ge=0)]
+    rejected_tool_call_count: Annotated[int, Field(ge=0)]
+    unclassified_tool_call_count: Annotated[int, Field(ge=0)]
     started_at: datetime | None
     completed_at: datetime | None
     duration_ms: Annotated[int, Field(ge=0)] | None
 
 
 class ReviewProcessReportResponse(StrictDto):
-    """Expose terminal Review metrics derived from its credential-safe transcript."""
+    """Expose live Review metrics derived from its credential-safe transcript."""
 
     task_id: str
     status: str
     usage_is_complete: bool
     agent_run_count: Annotated[int, Field(ge=0)]
     llm_call_count: Annotated[int, Field(ge=0)]
+    checkpoint_llm_call_count: Annotated[int, Field(ge=0)]
     input_tokens: Annotated[int, Field(ge=0)]
+    checkpoint_input_tokens: Annotated[int, Field(ge=0)]
+    cached_input_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_count: Annotated[int, Field(ge=0)]
+    context_compacted_result_count: Annotated[int, Field(ge=0)]
+    context_compaction_original_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_compressed_tokens: Annotated[int, Field(ge=0)]
+    context_compaction_failure_count: Annotated[int, Field(ge=0)]
+    compaction_replay_registered_count: Annotated[int, Field(ge=0)]
+    compaction_replay_consumed_count: Annotated[int, Field(ge=0)]
     output_tokens: Annotated[int, Field(ge=0)]
+    checkpoint_output_tokens: Annotated[int, Field(ge=0)]
     total_tokens: Annotated[int, Field(ge=0)]
     tool_call_count: Annotated[int, Field(ge=0)]
+    accepted_tool_call_count: Annotated[int, Field(ge=0)]
+    rejected_tool_call_count: Annotated[int, Field(ge=0)]
+    unclassified_tool_call_count: Annotated[int, Field(ge=0)]
+    invalid_tool_call_count: Annotated[int, Field(ge=0)]
     tool_result_count: Annotated[int, Field(ge=0)]
     unmatched_tool_result_count: Annotated[int, Field(ge=0)]
+    non_json_tool_result_count: Annotated[int, Field(ge=0)]
+    loop_abort_count: Annotated[int, Field(ge=0)]
+    tool_result_status_counts: dict[str, Annotated[int, Field(ge=0)]]
     finding_count: Annotated[int, Field(ge=0)]
     transcript_entry_count: Annotated[int, Field(ge=0)]
     started_at: datetime | None
     completed_at: datetime | None
     duration_ms: Annotated[int, Field(ge=0)] | None
     tools: list[ToolUsageResponse]
+    invalid_tools: list[InvalidToolUsageResponse]
+    rejected_tool_calls: list[RejectedToolCallResponse]
     agents: list[AgentProcessResponse]
 
     @classmethod
@@ -438,6 +714,10 @@ MaxAgentTurns = Annotated[int, Field(ge=1, le=500)]
 MaxToolCalls = Annotated[int, Field(ge=1, le=5000)]
 MaxIdenticalToolResults = Annotated[int, Field(ge=2, le=20)]
 ToolTimeoutSeconds = Annotated[int, Field(ge=1, le=300)]
+MaxRetries = Annotated[int, Field(ge=0, le=10)]
+RetryBackoffBase = Annotated[float, Field(ge=0.1, le=60.0)]
+RetryMaxDelay = Annotated[float, Field(ge=1.0, le=300.0)]
+NoProgressRoundsThreshold = Annotated[int, Field(ge=1, le=100)]
 
 
 class CreateModelGatewayRequest(StrictDto):
@@ -447,15 +727,19 @@ class CreateModelGatewayRequest(StrictDto):
     api_key: SecretStr
     model: GatewayModel
     base_url: AnyHttpUrl
-    vendor: Literal["openai", "deepseek", "zhipu"] = "openai"
+    vendor: Literal["openai", "deepseek", "zhipu", "qwen"] = "openai"
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
-    agent_timeout: AgentTimeoutSeconds = 1800
-    max_agent_turns: MaxAgentTurns = 100
-    max_tool_calls: MaxToolCalls = 300
+    agent_timeout: AgentTimeoutSeconds = 3600
+    max_agent_turns: MaxAgentTurns = 500
+    max_tool_calls: MaxToolCalls = 500
     max_identical_tool_results: MaxIdenticalToolResults = 3
     tool_timeout_seconds: ToolTimeoutSeconds = 30
+    max_retries: MaxRetries = 10
+    retry_backoff_base: RetryBackoffBase = 1.0
+    retry_max_delay: RetryMaxDelay = 30.0
+    no_progress_rounds_threshold: NoProgressRoundsThreshold = 10
 
     @field_validator("api_key")
     @classmethod
@@ -473,15 +757,19 @@ class UpdateModelGatewayRequest(StrictDto):
     api_key: SecretStr | None = None
     model: GatewayModel
     base_url: AnyHttpUrl
-    vendor: Literal["openai", "deepseek", "zhipu"] = "openai"
+    vendor: Literal["openai", "deepseek", "zhipu", "qwen"] = "openai"
     api_type: Literal["responses", "chat_completions"] = "chat_completions"
     max_tokens: int = 65536
     thinking_level: Literal["disabled", "low", "medium", "high"] = "disabled"
-    agent_timeout: AgentTimeoutSeconds = 1800
-    max_agent_turns: MaxAgentTurns = 100
-    max_tool_calls: MaxToolCalls = 300
+    agent_timeout: AgentTimeoutSeconds = 3600
+    max_agent_turns: MaxAgentTurns = 500
+    max_tool_calls: MaxToolCalls = 500
     max_identical_tool_results: MaxIdenticalToolResults = 3
     tool_timeout_seconds: ToolTimeoutSeconds = 30
+    max_retries: MaxRetries = 10
+    retry_backoff_base: RetryBackoffBase = 1.0
+    retry_max_delay: RetryMaxDelay = 30.0
+    no_progress_rounds_threshold: NoProgressRoundsThreshold = 10
 
     @field_validator("api_key")
     @classmethod
@@ -510,7 +798,7 @@ class ModelGatewayResponse(StrictDto):
     name: str
     model: str
     base_url: str
-    vendor: Literal["openai", "deepseek", "zhipu"]
+    vendor: Literal["openai", "deepseek", "zhipu", "qwen"]
     is_active: bool
     api_type: Literal["responses", "chat_completions"]
     max_tokens: int
@@ -520,6 +808,10 @@ class ModelGatewayResponse(StrictDto):
     max_tool_calls: int
     max_identical_tool_results: int
     tool_timeout_seconds: int
+    max_retries: int
+    retry_backoff_base: float
+    retry_max_delay: float
+    no_progress_rounds_threshold: int
 
 
 class ModelGatewayCatalogResponse(StrictDto):
@@ -549,9 +841,10 @@ class ResetAllSettingsResponse(StrictDto):
     """Aggregate response after resetting all user-facing settings to defaults."""
 
     instruction_files: InstructionFileSettingsResponse
+    file_exclusions: FileExclusionSettingsResponse
     review_completion: ReviewCompletionSettingsResponse
     trigger_idempotency: TriggerIdempotencySettingsResponse
     recent_repositories: RecentRepositorySettingsResponse
     tool_limits: ToolLimitsResponse
-    logging: RuntimeLogLevelResponse
+    logging: RuntimeLoggingSettingsResponse
     model_gateways: ModelGatewayCatalogResponse

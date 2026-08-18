@@ -23,6 +23,10 @@ from codelens.workspace.domain.models import (
     TaskWorktree,
 )
 from codelens.workspace.domain.ports import InputArtifactPort, ScopePlan
+from codelens.workspace.domain.review_file_scope import (
+    ReviewFileExclusionPolicy,
+    ReviewFileScope,
+)
 
 
 class SnapshotManifestPort(Protocol):
@@ -31,7 +35,10 @@ class SnapshotManifestPort(Protocol):
     async def build(
         self,
         worktree: TaskWorktree,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
+        base_oid: str,
+        policy: ReviewFileExclusionPolicy,
+        resolved_scope: ReviewFileScope | None,
         instructions: ResolvedInstructionSet,
         structured_skip: StructuredSkipPort,
     ) -> SnapshotBuild:
@@ -47,12 +54,20 @@ class ChangeIndexPort(Protocol):
         self,
         worktree: TaskWorktree,
         base_oid: str,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
         scope_type: ReviewScopeType,
     ) -> ChangeIndex:
         """Return all changed hunk identities relative to a pinned base."""
 
         raise NotImplementedError
+
+
+class ReviewFileScopeStorePort(Protocol):
+    """Persist the first resolved scope and return it unchanged on recovery."""
+
+    async def get_review_file_scope(self, task_id: str) -> ReviewFileScope | None: ...
+
+    async def save_review_file_scope(self, task_id: str, scope: ReviewFileScope) -> None: ...
 
 
 def _snapshot_metadata(
@@ -64,7 +79,7 @@ def _snapshot_metadata(
     scope_type: ReviewScopeType,
 ) -> bytes:
     payload = {
-        "schema_version": 1,
+        "schema_version": 2,
         "snapshot_id": snapshot_id,
         "worktree_id": worktree.worktree_id,
         "worktree_path_hash": hashlib.sha256(str(worktree.root).encode("utf-8")).hexdigest(),
@@ -92,6 +107,7 @@ class SnapshotService:
         artifacts: InputArtifactPort,
         instructions: InstructionResolutionPort,
         structured_skip: StructuredSkipPort,
+        scope_store: ReviewFileScopeStorePort | None = None,
     ) -> None:
         self._lifecycle = lifecycle
         self._manifest_builder = manifest_builder
@@ -99,6 +115,7 @@ class SnapshotService:
         self._artifacts = artifacts
         self._instructions = instructions
         self._structured_skip = structured_skip
+        self._scope_store = scope_store
 
     async def create(
         self,
@@ -111,7 +128,7 @@ class SnapshotService:
 
         worktree = await self._lifecycle.create(task_id, repository, captured)
         try:
-            resolved = await self.resolve_instructions(worktree, scope_plan.target_paths)
+            resolved = await self.resolve_instructions(worktree, scope_plan.candidate_paths)
             return await self.freeze(worktree, captured, scope_plan, resolved)
         except BaseException:
             await self._lifecycle.remove_owned(worktree)
@@ -126,16 +143,28 @@ class SnapshotService:
     ) -> ReviewSnapshot:
         """Freeze a Snapshot inside an already recovered and verified worktree."""
 
+        existing_scope = (
+            await self._scope_store.get_review_file_scope(worktree.task_id)
+            if self._scope_store is not None
+            else None
+        )
         build = await self._manifest_builder.build(
             worktree,
-            scope_plan.target_paths,
+            scope_plan.candidate_paths,
+            captured.target.base_oid,
+            scope_plan.file_exclusion_policy,
+            existing_scope,
             instructions,
             self._structured_skip,
         )
+        if self._scope_store is not None and existing_scope is None:
+            await self._scope_store.save_review_file_scope(
+                worktree.task_id, build.manifest.review_scope
+            )
         change_index = await self._change_index.build(
             worktree,
             captured.target.base_oid,
-            build.manifest.target_paths,
+            build.manifest.review_paths,
             scope_plan.scope_type,
         )
         snapshot_id = f"snapshot_{uuid.uuid4().hex}"
@@ -163,7 +192,7 @@ class SnapshotService:
     async def resolve_instructions(
         self,
         worktree: TaskWorktree,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
     ) -> ResolvedInstructionSet:
         """Resolve and merge the immutable instruction chain for every target path."""
 
@@ -171,7 +200,7 @@ class SnapshotService:
         chains_by_target: dict[str, InstructionChain] = {}
         excludes: list[str] = []
         warnings: list[str] = []
-        for target_path in target_paths:
+        for target_path in candidate_paths:
             resolved = await asyncio.to_thread(
                 self._instructions.resolve,
                 worktree.root,

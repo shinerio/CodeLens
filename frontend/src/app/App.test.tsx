@@ -14,5 +14,9 @@ describe("App", () => {
 
     expect(screen.getByText("CodeLens")).toBeInTheDocument();
     expect(screen.getByRole("link", { name: "Runs" })).toHaveAttribute("href", "/runs");
+    expect(screen.getByRole("link", { name: "Review profiles" })).toHaveAttribute(
+      "href",
+      "/settings/review-profiles",
+    );
   });
 });

@@ -13,6 +13,8 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
+from codelens.plugin.domain.versioning import PluginApiVersion
+
 
 class HookEvent(StrEnum):
     """Events that can trigger a review.
@@ -83,6 +85,7 @@ class PluginManifest:
     min_codelens_version: str | None = None
     name_i18n: dict[str, str] = field(default_factory=dict)
     description_i18n: dict[str, str] = field(default_factory=dict)
+    plugin_api_version: PluginApiVersion = PluginApiVersion.V2
 
     @property
     def trigger(self) -> TriggerCapability | None:
@@ -93,6 +96,20 @@ class PluginManifest:
     def report(self) -> ReportCapability | None:
         value = self.capabilities.get("report")
         return value if isinstance(value, ReportCapability) else None
+
+
+@dataclass(frozen=True, slots=True)
+class PluginProfileSource:
+    """Describe the Core-owned Profile copied into an installed plugin config.
+
+    Provenance is deliberately stored beside plugin-owned configuration. It is
+    never passed to plugin code and has no effect on review fingerprints.
+    """
+
+    profile_id: str
+    profile_name: str
+    profile_revision: int
+    copied_at: datetime
 
 
 @dataclass(frozen=True)
@@ -119,6 +136,8 @@ class PluginRecord:
     report_config: dict[str, Any] = field(default_factory=dict)
     git_url: str | None = None
     git_ref: str | None = None
+    config_revision: int = 1
+    profile_source: PluginProfileSource | None = None
 
 
 class PluginCapabilityError(ValueError):
@@ -154,12 +173,8 @@ def validate_capability_toggle(
     if record.is_builtin:
         return
 
-    final_trigger = (
-        enable_trigger if enable_trigger is not None else record.trigger_enabled
-    )
-    final_report = (
-        enable_report if enable_report is not None else record.report_enabled
-    )
+    final_trigger = enable_trigger if enable_trigger is not None else record.trigger_enabled
+    final_report = enable_report if enable_report is not None else record.report_enabled
 
     if final_report and not final_trigger:
         raise PluginCapabilityError(

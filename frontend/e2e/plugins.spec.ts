@@ -30,7 +30,8 @@ const LOCAL_PLUGIN = {
     scope_type: "commit",
     base_ref: null,
     target_ref: null,
-    selected_agents: ["correctness:v1"],
+    reviewer_selection: { mode: "fixed", reviewer_versions: ["correctness:v2"] },
+    supersede_policy: "latest_snapshot",
     prompt_locale: "en",
     debounce_seconds: 10,
   },
@@ -100,4 +101,84 @@ test("installs plugins without a null ref and reinstalls configured hooks", asyn
     path: testInfo.outputPath("plugins-page.png"),
     fullPage: true,
   });
+});
+
+test("keeps a copied v2 profile snapshot until reload is explicit", async ({ page }) => {
+  let configPayload: Record<string, unknown> | undefined;
+  const plugin = {
+    ...LOCAL_PLUGIN,
+    plugin_api_version: "2",
+    profile_source: {
+      profile_id: "profile-adaptive",
+      profile_name: "Adaptive deep",
+      profile_revision: 1,
+      copied_at: "2026-08-01T00:00:00Z",
+    },
+    trigger_config: {
+      ...LOCAL_PLUGIN.trigger_config,
+      reviewer_selection: { mode: "fixed", reviewer_versions: ["security:v2"] },
+      supersede_policy: "latest_snapshot",
+    },
+  };
+  await page.route("**/api/review-profiles", async (route) => {
+    await route.fulfill({ json: [{
+      profile_id: "profile-adaptive",
+      revision: 2,
+      name: "Adaptive deep",
+      is_default: true,
+      reviewer_selection: { mode: "adaptive" },
+      created_at: "2026-08-01T00:00:00Z",
+      updated_at: "2026-08-02T00:00:00Z",
+    }] });
+  });
+  await page.route("**/api/reviewer-catalog", async (route) => {
+    await route.fulfill({ json: [{
+      reference: "security:v2",
+      agent_id: "security",
+      version: 2,
+      dimensions: ["security"],
+      cost_class: "balanced",
+      planner_eligible: true,
+      capability_readiness: "ready",
+    }] });
+  });
+  await page.route("**/api/plugins/local/trigger/config", async (route) => {
+    configPayload = route.request().postDataJSON();
+    await route.fulfill({ json: plugin });
+  });
+  await page.route("**/api/plugins/local/trigger/hook-status", async (route) => {
+    await route.fulfill({ json: INSTALLED_HOOK_STATUS });
+  });
+  await page.route("**/api/plugins", async (route) => {
+    await route.fulfill({ json: [plugin] });
+  });
+
+  await page.goto("/plugins");
+  await expect(page.getByText("The source Profile has changed. The saved plugin snapshot is unchanged.")).toBeVisible();
+  await expect(page.getByRole("radio", { name: /Fixed/ })).toBeChecked();
+  expect(configPayload).toBeUndefined();
+
+  await page.getByRole("button", { name: "Reload from profile" }).click();
+  await expect(page.getByRole("radio", { name: /Adaptive/ })).toBeChecked();
+  await page.getByRole("button", { name: "Save configuration" }).click();
+  await expect.poll(() => configPayload).toMatchObject({
+    config: {
+      reviewer_selection: { mode: "adaptive" },
+    },
+    profile_source: {
+      profile_id: "profile-adaptive",
+      profile_name: "Adaptive deep",
+      profile_revision: 2,
+    },
+  });
+});
+
+test("shows profile and multi-agent strategy controls for the built-in local plugin", async ({ page }) => {
+  await page.goto("/plugins");
+
+  const strategy = page.getByRole("region", { name: "Plugin review strategy" });
+  await expect(strategy).toBeVisible();
+  await expect(strategy.getByLabel("Review profile")).toBeVisible();
+  await expect(strategy.getByRole("radio", { name: /Fixed/ })).toBeVisible();
+  await expect(strategy.getByRole("radio", { name: /Adaptive/ })).toBeVisible();
 });

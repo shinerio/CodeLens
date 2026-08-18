@@ -1,0 +1,68 @@
+from typing import cast
+
+import pytest
+from pydantic import ValidationError
+
+from codelens.findings.infrastructure.comment_output import (
+    CommentBatchSchema,
+    CommentOutputCodec,
+)
+
+
+def valid_comment_v2_payload() -> dict[str, object]:
+    return {
+        "schema_version": "2",
+        "findings": [
+            {
+                "reviewer_id": "security",
+                "path": "src/webhook.py",
+                "side": "new",
+                "existing_code": "payload = parse(body)",
+                "title": "Body parsed before signature verification",
+                "content": "Untrusted input is parsed before authentication.",
+                "recommendation": "Verify the signature before parsing.",
+                "category": "authentication",
+                "severity": "high",
+                "primary_dimension": "security",
+                "evidence_strength": "direct",
+            }
+        ],
+    }
+
+
+def test_comment_v2_accepts_categorical_evidence_axes() -> None:
+    batch = CommentBatchSchema.model_validate(valid_comment_v2_payload())
+
+    assert batch.findings[0].evidence_strength == "direct"
+
+
+def test_comment_v2_rejects_numeric_confidence() -> None:
+    payload = valid_comment_v2_payload()
+    findings = cast(list[dict[str, object]], payload["findings"])
+    findings[0]["confidence"] = 0.9
+
+    with pytest.raises(ValidationError, match="confidence"):
+        CommentBatchSchema.model_validate(payload)
+
+
+def test_comment_v2_rejects_unknown_fields() -> None:
+    payload = valid_comment_v2_payload()
+    findings = cast(list[dict[str, object]], payload["findings"])
+    findings[0]["impact_certainty"] = "confirmed"
+
+    with pytest.raises(ValidationError, match="extra"):
+        CommentBatchSchema.model_validate(payload)
+
+
+def test_comment_v2_codec_is_canonical_and_version_locked() -> None:
+    codec = CommentOutputCodec()
+
+    encoded = codec.encode(valid_comment_v2_payload())
+    decoded = codec.decode(encoded)
+
+    assert codec.schema_version == "2"
+    assert decoded == CommentBatchSchema.model_validate(valid_comment_v2_payload())
+    assert encoded == codec.encode(decoded)
+
+    with pytest.raises(ValueError, match="unsupported"):
+        CommentOutputCodec("1")  # type: ignore[arg-type]

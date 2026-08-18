@@ -64,12 +64,12 @@ class AlwaysMutatingCaptureSource:
     async def fingerprint(
         self,
         repository: Path,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
     ) -> RepositoryFingerprint:
-        return await self._source.fingerprint(repository, target_paths)
+        return await self._source.fingerprint(repository, candidate_paths)
 
-    async def capture_overlay(self, repository: Path, target_paths: tuple[str, ...]) -> bytes:
-        payload = await self._source.capture_overlay(repository, target_paths)
+    async def capture_overlay(self, repository: Path, candidate_paths: tuple[str, ...]) -> bytes:
+        payload = await self._source.capture_overlay(repository, candidate_paths)
         self._mutation += 1
         (self._repository / "README.md").write_text(
             f"# mutation {self._mutation}\n",
@@ -242,10 +242,10 @@ async def test_freezes_manifest_change_index_and_detects_reviewer_mutation(
         structured_skip=StructuredSkipMatcher(),
     ).create("review-snapshot", git_repository, captured, scope_plan)
 
-    assert snapshot.manifest.target_paths == ("src/state.py",)
+    assert snapshot.manifest.review_paths == ("src/state.py",)
     assert snapshot.manifest.instruction_paths == ("REVIEW.md",)
-    assert "tracked.log" not in snapshot.manifest.context_paths
-    assert any(item.path == "tracked.log" for item in snapshot.manifest.excluded_paths)
+    assert "tracked.log" in snapshot.manifest.context_paths
+    assert all(item.path != "tracked.log" for item in snapshot.manifest.review_scope.exclusions)
     assert snapshot.change_index.contains("src/state.py", 2, 2, "new")
     assert snapshot.snapshot_artifact is not None
 
@@ -306,10 +306,10 @@ async def test_full_scope_builds_complete_agent_input_and_freezes_only_active_ru
     )
 
     snapshot = await service.create("review-full", git_repository, captured, scope_plan)
-    instructions = await service.resolve_instructions(snapshot.worktree, scope_plan.target_paths)
+    instructions = await service.resolve_instructions(snapshot.worktree, scope_plan.candidate_paths)
     payload = ContextBuilder().build(snapshot, instructions).canonical_bytes()
 
-    assert snapshot.manifest.target_paths == ("README.md", "src/service.py")
+    assert snapshot.manifest.review_paths == ("README.md", "src/service.py")
     assert snapshot.manifest.instruction_paths == ("AGENTS.md", "src/REVIEW.md")
     assert all(entry.path != "tests/REVIEW.md" for entry in snapshot.manifest.entries)
     assert json.loads(payload) == {
@@ -338,5 +338,5 @@ async def test_full_scope_builds_complete_agent_input_and_freezes_only_active_ru
                 "old_ranges": [],
                 "path": "src/service.py",
             },
-        ]
+        ],
     }

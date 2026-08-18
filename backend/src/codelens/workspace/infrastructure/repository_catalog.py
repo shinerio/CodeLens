@@ -8,6 +8,10 @@ from codelens.workspace.domain.ports import (
 )
 from codelens.workspace.infrastructure.git_cli import GitCli
 
+# Field separators shared by the tip lookup and the paginated history page.
+# %x1f separates fields within one commit record, %x1e separates commit records.
+_COMMIT_LOG_FORMAT = "%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e"
+
 
 class GitRepositoryCatalogAdapter:
     """List branch and commit choices through bounded read-only Git commands."""
@@ -39,13 +43,15 @@ class GitRepositoryCatalogAdapter:
                 branches=branches,
                 commits=(),
                 next_commit_offset=None,
+                target_commit=None,
             )
+        target_commit = await self._resolve_target_commit(repository, target_branch.oid)
         commit_result = await self._git.run(
             repository,
             "log",
             f"--skip={commit_offset + 1}",
             f"--max-count={commit_limit + 1}",
-            "--format=%H%x1f%h%x1f%an%x1f%aI%x1f%s%x1e",
+            f"--format={_COMMIT_LOG_FORMAT}",
             target_branch.oid,
         )
         commits = self._parse_commits(commit_result.stdout)
@@ -54,7 +60,25 @@ class GitRepositoryCatalogAdapter:
             branches=branches,
             commits=commits[:commit_limit],
             next_commit_offset=commit_offset + commit_limit if has_more else None,
+            target_commit=target_commit,
         )
+
+    async def _resolve_target_commit(
+        self,
+        repository: Path,
+        oid: str,
+    ) -> RepositoryCommit | None:
+        """Resolve human-readable metadata for the selected branch tip commit."""
+
+        result = await self._git.run(
+            repository,
+            "log",
+            "-1",
+            f"--format={_COMMIT_LOG_FORMAT}",
+            oid,
+        )
+        parsed = self._parse_commits(result.stdout)
+        return parsed[0] if parsed else None
 
     @staticmethod
     def _select_target_branch(

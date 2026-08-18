@@ -1,4 +1,5 @@
 import { render, screen, waitFor } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
 import { beforeEach, expect, it, vi } from "vitest";
 import { Route, Routes } from "react-router-dom";
 
@@ -16,7 +17,36 @@ vi.mock("@monaco-editor/react", () => ({
 vi.mock("monaco-editor", () => ({}));
 
 function jsonResponse(payload: unknown, status = 200) {
-  return new Response(JSON.stringify(payload), {
+  const normalized =
+    typeof payload === "object" &&
+    payload !== null &&
+    "task_id" in payload &&
+    "scope_type" in payload
+      ? {
+          base_ref: null,
+          target_ref: null,
+          selected_agents: ["correctness:v2"],
+          worktree_status: "pending",
+          repository_id: "repository-1",
+          repository_realpath_hash: "c".repeat(64),
+          git_common_dir_hash: "d".repeat(64),
+          cancellation_requested: false,
+          repository_name: "codelens",
+          created_at: "2026-07-18T12:00:00Z",
+          finding_count: 0,
+          external_context: null,
+          selection_request: {
+            mode: "fixed",
+            reviewer_versions: ["correctness:v2"],
+          },
+          profile_source: null,
+          review_plan: null,
+          coverage: { planned: [], completed: [], failed: [], omitted: [] },
+          verdict_summary: { accept: 0, deny: 0, merge: 0 },
+          ...payload,
+        }
+      : payload;
+  return new Response(JSON.stringify(normalized), {
     status,
     headers: { "Content-Type": "application/json" },
   });
@@ -34,6 +64,20 @@ it("shows the live run and refreshes findings after completion", async () => {
     const url = String(input);
     if (url.endsWith("/api/plugins")) return jsonResponse([]);
     if (url.endsWith("/exports")) return jsonResponse([]);
+    if (url.endsWith("/source")) {
+      return jsonResponse({
+        path: "feature.py",
+        base: null,
+        target: {
+          path: "feature.py",
+          revision: "b".repeat(40),
+          content: "if branch:\n    run()\n",
+        },
+        highlight_side: "new",
+        highlight_start_line: 1,
+        highlight_end_line: 2,
+      });
+    }
     if (url.endsWith("/findings"))
       return jsonResponse([
         {
@@ -86,7 +130,7 @@ it("shows the live run and refreshes findings after completion", async () => {
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -111,13 +155,111 @@ it("shows the live run and refreshes findings after completion", async () => {
       level: 1,
     }),
   ).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: /Logs/ }));
   expect(screen.getByText("Waiting for events.")).toBeInTheDocument();
 
-  FakeEventSource.latest?.emit("review.completed", { finding_count: 1 }, "7");
+  FakeEventSource.latest?.emit("review.completed.v2", { finding_count: 1 }, "7");
 
   await waitFor(() => {
     expect(document.querySelector(".review-run-page__subtitle")).toHaveTextContent("completed");
   });
+});
+
+it("keeps published findings visible while naming partial reviewer coverage", async () => {
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/plugins") || url.endsWith("/exports") || url.endsWith("/transcript")) {
+      return jsonResponse([]);
+    }
+    if (url.endsWith("/source")) {
+      return jsonResponse({
+        path: "src/auth.ts",
+        base: null,
+        target: { path: "src/auth.ts", revision: "b".repeat(40), content: "allow(principal);" },
+        highlight_side: "new",
+        highlight_start_line: 1,
+        highlight_end_line: 1,
+      });
+    }
+    if (url.endsWith("/findings")) {
+      return jsonResponse([{
+        finding_id: "finding_partial",
+        fingerprint: "e".repeat(64),
+        reviewer_id: "security",
+        category: "security",
+        title: "Published security finding",
+        severity: "high",
+        disposition: "blocking",
+        confidence: null,
+        evidence_strength: "strong",
+        verification_state: "unresolved",
+        primary_location: { path: "src/auth.ts", start_line: 8, end_line: 8, side: "new", excerpt_hash: "f".repeat(64), is_deleted: false },
+        related_locations: [],
+        changed_hunk_id: "hunk-1",
+        change_origin: "introduced",
+        evidence: [],
+        impact: "Authorization can be bypassed.",
+        explanation: "The condition accepts an invalid principal.",
+        reproduction: null,
+        recommendation: "Reject missing principals.",
+        rule_sources: [],
+      }]);
+    }
+    if (url.endsWith("/process-report")) {
+      return jsonResponse({ code: "process_report_not_ready", message: "not ready" }, 409);
+    }
+    return jsonResponse({
+      task_id: "review_partial",
+      status: "partial",
+      scope_type: "branch",
+      base_oid: "a".repeat(40),
+      head_oid: "b".repeat(40),
+      base_ref: "main",
+      target_ref: "feature",
+      selected_agents: ["security:v2", "performance:v2"],
+      worktree_status: "pending",
+      repository_id: "repository-1",
+      repository_realpath_hash: "c".repeat(64),
+      git_common_dir_hash: "d".repeat(64),
+      cancellation_requested: false,
+      repository_name: "repository",
+      created_at: "2026-08-02T00:00:00Z",
+      finding_count: 1,
+      external_context: null,
+      selection_request: { mode: "adaptive" },
+      profile_source: null,
+      review_plan: {
+        selection_mode: "adaptive",
+        reviewer_references: ["security:v2", "performance:v2"],
+        plan_hash: "1".repeat(64),
+        planner_reason: "Risk-sensitive fan-out",
+        nodes: [
+          { node_id: "planner", node_type: "planner", agent_reference: "planner:v2", depends_on: [], pass_index: 0, shard_id: "all", logical_attempt_group: "planner", task_id: "review_partial" },
+          { node_id: "security", node_type: "reviewer", agent_reference: "security:v2", depends_on: ["planner"], pass_index: 1, shard_id: "all", logical_attempt_group: "security", task_id: "review_partial" },
+        ],
+      },
+      coverage: {
+        planned: ["security:v2", "performance:v2"],
+        completed: ["security:v2"],
+        failed: ["performance:v2"],
+        omitted: [],
+      },
+      verdict_summary: { accept: 1, deny: 0, merge: 1 },
+    });
+  });
+
+  render(<ReviewRunPage />, {
+    wrapper: ({ children }) => (
+      <TestProviders initialEntries={["/runs/review_partial"]}>
+        <Routes><Route path="/runs/:taskId" element={children} /></Routes>
+      </TestProviders>
+    ),
+  });
+
+  expect(await screen.findByRole("tab", { name: /Findings/ })).toHaveAttribute("aria-selected", "true");
+  expect(await screen.findByText("Published security finding")).toBeVisible();
+  expect(screen.getByRole("status", { name: "Reviewer coverage" })).toHaveTextContent("performance:v2");
+  expect(screen.getByText("Risk-sensitive fan-out")).toBeVisible();
 });
 
 it("keeps polling an empty transcript after completion until the worker persists it", async () => {
@@ -141,7 +283,7 @@ it("keeps polling an empty transcript after completion until the worker persists
                 created_at: "2026-07-24T00:00:00Z",
                 redacted: false,
                 truncated: false,
-                metadata: { agent: "correctness:v1", message_id: "message-1" },
+                metadata: { agent: "correctness:v2", message_id: "message-1" },
               },
             ],
       );
@@ -153,7 +295,7 @@ it("keeps polling an empty transcript after completion until the worker persists
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -172,8 +314,9 @@ it("keeps polling an empty transcript after completion until the worker persists
     ),
   });
 
+  await userEvent.click(await screen.findByRole("tab", { name: /Logs/ }));
   expect(await screen.findAllByText("Waiting for events.")).not.toHaveLength(0);
-  FakeEventSource.latest?.emit("review.completed", {}, "7");
+  FakeEventSource.latest?.emit("review.completed.v2", {}, "7");
 
   await waitFor(
     () => {
@@ -181,6 +324,69 @@ it("keeps polling an empty transcript after completion until the worker persists
     },
     { timeout: 2_000 },
   );
+});
+
+it("shows timeline filters when the persisted review plan arrives", async () => {
+  let reviewRequests = 0;
+  fetchMock.mockImplementation(async (input: RequestInfo | URL) => {
+    const url = String(input);
+    if (url.endsWith("/api/plugins") || url.endsWith("/exports")) return jsonResponse([]);
+    if (url.endsWith("/findings")) return jsonResponse([]);
+    if (url.endsWith("/transcript")) {
+      return jsonResponse([{
+        sequence: 1,
+        kind: "model_output_delta",
+        content: "Security timeline event",
+        created_at: "2026-08-03T00:00:00Z",
+        redacted: false,
+        truncated: false,
+        metadata: { agent: "security:v2", message_id: "security-output" },
+      }]);
+    }
+    if (url.endsWith("/api/reviews/review_plan_refresh")) {
+      reviewRequests += 1;
+      return jsonResponse({
+        task_id: "review_plan_refresh",
+        status: "reviewing",
+        scope_type: "branch",
+        base_oid: "a".repeat(40),
+        head_oid: "b".repeat(40),
+        selected_agents: reviewRequests > 1 ? ["security:v2", "performance:v2"] : [],
+        worktree_status: "pending",
+        repository_id: "repository-1",
+        repository_realpath_hash: "c".repeat(64),
+        git_common_dir_hash: "d".repeat(64),
+        cancellation_requested: false,
+        review_plan: reviewRequests > 1 ? {
+          selection_mode: "fixed",
+          reviewer_references: ["security:v2", "performance:v2"],
+          plan_hash: "1".repeat(64),
+          planner_reason: null,
+          nodes: [
+            { node_id: "security", node_type: "reviewer", agent_reference: "security:v2", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "security", task_id: "review_plan_refresh" },
+            { node_id: "performance", node_type: "reviewer", agent_reference: "performance:v2", depends_on: [], pass_index: 1, shard_id: "all", logical_attempt_group: "performance", task_id: "review_plan_refresh" },
+          ],
+        } : null,
+      });
+    }
+    return jsonResponse({ code: "not_found", message: "not found" }, 404);
+  });
+
+  render(<ReviewRunPage />, {
+    wrapper: ({ children }) => (
+      <TestProviders initialEntries={["/runs/review_plan_refresh"]}>
+        <Routes><Route path="/runs/:taskId" element={children} /></Routes>
+      </TestProviders>
+    ),
+  });
+
+  await userEvent.click(await screen.findByRole("tab", { name: /Logs/ }));
+  expect(screen.queryByRole("button", { name: /Reviewers/ })).not.toBeInTheDocument();
+
+  FakeEventSource.latest?.emit("review.plan_created.v2", { reviewer_count: 2 }, "2");
+
+  expect(await screen.findByRole("button", { name: /Reviewers/ })).toBeInTheDocument();
+  expect(reviewRequests).toBe(2);
 });
 
 it("shows the actionable failure reason in the page banner", async () => {
@@ -217,7 +423,7 @@ it("shows the actionable failure reason in the page banner", async () => {
       scope_type: "commit",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -237,7 +443,7 @@ it("shows the actionable failure reason in the page banner", async () => {
   });
 
   expect(await screen.findByRole("heading", { name: "Correctness Reviewer" })).toBeInTheDocument();
-  FakeEventSource.latest?.emit("review.failed", {}, "9");
+  FakeEventSource.latest?.emit("review.failed.v2", {}, "9");
 
   expect(await screen.findByRole("alert")).toHaveTextContent("Cannot connect to the model gateway");
   expect(screen.getByRole("alert")).toHaveTextContent("Check the Base URL and network access");
@@ -259,7 +465,7 @@ it("shows candidate validation warnings without failing the completed review", a
           redacted: false,
           truncated: false,
           metadata: {
-            agent: "correctness:v1",
+            agent: "correctness:v2",
             warning_code: "finding_validation_partial",
             retained_count: "3",
             skipped_count: "2",
@@ -278,7 +484,7 @@ it("shows candidate validation warnings without failing the completed review", a
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -323,7 +529,7 @@ it("shows files that were not verified before forced successful completion", asy
           redacted: false,
           truncated: false,
           metadata: {
-            agent: "correctness:v1",
+            agent: "correctness:v2",
             warning_code: "review_coverage_incomplete",
             incomplete_file_count: "2",
             incomplete_files: '["src/missed.py","src/unread.py"]',
@@ -337,7 +543,7 @@ it("shows files that were not verified before forced successful completion", asy
           redacted: false,
           truncated: false,
           metadata: {
-            agent: "security:v1",
+            agent: "security:v2",
             warning_code: "review_coverage_incomplete",
             incomplete_file_count: "2",
             incomplete_files: '["src/unread.py","src/security.py"]',
@@ -354,7 +560,7 @@ it("shows files that were not verified before forced successful completion", asy
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -397,7 +603,7 @@ it("shows the process report after a review has completed", async () => {
           created_at: "2026-07-25T00:00:05Z",
           redacted: false,
           truncated: false,
-          metadata: { agent: "correctness:v1" },
+          metadata: { agent: "correctness:v2" },
         },
       ]);
     }
@@ -412,6 +618,9 @@ it("shows the process report after a review has completed", async () => {
         output_tokens: 30,
         total_tokens: 150,
         tool_call_count: 2,
+        accepted_tool_call_count: 2,
+        rejected_tool_call_count: 0,
+        unclassified_tool_call_count: 0,
         tool_result_count: 2,
         unmatched_tool_result_count: 0,
         finding_count: 0,
@@ -420,18 +629,22 @@ it("shows the process report after a review has completed", async () => {
         completed_at: "2026-07-25T00:00:06Z",
         duration_ms: 6000,
         tools: [
-          { tool_name: "get_diff", call_count: 1, result_count: 1 },
-          { tool_name: "grep", call_count: 1, result_count: 1 },
+          { tool_name: "get_diff", call_count: 1, result_count: 1, accepted_call_count: 1, rejected_call_count: 0, unclassified_call_count: 0 },
+          { tool_name: "grep", call_count: 1, result_count: 1, accepted_call_count: 1, rejected_call_count: 0, unclassified_call_count: 0 },
         ],
+        rejected_tool_calls: [],
         agents: [
           {
-            agent: "correctness:v1",
+            agent: "correctness:v2",
             model_name: "gpt-5.1",
             llm_call_count: 3,
             input_tokens: 120,
             output_tokens: 30,
             total_tokens: 150,
             tool_call_count: 2,
+            accepted_tool_call_count: 2,
+            rejected_tool_call_count: 0,
+            unclassified_tool_call_count: 0,
             started_at: "2026-07-25T00:00:00Z",
             completed_at: "2026-07-25T00:00:06Z",
             duration_ms: 6000,
@@ -445,7 +658,7 @@ it("shows the process report after a review has completed", async () => {
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -464,10 +677,13 @@ it("shows the process report after a review has completed", async () => {
     ),
   });
 
+  await userEvent.click(await screen.findByRole("tab", { name: /Runtime overview/ }));
   expect(await screen.findByRole("heading", { name: "Process report" })).toBeInTheDocument();
   expect(screen.getAllByText("150")).toHaveLength(2);
   expect(screen.getByText("get_diff")).toBeInTheDocument();
   expect(screen.getByText("gpt-5.1")).toBeInTheDocument();
+  await userEvent.click(screen.getByRole("tab", { name: /Logs/ }));
+  expect(screen.queryByRole("heading", { name: "Process report" })).not.toBeInTheDocument();
 });
 
 it("places finding navigation above a full-width source comparison", async () => {
@@ -519,7 +735,7 @@ it("places finding navigation above a full-width source comparison", async () =>
       scope_type: "branch",
       base_oid: "a".repeat(40),
       head_oid: "b".repeat(40),
-      selected_agents: ["correctness:v1"],
+      selected_agents: ["correctness:v2"],
       worktree_status: "pending",
       repository_id: "repository-1",
       repository_realpath_hash: "c".repeat(64),
@@ -539,7 +755,10 @@ it("places finding navigation above a full-width source comparison", async () =>
   });
 
   await screen.findByRole("heading", { name: "Correctness Reviewer" });
-  screen.getByRole("button", { name: /Findings/ }).click();
+  expect(screen.getByRole("tab", { name: /Findings/ })).toHaveAttribute(
+    "aria-selected",
+    "true",
+  );
 
   expect(await screen.findByRole("navigation", { name: "Finding navigation" })).toBeVisible();
   expect(screen.getByTestId("review-diff-editor")).toBeVisible();

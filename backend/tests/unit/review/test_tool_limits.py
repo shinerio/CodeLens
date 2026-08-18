@@ -6,6 +6,10 @@ import pytest
 
 from codelens.review.domain.tool_limits import (
     DEFAULT_COMMENT_BATCH_SIZE,
+    DEFAULT_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES,
+    DEFAULT_CONTEXT_COMPACTION_MAX_RETRIES,
+    DEFAULT_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE,
+    DEFAULT_CONTEXT_COMPACTION_RETRY_MAX_DELAY,
     DEFAULT_LONG_TEXT_MAX,
     DEFAULT_MAX_LINES,
     DEFAULT_MAX_PATH_CHARS,
@@ -15,10 +19,13 @@ from codelens.review.domain.tool_limits import (
     DEFAULT_MAX_SCAN_BYTES,
     DEFAULT_MAX_SOURCE_BYTES,
     DEFAULT_REGEX_TIMEOUT_SECONDS,
-    DEFAULT_REVIEWED_FILES_BATCH,
     DEFAULT_SHORT_TEXT_MAX,
     DEFAULT_TASK_SUMMARY_MAX,
     MAX_COMMENT_BATCH_SIZE,
+    MAX_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES,
+    MAX_CONTEXT_COMPACTION_MAX_RETRIES,
+    MAX_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE,
+    MAX_CONTEXT_COMPACTION_RETRY_MAX_DELAY,
     MAX_LONG_TEXT_MAX,
     MAX_MAX_LINES,
     MAX_MAX_PATH_CHARS,
@@ -28,10 +35,13 @@ from codelens.review.domain.tool_limits import (
     MAX_MAX_SCAN_BYTES,
     MAX_MAX_SOURCE_BYTES,
     MAX_REGEX_TIMEOUT_SECONDS,
-    MAX_REVIEWED_FILES_BATCH,
     MAX_SHORT_TEXT_MAX,
     MAX_TASK_SUMMARY_MAX,
     MIN_COMMENT_BATCH_SIZE,
+    MIN_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES,
+    MIN_CONTEXT_COMPACTION_MAX_RETRIES,
+    MIN_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE,
+    MIN_CONTEXT_COMPACTION_RETRY_MAX_DELAY,
     MIN_LONG_TEXT_MAX,
     MIN_MAX_LINES,
     MIN_MAX_PATH_CHARS,
@@ -41,7 +51,6 @@ from codelens.review.domain.tool_limits import (
     MIN_MAX_SCAN_BYTES,
     MIN_MAX_SOURCE_BYTES,
     MIN_REGEX_TIMEOUT_SECONDS,
-    MIN_REVIEWED_FILES_BATCH,
     MIN_SHORT_TEXT_MAX,
     MIN_TASK_SUMMARY_MAX,
     ToolLimits,
@@ -59,10 +68,32 @@ def test_default_tool_limits_are_within_bounds() -> None:
     assert limits.max_pattern_chars == DEFAULT_MAX_PATTERN_CHARS
     assert limits.regex_timeout_seconds == DEFAULT_REGEX_TIMEOUT_SECONDS
     assert limits.comment_batch_size == DEFAULT_COMMENT_BATCH_SIZE
-    assert limits.reviewed_files_batch == DEFAULT_REVIEWED_FILES_BATCH
     assert limits.short_text_max == DEFAULT_SHORT_TEXT_MAX
     assert limits.long_text_max == DEFAULT_LONG_TEXT_MAX
     assert limits.task_summary_max == DEFAULT_TASK_SUMMARY_MAX
+    assert limits.context_compaction_enabled is True
+    assert limits.context_compaction_trigger_tokens == 160000
+    assert limits.context_compaction_keep_recent_evidence_results == 6
+    assert (
+        limits.context_compaction_max_retries
+        == DEFAULT_CONTEXT_COMPACTION_MAX_RETRIES
+        == 3
+    )
+    assert (
+        limits.context_compaction_retry_backoff_base
+        == DEFAULT_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE
+        == 2.0
+    )
+    assert (
+        limits.context_compaction_retry_max_delay
+        == DEFAULT_CONTEXT_COMPACTION_RETRY_MAX_DELAY
+        == 30.0
+    )
+    assert (
+        limits.context_compaction_max_consecutive_failures
+        == DEFAULT_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES
+        == 3
+    )
 
 
 def test_tool_limits_accept_boundary_values() -> None:
@@ -76,12 +107,19 @@ def test_tool_limits_accept_boundary_values() -> None:
         max_pattern_chars=MIN_MAX_PATTERN_CHARS,
         regex_timeout_seconds=MIN_REGEX_TIMEOUT_SECONDS,
         comment_batch_size=MIN_COMMENT_BATCH_SIZE,
-        reviewed_files_batch=MIN_REVIEWED_FILES_BATCH,
         short_text_max=MIN_SHORT_TEXT_MAX,
         long_text_max=MIN_LONG_TEXT_MAX,
         task_summary_max=MIN_TASK_SUMMARY_MAX,
+        context_compaction_max_retries=MIN_CONTEXT_COMPACTION_MAX_RETRIES,
+        context_compaction_retry_backoff_base=MIN_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE,
+        context_compaction_retry_max_delay=MIN_CONTEXT_COMPACTION_RETRY_MAX_DELAY,
+        context_compaction_max_consecutive_failures=MIN_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES,
     )
     assert min_limits.max_results == MIN_MAX_RESULTS
+    assert (
+        min_limits.context_compaction_max_retries
+        == MIN_CONTEXT_COMPACTION_MAX_RETRIES
+    )
 
     max_limits = ToolLimits(
         max_results=MAX_MAX_RESULTS,
@@ -93,12 +131,19 @@ def test_tool_limits_accept_boundary_values() -> None:
         max_pattern_chars=MAX_MAX_PATTERN_CHARS,
         regex_timeout_seconds=MAX_REGEX_TIMEOUT_SECONDS,
         comment_batch_size=MAX_COMMENT_BATCH_SIZE,
-        reviewed_files_batch=MAX_REVIEWED_FILES_BATCH,
         short_text_max=MAX_SHORT_TEXT_MAX,
         long_text_max=MAX_LONG_TEXT_MAX,
         task_summary_max=MAX_TASK_SUMMARY_MAX,
+        context_compaction_max_retries=MAX_CONTEXT_COMPACTION_MAX_RETRIES,
+        context_compaction_retry_backoff_base=MAX_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE,
+        context_compaction_retry_max_delay=MAX_CONTEXT_COMPACTION_RETRY_MAX_DELAY,
+        context_compaction_max_consecutive_failures=MAX_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES,
     )
     assert max_limits.max_results == MAX_MAX_RESULTS
+    assert (
+        max_limits.context_compaction_max_consecutive_failures
+        == MAX_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES
+    )
 
 
 @pytest.mark.parametrize(
@@ -116,10 +161,35 @@ def test_tool_limits_accept_boundary_values() -> None:
         ("regex_timeout_seconds", MAX_REGEX_TIMEOUT_SECONDS + 0.1),
         ("comment_batch_size", MIN_COMMENT_BATCH_SIZE - 1),
         ("comment_batch_size", MAX_COMMENT_BATCH_SIZE + 1),
-        ("reviewed_files_batch", MIN_REVIEWED_FILES_BATCH - 1),
         ("short_text_max", MAX_SHORT_TEXT_MAX + 1),
         ("long_text_max", MIN_LONG_TEXT_MAX - 1),
         ("task_summary_max", MAX_TASK_SUMMARY_MAX + 1),
+        ("context_compaction_max_retries", MIN_CONTEXT_COMPACTION_MAX_RETRIES - 1),
+        ("context_compaction_max_retries", MAX_CONTEXT_COMPACTION_MAX_RETRIES + 1),
+        (
+            "context_compaction_retry_backoff_base",
+            MIN_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE - 0.01,
+        ),
+        (
+            "context_compaction_retry_backoff_base",
+            MAX_CONTEXT_COMPACTION_RETRY_BACKOFF_BASE + 0.1,
+        ),
+        (
+            "context_compaction_retry_max_delay",
+            MIN_CONTEXT_COMPACTION_RETRY_MAX_DELAY - 0.1,
+        ),
+        (
+            "context_compaction_retry_max_delay",
+            MAX_CONTEXT_COMPACTION_RETRY_MAX_DELAY + 0.1,
+        ),
+        (
+            "context_compaction_max_consecutive_failures",
+            MIN_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES - 1,
+        ),
+        (
+            "context_compaction_max_consecutive_failures",
+            MAX_CONTEXT_COMPACTION_MAX_CONSECUTIVE_FAILURES + 1,
+        ),
     ],
 )
 def test_tool_limits_reject_out_of_range_values(field: str, invalid_value: int | float) -> None:
@@ -130,6 +200,18 @@ def test_tool_limits_reject_out_of_range_values(field: str, invalid_value: int |
 def test_tool_limits_reject_boolean_values() -> None:
     with pytest.raises(ValueError, match="max_results"):
         ToolLimits(max_results=True)  # type: ignore[arg-type]
+
+
+def test_context_compaction_retry_fields_reject_boolean_values() -> None:
+    """The four numeric retry config fields must reject bool despite bool being an int subclass."""
+    for field in (
+        "context_compaction_max_retries",
+        "context_compaction_retry_backoff_base",
+        "context_compaction_retry_max_delay",
+        "context_compaction_max_consecutive_failures",
+    ):
+        with pytest.raises(ValueError, match=field):
+            ToolLimits(**{field: True})  # type: ignore[arg-type]
 
 
 def test_tool_limits_are_frozen() -> None:

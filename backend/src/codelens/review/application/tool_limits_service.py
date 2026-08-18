@@ -29,10 +29,16 @@ class ToolLimitsService:
         max_pattern_chars: int | None = None,
         regex_timeout_seconds: float | None = None,
         comment_batch_size: int | None = None,
-        reviewed_files_batch: int | None = None,
         short_text_max: int | None = None,
         long_text_max: int | None = None,
         task_summary_max: int | None = None,
+        context_compaction_enabled: bool | None = None,
+        context_compaction_trigger_tokens: int | None = None,
+        context_compaction_keep_recent_evidence_results: int | None = None,
+        context_compaction_max_retries: int | None = None,
+        context_compaction_retry_backoff_base: float | None = None,
+        context_compaction_retry_max_delay: float | None = None,
+        context_compaction_max_consecutive_failures: int | None = None,
     ) -> ToolLimits:
         """Merge partial updates into the current limits and atomically persist."""
 
@@ -57,15 +63,45 @@ class ToolLimitsService:
             comment_batch_size=(
                 comment_batch_size if comment_batch_size is not None else current.comment_batch_size
             ),
-            reviewed_files_batch=(
-                reviewed_files_batch
-                if reviewed_files_batch is not None
-                else current.reviewed_files_batch
-            ),
             short_text_max=short_text_max if short_text_max is not None else current.short_text_max,
             long_text_max=long_text_max if long_text_max is not None else current.long_text_max,
             task_summary_max=(
                 task_summary_max if task_summary_max is not None else current.task_summary_max
+            ),
+            context_compaction_enabled=(
+                context_compaction_enabled
+                if context_compaction_enabled is not None
+                else current.context_compaction_enabled
+            ),
+            context_compaction_trigger_tokens=(
+                context_compaction_trigger_tokens
+                if context_compaction_trigger_tokens is not None
+                else current.context_compaction_trigger_tokens
+            ),
+            context_compaction_keep_recent_evidence_results=(
+                context_compaction_keep_recent_evidence_results
+                if context_compaction_keep_recent_evidence_results is not None
+                else current.context_compaction_keep_recent_evidence_results
+            ),
+            context_compaction_max_retries=(
+                context_compaction_max_retries
+                if context_compaction_max_retries is not None
+                else current.context_compaction_max_retries
+            ),
+            context_compaction_retry_backoff_base=(
+                context_compaction_retry_backoff_base
+                if context_compaction_retry_backoff_base is not None
+                else current.context_compaction_retry_backoff_base
+            ),
+            context_compaction_retry_max_delay=(
+                context_compaction_retry_max_delay
+                if context_compaction_retry_max_delay is not None
+                else current.context_compaction_retry_max_delay
+            ),
+            context_compaction_max_consecutive_failures=(
+                context_compaction_max_consecutive_failures
+                if context_compaction_max_consecutive_failures is not None
+                else current.context_compaction_max_consecutive_failures
             ),
         )
         await asyncio.to_thread(self._store.save_tool_limits, limits)

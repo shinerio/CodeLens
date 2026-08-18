@@ -16,7 +16,7 @@ async def test_event_bus_publishes_to_all_subscribers() -> None:
     event = ReviewEvent(
         event_id=1,
         task_id=task_id,
-        event_type="review.created",
+        event_type="review.created.v2",
         payload={"status": "pending"},
     )
     await bus.publish(event)
@@ -25,9 +25,9 @@ async def test_event_bus_publishes_to_all_subscribers() -> None:
     received2 = await queue2.get()
 
     assert received1.event_id == 1
-    assert received1.event_type == "review.created"
+    assert received1.event_type == "review.created.v2"
     assert received2.event_id == 1
-    assert received2.event_type == "review.created"
+    assert received2.event_type == "review.created.v2"
 
 
 async def test_event_bus_unsubscribe_removes_subscriber() -> None:
@@ -42,7 +42,7 @@ async def test_event_bus_unsubscribe_removes_subscriber() -> None:
     event = ReviewEvent(
         event_id=1,
         task_id=task_id,
-        event_type="review.created",
+        event_type="review.created.v2",
         payload={},
     )
     await bus.publish(event)
@@ -60,8 +60,8 @@ async def test_event_bus_handles_multiple_tasks_independently() -> None:
     queue1 = await bus.subscribe(task1)
     queue2 = await bus.subscribe(task2)
 
-    event1 = ReviewEvent(event_id=1, task_id=task1, event_type="review.created", payload={})
-    event2 = ReviewEvent(event_id=2, task_id=task2, event_type="review.created", payload={})
+    event1 = ReviewEvent(event_id=1, task_id=task1, event_type="review.created.v2", payload={})
+    event2 = ReviewEvent(event_id=2, task_id=task2, event_type="review.created.v2", payload={})
 
     await bus.publish(event1)
     await bus.publish(event2)
@@ -90,5 +90,5 @@ async def test_event_bus_publish_with_no_subscribers() -> None:
     bus = InMemoryEventBus()
     task_id = "review_" + "f" * 32
 
-    event = ReviewEvent(event_id=1, task_id=task_id, event_type="review.created", payload={})
+    event = ReviewEvent(event_id=1, task_id=task_id, event_type="review.created.v2", payload={})
     await bus.publish(event)  # Should not raise

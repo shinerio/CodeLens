@@ -4,10 +4,17 @@ import asyncio
 import json
 import time
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Literal, Protocol, TypeVar
 
-from codelens.findings.domain.models import FindingBatch
+from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
+from codelens.findings.domain.candidates import CandidateFindingBatch
+from codelens.findings.infrastructure.verdict_codec import ValidatedVerdictBatch
+from codelens.review.application.dag_scheduler import (
+    PersistedDagScheduler,
+    reviewer_stage_outcome,
+)
+from codelens.review.domain.errors import AgentRuntimeError
 from codelens.review.domain.ports import (
     AgentReviewCompletionStatus,
     AgentRunCompletionPort,
@@ -17,7 +24,7 @@ from codelens.review.domain.ports import (
     FindingValidationWarning,
     RunArtifactPort,
 )
-from codelens.reviewer_catalog.domain.models import AgentVersion
+from codelens.review.domain.review_plan import ReviewPlan, ReviewPlanNode, ReviewPlanNodeType
 from codelens.workspace.domain.models import ReviewSnapshot
 
 type TranscriptKind = Literal[
@@ -25,6 +32,8 @@ type TranscriptKind = Literal[
     "prompt",
     "model_output",
     "tool_call",
+    "invalid_tool_call",
+    "invalid_tool_result",
     "tool_result",
     "skill_loaded",
     "model_started",
@@ -34,18 +43,21 @@ type TranscriptKind = Literal[
     "model_output_completed",
     "model_completed",
     "model_raw_output",
+    "checkpoint_compaction",
 ]
 type TranscriptRecord = tuple[TranscriptKind, str, Mapping[str, str] | None]
 
 
 @dataclass(frozen=True)
 class PreparedReview:
-    """Hold one frozen Snapshot and bounded input for each immutable Agent version."""
+    """Hold one Snapshot and bounded input for each frozen Agent execution spec."""
 
     snapshot: ReviewSnapshot
-    agents: tuple[AgentVersion, ...]
+    execution_specs: tuple[FrozenAgentExecutionSpec, ...]
     input_payloads: dict[str, bytes]
     prompt_locale: str
+    plan: ReviewPlan | None = None
+    execution_specs_by_node: dict[str, FrozenAgentExecutionSpec] = field(default_factory=dict)
 
 
 class _WorkflowPort(Protocol):
@@ -56,10 +68,15 @@ class _WorkflowPort(Protocol):
     async def fail(self, task_id: str, error_code: str) -> None: ...
     async def interrupt(self, task_id: str) -> None: ...
     async def complete_job(self, task_id: str) -> None: ...
+    async def mark_partial_coverage(self, task_id: str) -> None: ...
+    async def has_partial_coverage(self, task_id: str) -> bool: ...
 
 
 class CheckpointView(Protocol):
     """Expose only restart decisions needed by the application orchestrator."""
+
+    @property
+    def node_key(self) -> str: ...
 
     @property
     def status(self) -> str: ...
@@ -75,6 +92,9 @@ class CheckpointView(Protocol):
 
     @property
     def execution_attempts(self) -> int: ...
+
+    @property
+    def run_id(self) -> str | None: ...
 
 
 _CheckpointViewT = TypeVar("_CheckpointViewT", bound=CheckpointView, covariant=True)
@@ -93,13 +113,31 @@ class _CheckpointPort(Protocol[_CheckpointViewT]):
         review_completion_status: AgentReviewCompletionStatus,
     ) -> None: ...
     async def mark_validating(self, task_id: str, node_key: str) -> None: ...
+    async def ensure_plan_nodes(
+        self,
+        plan: ReviewPlan,
+        *,
+        capability_fingerprints: dict[str, str] | None = None,
+    ) -> None: ...
+    async def list_for_task(self, task_id: str) -> tuple[_CheckpointViewT, ...]: ...
+    async def mark_failed(
+        self,
+        task_id: str,
+        node_key: str,
+        error_code: str,
+        *,
+        is_timeout: bool = False,
+        failure_metadata: Mapping[str, str] | None = None,
+    ) -> None: ...
+    async def mark_skipped(self, task_id: str, node_key: str, reason_code: str) -> None: ...
+    async def cancel_non_terminal(self, task_id: str) -> None: ...
 
 
 class _ValidatorPort(Protocol):
     @property
     def warnings(self) -> tuple[FindingValidationWarning, ...]: ...
 
-    async def validate(self, payload: bytes) -> FindingBatch: ...
+    async def validate(self, payload: bytes) -> CandidateFindingBatch | ValidatedVerdictBatch: ...
 
 
 class _CrashInjectorPort(Protocol):
@@ -122,7 +160,7 @@ class _TranscriptPort(Protocol):
 class _StreamingRuntimePort(Protocol):
     async def invoke_stream(
         self,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         input_payload: bytes,
         snapshot: ReviewSnapshot,
         prompt_locale: str,
@@ -145,6 +183,8 @@ class ReviewOrchestrator:
         completion: AgentRunCompletionPort,
         agent_semaphore: asyncio.Semaphore,
         max_agent_runs_per_review: int,
+        prepare_verdict: Callable[[str, PreparedReview], Awaitable[bool]] | None = None,
+        publish_findings: Callable[[str], Awaitable[None]] | None = None,
         transcript: _TranscriptPort | None = None,
         crash_injector: _CrashInjectorPort | None = None,
     ) -> None:
@@ -157,6 +197,8 @@ class ReviewOrchestrator:
         self._completion = completion
         self._agent_semaphore = agent_semaphore
         self._review_agent_semaphore = asyncio.Semaphore(max_agent_runs_per_review)
+        self._prepare_verdict = prepare_verdict
+        self._publish_findings = publish_findings
         self._crash_injector = crash_injector
         self._transcript = transcript
 
@@ -172,17 +214,39 @@ class ReviewOrchestrator:
             if status == "canceled":
                 return
             prepared = await self._prepare(task_id)
+            if (
+                prepared.snapshot.manifest.review_paths
+                and prepared.plan is None
+                and not prepared.execution_specs
+            ):
+                raise RuntimeError("non-empty Review scope produced no executable Agent nodes")
             for expected, target in (
                 ("provisioning_worktree", "snapshotting"),
                 ("snapshotting", "preparing"),
-                ("preparing", "reviewing"),
             ):
                 status = await self._advance(task_id, status, expected, target)
                 if status == "canceled":
                     return
 
+            if prepared.plan is not None:
+                status = await self._advance(task_id, status, "preparing", "planning")
+                if status == "canceled":
+                    return
+                status = await self._advance(task_id, status, "planning", "reviewing")
+                if status == "canceled":
+                    return
+                await self._execute_persisted_plan(task_id, status, prepared)
+                return
+
+            status = await self._advance(task_id, status, "preparing", "reviewing")
+            if status == "canceled":
+                return
+
             results = await asyncio.gather(
-                *(self._checkpoint_output(task_id, prepared, agent) for agent in prepared.agents),
+                *(
+                    self._checkpoint_output(task_id, prepared, execution_spec)
+                    for execution_spec in prepared.execution_specs
+                ),
                 return_exceptions=True,
             )
             exceptions = [r for r in results if isinstance(r, BaseException)]
@@ -193,7 +257,10 @@ class ReviewOrchestrator:
             if status == "canceled":
                 return
             results = await asyncio.gather(
-                *(self._validate_output(task_id, prepared, agent) for agent in prepared.agents),
+                *(
+                    self._validate_output(task_id, prepared, execution_spec)
+                    for execution_spec in prepared.execution_specs
+                ),
                 return_exceptions=True,
             )
             exceptions = [r for r in results if isinstance(r, BaseException)]
@@ -216,6 +283,7 @@ class ReviewOrchestrator:
                 await self._record(task_id, "lifecycle", message)
         except asyncio.CancelledError:
             if await self._workflow.cancellation_requested(task_id):
+                await self._checkpoints.cancel_non_terminal(task_id)
                 await self._workflow.cancel(task_id)
             else:
                 await self._workflow.interrupt(task_id)
@@ -239,25 +307,191 @@ class ReviewOrchestrator:
     async def _cancel_if_requested(self, task_id: str) -> bool:
         if not await self._workflow.cancellation_requested(task_id):
             return False
+        await self._checkpoints.cancel_non_terminal(task_id)
         await self._workflow.cancel(task_id)
         return True
+
+    async def _execute_persisted_plan(
+        self, task_id: str, status: str, prepared: PreparedReview
+    ) -> None:
+        """Drive one frozen DAG from durable node state with isolated failures."""
+
+        plan = prepared.plan
+        if plan is None:
+            raise RuntimeError("persisted execution requires a Review Plan")
+        scheduler = PersistedDagScheduler(plan, self._checkpoints)
+        specs = prepared.execution_specs_by_node
+        if set(specs) != {node.node_id for node in plan.nodes}:
+            raise ValueError("prepared execution specs do not match the Review Plan")
+        await scheduler.initialize({node_id: spec.fingerprint for node_id, spec in specs.items()})
+        planner_nodes = tuple(
+            node for node in plan.nodes if node.node_type is ReviewPlanNodeType.PLANNER
+        )
+        if planner_nodes:
+            planner_checkpoint = await self._checkpoints.get(task_id, planner_nodes[0].node_id)
+            if planner_checkpoint.status != "succeeded":
+                raise RuntimeError("Adaptive Planner output must be durable before Plan execution")
+
+        while True:
+            if await self._cancel_if_requested(task_id):
+                return
+            records = await self._checkpoints.list_for_task(task_id)
+            by_node = {record.node_key: record for record in records}
+            reviewer_nodes = tuple(
+                node for node in plan.nodes if node.node_type is ReviewPlanNodeType.REVIEWER
+            )
+            reviewer_records = tuple(by_node[node.node_id] for node in reviewer_nodes)
+            reviewers_terminal = all(
+                record.status in {"succeeded", "failed", "timed_out", "canceled", "skipped"}
+                for record in reviewer_records
+            )
+            if reviewers_terminal:
+                outcome = reviewer_stage_outcome(reviewer_records)
+                if outcome == "failed":
+                    await self._skip_pending_nodes(task_id, plan, by_node, "reviewer_stage_failed")
+                    await self._workflow.fail(task_id, "all_reviewers_failed")
+                    return
+                if outcome == "partial" or any(
+                    record.review_completion_status == "incomplete"
+                    for record in reviewer_records
+                    if record.status == "succeeded"
+                ):
+                    await self._workflow.mark_partial_coverage(task_id)
+
+            verifier = next(
+                (node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER),
+                None,
+            )
+            if verifier is not None and reviewers_terminal:
+                skip_verifier = False
+                if self._prepare_verdict is not None:
+                    skip_verifier = await self._prepare_verdict(task_id, prepared)
+                if skip_verifier:
+                    if self._publish_findings is not None:
+                        await self._publish_findings(task_id)
+                    await self._finish_persisted_task(task_id, status)
+                    return
+                verifier_status = by_node[verifier.node_id].status
+                if verifier_status in {"failed", "timed_out"}:
+                    await self._workflow.mark_partial_coverage(task_id)
+                    if self._publish_findings is not None:
+                        await self._publish_findings(task_id)
+                    await self._finish_persisted_task(task_id, status)
+                    return
+                if verifier_status == "succeeded":
+                    if self._publish_findings is not None:
+                        await self._publish_findings(task_id)
+                    await self._finish_persisted_task(task_id, status)
+                    return
+            elif verifier is None and reviewers_terminal:
+                if self._prepare_verdict is not None:
+                    await self._prepare_verdict(task_id, prepared)
+                if self._publish_findings is not None:
+                    await self._publish_findings(task_id)
+                await self._finish_persisted_task(task_id, status)
+                return
+
+            ready = await scheduler.next_ready_nodes(task_id)
+            ready = tuple(
+                node for node in ready if node.node_type is not ReviewPlanNodeType.PLANNER
+            )
+            if not ready:
+                raise RuntimeError("persisted Review DAG has no ready or terminal reduction")
+            if any(node.node_type is ReviewPlanNodeType.VERIFIER for node in ready):
+                status = await self._advance(task_id, status, "reviewing", "verifying")
+            await asyncio.gather(
+                *(self._execute_plan_node(task_id, prepared, node) for node in ready)
+            )
+
+    async def _execute_plan_node(
+        self, task_id: str, prepared: PreparedReview, node: ReviewPlanNode
+    ) -> None:
+        execution_spec = prepared.execution_specs_by_node[node.node_id]
+        try:
+            await self._checkpoint_output(task_id, prepared, execution_spec, node_key=node.node_id)
+            await self._validate_output(task_id, prepared, execution_spec, node_key=node.node_id)
+        except asyncio.CancelledError:
+            raise
+        except Exception as error:
+            failure_metadata: dict[str, str] = {
+                "agent": node.agent_reference,
+                "error_type": type(error).__name__,
+            }
+            if isinstance(error, AgentRuntimeError):
+                failure_metadata.update(error.failure_metadata())
+                # Persist partial candidates if available
+                if error.partial_candidates is not None:
+                    try:
+                        await self._completion.persist_partial_candidates(
+                            task_id, node.node_id, error.partial_candidates
+                        )
+                    except Exception:
+                        # Don't let persistence failure mask the original error
+                        pass
+            checkpoint = await self._checkpoints.get(task_id, node.node_id)
+            if checkpoint.status in {"running", "validating"}:
+                await self._checkpoints.mark_failed(
+                    task_id,
+                    node.node_id,
+                    "agent_node_failed",
+                    is_timeout=isinstance(error, TimeoutError),
+                    failure_metadata=failure_metadata,
+                )
+            await self._record(
+                task_id,
+                "lifecycle",
+                "Agent node failed and the persisted DAG will reduce its stage",
+                failure_metadata,
+            )
+
+    async def _skip_pending_nodes(
+        self,
+        task_id: str,
+        plan: ReviewPlan,
+        records: Mapping[str, CheckpointView],
+        reason_code: str,
+    ) -> None:
+        for node in plan.nodes:
+            if records[node.node_id].status == "pending":
+                await self._checkpoints.mark_skipped(task_id, node.node_id, reason_code)
+
+    async def _finish_persisted_task(self, task_id: str, status: str) -> None:
+        target = "partial" if await self._workflow.has_partial_coverage(task_id) else "completed"
+        final_status = await self._advance(task_id, status, status, target)
+        if final_status in {"completed", "partial"}:
+            await self._workflow.complete_job(task_id)
+            await self._record(
+                task_id,
+                "lifecycle",
+                (
+                    "Review execution completed"
+                    if final_status == "completed"
+                    else "Review execution completed with partial Agent coverage"
+                ),
+            )
 
     async def _checkpoint_output(
         self,
         task_id: str,
         prepared: PreparedReview,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
+        *,
+        node_key: str | None = None,
     ) -> None:
         if await self._cancel_if_requested(task_id):
             return
-        node_key = self._node_key(agent)
+        node_key = node_key or self._node_key(execution_spec)
         await self._checkpoints.ensure(task_id, node_key, "primary")
         checkpoint = await self._checkpoints.get(task_id, node_key)
         if checkpoint.status in {"output_saved", "validating", "succeeded"}:
             return
         if checkpoint.status != "pending":
             raise RuntimeError("interrupted checkpoint was not recovered before execution")
-        input_payload = prepared.input_payloads[self._agent_key(agent)]
+        input_payload = (
+            prepared.input_payloads[node_key]
+            if node_key in prepared.input_payloads
+            else prepared.input_payloads[self._agent_key(execution_spec)]
+        )
         transcript_records: list[TranscriptRecord] = []
         await self._checkpoints.mark_running(task_id, node_key)
         await self._hit("before_model_invocation")
@@ -265,7 +499,7 @@ class ReviewOrchestrator:
 
         async def record_stream_event(event: AgentRuntimeEvent) -> None:
             nonlocal last_transcript_flush
-            await self._buffer_runtime_event(transcript_records, agent, event)
+            await self._buffer_runtime_event(transcript_records, execution_spec, event)
             if time.monotonic() - last_transcript_flush >= 1.0:
                 await self._record_many(task_id, transcript_records)
                 transcript_records.clear()
@@ -276,14 +510,14 @@ class ReviewOrchestrator:
                 stream = getattr(self._runtime, "invoke_stream", None)
                 if stream is None:
                     output = await self._runtime.invoke(
-                        agent,
+                        execution_spec,
                         input_payload,
                         prepared.snapshot,
                         prepared.prompt_locale,
                     )
                 else:
                     output = await stream(
-                        agent,
+                        execution_spec,
                         input_payload,
                         prepared.snapshot,
                         prepared.prompt_locale,
@@ -294,11 +528,33 @@ class ReviewOrchestrator:
                 "model_output",
                 output.canonical_bytes.decode("utf-8", errors="replace"),
                 {
-                    "agent": self._agent_key(agent),
+                    "agent": self._agent_key(execution_spec),
+                    "usage_scope": "agent_run",
                     "model_name": output.model_name,
                     "llm_call_count": str(len(output.diagnostics)),
+                    "checkpoint_llm_call_count": str(output.checkpoint_llm_call_count),
                     "input_tokens": str(output.input_tokens),
+                    "checkpoint_input_tokens": str(output.checkpoint_input_tokens),
+                    "cached_input_tokens": str(output.cached_input_tokens),
+                    "context_compaction_count": str(output.context_compaction_count),
+                    "context_compacted_result_count": str(output.context_compacted_result_count),
+                    "context_compaction_original_tokens": str(
+                        output.context_compaction_original_tokens
+                    ),
+                    "context_compaction_compressed_tokens": str(
+                        output.context_compaction_compressed_tokens
+                    ),
+                    "context_compaction_failure_count": str(
+                        output.context_compaction_failure_count
+                    ),
+                    "compaction_replay_registered_count": str(
+                        output.compaction_replay_registered_count
+                    ),
+                    "compaction_replay_consumed_count": str(
+                        output.compaction_replay_consumed_count
+                    ),
                     "output_tokens": str(output.output_tokens),
+                    "checkpoint_output_tokens": str(output.checkpoint_output_tokens),
                     "total_tokens": str(output.input_tokens + output.output_tokens),
                 },
             )
@@ -317,7 +573,7 @@ class ReviewOrchestrator:
                         f"{len(output.incomplete_review_files)} files lack verified review coverage"
                     ),
                     {
-                        "agent": self._agent_key(agent),
+                        "agent": self._agent_key(execution_spec),
                         "warning_code": "review_coverage_incomplete",
                         "incomplete_file_count": str(len(output.incomplete_review_files)),
                         "incomplete_files": incomplete_files,
@@ -341,11 +597,13 @@ class ReviewOrchestrator:
         self,
         task_id: str,
         prepared: PreparedReview,
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
+        *,
+        node_key: str | None = None,
     ) -> None:
         if await self._cancel_if_requested(task_id):
             return
-        node_key = self._node_key(agent)
+        node_key = node_key or self._node_key(execution_spec)
         checkpoint = await self._checkpoints.get(task_id, node_key)
         if checkpoint.status == "succeeded":
             return
@@ -362,31 +620,55 @@ class ReviewOrchestrator:
             checkpoint.artifact_ref,
             checkpoint.artifact_hash,
         )
-        validator = self._validator_factory(task_id, node_key, prepared, agent)
-        findings = await validator.validate(payload)
+        validator = self._validator_factory(
+            task_id,
+            node_key,
+            prepared,
+            execution_spec.agent,
+            checkpoint,
+        )
+        validated = await validator.validate(payload)
         if validator.warnings:
+            retained_count = (
+                len(validated.candidates)
+                if isinstance(validated, CandidateFindingBatch)
+                else len(validated.decisions)
+            )
             duplicate_count = sum(
                 warning.reason_code == "duplicate" for warning in validator.warnings
             )
             invalid_count = len(validator.warnings) - duplicate_count
+            skipped_reasons = "; ".join(
+                f"[{warning.reason_code}] candidate#{warning.candidate_index}: {warning.message}"
+                for warning in validator.warnings
+            )
             await self._record(
                 task_id,
                 "lifecycle",
                 (
-                    f"Finding validation retained {len(findings.findings)} and skipped "
+                    f"Finding validation retained {retained_count} and skipped "
                     f"{len(validator.warnings)} model candidates"
                 ),
                 {
-                    "agent": self._agent_key(agent),
+                    "agent": self._agent_key(execution_spec),
                     "warning_code": "finding_validation_partial",
-                    "retained_count": str(len(findings.findings)),
+                    "retained_count": str(retained_count),
                     "skipped_count": str(len(validator.warnings)),
                     "duplicate_count": str(duplicate_count),
                     "invalid_count": str(invalid_count),
+                    "skipped_reasons": skipped_reasons,
                 },
             )
-        await self._completion.complete_with_findings(task_id, node_key, findings)
-        await self._hit("after_finding_completion")
+        if isinstance(validated, ValidatedVerdictBatch):
+            await self._completion.complete_with_verdicts(task_id, node_key, validated.decisions)
+        elif isinstance(validated, CandidateFindingBatch):
+            await self._completion.complete_with_candidates(
+                task_id,
+                node_key,
+                validated,
+                result_summary={"candidate_count": len(validated.candidates)},
+            )
+        await self._hit("after_candidate_completion")
 
     async def _task_completion_status(
         self,
@@ -397,8 +679,8 @@ class ReviewOrchestrator:
 
         checkpoints = await asyncio.gather(
             *(
-                self._checkpoints.get(task_id, self._node_key(agent))
-                for agent in prepared.agents
+                self._checkpoints.get(task_id, self._node_key(execution_spec))
+                for execution_spec in prepared.execution_specs
             )
         )
         return (
@@ -424,13 +706,17 @@ class ReviewOrchestrator:
     async def _record_runtime_event(
         self,
         records: list[TranscriptRecord],
-        agent: AgentVersion,
+        execution_spec: FrozenAgentExecutionSpec,
         event: AgentRuntimeEvent,
     ) -> None:
         """Keep streamed chunks in memory until the model produces complete output."""
 
         records.append(
-            (event.kind, event.content, {"agent": self._agent_key(agent), **event.metadata})
+            (
+                event.kind,
+                event.content,
+                {"agent": self._agent_key(execution_spec), **event.metadata},
+            )
         )
 
     _buffer_runtime_event = _record_runtime_event
@@ -440,9 +726,9 @@ class ReviewOrchestrator:
             await self._transcript.append_many(task_id, records)
 
     @staticmethod
-    def _agent_key(agent: AgentVersion) -> str:
-        return f"{agent.agent_id}:v{agent.version}"
+    def _agent_key(execution_spec: FrozenAgentExecutionSpec) -> str:
+        return execution_spec.agent.reference
 
     @classmethod
-    def _node_key(cls, agent: AgentVersion) -> str:
-        return f"{cls._agent_key(agent)}:0:root"
+    def _node_key(cls, execution_spec: FrozenAgentExecutionSpec) -> str:
+        return f"{cls._agent_key(execution_spec)}:0:root"

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any
 
+from codelens.plugin.api.v2 import TriggerReviewPolicy
 from codelens.plugin.domain.models import HookEvent
 from codelens.plugin.domain.ports import (
     ReviewCreatorPort,
@@ -93,8 +94,7 @@ class LocalHookTriggerAdapter(TriggerSinkPort):
                 repository_path=repository_path,
                 scope_type=config.get("scope_type", "uncommitted"),
                 scope_params=scope_params,
-                selected_agents=tuple(config.get("selected_agents", [])),
-                prompt_locale=config.get("prompt_locale", "en"),
+                review_policy=TriggerReviewPolicy.from_config(config),
                 external_context=None,
             )
             _LOGGER.info(

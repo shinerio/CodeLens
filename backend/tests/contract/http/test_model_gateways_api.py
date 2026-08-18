@@ -66,6 +66,10 @@ def test_multiple_model_gateways_are_redacted_switchable_and_persistent(
     assert empty.json() == {"active_gateway_id": None, "gateways": []}
     assert primary.status_code == 201, primary.text
     assert primary_id.startswith("gateway_")
+    primary_gateway = primary.json()["gateways"][0]
+    assert primary_gateway["agent_timeout"] == 3600
+    assert primary_gateway["max_agent_turns"] == 500
+    assert primary_gateway["max_tool_calls"] == 500
     assert secondary.status_code == 201, secondary.text
     assert secondary.json()["active_gateway_id"] == primary_id
     assert activated.status_code == 200, activated.text
@@ -97,9 +101,7 @@ def test_multiple_model_gateways_are_redacted_switchable_and_persistent(
     assert len(persisted.json()["gateways"]) == 2
     assert deleted.status_code == 200, deleted.text
     assert deleted.json()["active_gateway_id"] == primary_id
-    assert [gateway["name"] for gateway in deleted.json()["gateways"]] == [
-        "Primary renamed"
-    ]
+    assert [gateway["name"] for gateway in deleted.json()["gateways"]] == ["Primary renamed"]
 
 
 def test_model_gateway_update_rejects_unknown_gateway_without_leaking_key(
@@ -138,6 +140,7 @@ def test_model_execution_limits_are_validated_and_persisted_per_gateway(
                 "max_tool_calls": 240,
                 "max_identical_tool_results": 4,
                 "tool_timeout_seconds": 20,
+                "no_progress_rounds_threshold": 7,
             },
         )
         gateway = created.json()["gateways"][0]
@@ -150,6 +153,15 @@ def test_model_execution_limits_are_validated_and_persisted_per_gateway(
                 "max_identical_tool_results": 1,
             },
         )
+        invalid_no_progress = client.put(
+            f"/api/settings/model-gateways/{gateway['gateway_id']}",
+            json={
+                "name": gateway["name"],
+                "model": gateway["model"],
+                "base_url": gateway["base_url"],
+                "no_progress_rounds_threshold": 0,
+            },
+        )
 
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
         persisted = client.get("/api/settings/model-gateways").json()["gateways"][0]
@@ -160,7 +172,9 @@ def test_model_execution_limits_are_validated_and_persisted_per_gateway(
     assert gateway["max_tool_calls"] == 240
     assert gateway["max_identical_tool_results"] == 4
     assert gateway["tool_timeout_seconds"] == 20
+    assert gateway["no_progress_rounds_threshold"] == 7
     assert invalid.status_code == 422
+    assert invalid_no_progress.status_code == 422
     assert persisted == gateway
 
 
@@ -175,9 +189,7 @@ def _free_tcp_port() -> int:
 
 
 def test_gateway_connectivity_succeeds_for_reachable_host(tmp_path: Path) -> None:
-    async def _noop_handler(
-        reader: asyncio.StreamReader, writer: asyncio.StreamWriter
-    ) -> None:
+    async def _noop_handler(reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         writer.close()
 
     async def _serve() -> tuple[asyncio.base_events.Server, int]:

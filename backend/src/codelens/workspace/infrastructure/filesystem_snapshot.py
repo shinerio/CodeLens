@@ -12,12 +12,19 @@ from codelens.shared.domain.errors import InvalidRepositoryError, WorktreeMutate
 from codelens.workspace.domain.models import (
     ExcludedPath,
     RepositoryFingerprint,
+    ReviewFileChange,
     ReviewSnapshot,
     SnapshotBuild,
     SnapshotEntry,
     SnapshotManifest,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import (
+    ReviewFileExclusionPolicy,
+    ReviewFileScope,
+    ReviewFileScopeResolver,
+)
+from codelens.workspace.infrastructure.binary_file_classifier import BinaryFileClassifier
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.git_ignore import GitIgnoreResolver
 
@@ -111,10 +118,9 @@ def _snapshot_entry(root: Path, path: str, origin: _SnapshotOrigin) -> SnapshotE
 
 def _canonical_manifest(manifest: SnapshotManifest) -> bytes:
     payload = {
-        "target_paths": manifest.target_paths,
-        "context_paths": manifest.context_paths,
+        "review_scope": json.loads(manifest.review_scope.canonical_json()),
+        "scope_hash": manifest.review_scope.scope_hash,
         "instruction_paths": manifest.instruction_paths,
-        "excluded_paths": [asdict(path) for path in manifest.excluded_paths],
         "entries": [asdict(entry) for entry in manifest.entries],
     }
     return json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
@@ -128,14 +134,26 @@ class FilesystemSnapshotBuilder:
     the worktree can be exposed to a Reviewer.
     """
 
-    def __init__(self, *, git: GitCli, ignore: GitIgnoreResolver) -> None:
+    def __init__(
+        self,
+        *,
+        git: GitCli,
+        ignore: GitIgnoreResolver,
+        binary: BinaryFileClassifier | None = None,
+        scope_resolver: ReviewFileScopeResolver | None = None,
+    ) -> None:
         self._git = git
         self._ignore = ignore
+        self._binary = binary or BinaryFileClassifier(git)
+        self._scope_resolver = scope_resolver or ReviewFileScopeResolver()
 
     async def build(
         self,
         worktree: TaskWorktree,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
+        base_oid: str,
+        policy: ReviewFileExclusionPolicy,
+        resolved_scope: ReviewFileScope | None,
         instructions: ResolvedInstructionSet,
         structured_skip: StructuredSkipPort,
     ) -> SnapshotBuild:
@@ -154,11 +172,9 @@ class FilesystemSnapshotBuilder:
             for raw in listed.stdout.split(b"\0")
             if raw
         )
-        all_instruction_paths = tuple(
-            document.relative_path for document in instructions.documents
-        )
+        all_instruction_paths = tuple(document.relative_path for document in instructions.documents)
         control_set = set(all_instruction_paths)
-        candidates = tuple(sorted({*context_candidates, *target_paths} - control_set))
+        candidates = tuple(sorted({*context_candidates, *candidate_paths} - control_set))
         ignore_resolution = await self._ignore.resolve(worktree.root, candidates)
 
         policy_excluded = tuple(
@@ -166,25 +182,39 @@ class FilesystemSnapshotBuilder:
             for path in ignore_resolution.included
             if structured_skip.excludes(path, instructions)
         )
-        policy_excluded_set = {item.path for item in policy_excluded}
-        included = tuple(
-            path for path in ignore_resolution.included if path not in policy_excluded_set
-        )
-        included_set = set(included)
-        normalized_targets = tuple(
+        normalized_candidates = tuple(
             sorted(
                 path
-                for path in (_normalize_path(value) for value in target_paths)
-                if path in included_set and path not in control_set
+                for path in (_normalize_path(value) for value in candidate_paths)
+                if path not in control_set
             )
         )
-        context_paths = tuple(
-            sorted(
-                path
-                for path in context_candidates
-                if path in included_set and path not in control_set
-            )
+        context_candidates = tuple(
+            sorted(path for path in context_candidates if path not in control_set)
         )
+        if resolved_scope is None:
+            binary_review_paths = await self._binary.classify(
+                worktree.root,
+                base_oid,
+                tuple(ReviewFileChange(path, "modified") for path in normalized_candidates),
+            )
+            binary_context_paths = await self._binary.classify_current(
+                worktree.root, context_candidates
+            )
+            review_scope = self._scope_resolver.resolve(
+                candidate_review_paths=normalized_candidates,
+                candidate_context_paths=context_candidates,
+                policy=policy,
+                git_ignored_paths=tuple(item.path for item in ignore_resolution.excluded),
+                instruction_excluded_paths=tuple(item.path for item in policy_excluded),
+                binary_paths=tuple((*binary_review_paths, *binary_context_paths)),
+            )
+        else:
+            if resolved_scope.policy_hash != policy.policy_hash:
+                raise ValueError("persisted Review file scope policy does not match task")
+            review_scope = resolved_scope
+        normalized_targets = review_scope.review_paths
+        context_paths = review_scope.context_paths
         active_targets = set(normalized_targets)
         active_instruction_path_set = {
             rule_path
@@ -211,10 +241,12 @@ class FilesystemSnapshotBuilder:
         entries = tuple(entry for entry in raw_entries if entry is not None)
         # Filter paths whose entries were skipped (e.g., submodule directories)
         entry_paths = {entry.path for entry in entries}
+        manifest_scope = review_scope.with_visible_paths(
+            tuple(p for p in normalized_targets if p in entry_paths),
+            tuple(p for p in context_paths if p in entry_paths),
+        )
         manifest = SnapshotManifest(
-            target_paths=tuple(p for p in normalized_targets if p in entry_paths),
-            context_paths=tuple(p for p in context_paths if p in entry_paths),
-            excluded_paths=tuple((*ignore_resolution.excluded, *policy_excluded)),
+            review_scope=manifest_scope,
             instruction_paths=tuple(p for p in instruction_paths if p in entry_paths),
             entries=entries,
         )

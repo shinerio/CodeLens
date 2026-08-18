@@ -8,20 +8,26 @@ from codelens.review.domain.models import (
     ReviewStatus,
     ReviewTask,
 )
+from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
+    FixedReviewerSelection,
+    ReviewProfileSnapshot,
+)
 from codelens.workspace.domain.models import BranchScope, ReviewTarget
 
 
-def _review_task() -> ReviewTask:
+def _review_task(profile: ReviewProfileSnapshot | None = None) -> ReviewTask:
     return ReviewTask.create(
         task_id="review-1",
         repository_id="repository-1",
         repository_realpath_hash="c" * 64,
         git_common_dir_hash="d" * 64,
         repository_path=Path("/tmp/repository-1"),
-        target_paths=("src/state.py",),
+        candidate_paths=("src/state.py",),
         scope=BranchScope(base_ref="main", target_ref="feature"),
         target=ReviewTarget("a" * 40, "b" * 40, None),
-        selected_agent_versions=("correctness:v1",),
+        selected_agent_versions=("correctness:v2",),
+        review_profile=profile,
         created_at=datetime(2026, 7, 17, tzinfo=UTC),
     )
 
@@ -67,3 +73,27 @@ def test_cancellation_is_valid_from_every_non_terminal_state(status: ReviewStatu
 
     assert task.cancellation_requested
     assert task.status is ReviewStatus.CANCELED
+
+
+def test_fixed_selection_preserves_order_as_actual_team() -> None:
+    task = _review_task(
+        ReviewProfileSnapshot(
+            FixedReviewerSelection(("security:v2", "performance:v2")),
+            source_profile_id="profile-team",
+            source_profile_revision=2,
+        )
+    )
+
+    assert task.selected_agent_versions == ("security:v2", "performance:v2")
+
+
+def test_adaptive_selection_has_no_actual_team_before_planning() -> None:
+    task = _review_task(
+        ReviewProfileSnapshot(
+            AdaptiveReviewerSelection(),
+            source_profile_id="profile-auto",
+            source_profile_revision=3,
+        )
+    )
+
+    assert task.initial_selected_agent_versions() == ()

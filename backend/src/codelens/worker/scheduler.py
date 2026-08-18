@@ -11,6 +11,18 @@ from codelens.worker.singleton import WorkerSingletonPort
 _LOGGER = logging.getLogger("codelens.worker.scheduler")
 
 
+def fair_per_review_agent_limit(
+    *, configured_limit: int, global_limit: int, max_active_reviews: int
+) -> int:
+    """Reserve global Agent capacity for a peer task whenever concurrency permits."""
+
+    if min(configured_limit, global_limit, max_active_reviews) < 1:
+        raise ValueError("Worker concurrency limits must be positive")
+    if max_active_reviews == 1 or global_limit == 1:
+        return min(configured_limit, global_limit)
+    return min(configured_limit, global_limit - 1)
+
+
 @dataclass(frozen=True)
 class WorkerSemaphores:
     """Share bounded Agent, model, and tool capacity across active reviews."""
@@ -96,9 +108,7 @@ class ReviewScheduler:
         if task is not None:
             task.cancel()
 
-    def _make_unregister_callback(
-        self, task_id: str
-    ) -> Callable[[asyncio.Task[None]], None]:
+    def _make_unregister_callback(self, task_id: str) -> Callable[[asyncio.Task[None]], None]:
         """Return a callback that removes a task from the active registry."""
 
         def unregister(task: asyncio.Task[None]) -> None:
@@ -115,8 +125,11 @@ class ReviewScheduler:
             await self._singleton.acquire()
             acquired = True
             _LOGGER.info("Worker singleton acquired")
-            await self._recover()
-            _LOGGER.info("Worker recovery completed")
+            try:
+                await self._recover()
+                _LOGGER.info("Worker recovery completed")
+            except Exception:
+                _LOGGER.exception("Worker recovery failed; continuing with poll loop")
             await self._poll(stop_event)
         finally:
             if acquired:

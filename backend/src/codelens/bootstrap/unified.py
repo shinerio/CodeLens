@@ -9,7 +9,7 @@ import uvicorn
 
 from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.settings import Settings
-from codelens.findings.infrastructure.agent_output_codec import AgentOutputCodec
+from codelens.bootstrap.web_settings_defaults import load_web_settings_defaults
 from codelens.instruction_policy.application.resolver import InstructionResolver
 from codelens.instruction_policy.application.settings import InstructionSettingsService
 from codelens.instruction_policy.infrastructure.file_settings import (
@@ -30,10 +30,21 @@ from codelens.plugin.infrastructure.export_history_store import SqliteExportHist
 from codelens.plugin.infrastructure.git_installer import GitPluginInstaller
 from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader
 from codelens.plugin.infrastructure.plugin_store import FilesystemPluginStore
+from codelens.plugin.report.local_file_export.existing_findings import (
+    LocalExistingFindingsProvider,
+)
 from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
 from codelens.review.application.context_builder import ContextBuilder
+from codelens.review.application.review_profiles import (
+    CopyReviewProfileHandler,
+    CreateReviewProfileHandler,
+    DeleteReviewProfileHandler,
+    ListReviewProfilesHandler,
+    SetDefaultReviewProfileHandler,
+    UpdateReviewProfileHandler,
+)
 from codelens.review.application.settings import (
     ReviewCompletionSettingsService,
     TriggerIdempotencySettingsService,
@@ -51,11 +62,16 @@ from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 from codelens.review.infrastructure.model_log import ModelTranscriptLogWriter
 from codelens.review.infrastructure.openai_runtime import OpenAIAgentRuntime
 from codelens.review.infrastructure.repositories import (
+    SqlAgentExecutionSpecStore,
+    SqlCandidateFindingStore,
     SqlCheckpointStore,
     SqlEventOutbox,
     SqlJobQueue,
     SqlRecentRepositoryStore,
+    SqlReviewPlanStore,
+    SqlReviewProfileRepository,
     SqlReviewStore,
+    SqlVerdictStore,
     SqlWorktreeRegistry,
 )
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
@@ -79,11 +95,18 @@ from codelens.worker.execution import SqlJobQueuePortAdapter, WorkerReviewExecut
 from codelens.worker.scheduler import ReviewScheduler, WorkerSemaphores
 from codelens.worker.singleton import platform_worker_singleton
 from codelens.workspace.application.create_snapshot import SnapshotService
+from codelens.workspace.application.file_exclusion_settings import (
+    FileExclusionPolicyService,
+)
 from codelens.workspace.application.worktree_lifecycle import (
     ReviewWorktreeLifecycle,
     ReviewWorktreeRecoveryService,
 )
 from codelens.workspace.infrastructure.change_index import GitChangeIndexBuilder
+from codelens.workspace.infrastructure.file_exclusion_settings import (
+    FilesystemFileExclusionPolicySource,
+    FilesystemFileExclusionPolicyStore,
+)
 from codelens.workspace.infrastructure.filesystem_snapshot import FilesystemSnapshotBuilder
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.git_ignore import GitIgnoreResolver
@@ -110,7 +133,11 @@ class UnifiedBackend:
 
         await self.components.start()
         await initialize_plugins(self.components)
-        configure_process_logging("unified", data_directory=self.settings.data_dir)
+        configure_process_logging(
+            "unified",
+            data_directory=self.settings.data_dir,
+            default_level=self.components.web_settings_defaults.log_level,
+        )
         _LOGGER.info("Unified backend started")
 
     async def run(self, stop: asyncio.Event) -> None:
@@ -158,32 +185,55 @@ def build_unified_backend(
 ) -> UnifiedBackend:
     """Compose API and Worker with shared database, event bus, and transcripts."""
 
+    web_settings_defaults = load_web_settings_defaults(
+        settings.web_settings_defaults_config
+    )
     database = Database(settings.resolved_database_url)
     event_bus = InMemoryEventBus()
     git = GitCli()
 
     # Shared infrastructure
     review_store = SqlReviewStore(database, event_bus=event_bus)
+    event_outbox = SqlEventOutbox(database, event_bus=event_bus)
     recent_repository_store = SqlRecentRepositoryStore(database)
+    review_profile_repository = SqlReviewProfileRepository(database)
     worktree_registry = SqlWorktreeRegistry(database, settings.data_dir)
     input_artifacts = FilesystemInputArtifactStore(settings.data_dir / "artifacts" / "inputs")
     transcripts_store = ExecutionTranscriptStore(settings.data_dir / "artifacts" / "transcripts")
     worker_transcripts = WorkerTranscriptStore(
         transcripts_store,
-        model_log=ModelTranscriptLogWriter(),
+        model_log=ModelTranscriptLogWriter(settings.data_dir),
+        rejection_events=event_outbox,
     )
-    instruction_line_limits = FilesystemInstructionLineLimitsStore(settings.data_dir)
+    instruction_line_limits = FilesystemInstructionLineLimitsStore(
+        settings.data_dir, web_settings_defaults.instruction_files
+    )
     review_completion_settings = ReviewCompletionSettingsService(
-        FilesystemReviewCompletionSettingsStore(settings.data_dir)
+        FilesystemReviewCompletionSettingsStore(
+            settings.data_dir, web_settings_defaults.review_completion
+        )
     )
     trigger_idempotency_settings = TriggerIdempotencySettingsService(
-        FilesystemTriggerIdempotencySettingsStore(settings.data_dir)
+        FilesystemTriggerIdempotencySettingsStore(
+            settings.data_dir, web_settings_defaults.trigger_idempotency
+        )
     )
-    tool_limits_service = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
+    tool_limits_service = ToolLimitsService(
+        FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
+    )
+    file_exclusion_source = FilesystemFileExclusionPolicySource(settings.file_exclusion_config)
+    file_exclusion_source.get_policy()
+    file_exclusion_settings = FileExclusionPolicyService(
+        file_exclusion_source,
+        FilesystemFileExclusionPolicyStore(
+            settings.data_dir, web_settings_defaults.file_exclusions
+        ),
+    )
 
     # Create repository inspector early so it can be shared with Worker
     from codelens.workspace.application.inspect_repository import RepositoryInspector
     from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
+
     repository_inspector = RepositoryInspector(
         GitRepositoryMetadataAdapter(git),
         settings.repository_roots,
@@ -219,13 +269,13 @@ def build_unified_backend(
             line_limits_provider=instruction_line_limits,
         ),
         structured_skip=StructuredSkipMatcher(),
+        scope_store=review_store,
     )
     snapshot_reader = FilesystemSnapshotReader(git)
-    codec = AgentOutputCodec("1")
     system_prompts = I18nPromptLoader.load(settings.prompt_dir)
+    provider_config_store = FilesystemModelProviderConfigAdapter(settings.data_dir)
     provider_runtime = runtime or OpenAIAgentRuntime(
-        FilesystemModelProviderConfigAdapter(settings.data_dir),
-        codec,
+        provider_config_store,
         git,
         system_prompts,
         completion_settings=review_completion_settings,
@@ -251,13 +301,18 @@ def build_unified_backend(
             settings.data_dir / "artifacts" / "outputs",
         ),
         checkpoints=SqlCheckpointStore(database),
-        codec=codec,
         semaphores=semaphores,
         transcripts=worker_transcripts,
         reviewer_prompts=ReviewerPromptSettingsService(
             FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
         ),
         repository_inspector=repository_inspector,
+        provider_config=provider_config_store,
+        tool_limits_service=tool_limits_service,
+        execution_spec_store=SqlAgentExecutionSpecStore(database),
+        review_plan_store=SqlReviewPlanStore(database),
+        candidate_store=SqlCandidateFindingStore(database),
+        verdict_store=SqlVerdictStore(database),
     )
     scheduler = ReviewScheduler(
         queue=SqlJobQueuePortAdapter(SqlJobQueue(database)),
@@ -270,9 +325,6 @@ def build_unified_backend(
         poll_min_seconds=0.05,
         poll_max_seconds=1.0,
         record_failure=executor.record_failure,
-        record_claim=lambda task_id: worker_transcripts.append(
-            task_id, "lifecycle", "Review execution started"
-        ),
     )
 
     # API components (sharing event_bus, review_store, worker_transcripts)
@@ -308,7 +360,9 @@ def build_unified_backend(
     planner = ScopePlanner(GitWorkspaceAdapter(git))
     capture = ReviewInputCaptureService(GitReviewInputCaptureAdapter(git), input_artifacts)
     provider_config = FilesystemModelProviderConfigAdapter(settings.data_dir)
-    tool_limits = ToolLimitsService(FilesystemToolLimitsStore(settings.data_dir))
+    tool_limits = ToolLimitsService(
+        FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
+    )
 
     # Plugin context: store, loader, lifecycle manager, and export orchestrator.
     # The terminal hook is late-bound on the review store so that the
@@ -319,9 +373,8 @@ def build_unified_backend(
     plugin_store = FilesystemPluginStore(settings.data_dir)
     plugin_installer = GitPluginInstaller(git, plugins_dir)
     plugin_loader = CompositePluginLoader()
-    plugin_manager = PluginManager(
-        plugin_store, plugin_installer, plugins_dir, plugin_loader
-    )
+    plugin_manager = PluginManager(plugin_store, plugin_installer, plugins_dir, plugin_loader)
+    local_existing_findings = LocalExistingFindingsProvider(plugin_store)
     export_history = SqliteExportHistoryStore(settings.data_dir / "codelens.sqlite3")
     export_orchestrator = ExportOrchestrator(
         review_store,
@@ -329,6 +382,8 @@ def build_unified_backend(
         plugin_store,
         plugin_loader,
         export_history,
+        SqlReviewPlanStore(database),
+        SqlCheckpointStore(database),
     )
 
     async def _terminal_export_hook(task_id: str, _status: str) -> None:
@@ -351,14 +406,17 @@ def build_unified_backend(
     )
     review_creator_adapter = ReviewCreatorAdapter(
         CreateReviewHandler(
-            planner, capture, review_store, input_artifacts,
-            idempotency_settings=trigger_idempotency_settings
+            planner,
+            capture,
+            review_store,
+            input_artifacts,
+            idempotency_settings=trigger_idempotency_settings,
+            file_exclusion_settings=file_exclusion_settings,
+            existing_findings_provider=local_existing_findings,
         ),
         repository_inspector,
     )
-    trigger_orchestrator = TriggerOrchestrator(
-        plugin_store, review_creator_adapter, plugin_loader
-    )
+    trigger_orchestrator = TriggerOrchestrator(plugin_store, review_creator_adapter, plugin_loader)
     trigger_hooks = TriggerHookService(
         plugin_manager,
         hook_installer,
@@ -368,6 +426,7 @@ def build_unified_backend(
 
     components = HttpComponents(
         settings=settings,
+        web_settings_defaults=web_settings_defaults,
         database=database,
         repository_inspector=repository_inspector,
         repository_catalog=RepositoryCatalogService(
@@ -375,7 +434,14 @@ def build_unified_backend(
             GitRepositoryCatalogAdapter(git),
         ),
         directory_browser=BrowseDirectoriesService(LocalFilesystemBrowserAdapter()),
-        create_review=CreateReviewHandler(planner, capture, review_store, input_artifacts),
+        create_review=CreateReviewHandler(
+            planner,
+            capture,
+            review_store,
+            input_artifacts,
+            file_exclusion_settings=file_exclusion_settings,
+            existing_findings_provider=local_existing_findings,
+        ),
         get_review=GetReviewHandler(review_store),
         list_reviews=ListReviewsHandler(review_store),
         list_recent_repositories=ListRecentRepositoriesHandler(recent_repository_store),
@@ -384,6 +450,12 @@ def build_unified_backend(
         update_recent_repository_settings=UpdateRecentRepositorySettingsHandler(
             recent_repository_store
         ),
+        create_review_profile=CreateReviewProfileHandler(review_profile_repository),
+        update_review_profile=UpdateReviewProfileHandler(review_profile_repository),
+        copy_review_profile=CopyReviewProfileHandler(review_profile_repository),
+        delete_review_profile=DeleteReviewProfileHandler(review_profile_repository),
+        set_default_review_profile=SetDefaultReviewProfileHandler(review_profile_repository),
+        list_review_profiles=ListReviewProfilesHandler(review_profile_repository),
         instruction_settings=InstructionSettingsService(instruction_line_limits),
         review_completion_settings=review_completion_settings,
         trigger_idempotency_settings=trigger_idempotency_settings,
@@ -394,9 +466,12 @@ def build_unified_backend(
         ),
         cancel_review=CancelReviewHandler(review_store, cancel_task=scheduler.cancel_task),
         retry_review=RetryReviewHandler(review_store),
-        events=SqlEventOutbox(database, event_bus=event_bus),
+        events=event_outbox,
         event_bus=event_bus,
         review_store=review_store,
+        review_plan_store=SqlReviewPlanStore(database),
+        checkpoints=SqlCheckpointStore(database),
+        verdict_store=SqlVerdictStore(database),
         input_artifacts=input_artifacts,
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()
@@ -406,7 +481,7 @@ def build_unified_backend(
         ),
         transcripts=transcripts_store,
         worker_transcripts=worker_transcripts,
-        finding_source_preview=FindingSourcePreviewService(review_store, git),
+        finding_source_preview=FindingSourcePreviewService(review_store, git, input_artifacts, git),
         plugin_manager=plugin_manager,
         export_orchestrator=export_orchestrator,
         export_history=export_history,
@@ -414,6 +489,7 @@ def build_unified_backend(
         hook_installer=hook_installer,
         trigger_hooks=trigger_hooks,
         tool_limits=tool_limits,
+        file_exclusion_settings=file_exclusion_settings,
     )
 
     return UnifiedBackend(

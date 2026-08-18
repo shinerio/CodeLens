@@ -1,3 +1,4 @@
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -14,6 +15,7 @@ from codelens.plugin.domain.models import (
     TriggerCapability,
 )
 from codelens.plugin.domain.ports import PluginInstallerPort, PluginStorePort
+from codelens.plugin.domain.versioning import PluginApiVersion
 
 
 class MemoryPluginStore:
@@ -65,9 +67,7 @@ def _record() -> PluginRecord:
                 entry_point="sink:Sink",
                 config_schema={
                     "type": "object",
-                    "properties": {
-                        "retries": {"type": "integer", "minimum": 0}
-                    },
+                    "properties": {"retries": {"type": "integer", "minimum": 0}},
                 },
             )
         },
@@ -141,7 +141,7 @@ async def test_auto_export_requires_a_declared_report_capability() -> None:
     assert store.record.report_auto_export is False
 
 
-async def test_builtin_trigger_rejects_an_empty_agent_selection() -> None:
+async def test_builtin_trigger_rejects_an_empty_reviewer_selection() -> None:
     store = EmptyPluginStore()
     manager = PluginManager(
         cast(PluginStorePort, store),
@@ -151,10 +151,59 @@ async def test_builtin_trigger_rejects_an_empty_agent_selection() -> None:
     await manager.initialize_builtin()
 
     with pytest.raises(PluginConfigurationError):
-        await manager.update_trigger_config("local", {"selected_agents": []})
+        await manager.update_trigger_config(
+            "local",
+            {"reviewer_selection": {"mode": "fixed", "reviewer_versions": []}},
+        )
 
     assert store.record is not None
-    assert store.record.trigger_config["selected_agents"] == ["correctness:v1"]
+    assert store.record.trigger_config["reviewer_selection"] == {
+        "mode": "fixed",
+        "reviewer_versions": ["correctness:v2"],
+    }
+
+
+async def test_existing_builtin_manifest_is_refreshed_without_rewriting_config() -> None:
+    store = EmptyPluginStore()
+    manager = PluginManager(
+        cast(PluginStorePort, store),
+        cast(PluginInstallerPort, object()),
+        Path("/unused"),
+    )
+    await manager.initialize_builtin()
+    current = store.record
+    assert current is not None
+    store.record = replace(
+        current,
+        manifest=replace(
+            current.manifest,
+            version="2.0.1",
+        ),
+        trigger_enabled=True,
+        trigger_config={
+            "reviewer_selection": {
+                "mode": "fixed",
+                "reviewer_versions": ["correctness:v2"],
+            },
+            "supersede_policy": "latest_snapshot",
+            "prompt_locale": "zh-CN",
+        },
+        config_revision=4,
+    )
+
+    await manager.initialize_builtin()
+
+    migrated = store.record
+    assert migrated is not None
+    assert migrated.manifest.plugin_api_version is PluginApiVersion.V2
+    assert migrated.manifest.version == "2.0.0"
+    assert migrated.trigger_enabled is True
+    assert migrated.trigger_config["reviewer_selection"] == {
+        "mode": "fixed",
+        "reviewer_versions": ["correctness:v2"],
+    }
+    assert migrated.trigger_config["prompt_locale"] == "zh-CN"
+    assert migrated.config_revision == 5
 
 
 class MockInstaller:

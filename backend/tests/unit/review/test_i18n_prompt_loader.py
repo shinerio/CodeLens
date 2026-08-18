@@ -4,10 +4,16 @@ from codelens.review.infrastructure.i18n_prompt_loader import I18nPromptLoader
 
 PROMPT_ROOT = Path(__file__).parents[4] / "prompts"
 EXPECTED_BUNDLE_FILES = {
+    "checkpoint-compaction.md",
     "review-policy.md",
     "review-workflow.md",
+    "review-feedback.md",
+    "tool-not-found.md",
     "tool-loop-warning.md",
     "tools.json",
+    "no-progress-nudge.md",
+    "completion-nudge.md",
+    "all-files-reviewed-nudge.md",
 }
 
 
@@ -30,24 +36,69 @@ def test_repository_policy_describes_complete_prefetched_rules_and_review_workfl
     assert "repository_instructions" in chinese.review_policy
     assert "完整冻结仓库规则" in chinese.review_policy
     assert "Apply the rules mapped to each file" in english.review_workflow
-    assert "直接应用映射到每个文件的规则" in chinese.review_workflow
+    assert "直接应用映射到每个文件的 `repository_instructions`" in chinese.review_workflow
     assert "never request a shell or invent another tool" in english.review_workflow
     assert "不得请求 Shell，也不得发明其他工具" in chinese.review_workflow
-    assert "`review_file_done`" in english.review_workflow
-    assert "`review_file_done`" in chinese.review_workflow
-    assert "missing_evidence_files" in english.review_workflow
-    assert "missing_evidence_files" in chinese.review_workflow
-    assert "undeclared_files" in english.review_workflow
-    assert "undeclared_files" in chinese.review_workflow
-    assert "Do not include unchanged diff context" in english.tools["comment"].description
+    assert "missing_review_files" in english.review_workflow
+    assert "missing_review_files" in chinese.review_workflow
+    assert (
+        "trigger -> changed-code mechanism -> concrete harmful outcome" in english.review_workflow
+    )
+    assert "触发条件 → 变更代码的错误机制 → 具体危害" in chinese.review_workflow
+    assert "do not report" in english.review_workflow
+    assert "不要上报" in chinese.review_workflow
+    assert "without diff markers or unchanged context" in english.tools["comment"].description
     assert "side=old" in english.tools["comment"].description
-    assert "不得包含未修改的 diff 上下文行" in chinese.tools["comment"].description
+    assert "不含 diff 标记和未变更上下文" in chinese.tools["comment"].description
     assert "side=old" in chinese.tools["comment"].description
-    assert "narrow path or pattern" in english.tools["find_files"].description
-    assert "缩小 path 或细化 pattern" in chinese.tools["find_files"].description
+    assert "retract_comment" in english.review_workflow
+    assert "retract_comment" in chinese.review_workflow
+    assert "candidate_ids" in english.tools["retract_comment"].description
+    assert "does not fall on an actual changed diff line" in english.review_feedback
+    assert "没有落在本次实际变更的 diff 行" in chinese.review_feedback
+    assert "evidence IDs" in english.checkpoint_compaction
+    assert "证据 ID" in chinese.checkpoint_compaction
+    assert "untrusted" in english.checkpoint_compaction
+    assert "不可信" in chinese.checkpoint_compaction
+    assert "task objective" in english.checkpoint_compaction
+    assert "任务目标" in chinese.checkpoint_compaction
+    assert "coverage" in english.checkpoint_compaction
+    assert "覆盖进度" in chinese.checkpoint_compaction
+    assert "JSON or XML" not in english.checkpoint_compaction
+    assert "JSON 或 XML" not in chinese.checkpoint_compaction
+    assert "{tool_name}" in english.tool_not_found
+    assert "{available_tools}" in english.tool_not_found
+    assert "{tool_name}" in chinese.tool_not_found
+    assert "{available_tools}" in chinese.tool_not_found
+    assert "recursively matches basenames" in english.tools["find_files"].description
+    assert "递归匹配 basename" in chinese.tools["find_files"].description
     assert "file_pattern" in english.tools["grep"].description
     assert "file_pattern" in chinese.tools["grep"].description
-    assert "narrow pattern, path, or file_pattern" in english.tools["grep"].description
-    assert "缩小 pattern、path 或细化 file_pattern" in chinese.tools["grep"].description
-    assert "may both be omitted" in english.tools["read_file"].description
-    assert "可以同时省略" in chinese.tools["read_file"].description
+    assert "mode=literal|regex" in english.tools["grep"].description
+    assert "mode=literal|regex" in chinese.tools["grep"].description
+    assert "start_line" in english.tools["read_file"].description
+    assert "end_line" in english.tools["read_file"].description
+    assert "start_line" in chinese.tools["read_file"].description
+    assert "end_line" in chinese.tools["read_file"].description
+    assert "Omit cursor" in english.tools["get_diff"].description
+    assert "省略 cursor" in chinese.tools["get_diff"].description
+
+
+def test_planner_and_verifier_prompts_define_focused_decision_boundaries() -> None:
+    loader = I18nPromptLoader.load(PROMPT_ROOT)
+    english = loader.get("en")
+    chinese = loader.get("zh-CN")
+
+    assert "submit_review_plan" not in english.tools
+    assert "submit_review_plan" not in chinese.tools
+    assert "General alone or at least two specialists" in english.tools["finalize_plan"].description
+    assert "General 单独运行或至少两个专项 Reviewer" in chinese.tools["finalize_plan"].description
+
+    for locale in ("en", "zh-CN"):
+        verifier = (PROMPT_ROOT / "review-verdict" / f"{locale}.md").read_text(encoding="utf-8")
+        assert "weak" in verifier
+        assert "inferred" in verifier
+    english_verifier = (PROMPT_ROOT / "review-verdict" / "en.md").read_text(encoding="utf-8")
+    chinese_verifier = (PROMPT_ROOT / "review-verdict" / "zh-CN.md").read_text(encoding="utf-8")
+    assert "cannot establish that a defect exists" in english_verifier
+    assert "无法建立缺陷确实存在" in chinese_verifier

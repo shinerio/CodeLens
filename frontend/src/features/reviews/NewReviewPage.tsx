@@ -1,18 +1,12 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import {
-  BookOpenText,
   Check,
-  FileCode2,
   FolderSearch,
   FolderGit2,
-  Gauge,
   GitBranch,
-  GitCommitVertical,
   History,
-  Lock,
   ShieldCheck,
   Trash2,
-  Wrench,
 } from "lucide-react";
 import {
   useEffect,
@@ -26,6 +20,12 @@ import { Link, useNavigate } from "react-router-dom";
 
 import { formatUserDateTime } from "../../shared/i18n/format-user-date-time";
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
+import { listReviewerCatalog } from "../catalog/api";
+import { createReviewProfile, listReviewProfiles } from "../review-profiles/api";
+import { ReviewProfilePicker } from "../review-profiles/ReviewProfilePicker";
+import { ReviewStrategyEditor } from "../review-strategy/ReviewStrategyEditor";
+import { ReviewStrategySummary } from "../review-strategy/ReviewStrategySummary";
+import { validateStrategy } from "../review-strategy/model";
 import {
   deleteRecentRepository,
   getRepositoryCatalog,
@@ -40,76 +40,9 @@ import type {
   RecentRepository,
 } from "../repositories/types";
 import { listModelGateways } from "../settings/api";
-import { createReview } from "./api";
-import type { CreateReviewRequest, ScopeRequest } from "./types";
+import { createReview, toCreateReviewRequest } from "./api";
+import type { CreateReviewRequest, ReviewStrategySnapshot, ScopeRequest } from "./types";
 import "./NewReviewPage.css";
-
-const CORRECTNESS_AGENT_REFERENCE = "correctness:v1";
-const REVIEWER_ROWS: Array<{
-  reference: string;
-  labelKey: TranslationKey;
-  noteKey: TranslationKey;
-  enabled: boolean;
-  statusKey: TranslationKey;
-  icon: typeof ShieldCheck;
-}> = [
-  {
-    reference: CORRECTNESS_AGENT_REFERENCE,
-    labelKey: "review.correctness",
-    noteKey: "review.correctnessNote",
-    enabled: true,
-    statusKey: "review.enabledNow",
-    icon: ShieldCheck,
-  },
-  {
-    reference: "security:v1",
-    labelKey: "review.security",
-    noteKey: "review.securityNote",
-    enabled: false,
-    statusKey: "review.availablePhase3",
-    icon: Lock,
-  },
-  {
-    reference: "performance:v1",
-    labelKey: "review.performance",
-    noteKey: "review.performanceNote",
-    enabled: false,
-    statusKey: "review.availablePhase3",
-    icon: Gauge,
-  },
-  {
-    reference: "maintainability:v1",
-    labelKey: "review.maintainability",
-    noteKey: "review.maintainabilityNote",
-    enabled: false,
-    statusKey: "review.availablePhase3",
-    icon: Wrench,
-  },
-  {
-    reference: "testing:v1",
-    labelKey: "review.testing",
-    noteKey: "review.testingNote",
-    enabled: false,
-    statusKey: "review.availablePhase3",
-    icon: FileCode2,
-  },
-  {
-    reference: "docs_style:v1",
-    labelKey: "review.docsStyle",
-    noteKey: "review.docsStyleNote",
-    enabled: false,
-    statusKey: "review.availablePhase3",
-    icon: BookOpenText,
-  },
-  {
-    reference: "cross_file:v1",
-    labelKey: "review.crossFile",
-    noteKey: "review.crossFileNote",
-    enabled: false,
-    statusKey: "review.availablePhase3",
-    icon: GitCommitVertical,
-  },
-];
 
 type ScopeType = ScopeRequest["type"];
 
@@ -145,7 +78,15 @@ export function NewReviewPage() {
   const [commitTargetRef, setCommitTargetRef] = useState("");
   const selectedCommitBranchRef = useRef("");
   const [fullTargetRef, setFullTargetRef] = useState("");
-  const [correctnessEnabled, setCorrectnessEnabled] = useState(true);
+  const [strategy, setStrategy] = useState<ReviewStrategySnapshot>({
+    reviewerSelection: { mode: "adaptive" },
+  });
+  const [selectedProfileId, setSelectedProfileId] = useState("");
+  const [isCustomizingStrategy, setIsCustomizingStrategy] = useState(false);
+  const [isStrategyCustomized, setIsStrategyCustomized] = useState(false);
+  const [shouldSaveProfile, setShouldSaveProfile] = useState(false);
+  const [newProfileName, setNewProfileName] = useState("");
+  const profileInitialized = useRef(false);
   const [repositoryPendingDeletion, setRepositoryPendingDeletion] =
     useState<RecentRepository | null>(null);
   const deleteDialogConfirmRef = useRef<HTMLButtonElement>(null);
@@ -155,6 +96,8 @@ export function NewReviewPage() {
     queryKey: ["model-gateways"],
     queryFn: listModelGateways,
   });
+  const profilesQuery = useQuery({ queryKey: ["review-profiles"], queryFn: listReviewProfiles });
+  const reviewerCatalogQuery = useQuery({ queryKey: ["reviewer-catalog"], queryFn: listReviewerCatalog });
   const recentRepositoriesQuery = useQuery({
     queryKey: ["recent-repositories"],
     queryFn: listRecentRepositories,
@@ -253,15 +196,33 @@ export function NewReviewPage() {
   });
 
   const createMutation = useMutation({
-    mutationFn: createReview,
+    mutationFn: async ({ request, saveProfileName }: { request: CreateReviewRequest; saveProfileName: string | null }) => {
+      if (saveProfileName === null) return createReview(request);
+      const profile = await createReviewProfile({ name: saveProfileName, isDefault: false, strategy });
+      return createReview({ ...request, profile_source: { profile_id: profile.id, revision: profile.revision } });
+    },
     onSuccess: async (result) => {
       await queryClient.invalidateQueries({ queryKey: ["reviews"] });
       navigate(`/runs/${result.task_id}`);
     },
   });
 
+  useEffect(() => {
+    if (profileInitialized.current || profilesQuery.data === undefined) return;
+    const defaultProfile = profilesQuery.data.find((profile) => profile.isDefault);
+    if (defaultProfile === undefined) return;
+    profileInitialized.current = true;
+    setSelectedProfileId(defaultProfile.id);
+    setStrategy({
+      reviewerSelection:
+        defaultProfile.strategy.reviewerSelection.mode === "adaptive"
+          ? { mode: "adaptive" }
+          : { mode: "fixed", reviewerVersions: [...defaultProfile.strategy.reviewerSelection.reviewerVersions] },
+    });
+  }, [profilesQuery.data]);
+
   const branchNames = catalog?.branches.map((branch) => branch.name) ?? [];
-  const selectedAgents = correctnessEnabled ? [CORRECTNESS_AGENT_REFERENCE] : [];
+  const strategyErrors = validateStrategy(strategy, reviewerCatalogQuery.data ?? []);
   const hasActiveGateway = gatewayQuery.data?.active_gateway_id != null;
   const selectedScopeIsValid =
     scopeType === "uncommitted" ||
@@ -270,7 +231,11 @@ export function NewReviewPage() {
     (scopeType === "full" && fullTargetRef !== "");
   const startDisabled =
     inspection === null ||
-    selectedAgents.length === 0 ||
+    profilesQuery.data === undefined ||
+    profilesQuery.data.length === 0 ||
+    reviewerCatalogQuery.isError ||
+    strategyErrors.length > 0 ||
+    (shouldSaveProfile && newProfileName.trim() === "") ||
     !hasActiveGateway ||
     !selectedScopeIsValid ||
     inspectMutation.isPending ||
@@ -280,6 +245,8 @@ export function NewReviewPage() {
     commitCatalogMutation.error,
     createMutation.error,
     gatewayQuery.error,
+    profilesQuery.error,
+    reviewerCatalogQuery.error,
     deleteRecentRepositoryMutation.error,
   ].find((error): error is Error => error instanceof Error)?.message;
 
@@ -363,17 +330,20 @@ export function NewReviewPage() {
     if (startDisabled) {
       return;
     }
-    const request: CreateReviewRequest = {
-      repository_path: repositoryPath,
+    const selectedProfile = profilesQuery.data?.find((profile) => profile.id === selectedProfileId);
+    const request = toCreateReviewRequest({
+      repositoryPath,
       scope: buildScope(),
-      selected_agents: selectedAgents,
-      prompt_locale: locale,
-    };
-    createMutation.mutate(request);
-  }
-
-  function handleUnsupported() {
-    window.alert(t("common.notSupported"));
+      strategy,
+      promptLocale: locale,
+      ...(selectedProfile === undefined || isStrategyCustomized
+        ? {}
+        : { profileSource: { id: selectedProfile.id, revision: selectedProfile.revision } }),
+    });
+    createMutation.mutate({
+      request,
+      saveProfileName: shouldSaveProfile ? newProfileName.trim() : null,
+    });
   }
 
   function scopeToggle(type: ScopeType, title: TranslationKey, note: TranslationKey) {
@@ -566,7 +536,11 @@ export function NewReviewPage() {
                       aria-label={t("review.targetCommit")}
                       className="field__control"
                       readOnly
-                      value={commitTargetRef}
+                      value={
+                        catalog?.target_commit
+                          ? commitLabel(catalog.target_commit)
+                          : commitTargetRef
+                      }
                     />
                   </label>
                 </>
@@ -602,38 +576,49 @@ export function NewReviewPage() {
           <section className="panel">
             <div className="panel__heading">
               <ShieldCheck aria-hidden="true" />
-              <h2>{t("review.reviewers")}</h2>
+              <h2>{t("review.strategyTitle")}</h2>
             </div>
-            <div className="reviewer-list">
-              {REVIEWER_ROWS.map((row) => {
-                const Icon = row.icon;
-                return (
-                  <label
-                    className={row.enabled ? "agent-row" : "agent-row agent-row--disabled"}
-                    key={row.reference}
-                    onClick={row.enabled ? undefined : handleUnsupported}
-                  >
-                    <span className="agent-row__leading"><Icon aria-hidden="true" /></span>
-                    <span className="agent-row__content">
-                      <span className="agent-row__headline">
-                        <span>{t(row.labelKey)}</span>
-                        <span className="agent-row__reference">{row.reference}</span>
-                      </span>
-                      <span className="agent-row__description">{t(row.noteKey)}</span>
-                    </span>
-                    <span className="agent-row__status">{t(row.statusKey)}</span>
-                    <input
-                      aria-label={t(row.labelKey)}
-                      checked={row.enabled ? correctnessEnabled : false}
-                      className="agent-row__input"
-                      disabled={!row.enabled}
-                      type="checkbox"
-                      onChange={(event) => setCorrectnessEnabled(event.currentTarget.checked)}
-                    />
-                  </label>
-                );
-              })}
-            </div>
+            {profilesQuery.isPending || reviewerCatalogQuery.isPending ? <p className="hint">{t("common.loading")}</p> : null}
+            {profilesQuery.data !== undefined && profilesQuery.data.length > 0 ? (
+              <div className="review-profile-snapshot">
+                <ReviewProfilePicker
+                  profiles={profilesQuery.data}
+                  value={selectedProfileId}
+                  onChange={(profile) => {
+                    setSelectedProfileId(profile.id);
+                    setStrategy({
+                      reviewerSelection:
+                        profile.strategy.reviewerSelection.mode === "adaptive"
+                          ? { mode: "adaptive" }
+                          : { mode: "fixed", reviewerVersions: [...profile.strategy.reviewerSelection.reviewerVersions] },
+                    });
+                    setIsStrategyCustomized(false);
+                  }}
+                />
+                <ReviewStrategySummary strategy={strategy} />
+                <button className="load-more-button" type="button" onClick={() => setIsCustomizingStrategy((value) => !value)}>
+                  {t(isCustomizingStrategy ? "review.hideCustomization" : "review.customize")}
+                </button>
+                {isStrategyCustomized ? <p className="hint">{t("review.strategyCustomized")}</p> : null}
+              </div>
+            ) : null}
+            {isCustomizingStrategy ? (
+              <ReviewStrategyEditor
+                catalog={reviewerCatalogQuery.data ?? []}
+                validationErrors={strategyErrors}
+                value={strategy}
+                onChange={(value) => { setStrategy(value); setIsStrategyCustomized(true); }}
+              />
+            ) : null}
+            {isCustomizingStrategy ? (
+              <div className="review-save-profile">
+                <label><input checked={shouldSaveProfile} type="checkbox" onChange={(event) => setShouldSaveProfile(event.currentTarget.checked)} /> {t("review.saveAsProfile")}</label>
+                {shouldSaveProfile ? <input aria-label={t("review.newProfileName")} maxLength={120} placeholder={t("review.newProfilePlaceholder")} value={newProfileName} onChange={(event) => setNewProfileName(event.currentTarget.value)} /> : null}
+              </div>
+            ) : null}
+            {profilesQuery.data?.length === 0 ? (
+              <div className="alert" role="alert">{t("review.noProfiles")}</div>
+            ) : null}
           </section>
 
           {errorMessage !== undefined ? <div className="alert" role="alert">{errorMessage}</div> : null}
@@ -647,7 +632,7 @@ export function NewReviewPage() {
           <div className="form-actions">
             <div className="form-actions__summary">
               <span>{inspection === null ? t("repository.notReady") : t("repository.ready")}</span>
-              <span>{t("review.agentCount", { count: selectedAgents.length })}</span>
+              <span>{strategy.reviewerSelection.mode === "adaptive" ? t("review.adaptivePlan") : t("review.agentCount", { count: strategy.reviewerSelection.reviewerVersions.length })}</span>
               <span>{hasActiveGateway ? t("review.gatewayReady") : t("review.gatewayMissing")}</span>
             </div>
             <button className="action-button" disabled={startDisabled} type="submit">

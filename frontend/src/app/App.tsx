@@ -1,4 +1,4 @@
-import { Blocks, Bot, History, Package, Settings } from "lucide-react";
+import { Blocks, Bot, History, Package, Settings, SlidersHorizontal } from "lucide-react";
 import { NavLink, Outlet, useLocation } from "react-router-dom";
 
 import { useI18n } from "../shared/i18n/i18n";
@@ -30,6 +30,10 @@ export function App() {
             <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/agents">
               <Bot aria-hidden="true" />
               <span>{t("nav.reviewAgents")}</span>
+            </NavLink>
+            <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/settings/review-profiles">
+              <SlidersHorizontal aria-hidden="true" />
+              <span>{t("nav.reviewProfiles")}</span>
             </NavLink>
             <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/capabilities">
               <Blocks aria-hidden="true" />

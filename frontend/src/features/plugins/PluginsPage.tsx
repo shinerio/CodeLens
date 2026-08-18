@@ -15,6 +15,14 @@ import {
 import { useEffect, useState } from "react";
 
 import { useI18n } from "../../shared/i18n/i18n";
+import { listReviewerCatalog } from "../catalog/api";
+import type { ReviewerCatalogEntry } from "../catalog/types";
+import { listReviewProfiles } from "../review-profiles/api";
+import { ReviewProfilePicker } from "../review-profiles/ReviewProfilePicker";
+import type { ReviewProfile } from "../review-profiles/types";
+import { ReviewStrategyEditor } from "../review-strategy/ReviewStrategyEditor";
+import { validateStrategy, type StrategyValidationError } from "../review-strategy/model";
+import type { ReviewStrategySnapshot } from "../reviews/types";
 import { RepositoryBrowser } from "../repositories/RepositoryBrowser";
 import {
   disableReport,
@@ -32,15 +40,48 @@ import {
   updateReportConfig,
   updateTriggerConfig,
 } from "./api";
-import type { HookStatusResponse, PluginRecord } from "./types";
+import type { HookStatusResponse, PluginProfileSource, PluginRecord } from "./types";
 import "./PluginsPage.css";
 
-const AVAILABLE_AGENTS = [
-  { reference: "correctness:v1", labelKey: "review.correctness", enabled: true },
-  { reference: "security:v1", labelKey: "review.security", enabled: false },
-  { reference: "performance:v1", labelKey: "review.performance", enabled: false },
-  { reference: "maintainability:v1", labelKey: "review.maintainability", enabled: false },
-] as const;
+function isStringKeyedRecord(value: unknown): value is Record<string, unknown> {
+  return value !== null && typeof value === "object" && !Array.isArray(value);
+}
+
+function strategyFromPluginConfig(config: Record<string, unknown>): ReviewStrategySnapshot {
+  const rawSelection = config.reviewer_selection;
+  if (isStringKeyedRecord(rawSelection)) {
+    if (rawSelection.mode === "adaptive") {
+      return { reviewerSelection: { mode: "adaptive" } };
+    }
+    if (rawSelection.mode === "fixed" && Array.isArray(rawSelection.reviewer_versions)) {
+      return {
+        reviewerSelection: {
+          mode: "fixed",
+          reviewerVersions: rawSelection.reviewer_versions.filter(
+            (reference): reference is string => typeof reference === "string",
+          ),
+        },
+      };
+    }
+  }
+  return {
+    reviewerSelection: { mode: "fixed", reviewerVersions: [] },
+  };
+}
+
+function withStrategy(
+  config: Record<string, unknown>,
+  strategy: ReviewStrategySnapshot,
+): Record<string, unknown> {
+  const selection = strategy.reviewerSelection;
+  return {
+    ...config,
+    reviewer_selection:
+      selection.mode === "adaptive"
+        ? { mode: "adaptive" }
+        : { mode: "fixed", reviewer_versions: [...selection.reviewerVersions] },
+  };
+}
 
 export function PluginsPage() {
   const { t } = useI18n();
@@ -296,13 +337,37 @@ function TriggerCapabilitySection({
 }: TriggerCapabilitySectionProps) {
   const { t, locale } = useI18n();
   const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(plugin.trigger_config);
+  const [profileSourceDraft, setProfileSourceDraft] = useState<PluginProfileSource | null>(
+    plugin.profile_source ?? null,
+  );
+  const [selectedProfileId, setSelectedProfileId] = useState(
+    plugin.profile_source?.profile_id ?? "",
+  );
   const [browserOpen, setBrowserOpen] = useState(false);
   const [hookStatus, setHookStatus] = useState<HookStatusResponse | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const profilesQuery = useQuery({
+    queryKey: ["review-profiles"],
+    queryFn: listReviewProfiles,
+  });
+  const reviewerCatalogQuery = useQuery({
+    queryKey: ["reviewer-catalog"],
+    queryFn: listReviewerCatalog,
+  });
 
   const configMutation = useMutation({
     mutationFn: (config: Record<string, unknown>) =>
-      updateTriggerConfig(plugin.plugin_id, { config }),
+      updateTriggerConfig(plugin.plugin_id, {
+        config,
+        profile_source:
+          profileSourceDraft === null
+            ? null
+            : {
+                profile_id: profileSourceDraft.profile_id,
+                profile_name: profileSourceDraft.profile_name,
+                profile_revision: profileSourceDraft.profile_revision,
+              },
+      }),
     onSuccess: () => {
       setError(null);
       onConfigUpdate();
@@ -324,11 +389,15 @@ function TriggerCapabilitySection({
     },
   });
 
-  const configChanged = JSON.stringify(configDraft) !== JSON.stringify(plugin.trigger_config);
+  const configChanged =
+    JSON.stringify(configDraft) !== JSON.stringify(plugin.trigger_config) ||
+    JSON.stringify(profileSourceDraft) !== JSON.stringify(plugin.profile_source ?? null);
 
   useEffect(() => {
     setConfigDraft(plugin.trigger_config);
-  }, [plugin.plugin_id, plugin.trigger_config]);
+    setProfileSourceDraft(plugin.profile_source ?? null);
+    setSelectedProfileId(plugin.profile_source?.profile_id ?? "");
+  }, [plugin.plugin_id, plugin.profile_source, plugin.trigger_config]);
 
   function refreshHookStatus() {
     getHookStatus(plugin.plugin_id).then(setHookStatus).catch(() => setHookStatus(null));
@@ -348,12 +417,33 @@ function TriggerCapabilitySection({
   // For webhook: use config_schema to dynamically render fields
   const repositoryPaths = (configDraft.repository_paths as string[]) ?? [];
   const events = (configDraft.events as string[]) ?? [];
-  const selectedAgents = (configDraft.selected_agents as string[]) ?? [];
   const scopeType = (configDraft.scope_type as string) ?? "uncommitted";
   const baseRef = (configDraft.base_ref as string | null) ?? "";
   const targetRef = (configDraft.target_ref as string | null) ?? "";
   const promptLocale = (configDraft.prompt_locale as string) ?? "en";
   const debounceSeconds = (configDraft.debounce_seconds as number) ?? 0;
+  const supersedePolicy =
+    configDraft.supersede_policy === "preserve_all" ? "preserve_all" : "latest_snapshot";
+  const strategy = strategyFromPluginConfig(configDraft);
+  const strategyErrors = validateStrategy(strategy, reviewerCatalogQuery.data ?? []);
+  const selectedProfile =
+    profilesQuery.data?.find((profile) => profile.id === selectedProfileId) ??
+    profilesQuery.data?.[0];
+  const hasProfileDrift =
+    profileSourceDraft !== null &&
+    selectedProfile?.id === profileSourceDraft.profile_id &&
+    selectedProfile.revision !== profileSourceDraft.profile_revision;
+
+  function handleReloadProfile() {
+    if (selectedProfile === undefined) return;
+    setConfigDraft(withStrategy(configDraft, selectedProfile.strategy));
+    setProfileSourceDraft({
+      profile_id: selectedProfile.id,
+      profile_name: selectedProfile.name,
+      profile_revision: selectedProfile.revision,
+      copied_at: new Date().toISOString(),
+    });
+  }
 
   function handleRepositorySelect(path: string) {
     if (!repositoryPaths.includes(path)) {
@@ -378,17 +468,15 @@ function TriggerCapabilitySection({
     setConfigDraft({ ...configDraft, scope_type: newScopeType });
   }
 
-  function handleAgentToggle(reference: string, checked: boolean) {
-    const newAgents = checked
-      ? [...selectedAgents, reference]
-      : selectedAgents.filter((a) => a !== reference);
-    setConfigDraft({ ...configDraft, selected_agents: newAgents });
-  }
-
   const supportedEvents = plugin.manifest.capabilities.trigger?.supported_events ?? [];
 
   // Common trigger fields rendered with specialized UI for all trigger types
-  const COMMON_TRIGGER_FIELDS = new Set(["selected_agents", "prompt_locale", "debounce_seconds"]);
+  const COMMON_TRIGGER_FIELDS = new Set([
+    "reviewer_selection",
+    "supersede_policy",
+    "prompt_locale",
+    "debounce_seconds",
+  ]);
 
   // For webhook: extract config_schema properties for dynamic rendering
   const webhookConfigSchema = plugin.manifest.capabilities.trigger?.config_schema ?? {};
@@ -466,30 +554,39 @@ function TriggerCapabilitySection({
               </div>
             </div>
 
+            <PluginReviewStrategySection
+                catalog={reviewerCatalogQuery.data ?? []}
+                hasProfileDrift={hasProfileDrift}
+                isCatalogLoading={reviewerCatalogQuery.isLoading}
+                profiles={profilesQuery.data ?? []}
+                profileSource={profileSourceDraft}
+                selectedProfileId={selectedProfileId}
+                strategy={strategy}
+                validationErrors={strategyErrors}
+                onProfileChange={setSelectedProfileId}
+                onReloadProfile={handleReloadProfile}
+                onStrategyChange={(nextStrategy) => {
+                  setConfigDraft(withStrategy(configDraft, nextStrategy));
+                  setProfileSourceDraft(null);
+                }}
+            />
+
             <div className="config-section">
-              <label className="config-section__label">{t("plugins.selectedAgents")}</label>
-              <div className="config-checkboxes">
-                {AVAILABLE_AGENTS.map((agent) => (
-                  <label
-                    key={agent.reference}
-                    className={`config-checkbox ${!agent.enabled ? "config-checkbox--disabled" : ""}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedAgents.includes(agent.reference)}
-                      disabled={!agent.enabled}
-                      onChange={(e) => handleAgentToggle(agent.reference, e.target.checked)}
-                    />
-                    <span>{t(agent.labelKey)}</span>
-                    {!agent.enabled && (
-                      <span className="config-agent-badge">{t("plugins.comingSoon")}</span>
-                    )}
-                  </label>
-                ))}
-              </div>
-              {selectedAgents.length === 0 && (
-                <p className="config-error">{t("plugins.noAgentSelected")}</p>
-              )}
+                <label className="config-section__label" htmlFor={`supersede-${plugin.plugin_id}`}>
+                  {t("plugins.supersede")}
+                </label>
+                <select
+                  className="config-select"
+                  id={`supersede-${plugin.plugin_id}`}
+                  value={supersedePolicy}
+                  onChange={(event) => setConfigDraft({
+                    ...configDraft,
+                    supersede_policy: event.currentTarget.value,
+                  })}
+                >
+                  <option value="latest_snapshot">{t("plugins.keepLatest")}</option>
+                  <option value="preserve_all">{t("plugins.preserveAll")}</option>
+                </select>
             </div>
 
             <div className="config-section">
@@ -563,30 +660,39 @@ function TriggerCapabilitySection({
 
         {isWebhook && (
           <>
+            <PluginReviewStrategySection
+                catalog={reviewerCatalogQuery.data ?? []}
+                hasProfileDrift={hasProfileDrift}
+                isCatalogLoading={reviewerCatalogQuery.isLoading}
+                profiles={profilesQuery.data ?? []}
+                profileSource={profileSourceDraft}
+                selectedProfileId={selectedProfileId}
+                strategy={strategy}
+                validationErrors={strategyErrors}
+                onProfileChange={setSelectedProfileId}
+                onReloadProfile={handleReloadProfile}
+                onStrategyChange={(nextStrategy) => {
+                  setConfigDraft(withStrategy(configDraft, nextStrategy));
+                  setProfileSourceDraft(null);
+                }}
+            />
+
             <div className="config-section">
-              <label className="config-section__label">{t("plugins.selectedAgents")}</label>
-              <div className="config-checkboxes">
-                {AVAILABLE_AGENTS.map((agent) => (
-                  <label
-                    key={agent.reference}
-                    className={`config-checkbox ${!agent.enabled ? "config-checkbox--disabled" : ""}`}
-                  >
-                    <input
-                      type="checkbox"
-                      checked={selectedAgents.includes(agent.reference)}
-                      disabled={!agent.enabled}
-                      onChange={(e) => handleAgentToggle(agent.reference, e.target.checked)}
-                    />
-                    <span>{t(agent.labelKey)}</span>
-                    {!agent.enabled && (
-                      <span className="config-agent-badge">{t("plugins.comingSoon")}</span>
-                    )}
-                  </label>
-                ))}
-              </div>
-              {selectedAgents.length === 0 && (
-                <p className="config-error">{t("plugins.noAgentSelected")}</p>
-              )}
+                <label className="config-section__label" htmlFor={`supersede-${plugin.plugin_id}`}>
+                  {t("plugins.supersede")}
+                </label>
+                <select
+                  className="config-select"
+                  id={`supersede-${plugin.plugin_id}`}
+                  value={supersedePolicy}
+                  onChange={(event) => setConfigDraft({
+                    ...configDraft,
+                    supersede_policy: event.currentTarget.value,
+                  })}
+                >
+                  <option value="latest_snapshot">{t("plugins.keepLatest")}</option>
+                  <option value="preserve_all">{t("plugins.preserveAll")}</option>
+                </select>
             </div>
 
             <div className="config-section">
@@ -635,7 +741,11 @@ function TriggerCapabilitySection({
 
         <button
           className="config-save"
-          disabled={!configChanged || configMutation.isPending}
+          disabled={
+            !configChanged ||
+            configMutation.isPending ||
+            strategyErrors.length > 0
+          }
           onClick={() => configMutation.mutate(configDraft)}
           type="button"
         >
@@ -709,6 +819,74 @@ function TriggerCapabilitySection({
         />
       )}
     </div>
+  );
+}
+
+function PluginReviewStrategySection({
+  catalog,
+  profiles,
+  selectedProfileId,
+  profileSource,
+  hasProfileDrift,
+  strategy,
+  validationErrors,
+  isCatalogLoading,
+  onProfileChange,
+  onReloadProfile,
+  onStrategyChange,
+}: {
+  catalog: readonly ReviewerCatalogEntry[];
+  profiles: readonly ReviewProfile[];
+  selectedProfileId: string;
+  profileSource: PluginProfileSource | null;
+  hasProfileDrift: boolean;
+  strategy: ReviewStrategySnapshot;
+  validationErrors: readonly StrategyValidationError[];
+  isCatalogLoading: boolean;
+  onProfileChange: (profileId: string) => void;
+  onReloadProfile: () => void;
+  onStrategyChange: (strategy: ReviewStrategySnapshot) => void;
+}) {
+  const { t } = useI18n();
+  return (
+    <section className="plugin-review-strategy" aria-label={t("plugins.strategyLabel")}>
+      <header>
+        <div>
+          <strong>{t("plugins.strategyTitle")}</strong>
+          <span>{t("plugins.strategySnapshot")}</span>
+        </div>
+        {profileSource !== null ? (
+          <small>
+            {t("plugins.profileSource", {
+              name: profileSource.profile_name,
+              revision: String(profileSource.profile_revision),
+            })}
+          </small>
+        ) : null}
+      </header>
+      {profiles.length > 0 ? (
+        <div className="plugin-profile-copy">
+          <ReviewProfilePicker
+            profiles={profiles}
+            value={selectedProfileId || profiles[0]?.id || ""}
+            onChange={(profile) => onProfileChange(profile.id)}
+          />
+          <button type="button" onClick={onReloadProfile}>{t("plugins.reloadProfile")}</button>
+        </div>
+      ) : null}
+      {hasProfileDrift ? (
+        <p className="plugin-profile-drift" role="status">
+          {t("plugins.profileDrift")}
+        </p>
+      ) : null}
+      <ReviewStrategyEditor
+        catalog={catalog}
+        isDisabled={isCatalogLoading}
+        validationErrors={validationErrors}
+        value={strategy}
+        onChange={onStrategyChange}
+      />
+    </section>
   );
 }
 

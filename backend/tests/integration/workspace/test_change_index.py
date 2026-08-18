@@ -135,8 +135,12 @@ async def test_skips_old_hunk_when_base_object_is_unreachable(tmp_path: Path) ->
 
     await _git(
         origin,
-        "-c", "protocol.file.allow=always",
-        "submodule", "add", str(submodule), ".codehub/sub",
+        "-c",
+        "protocol.file.allow=always",
+        "submodule",
+        "add",
+        str(submodule),
+        ".codehub/sub",
     )
     await _git(origin, "commit", "-m", "add submodule")
     (origin / "main.py").write_text("main = 2\n", encoding="utf-8")

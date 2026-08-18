@@ -37,7 +37,5 @@ async def test_concurrent_updates_do_not_overwrite_other_plugin_records(
     )
 
     persisted = await store.list_plugins()
-    assert {record.plugin_id for record in persisted} == {
-        record.plugin_id for record in records
-    }
+    assert {record.plugin_id for record in persisted} == {record.plugin_id for record in records}
     assert all(record.report_enabled for record in persisted)

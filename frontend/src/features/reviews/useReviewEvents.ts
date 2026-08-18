@@ -6,8 +6,10 @@ type ReviewStatus =
   | "provisioning_worktree"
   | "snapshotting"
   | "preparing"
+  | "planning"
   | "reviewing"
   | "validating"
+  | "verifying"
   | "synthesizing"
   | "completed"
   | "partial"
@@ -23,18 +25,40 @@ export type ReviewStreamEvent = {
 export type ConnectionState = "connecting" | "open" | "closed";
 
 const STATUS_BY_EVENT: Record<string, ReviewStatus> = {
-  "review.created": "created",
-  "review.provisioning_worktree": "provisioning_worktree",
-  "review.snapshotting": "snapshotting",
-  "review.preparing": "preparing",
-  "review.reviewing": "reviewing",
-  "review.validating": "validating",
-  "review.synthesizing": "synthesizing",
-  "review.completed": "completed",
-  "review.partial": "partial",
-  "review.failed": "failed",
-  "review.canceled": "canceled",
+  "review.created.v2": "created",
+  "review.provisioning_worktree.v2": "provisioning_worktree",
+  "review.snapshotting.v2": "snapshotting",
+  "review.preparing.v2": "preparing",
+  "review.planning.v2": "planning",
+  "review.reviewing.v2": "reviewing",
+  "review.validating.v2": "validating",
+  "review.verifying.v2": "verifying",
+  "review.synthesizing.v2": "synthesizing",
+  "review.completed.v2": "completed",
+  "review.partial.v2": "partial",
+  "review.failed.v2": "failed",
+  "review.canceled.v2": "canceled",
 };
+
+/**
+ * Persisted event contract emitted by the review SSE endpoint. Keep this list exhaustive:
+ * named SSE events do not reach EventSource.onmessage, so every non-status audit event must
+ * be registered here and covered by the hook contract test.
+ */
+const NON_STATUS_EVENT_TYPES = [
+  "review.plan_created.v2",
+  "review.ready.v2",
+  "review.scope_empty.v2",
+  "review.cancel_requested.v2",
+  "review.superseded.v2",
+  "review.verdict_completed.v2",
+  "agent_run.started.v2",
+  "agent_run.completed.v2",
+  "agent_run.failed.v2",
+  "agent.succeeded.v2",
+  "agent_tool_call.rejected.v2",
+  "finding.published.v2",
+] as const;
 
 const TERMINAL_STATUSES = new Set<ReviewStatus>([
   "completed",
@@ -61,7 +85,7 @@ export function useReviewEvents(taskId: string | undefined) {
     const source = new EventSource(`/api/reviews/${taskId}/events`);
     setConnectionState("connecting");
     setConnectionState("open");
-    const eventTypes = Object.keys(STATUS_BY_EVENT);
+    const eventTypes = [...Object.keys(STATUS_BY_EVENT), ...NON_STATUS_EVENT_TYPES];
     const listeners = eventTypes.map((type) => {
       const listener = (event: MessageEvent<string>) => {
         const payload = JSON.parse(event.data) as Record<string, unknown>;

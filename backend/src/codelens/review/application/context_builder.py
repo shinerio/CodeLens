@@ -1,4 +1,3 @@
-import hashlib
 import json
 from dataclasses import dataclass
 from pathlib import PurePosixPath
@@ -141,14 +140,14 @@ class ContextBuilder:
             raise ContextIntegrityError("Snapshot manifest contains duplicate entries")
 
         referenced_paths = (
-            *snapshot.manifest.target_paths,
+            *snapshot.manifest.review_paths,
             *snapshot.manifest.context_paths,
             *snapshot.manifest.instruction_paths,
         )
         if any(not ContextBuilder._is_normalized_relative(path) for path in referenced_paths):
             raise ContextContainmentError("Snapshot manifest contains an unsafe path")
 
-        active_targets = set(snapshot.manifest.target_paths)
+        active_targets = set(snapshot.manifest.review_paths)
         for target_path in active_targets:
             entry = entries.get(target_path)
             if entry is None or entry.origin != "target":
@@ -173,9 +172,7 @@ class ContextBuilder:
                 "Snapshot target has no unique repository instruction chain"
             )
 
-        active_rule_paths = {
-            rule_path for chain in chains for rule_path in chain.rule_paths
-        }
+        active_rule_paths = {rule_path for chain in chains for rule_path in chain.rule_paths}
         manifest_instruction_paths = snapshot.manifest.instruction_paths
         if (
             len(set(manifest_instruction_paths)) != len(manifest_instruction_paths)
@@ -213,8 +210,7 @@ class ContextBuilder:
                 or entry.origin != "instruction"
             ):
                 raise ContextContainmentError("instruction path is outside the Snapshot")
-            actual_hash = hashlib.sha256(document.content.encode("utf-8")).hexdigest()
-            if actual_hash != document.content_hash or entry.content_hash != actual_hash:
+            if document.content_hash != entry.content_hash:
                 raise ContextIntegrityError("instruction content is stale or corrupted")
 
         for chain in chains:

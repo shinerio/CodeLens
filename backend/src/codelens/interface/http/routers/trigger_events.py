@@ -69,9 +69,7 @@ async def receive_trigger_event(
         event_payload["commit_sha"] = request.commit_sha
     elif hook_event == HookEvent.PRE_PUSH:
         if not request.push_ref:
-            raise HttpProblem(
-                400, "missing_push_ref", "pre-push event requires push_ref"
-            ) from None
+            raise HttpProblem(400, "missing_push_ref", "pre-push event requires push_ref") from None
         event_payload["push_ref"] = request.push_ref
 
     repository_path = Path(request.repository_path)

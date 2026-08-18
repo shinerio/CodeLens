@@ -13,27 +13,27 @@ class FilesystemReviewerPromptStore:
     def __init__(self, data_dir: Path) -> None:
         self._path = data_dir.expanduser().resolve() / "reviewer-prompts.json"
 
-    async def load_override(self, agent_id: str, locale: PromptLocale) -> str | None:
-        return await asyncio.to_thread(self._load_override_sync, agent_id, locale)
+    async def load_override(self, reference: str, locale: PromptLocale) -> str | None:
+        return await asyncio.to_thread(self._load_override_sync, reference, locale)
 
-    async def save_override(self, agent_id: str, locale: PromptLocale, prompt: str) -> None:
-        await asyncio.to_thread(self._update_sync, agent_id, locale, prompt)
+    async def save_override(self, reference: str, locale: PromptLocale, prompt: str) -> None:
+        await asyncio.to_thread(self._update_sync, reference, locale, prompt)
 
-    async def delete_override(self, agent_id: str, locale: PromptLocale) -> None:
-        await asyncio.to_thread(self._update_sync, agent_id, locale, None)
+    async def delete_override(self, reference: str, locale: PromptLocale) -> None:
+        await asyncio.to_thread(self._update_sync, reference, locale, None)
 
-    def _load_override_sync(self, agent_id: str, locale: PromptLocale) -> str | None:
+    def _load_override_sync(self, reference: str, locale: PromptLocale) -> str | None:
         payload = self._read()
-        value = payload.get(agent_id, {}).get(locale)
+        value = payload.get(reference, {}).get(locale)
         return value if isinstance(value, str) else None
 
-    def _update_sync(self, agent_id: str, locale: PromptLocale, prompt: str | None) -> None:
+    def _update_sync(self, reference: str, locale: PromptLocale, prompt: str | None) -> None:
         payload = self._read()
-        agent = payload.setdefault(agent_id, {})
+        agent = payload.setdefault(reference, {})
         if prompt is None:
             agent.pop(locale, None)
             if not agent:
-                payload.pop(agent_id, None)
+                payload.pop(reference, None)
         else:
             agent[locale] = prompt
         self._path.parent.mkdir(parents=True, exist_ok=True)

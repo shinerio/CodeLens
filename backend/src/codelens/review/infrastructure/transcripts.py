@@ -2,6 +2,7 @@
 
 import asyncio
 import json
+import logging
 import os
 import re
 import tempfile
@@ -12,11 +13,15 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, Field
 
+from codelens.review.domain.tool_invocation import classify_tool_result, outcome_metadata
+
 TranscriptKind = Literal[
     "lifecycle",
     "prompt",
     "model_output",
     "tool_call",
+    "invalid_tool_call",
+    "invalid_tool_result",
     "tool_result",
     "skill_loaded",
     "model_started",
@@ -26,7 +31,9 @@ TranscriptKind = Literal[
     "model_output_completed",
     "model_completed",
     "model_raw_output",
+    "checkpoint_compaction",
 ]
+_LOGGER = logging.getLogger("codelens.worker.transcripts")
 
 _SECRET_PATTERN = re.compile(
     r"(?i)(?P<prefix>"
@@ -55,6 +62,12 @@ class ModelTranscriptLogPort(Protocol):
         """Persist model exchanges outside the streaming event path."""
 
         raise NotImplementedError
+
+
+class ToolRejectionEventPort(Protocol):
+    """Persist bounded rejected-tool diagnostics without arguments or result content."""
+
+    async def append(self, task_id: str, event_type: str, payload: dict[str, object]) -> None: ...
 
 
 class ExecutionTranscriptStore:
@@ -158,15 +171,23 @@ class ExecutionTranscriptStore:
 
 
 class WorkerTranscriptStore:
-    """Keep active Review transcripts in Worker memory and persist only at completion."""
+    """Keep active transcripts in memory and persist them at task completion.
+
+    Each model call produces one ``model_output_delta`` (or ``model_reasoning_delta``)
+    entry with the full text — token-level chunking is handled upstream in
+    ``openai_runtime._visible_event``. This store simply appends entries in arrival
+    order and flushes them to the durable store on ``finalize()``.
+    """
 
     def __init__(
         self,
         durable_store: ExecutionTranscriptStore,
         model_log: ModelTranscriptLogPort | None = None,
+        rejection_events: ToolRejectionEventPort | None = None,
     ) -> None:
         self._durable_store = durable_store
         self._model_log = model_log
+        self._rejection_events = rejection_events
         self._entries: dict[str, list[TranscriptEntry]] = {}
         self._locks: dict[str, asyncio.Lock] = {}
 
@@ -181,24 +202,55 @@ class WorkerTranscriptStore:
         await self.append_many(task_id, ((kind, content, metadata),))
 
     async def append_many(
-        self, task_id: str, entries: Sequence[tuple[TranscriptKind, str, Mapping[str, str] | None]],
+        self,
+        task_id: str,
+        entries: Sequence[tuple[TranscriptKind, str, Mapping[str, str] | None]],
     ) -> None:
         lock = self._locks.setdefault(task_id, asyncio.Lock())
         async with lock:
             collected = self._entries.setdefault(task_id, [])
-            start_sequence = len(collected)
-            collected.extend(
-                TranscriptEntry(
-                    sequence=start_sequence + index,
-                    kind=kind,
-                    content=safe_content,
-                    created_at=datetime.now(UTC),
-                    redacted=redacted,
-                    truncated=False,
-                    metadata=dict(metadata or {}),
+            for kind, content, metadata in entries:
+                safe_content, redacted = _redact(content)
+                safe_metadata = dict(metadata or {})
+                if kind == "tool_result" and "tool_outcome" not in safe_metadata:
+                    safe_metadata.update(outcome_metadata(classify_tool_result(safe_content)))
+                collected.append(
+                    _transcript_entry(
+                        sequence=len(collected) + 1,
+                        kind=kind,
+                        content=safe_content,
+                        redacted=redacted,
+                        metadata=safe_metadata,
+                    )
                 )
-                for index, (kind, content, metadata) in enumerate(entries, start=1)
-                for safe_content, redacted in (_redact(content),)
+                if kind == "tool_result" and safe_metadata.get("tool_outcome") == "rejected":
+                    await self._record_tool_rejection(task_id, safe_metadata)
+
+    async def _record_tool_rejection(
+        self, task_id: str, metadata: Mapping[str, str]
+    ) -> None:
+        """Write one bounded rejection fact to logs and the durable event outbox."""
+
+        payload: dict[str, object] = {
+            "agent": metadata.get("agent", "unknown")[:128],
+            "tool_name": metadata.get("tool_name", "unknown")[:128],
+            "tool_call_id": metadata.get("tool_call_id", "")[:128],
+            "reason_code": metadata.get(
+                "tool_rejection_reason_code", "tool_result_rejected"
+            )[:128],
+            "reason": metadata.get(
+                "tool_rejection_reason", "Tool invocation was rejected."
+            )[:500],
+        }
+        _LOGGER.warning(
+            "Model-visible tool invocation rejected",
+            extra={"task_id": task_id, **payload},
+        )
+        if self._rejection_events is not None:
+            await self._rejection_events.append(
+                task_id,
+                "agent_tool_call.rejected.v2",
+                payload,
             )
 
     async def list(self, task_id: str) -> tuple[TranscriptEntry, ...]:
@@ -214,6 +266,25 @@ class WorkerTranscriptStore:
                 await self._durable_store.replace(task_id, entries)
                 if self._model_log is not None:
                     await self._model_log.write(task_id, entries)
+
+
+def _transcript_entry(
+    *,
+    sequence: int,
+    kind: TranscriptKind,
+    content: str,
+    redacted: bool,
+    metadata: dict[str, str],
+) -> TranscriptEntry:
+    return TranscriptEntry(
+        sequence=sequence,
+        kind=kind,
+        content=content,
+        created_at=datetime.now(UTC),
+        redacted=redacted,
+        truncated=False,
+        metadata=metadata,
+    )
 
 
 def _redact(content: str) -> tuple[str, bool]:

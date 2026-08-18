@@ -4,7 +4,7 @@ import logging
 from collections.abc import Sequence
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
 from codelens.findings.domain.models import Finding
 from codelens.plugin.domain.models import ExportHistoryEntry, ExportResult, PluginRecord
@@ -19,7 +19,12 @@ from codelens.review.application.export_findings import (
     ExportFindingsHandler,
     FindingExportEnvelope,
 )
-from codelens.review.domain.ports import ReviewExecutionRecord, ReviewRecord
+from codelens.review.domain.ports import ReviewExecutionRecord, ReviewPlanRecord, ReviewRecord
+
+
+class ReviewPlanStorePort(Protocol):
+    async def get(self, task_id: str) -> ReviewPlanRecord | None: ...
+
 
 _LOGGER = logging.getLogger("codelens.plugin.report.orchestrator")
 
@@ -75,6 +80,8 @@ class ExportOrchestrator:
         plugin_store: PluginStorePort,
         plugin_loader: PluginLoaderPort,
         export_history: ExportHistoryPort | None = None,
+        review_plan_store: ReviewPlanStorePort | None = None,
+        checkpoint_store: Any | None = None,
     ) -> None:
         """Initialize the export orchestrator.
 
@@ -90,7 +97,12 @@ class ExportOrchestrator:
         self._plugin_store = plugin_store
         self._plugin_loader = plugin_loader
         self._export_history = export_history
-        self._envelope_builder = ExportFindingsHandler(review_store, revision_reader)
+        self._envelope_builder = ExportFindingsHandler(
+            review_store,
+            revision_reader,
+            review_plan_store,
+            checkpoint_store,
+        )
         self._builtin_sink = LocalFileExportSink()
 
     async def export_findings(
@@ -171,10 +183,7 @@ class ExportOrchestrator:
         """
         # Query all plugins with enabled report capability and auto-export
         all_plugins = await self._plugin_store.list_plugins()
-        auto_export_plugins = [
-            p for p in all_plugins
-            if p.report_enabled and p.report_auto_export
-        ]
+        auto_export_plugins = [p for p in all_plugins if p.report_enabled and p.report_auto_export]
 
         if not auto_export_plugins:
             _LOGGER.debug("No auto-export plugins enabled")
@@ -258,7 +267,6 @@ class ExportOrchestrator:
         """
         try:
             sink = self._load_sink(plugin_record)
-            execution = await self._review_store.get_execution(envelope.review.task_id)
         except Exception:
             _LOGGER.exception("Plugin %s could not be loaded", plugin_record.plugin_id)
             return ExportResult(
@@ -267,6 +275,22 @@ class ExportOrchestrator:
                 success=False,
                 output_path=None,
                 error="Plugin could not be loaded",
+                exported_at=datetime.now(UTC),
+            )
+
+        try:
+            execution = await self._review_store.get_execution(envelope.review.task_id)
+        except Exception:
+            _LOGGER.exception(
+                "Review execution record for task %s could not be loaded",
+                envelope.review.task_id,
+            )
+            return ExportResult(
+                plugin_id=plugin_record.plugin_id,
+                task_id=envelope.review.task_id,
+                success=False,
+                output_path=None,
+                error="Review execution record could not be loaded",
                 exported_at=datetime.now(UTC),
             )
 
@@ -362,9 +386,7 @@ class ExportOrchestrator:
             return self._builtin_sink
 
         if not plugin_record.install_path:
-            raise ValueError(
-                f"External plugin '{plugin_record.plugin_id}' has no install_path"
-            )
+            raise ValueError(f"External plugin '{plugin_record.plugin_id}' has no install_path")
 
         return self._plugin_loader.load_sink(
             plugin_record.manifest,

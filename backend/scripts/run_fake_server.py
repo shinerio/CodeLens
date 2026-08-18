@@ -19,9 +19,15 @@ from codelens.interface.http.app import (
 from codelens.interface.http.dependencies import HttpProblem
 from codelens.interface.http.routers.plugins import router as plugins_router
 from codelens.interface.http.routers.repositories import router as repositories_router
+from codelens.interface.http.routers.review_profiles import router as review_profiles_router
+from codelens.interface.http.routers.reviewer_catalog import router as reviewer_catalog_router
 from codelens.interface.http.routers.reviewer_prompts import router as reviewer_prompts_router
 from codelens.interface.http.routers.reviews import router as reviews_router
 from codelens.interface.http.routers.settings import router as settings_router
+from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
+    FixedReviewerSelection,
+)
 from codelens.shared.domain.errors import DomainError
 from codelens.testing.correctness_fixture import (
     FixtureRuntime,
@@ -58,7 +64,6 @@ async def _build_app(settings: Settings) -> FastAPI:
         settings,
         runtime=FixtureRuntime(
             load_simple_branch_comments(),
-            repeat_first_comment=True,
         ),
     )
     components = backend.components
@@ -69,6 +74,16 @@ async def _build_app(settings: Settings) -> FastAPI:
     async def lifespan(_app: FastAPI) -> AsyncIterator[None]:
         nonlocal scheduler_task
         await backend.start()
+        profiles = await components.list_review_profiles.handle()
+        default_profile = next(profile for profile in profiles if profile.is_default)
+        if isinstance(default_profile.reviewer_selection, AdaptiveReviewerSelection):
+            await components.update_review_profile.handle(
+                default_profile.profile_id,
+                expected_revision=default_profile.revision,
+                name=default_profile.name,
+                is_default=True,
+                reviewer_selection=FixedReviewerSelection(("correctness:v2",)),
+            )
         scheduler_task = asyncio.create_task(backend.scheduler.run(stop_event))
         try:
             yield
@@ -78,7 +93,7 @@ async def _build_app(settings: Settings) -> FastAPI:
                 await scheduler_task
             await backend.close()
 
-    app = FastAPI(title="CodeLens Review API", version="0.1.0", lifespan=lifespan)
+    app = FastAPI(title="CodeLens Review API", version="0.2.0", lifespan=lifespan)
     app.state.settings = settings
     app.state.components = components
     app.add_middleware(LocalHttpSafetyMiddleware, configured_host="127.0.0.1")
@@ -104,6 +119,8 @@ async def _build_app(settings: Settings) -> FastAPI:
 
     app.include_router(repositories_router)
     app.include_router(reviews_router)
+    app.include_router(review_profiles_router)
+    app.include_router(reviewer_catalog_router)
     app.include_router(settings_router)
     app.include_router(reviewer_prompts_router)
     app.include_router(plugins_router)

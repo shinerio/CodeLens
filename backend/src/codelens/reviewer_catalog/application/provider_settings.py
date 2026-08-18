@@ -41,6 +41,10 @@ class ModelGatewayView:
     max_tool_calls: int
     max_identical_tool_results: int
     tool_timeout_seconds: int
+    max_retries: int
+    retry_backoff_base: float
+    retry_max_delay: float
+    no_progress_rounds_threshold: int
 
 
 @dataclass(frozen=True)
@@ -82,11 +86,15 @@ class ModelGatewaySettingsService:
         api_type: GatewayApiType = "chat_completions",
         max_tokens: int = 65536,
         thinking_level: ThinkingLevel = "disabled",
-        agent_timeout: int = 1800,
-        max_agent_turns: int = 100,
-        max_tool_calls: int = 300,
+        agent_timeout: int = 3600,
+        max_agent_turns: int = 500,
+        max_tool_calls: int = 500,
         max_identical_tool_results: int = 3,
         tool_timeout_seconds: int = 30,
+        max_retries: int = 10,
+        retry_backoff_base: float = 1.0,
+        retry_max_delay: float = 30.0,
+        no_progress_rounds_threshold: int = 10,
     ) -> ModelGatewayCatalogView:
         """Append a gateway; the first created gateway becomes active automatically."""
 
@@ -107,6 +115,10 @@ class ModelGatewaySettingsService:
                 max_tool_calls=max_tool_calls,
                 max_identical_tool_results=max_identical_tool_results,
                 tool_timeout_seconds=tool_timeout_seconds,
+                max_retries=max_retries,
+                retry_backoff_base=retry_backoff_base,
+                retry_max_delay=retry_max_delay,
+                no_progress_rounds_threshold=no_progress_rounds_threshold,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id or gateway.gateway_id,
@@ -127,11 +139,15 @@ class ModelGatewaySettingsService:
         api_type: GatewayApiType = "chat_completions",
         max_tokens: int = 65536,
         thinking_level: ThinkingLevel = "disabled",
-        agent_timeout: int = 1800,
-        max_agent_turns: int = 100,
-        max_tool_calls: int = 300,
+        agent_timeout: int = 3600,
+        max_agent_turns: int = 500,
+        max_tool_calls: int = 500,
         max_identical_tool_results: int = 3,
         tool_timeout_seconds: int = 30,
+        max_retries: int = 10,
+        retry_backoff_base: float = 1.0,
+        retry_max_delay: float = 30.0,
+        no_progress_rounds_threshold: int = 10,
     ) -> ModelGatewayCatalogView:
         """Replace gateway metadata while retaining an omitted write-only API key."""
 
@@ -153,6 +169,10 @@ class ModelGatewaySettingsService:
                 max_tool_calls=max_tool_calls,
                 max_identical_tool_results=max_identical_tool_results,
                 tool_timeout_seconds=tool_timeout_seconds,
+                max_retries=max_retries,
+                retry_backoff_base=retry_backoff_base,
+                retry_max_delay=retry_max_delay,
+                no_progress_rounds_threshold=no_progress_rounds_threshold,
             )
             updated = ModelGatewayCatalog(
                 active_gateway_id=catalog.active_gateway_id,
@@ -234,6 +254,10 @@ class ModelGatewaySettingsService:
                     max_tool_calls=gateway.max_tool_calls,
                     max_identical_tool_results=gateway.max_identical_tool_results,
                     tool_timeout_seconds=gateway.tool_timeout_seconds,
+                    max_retries=gateway.max_retries,
+                    retry_backoff_base=gateway.retry_backoff_base,
+                    retry_max_delay=gateway.retry_max_delay,
+                    no_progress_rounds_threshold=gateway.no_progress_rounds_threshold,
                 )
                 for gateway in catalog.gateways
             ),

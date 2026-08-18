@@ -76,6 +76,31 @@ function installApiMock({
       }
       return jsonResponse(recentRepositories);
     }
+    if (url === "/api/review-profiles") {
+      return jsonResponse([
+        {
+          profile_id: "profile-default",
+          revision: 1,
+          name: "Default",
+          is_default: true,
+          reviewer_selection: { mode: "adaptive" },
+          created_at: "2026-08-01T00:00:00Z",
+          updated_at: "2026-08-01T00:00:00Z",
+        },
+      ]);
+    }
+    if (url === "/api/reviewer-catalog") {
+      return jsonResponse([
+        {
+          reference: "general:v2",
+          agent_id: "general",
+          version: 1,
+          dimensions: ["general"],
+          planner_eligible: true,
+          capability_readiness: "ready",
+        },
+      ]);
+    }
     if (url === "/api/repositories/browse") {
       const body = JSON.parse(String(init?.body)) as { path: string | null };
       if (body.path === null) {
@@ -107,10 +132,21 @@ function installApiMock({
       };
       const offset = body.commit_offset;
       const firstCommit = body.target_ref === "main" ? 100 : offset;
+      const targetBranch = branches.find(
+        (branch) => branch.name === (body.target_ref ?? "feature"),
+      );
+      const targetOid = targetBranch?.oid ?? "c".repeat(40);
       return jsonResponse({
         branches,
         commits: Array.from({ length: 10 }, (_, index) => commit(firstCommit + index)),
         next_commit_offset: offset === 0 ? nextOffset : null,
+        target_commit: {
+          oid: targetOid,
+          short_oid: targetOid.slice(-8),
+          author: "Tip Author",
+          message: body.target_ref === "main" ? "main tip" : "feature tip",
+          committed_at: "2026-07-18T12:00:00Z",
+        },
       });
     }
     if (url === "/api/reviews") {
@@ -156,7 +192,9 @@ it("creates a branch review using Git branch dropdowns", async () => {
 
   const reviewCall = fetchMock.mock.calls.find(([url]) => url === "/api/reviews");
   const body = JSON.parse(String(reviewCall?.[1]?.body)) as {
+    profile_source?: { profile_id: string; revision: number };
     repository_path: string;
+    reviewer_selection: { mode: string };
     scope: { base_ref: string; target_ref: string; type: string };
   };
   expect(body.repository_path).toBe("/app");
@@ -165,6 +203,8 @@ it("creates a branch review using Git branch dropdowns", async () => {
     base_ref: "origin/main",
     target_ref: "feature",
   });
+  expect(body.reviewer_selection).toEqual({ mode: "adaptive" });
+  expect(body.profile_source).toEqual({ profile_id: "profile-default", revision: 1 });
 });
 
 it("inspects a repository path entered directly into the path field", async () => {
@@ -226,13 +266,13 @@ it("reloads base commits and target tip when the target branch changes", async (
   await chooseRepository(user);
   await user.click(screen.getByRole("button", { name: /Commit diff/ }));
 
-  expect(screen.getByLabelText("Target commit")).toHaveValue("c".repeat(40));
+  expect(screen.getByLabelText("Target commit")).toHaveValue("cccccccc · Tip Author · feature tip");
   await user.selectOptions(screen.getByLabelText("Target branch"), "main");
 
   expect(await screen.findByRole("option", { name: /Author 100 · Commit message 100/ })).toBeVisible();
   expect(screen.getByLabelText("Base commit")).toHaveValue(commit(100).oid);
   expect(screen.queryByRole("option", { name: /Author 0 · Commit message 0/ })).not.toBeInTheDocument();
-  expect(screen.getByLabelText("Target commit")).toHaveValue("d".repeat(40));
+  expect(screen.getByLabelText("Target commit")).toHaveValue("dddddddd · Tip Author · main tip");
   const catalogCalls = fetchMock.mock.calls.filter(([url]) => url === "/api/repositories/catalog");
   expect(JSON.parse(String(catalogCalls.at(-1)?.[1]?.body))).toMatchObject({
     target_ref: "main",

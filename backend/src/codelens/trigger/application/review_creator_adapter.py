@@ -2,10 +2,22 @@
 
 import logging
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Protocol
 
+from codelens.plugin.api.v2 import (
+    AdaptiveReviewerSelection as PluginAdaptiveReviewerSelection,
+)
+from codelens.plugin.api.v2 import (
+    ExistingFindingV2,
+    TriggerReviewPolicy,
+)
 from codelens.plugin.domain.ports import ReviewCreatorPort, TriggerRepositoryValidatorPort
 from codelens.review.application.commands import CreateReviewCommand, CreateReviewHandler
+from codelens.review.domain.review_strategy import (
+    AdaptiveReviewerSelection,
+    FixedReviewerSelection,
+    ReviewProfileSnapshot,
+)
 from codelens.workspace.domain.models import (
     BranchScope,
     CommitScope,
@@ -81,9 +93,9 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
         repository_path: Path,
         scope_type: str,
         scope_params: dict[str, str | None],
-        selected_agents: tuple[str, ...],
-        prompt_locale: str,
-        external_context: dict | None = None,
+        review_policy: TriggerReviewPolicy,
+        external_context: dict[str, Any] | None = None,
+        existing_findings: tuple[ExistingFindingV2, ...] = (),
     ) -> str:
         """Create a review from a trigger event.
 
@@ -97,9 +109,9 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
                 - For 'commit': base_commit, target_ref
                 - For 'branch': base_ref, target_ref
                 - For 'uncommitted': (no parameters needed)
-            selected_agents: Tuple of agent IDs to use for the review.
-            prompt_locale: Locale for review prompts ('en' or 'zh-CN').
+            review_policy: Frozen v2 reviewer selection and trigger behavior.
             external_context: Platform-specific context for export routing.
+            existing_findings: Structured, untrusted prior issues for duplicate detection.
 
         Returns:
             Task ID of the created review.
@@ -119,9 +131,21 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
         command = CreateReviewCommand(
             repository=repository_info,
             scope=scope,
-            selected_agent_versions=selected_agents,
-            prompt_locale=prompt_locale,
+            review_profile=ReviewProfileSnapshot(
+                (
+                    AdaptiveReviewerSelection()
+                    if isinstance(
+                        review_policy.reviewer_selection,
+                        PluginAdaptiveReviewerSelection,
+                    )
+                    else FixedReviewerSelection(review_policy.reviewer_selection.reviewer_versions)
+                ),
+            ),
+            trigger_source="plugin",
+            supersede_policy=review_policy.supersede_policy.value,
+            prompt_locale=review_policy.prompt_locale,
             external_context=external_context,
+            existing_findings=existing_findings,
             skip_if_duplicate=True,
         )
 
@@ -129,7 +153,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             "Creating review from trigger: repo=%s, scope=%s, agents=%s",
             repository_path,
             scope_type,
-            selected_agents,
+            review_policy.reviewer_selection,
         )
 
         # Delegate to the review application layer
@@ -161,9 +185,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             target_ref = scope_params.get("target_ref")
 
             if not base_commit or not target_ref:
-                raise ValueError(
-                    "Commit scope requires 'base_commit' and 'target_ref' parameters"
-                )
+                raise ValueError("Commit scope requires 'base_commit' and 'target_ref' parameters")
 
             return CommitScope(
                 base_commit=base_commit,
@@ -176,9 +198,7 @@ class ReviewCreatorAdapter(ReviewCreatorPort):
             target_ref = scope_params.get("target_ref")
 
             if not base_ref or not target_ref:
-                raise ValueError(
-                    "Branch scope requires 'base_ref' and 'target_ref' parameters"
-                )
+                raise ValueError("Branch scope requires 'base_ref' and 'target_ref' parameters")
 
             return BranchScope(
                 base_ref=base_ref,

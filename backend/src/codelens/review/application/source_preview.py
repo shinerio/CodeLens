@@ -23,6 +23,28 @@ class _RevisionReaderPort(Protocol):
         path: str,
     ) -> bytes | None: ...
 
+    async def resolve_old_path_optional(
+        self,
+        repository: Path,
+        base_revision: str,
+        target_revision: str,
+        path: str,
+    ) -> str | None: ...
+
+
+class _OverlayArtifactPort(Protocol):
+    async def read_bytes(self, reference: str, expected_hash: str) -> bytes: ...
+
+
+class _OverlaySourcePort(Protocol):
+    async def read_overlay_optional(
+        self,
+        repository: Path,
+        revision: str,
+        path: str,
+        payload: bytes,
+    ) -> bytes | None: ...
+
 
 @dataclass(frozen=True)
 class PinnedSourceVersion:
@@ -52,9 +74,17 @@ class FindingSourcePreview:
 class FindingSourcePreviewService:
     """Serve source only after matching a persisted Finding and its pinned review revision."""
 
-    def __init__(self, store: _ReviewStorePort, reader: _RevisionReaderPort) -> None:
+    def __init__(
+        self,
+        store: _ReviewStorePort,
+        reader: _RevisionReaderPort,
+        overlay_artifacts: _OverlayArtifactPort | None = None,
+        overlay_source: _OverlaySourcePort | None = None,
+    ) -> None:
         self._store = store
         self._reader = reader
+        self._overlay_artifacts = overlay_artifacts
+        self._overlay_source = overlay_source
 
     async def get(self, task_id: str, finding_id: str) -> FindingSourcePreview:
         execution = await self._store.get_execution(task_id)
@@ -72,23 +102,53 @@ class FindingSourcePreviewService:
             highlight_side = "new"
         else:
             raise ValueError("Finding location has an unsupported source side")
-        base_source = await self._reader.read_revision_optional(
+        base_path = await self._reader.resolve_old_path_optional(
             execution.repository_path,
             execution.base_oid,
-            location.path,
-        )
-        target_source = await self._reader.read_revision_optional(
-            execution.repository_path,
             execution.head_oid,
             location.path,
         )
+        base_display_path = base_path if base_path is not None else location.path
+        base_source = await self._reader.read_revision_optional(
+            execution.repository_path,
+            execution.base_oid,
+            base_display_path,
+        )
+        target_source = await self._read_target(execution, location.path)
         return FindingSourcePreview(
             path=location.path,
-            base=self._version(location.path, execution.base_oid, base_source),
+            base=self._version(base_display_path, execution.base_oid, base_source),
             target=self._version(location.path, execution.head_oid, target_source),
             highlight_side=highlight_side,
             highlight_start_line=location.start_line,
             highlight_end_line=location.end_line,
+        )
+
+    async def _read_target(
+        self,
+        execution: ReviewExecutionRecord,
+        path: str,
+    ) -> bytes | None:
+        if (
+            execution.overlay_artifact_ref is None
+            or execution.overlay_hash is None
+            or self._overlay_artifacts is None
+            or self._overlay_source is None
+        ):
+            return await self._reader.read_revision_optional(
+                execution.repository_path,
+                execution.head_oid,
+                path,
+            )
+        payload = await self._overlay_artifacts.read_bytes(
+            execution.overlay_artifact_ref,
+            execution.overlay_hash,
+        )
+        return await self._overlay_source.read_overlay_optional(
+            execution.repository_path,
+            execution.head_oid,
+            path,
+            payload,
         )
 
     @staticmethod

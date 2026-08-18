@@ -88,6 +88,15 @@ async def get_repository_catalog(
             for commit in catalog.commits
         ],
         next_commit_offset=catalog.next_commit_offset,
+        target_commit=RepositoryCommitResponse(
+            oid=catalog.target_commit.oid,
+            short_oid=catalog.target_commit.short_oid,
+            author=catalog.target_commit.author,
+            message=catalog.target_commit.message,
+            committed_at=catalog.target_commit.committed_at,
+        )
+        if catalog.target_commit is not None
+        else None,
     )
 
 

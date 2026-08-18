@@ -7,7 +7,7 @@ import tempfile
 import threading
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import ClassVar
+from typing import Any, ClassVar
 
 from pathspec import PathSpec
 
@@ -55,7 +55,7 @@ class LocalFileExportSink(ReportSinkPort):
     async def export(
         self,
         envelope: FindingExportEnvelope,
-        config: dict,
+        config: dict[str, Any],
         repository_path: Path,
     ) -> ExportResult:
         output_dir_name = config.get("output_dir", self._DEFAULT_OUTPUT_DIR)
@@ -147,8 +147,9 @@ class LocalFileExportSink(ReportSinkPort):
             if cls._last_exported_at is not None and candidate <= cls._last_exported_at:
                 candidate = cls._last_exported_at + timedelta(microseconds=1)
             while any(
-                (target_dir / f"findings-{candidate.strftime('%Y%m%dT%H%M%S%fZ')}.{extension}")
-                .exists()
+                (
+                    target_dir / f"findings-{candidate.strftime('%Y%m%dT%H%M%S%fZ')}.{extension}"
+                ).exists()
                 for extension in file_extensions
             ):
                 candidate += timedelta(microseconds=1)
@@ -177,9 +178,7 @@ class LocalFileExportSink(ReportSinkPort):
             escaped_path = cls._escape_gitignore_path(relative_output_dir)
             separator = b"" if not content or content.endswith((b"\n", b"\r")) else b"\n"
             updated = content + separator + f"/{escaped_path}/\n".encode()
-            existing_mode = (
-                stat.S_IMODE(gitignore.stat().st_mode) if gitignore.exists() else None
-            )
+            existing_mode = stat.S_IMODE(gitignore.stat().st_mode) if gitignore.exists() else None
             cls._atomic_write(gitignore, updated, mode=existing_mode)
 
     @staticmethod
@@ -198,9 +197,7 @@ class LocalFileExportSink(ReportSinkPort):
         """Write content to path atomically using tempfile + os.replace."""
 
         path.parent.mkdir(parents=True, exist_ok=True)
-        descriptor, name = tempfile.mkstemp(
-            dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp"
-        )
+        descriptor, name = tempfile.mkstemp(dir=path.parent, prefix=f".{path.stem}-", suffix=".tmp")
         temporary = Path(name)
         try:
             with os.fdopen(descriptor, "wb") as stream:

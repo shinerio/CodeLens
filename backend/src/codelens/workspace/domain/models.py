@@ -2,6 +2,8 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Literal
 
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
+
 
 @dataclass(frozen=True)
 class BranchScope:
@@ -77,16 +79,26 @@ class SnapshotEntry:
 class SnapshotManifest:
     """Separate review targets from safe read-only context and control inputs."""
 
-    target_paths: tuple[str, ...]
-    context_paths: tuple[str, ...]
-    excluded_paths: tuple[ExcludedPath, ...]
+    review_scope: ReviewFileScope
     instruction_paths: tuple[str, ...] = ()
     entries: tuple[SnapshotEntry, ...] = ()
 
-    def is_target(self, path: str) -> bool:
+    @property
+    def review_paths(self) -> tuple[str, ...]:
+        """Expose the canonical Review targets from the frozen scope."""
+
+        return self.review_scope.review_paths
+
+    @property
+    def context_paths(self) -> tuple[str, ...]:
+        """Expose the canonical context paths from the frozen scope."""
+
+        return self.review_scope.context_paths
+
+    def is_review_path(self, path: str) -> bool:
         """Return whether a normalized repository path is a review target."""
 
-        return path in self.target_paths
+        return path in self.review_paths
 
     def is_context(self, path: str) -> bool:
         """Return whether a normalized repository path is visible as context."""

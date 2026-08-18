@@ -7,6 +7,7 @@ from typing import Any, TypeVar
 from alembic import command
 from alembic.config import Config
 from sqlalchemy import event
+from sqlalchemy.engine import make_url
 from sqlalchemy.exc import OperationalError
 from sqlalchemy.ext.asyncio import (
     AsyncEngine,
@@ -41,6 +42,18 @@ def _upgrade_database(database_url: str) -> None:
     command.upgrade(config, "head")
 
 
+def _is_new_file_database(database_url: str) -> bool:
+    """Return whether a SQLite URL targets a file that does not exist yet."""
+
+    url = make_url(database_url)
+    if (
+        url.get_backend_name() != "sqlite"
+        or url.database in {None, "", ":memory:"}
+    ):
+        return False
+    return not Path(url.database).expanduser().exists()
+
+
 class Database:
     """Own the async SQLite engine, sessions, PRAGMAs, and Alembic lifecycle."""
 
@@ -69,10 +82,14 @@ class Database:
             expire_on_commit=False,
         )
 
-    async def migrate(self) -> None:
-        """Apply Alembic migrations outside the event loop's blocking path."""
+    async def migrate(self) -> bool:
+        """Apply migrations and report whether a new file-backed database was created."""
 
+        was_created = await asyncio.to_thread(
+            _is_new_file_database, self.database_url
+        )
         await asyncio.to_thread(_upgrade_database, self.database_url)
+        return was_created
 
     async def run_transaction(
         self,

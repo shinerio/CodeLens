@@ -1,20 +1,22 @@
 from pathlib import Path
 
+import pytest
+
 from codelens.plugin.domain.models import PluginManifest, ReportCapability
-from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader
+from codelens.plugin.domain.versioning import PluginApiVersion
+from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader, PluginLoadError
 
 
 def _manifest() -> PluginManifest:
     return PluginManifest(
         plugin_id="external-report",
         name="External report",
-        version="1.0.0",
+        version="2.0.0",
         description="",
         author="test",
         platform="local",
-        capabilities={
-            "report": ReportCapability(entry_point="report_sink:ExternalSink")
-        },
+        capabilities={"report": ReportCapability(entry_point="report_sink:ExternalSink")},
+        min_codelens_version="0.2.0",
     )
 
 
@@ -55,3 +57,17 @@ def test_invalidating_a_plugin_reloads_its_updated_code(tmp_path: Path) -> None:
     loader.invalidate("external-report")
 
     assert loader.load_sink(_manifest(), tmp_path).sink_id == "version-two"
+
+
+def test_loader_rejects_incompatible_v2_manifest_before_import(tmp_path: Path) -> None:
+    manifest = PluginManifest(
+        **{
+            **_manifest().__dict__,
+            "version": "2.0.0",
+            "plugin_api_version": PluginApiVersion.V2,
+            "min_codelens_version": "99.0.0",
+        }
+    )
+
+    with pytest.raises(PluginLoadError, match="incompatible"):
+        CompositePluginLoader().load_sink(manifest, tmp_path)

@@ -22,6 +22,7 @@ from codelens.plugin.domain.models import (
     PluginCapabilityError,
     PluginConfigurationError,
     PluginInstallError,
+    PluginProfileSource,
     PluginRecord,
     ReportCapability,
     TriggerCapability,
@@ -46,6 +47,7 @@ class PluginManifestResponse(BaseModel):
     min_codelens_version: str | None
     name_i18n: dict[str, str] = Field(default_factory=dict)
     description_i18n: dict[str, str] = Field(default_factory=dict)
+    plugin_api_version: str
 
 
 class PluginRecordResponse(BaseModel):
@@ -64,6 +66,11 @@ class PluginRecordResponse(BaseModel):
     report_config: dict[str, Any]
     git_url: str | None = None
     git_ref: str | None = None
+    plugin_api_version: str
+    compatibility_status: str
+    config_revision: int
+    config: dict[str, Any]
+    profile_source: dict[str, Any] | None
 
     @classmethod
     def from_domain(cls, record: PluginRecord) -> "PluginRecordResponse":
@@ -95,6 +102,7 @@ class PluginRecordResponse(BaseModel):
                 min_codelens_version=record.manifest.min_codelens_version,
                 name_i18n=record.manifest.name_i18n,
                 description_i18n=record.manifest.description_i18n,
+                plugin_api_version=record.manifest.plugin_api_version.value,
             ),
             is_builtin=record.is_builtin,
             install_path=record.install_path,
@@ -105,6 +113,20 @@ class PluginRecordResponse(BaseModel):
             report_config=record.report_config,
             git_url=record.git_url,
             git_ref=record.git_ref,
+            plugin_api_version=record.manifest.plugin_api_version.value,
+            compatibility_status="compatible",
+            config=record.trigger_config,
+            config_revision=record.config_revision,
+            profile_source=(
+                {
+                    "profile_id": record.profile_source.profile_id,
+                    "profile_name": record.profile_source.profile_name,
+                    "profile_revision": record.profile_source.profile_revision,
+                    "copied_at": record.profile_source.copied_at,
+                }
+                if record.profile_source is not None
+                else None
+            ),
         )
 
 
@@ -141,6 +163,27 @@ class UpdateConfigRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     config: dict[str, Any]
+    profile_source: "PluginProfileSourceRequest | None" = None
+
+
+class PluginProfileSourceRequest(BaseModel):
+    """Identify the Profile snapshot explicitly copied into plugin config."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    profile_id: Annotated[str, Field(min_length=1, max_length=128)]
+    profile_name: Annotated[str, Field(min_length=1, max_length=200)]
+    profile_revision: Annotated[int, Field(ge=1)]
+
+    def to_domain(self) -> PluginProfileSource:
+        """Attach server-owned copy time without placing provenance in plugin config."""
+
+        return PluginProfileSource(
+            profile_id=self.profile_id,
+            profile_name=self.profile_name,
+            profile_revision=self.profile_revision,
+            copied_at=datetime.now(UTC),
+        )
 
 
 class HookStatusResponse(BaseModel):
@@ -215,6 +258,19 @@ async def list_plugins(
     return [PluginRecordResponse.from_domain(record) for record in records]
 
 
+@router.get("/{plugin_id}", response_model=PluginRecordResponse)
+async def get_plugin(
+    plugin_id: str,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> PluginRecordResponse:
+    """Return one installed plugin through the stable compatibility projection."""
+
+    record = await components.plugin_manager.get_plugin(plugin_id)
+    if record is None:
+        raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
+    return PluginRecordResponse.from_domain(record)
+
+
 @router.post("/install", response_model=InstallPluginResponse, status_code=201)
 async def install_plugin(
     request: InstallPluginRequest,
@@ -265,9 +321,7 @@ async def update_plugin(
 
     _LOGGER.info("Updating plugin: %s", plugin_id)
     try:
-        record = await components.plugin_manager.update_plugin(
-            plugin_id, ref=request.ref
-        )
+        record = await components.plugin_manager.update_plugin(plugin_id, ref=request.ref)
     except PluginInstallError as error:
         raise HttpProblem(400, "plugin_update_failed", str(error)) from error
     _LOGGER.info("Plugin updated: %s to v%s", record.plugin_id, record.manifest.version)
@@ -360,7 +414,14 @@ async def update_trigger_config(
 
     _LOGGER.info("Updating trigger config for plugin: %s", plugin_id)
     try:
-        record = await components.trigger_hooks.update_config(plugin_id, request.config)
+        record = await components.trigger_hooks.update_config(
+            plugin_id,
+            request.config,
+            profile_source=(
+                request.profile_source.to_domain() if request.profile_source is not None else None
+            ),
+            should_replace_profile_source="profile_source" in request.model_fields_set,
+        )
     except HookConfigurationError as error:
         _raise_hook_problem(error)
     except HookInstallationError as error:
@@ -382,9 +443,7 @@ async def update_report_config(
 
     _LOGGER.info("Updating report config for plugin: %s", plugin_id)
     try:
-        record = await components.plugin_manager.update_report_config(
-            plugin_id, request.config
-        )
+        record = await components.plugin_manager.update_report_config(plugin_id, request.config)
     except (PluginCapabilityError, PluginConfigurationError) as error:
         _raise_plugin_problem(error)
     if record is None:

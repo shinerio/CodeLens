@@ -22,7 +22,13 @@ def _normalized_relative(path: str) -> bool:
     )
 
 
-def _read_entry(root: Path, entry: SnapshotEntry, max_bytes: int) -> bytes:
+def _read_entry(root: Path, entry: SnapshotEntry) -> bytes:
+    """Read the full content of one snapshot entry for hash verification.
+
+    The entire file is read so its content hash can be verified against the
+    frozen snapshot. Excerpt-level truncation is applied by the caller after
+    line-range extraction, not here.
+    """
     absolute = root / entry.path
     if entry.kind == "deleted":
         return b""
@@ -32,10 +38,7 @@ def _read_entry(root: Path, entry: SnapshotEntry, max_bytes: int) -> bytes:
     if not resolved.is_relative_to(root):
         raise ValueError("Snapshot context path escapes its worktree")
     with absolute.open("rb") as stream:
-        payload = stream.read(max_bytes + 1)
-    if len(payload) > max_bytes:
-        raise ValueError("Snapshot context file exceeds size limit")
-    return payload
+        return stream.read()
 
 
 class FilesystemSnapshotReader:
@@ -78,7 +81,7 @@ class FilesystemSnapshotReader:
                 path,
             )
         else:
-            payload = await asyncio.to_thread(_read_entry, snapshot.worktree.root, entry, max_bytes)
+            payload = await asyncio.to_thread(_read_entry, snapshot.worktree.root, entry)
             if hashlib.sha256(payload).hexdigest() != entry.content_hash:
                 raise ValueError("Snapshot context content changed")
         selected = b"".join(payload.splitlines(keepends=True)[start_line - 1 : end_line])

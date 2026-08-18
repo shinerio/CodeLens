@@ -3,9 +3,11 @@
 import asyncio
 import hashlib
 import json
-from typing import Any
+import logging
+from typing import Any, Protocol
 
 from agents import FunctionTool, Tool
+from agents.exceptions import ModelBehaviorError
 from agents.tool_context import ToolContext
 
 from codelens.review.domain.errors import (
@@ -13,10 +15,64 @@ from codelens.review.domain.errors import (
     ToolInvocationTimeoutError,
     ToolLoopDetectedError,
 )
+from codelens.review.domain.tool_results import (
+    ToolDiagnostic,
+    ToolResult,
+    ToolResultError,
+    ToolResultStatus,
+    invalid_internal_tool_result,
+    parse_tool_result,
+)
+from codelens.review.infrastructure.evidence_replay import (
+    CompactedEvidenceReplayRegistry,
+    ToolLoopResetSignal,
+    canonicalize_tool_arguments,
+)
+
+logger = logging.getLogger(__name__)
+
+_VOLATILE_RESULT_FIELDS = frozenset(
+    {"call_id", "tool_call_id", "original_call_id", "timestamp", "created_at", "updated_at"}
+)
+
+
+def _rejected_result(
+    tool_name: str,
+    code: str,
+    message: str,
+    *,
+    field: str | None = None,
+) -> str:
+    return ToolResult(
+        tool_name,
+        ToolResultStatus.REJECTED,
+        {},
+        (ToolDiagnostic(code, message, True, field),),
+    ).to_json()
+
+
+def ensure_tool_result(tool_name: str, result: object) -> str:
+    """Return a valid result for this tool or a safe structured contract failure."""
+
+    if isinstance(result, str):
+        try:
+            parsed = parse_tool_result(result)
+        except ToolResultError:
+            parsed = None
+        if parsed is not None and parsed.tool == tool_name:
+            return parsed.to_json()
+    logger.error(
+        "model-visible tool returned an invalid internal result",
+        extra={"tool_name": tool_name, "reason_code": "invalid_internal_tool_result"},
+    )
+    return invalid_internal_tool_result(
+        tool_name,
+        "The tool returned a result that violates its internal contract.",
+    ).to_json()
 
 
 def reject_unknown_arguments(tool: FunctionTool) -> FunctionTool:
-    """Reject fields forbidden by the advertised strict schema at the local boundary."""
+    """Convert argument and adapter failures to the shared Tool Result v2 contract."""
 
     invoke = tool.on_invoke_tool
     expected = frozenset(tool.params_json_schema.get("properties", {}))
@@ -25,16 +81,193 @@ def reject_unknown_arguments(tool: FunctionTool) -> FunctionTool:
         try:
             parsed = json.loads(arguments)
         except json.JSONDecodeError:
-            return await invoke(context, arguments)
-        if isinstance(parsed, dict):
-            unknown = sorted(str(name) for name in parsed if name not in expected)
-            if unknown:
-                fields = ", ".join(unknown)
-                return f"Tool arguments contain unsupported fields: {fields}"
-        return await invoke(context, arguments)
+            return _rejected_result(
+                tool.name,
+                "invalid_arguments_json",
+                "Tool arguments must be one valid JSON object.",
+            )
+        if not isinstance(parsed, dict):
+            return _rejected_result(
+                tool.name,
+                "invalid_argument_type",
+                "Tool arguments must be a JSON object.",
+            )
+        unknown = sorted(str(name) for name in parsed if name not in expected)
+        if unknown:
+            return _rejected_result(
+                tool.name,
+                "unknown_argument",
+                "Tool arguments contain an unsupported field.",
+                field=unknown[0],
+            )
+        try:
+            result = await invoke(context, arguments)
+        except ModelBehaviorError as error:
+            error_text = str(error)
+            code = (
+                "invalid_argument_type"
+                if any(
+                    marker in error_text for marker in ("_type", "Input should be a valid", "type=")
+                )
+                else "invalid_argument_value"
+            )
+            return _rejected_result(
+                tool.name,
+                code,
+                f"Tool arguments failed schema validation: {error_text}",
+            )
+        except ValueError:
+            return _rejected_result(
+                tool.name,
+                "invalid_argument_value",
+                "Tool arguments violate an input constraint.",
+            )
+        if isinstance(result, str):
+            try:
+                parsed_result = parse_tool_result(result)
+            except ToolResultError:
+                parsed_result = None
+            if parsed_result is not None:
+                if parsed_result.tool == tool.name:
+                    return parsed_result.to_json()
+                return ensure_tool_result(tool.name, result)
+            sdk_validation_prefix = f"Invalid JSON input for tool {tool.name}:"
+            if sdk_validation_prefix in result:
+                code = (
+                    "invalid_argument_type"
+                    if any(
+                        marker in result
+                        for marker in ("_type", "Input should be a valid", "type=")
+                    )
+                    else "invalid_argument_value"
+                )
+                validation_detail = result.removeprefix(
+                    sdk_validation_prefix
+                ).strip()
+                return _rejected_result(
+                    tool.name,
+                    code,
+                    f"Tool arguments failed schema validation: {validation_detail}",
+                )
+        return ensure_tool_result(tool.name, result)
 
     tool.on_invoke_tool = invoke_strict
     return tool
+
+
+_EVIDENCE_TOOL_NAMES = frozenset(
+    (
+        "find_files",
+        "grep",
+        "read_file",
+        "get_diff",
+    )
+)
+"""Read-only tools whose effects must become visible before state mutations."""
+
+_OUTPUT_TOOL_NAMES = frozenset(
+    (
+        "comment",
+        "retract_comment",
+        "task_done",
+        "verdict",
+        "merge",
+        "finalize_verdicts",
+        "finalize_plan",
+        "review_ignore",
+    )
+)
+"""Tools that produce findings or declare completion, resetting no-progress state."""
+
+
+class ReviewCoverageProbe(Protocol):
+    """Expose review file coverage for the all-files-reviewed nudge."""
+
+    @property
+    def review_file_paths(self) -> tuple[str, ...]:
+        """Return the stable canonical review target paths."""
+        ...
+
+    @property
+    def reviewed_paths(self) -> frozenset[str]:
+        """Return review paths exposed through read_file or get_diff."""
+        ...
+
+
+class ToolBatchPhaseCoordinator:
+    """Schedule read-only evidence ahead of state changes in one SDK tool batch.
+
+    The Agents SDK starts every function call in a turn as its own task.  Tool
+    wrappers do not receive the batch list before those tasks start, so the
+    coordinator uses a short admission interval: every invocation first registers,
+    then the batch closes.  Evidence proceeds once admission closes, while state
+    and completion tools additionally wait for all registered evidence calls to
+    succeed, fail, or be cancelled.  The interval is deliberately tiny and the
+    runtime explicitly preserves the SDK default of launching the complete batch.
+    """
+
+    _ADMISSION_INTERVAL_SECONDS = 0.01
+
+    def __init__(self) -> None:
+        self._condition = asyncio.Condition()
+        self._active_calls: set[str] = set()
+        self._active_evidence: set[str] = set()
+        self._admission_closing = False
+        self._admission_closed = False
+
+    def wrap(self, tool: FunctionTool) -> FunctionTool:
+        """Attach phase scheduling to one function tool."""
+
+        invoke = tool.on_invoke_tool
+        is_evidence = tool.name in _EVIDENCE_TOOL_NAMES
+
+        async def invoke_phased(context: ToolContext[Any], arguments: str) -> Any:
+            call_id = context.tool_call_id or f"{tool.name}:{id(invoke)}"
+            try:
+                await self._register(call_id, is_evidence)
+                return await invoke(context, arguments)
+            finally:
+                await self._finish(call_id, is_evidence)
+
+        tool.on_invoke_tool = invoke_phased
+        return tool
+
+    async def _register(self, call_id: str, is_evidence: bool) -> None:
+        async with self._condition:
+            if call_id in self._active_calls:
+                raise RuntimeError(f"duplicate tool call id: {call_id}")
+            self._active_calls.add(call_id)
+            if is_evidence:
+                self._active_evidence.add(call_id)
+            if not self._admission_closing:
+                self._admission_closing = True
+                asyncio.create_task(self._close_after_admission())
+            await self._condition.wait_for(lambda: self._admission_closed)
+            if is_evidence:
+                return
+            await self._condition.wait_for(lambda: not self._active_evidence)
+
+    async def _close_after_admission(self) -> None:
+        try:
+            await asyncio.sleep(self._ADMISSION_INTERVAL_SECONDS)
+            async with self._condition:
+                self._admission_closed = True
+                self._condition.notify_all()
+        except BaseException:
+            async with self._condition:
+                self._admission_closed = True
+                self._condition.notify_all()
+            raise
+
+    async def _finish(self, call_id: str, is_evidence: bool) -> None:
+        async with self._condition:
+            self._active_calls.remove(call_id)
+            if is_evidence:
+                self._active_evidence.remove(call_id)
+            self._condition.notify_all()
+            if not self._active_calls:
+                self._admission_closed = False
+                self._admission_closing = False
 
 
 class ToolExecutionLimiter:
@@ -52,6 +285,12 @@ class ToolExecutionLimiter:
         max_identical_tool_results: int,
         tool_timeout_seconds: float,
         tool_loop_warning_template: str,
+        evidence_replay_registry: CompactedEvidenceReplayRegistry | None = None,
+        loop_reset_signal: ToolLoopResetSignal | None = None,
+        no_progress_rounds_threshold: int | None = None,
+        no_progress_nudge_template: str | None = None,
+        all_files_reviewed_nudge_template: str | None = None,
+        coverage_probe: ReviewCoverageProbe | None = None,
     ) -> None:
         if max_tool_calls <= 0:
             raise ValueError("tool call budget must be positive")
@@ -63,7 +302,16 @@ class ToolExecutionLimiter:
         self._max_identical_tool_results = max_identical_tool_results
         self._tool_timeout_seconds = tool_timeout_seconds
         self._tool_loop_warning_template = tool_loop_warning_template
-        self._result_counts: dict[str, int] = {}
+        self._evidence_replay_registry = evidence_replay_registry
+        self._loop_reset_signal = loop_reset_signal
+        self._last_reset_generation: int | None = None
+        self._fingerprint_counts: dict[str, int] = {}
+        self._no_progress_rounds_threshold = no_progress_rounds_threshold
+        self._no_progress_nudge_template = no_progress_nudge_template
+        self._no_progress_rounds = 0
+        self._all_files_reviewed_nudge_template = all_files_reviewed_nudge_template
+        self._coverage_probe = coverage_probe
+        self._all_files_reviewed_nudge_emitted = False
         self._lock = asyncio.Lock()
 
     def wrap(self, tool: FunctionTool) -> FunctionTool:
@@ -83,10 +331,30 @@ class ToolExecutionLimiter:
                     reason_code="tool_invocation_timed_out",
                     retryable=False,
                 ) from None
-            warning = await self._observe_result(tool.name, arguments, result)
-            if warning is not None:
-                return self._attach_warning(result, warning)
-            return result
+            normalized_result = ensure_tool_result(tool.name, result)
+
+            loop_warning = await self._observe_result(
+                tool.name, arguments, normalized_result
+            )
+            progress_warning = await self._observe_progress(tool.name)
+            coverage_warning = await self._observe_coverage(
+                tool.name, normalized_result
+            )
+
+            diagnostics: list[tuple[str, str]] = []
+            if loop_warning is not None:
+                diagnostics.append(("repeated_identical_call", loop_warning))
+            if progress_warning is not None:
+                diagnostics.append(("no_progress_rounds", progress_warning))
+            if coverage_warning is not None:
+                diagnostics.append(("all_files_reviewed", coverage_warning))
+
+            if not diagnostics or not isinstance(normalized_result, str):
+                return normalized_result
+            parsed = parse_tool_result(normalized_result)
+            for code, message in diagnostics:
+                parsed = parsed.with_diagnostic(ToolDiagnostic(code, message, True))
+            return parsed.to_json()
 
         tool.on_invoke_tool = invoke_limited
         return tool
@@ -105,13 +373,37 @@ class ToolExecutionLimiter:
     async def _observe_result(self, tool_name: str, arguments: str, result: object) -> str | None:
         """Check for repeated tool calls and return a warning if detected.
 
-        Returns a warning message on first detection of repetition (count == 2),
-        or raises ToolLoopDetectedError if the threshold is reached.
+        Tracks per-fingerprint occurrence counts across the entire run so that
+        non-consecutive repetition (A B C D E F A) is detected the same as
+        consecutive (A A). Returns a warning when a fingerprint appears 2+ times,
+        or raises ToolLoopDetectedError if the threshold is reached. Resets all
+        counts when a ToolLoopResetSignal generation change indicates that context
+        compaction succeeded, so post-compaction re-reads are not flagged.
         """
+        if self._loop_reset_signal is not None:
+            current_generation = self._loop_reset_signal.generation
+            if current_generation != self._last_reset_generation:
+                async with self._lock:
+                    self._last_reset_generation = current_generation
+                    self._fingerprint_counts.clear()
+                    self._no_progress_rounds = 0
+                    self._all_files_reviewed_nudge_emitted = False
+        if (
+            self._evidence_replay_registry is not None
+            and isinstance(result, str)
+            and parse_tool_result(result).status
+            in {ToolResultStatus.SUCCESS, ToolResultStatus.PARTIAL}
+            and self._evidence_replay_registry.consume(tool_name, arguments)
+        ):
+            async with self._lock:
+                self._fingerprint_counts.clear()
+                self._no_progress_rounds = 0
+                self._all_files_reviewed_nudge_emitted = False
+            return None
         fingerprint = self._fingerprint(tool_name, arguments, result)
         async with self._lock:
-            repeated_count = self._result_counts.get(fingerprint, 0) + 1
-            self._result_counts[fingerprint] = repeated_count
+            repeated_count = self._fingerprint_counts.get(fingerprint, 0) + 1
+            self._fingerprint_counts[fingerprint] = repeated_count
 
             # Threshold reached: fail the run
             if repeated_count >= self._max_identical_tool_results:
@@ -132,17 +424,82 @@ class ToolExecutionLimiter:
 
             return None
 
-    @staticmethod
-    def _attach_warning(result: object, warning: str) -> str:
-        """Attach a warning message to the tool result."""
-        if isinstance(result, str):
-            return f"{result}\n\n[{warning}]"
-        return json.dumps({"result": result, "warning": warning}, ensure_ascii=False)
+    async def _observe_progress(self, tool_name: str) -> str | None:
+        """Track consecutive evidence-only rounds and nudge when threshold is reached.
+
+        Evidence tool calls increment the counter; output tool calls reset it.
+        When the threshold is reached, the nudge is emitted once and the counter
+        resets to zero, so the next nudge fires after another full threshold
+        cycle rather than on every subsequent call.  The counter is also cleared
+        on context compaction and evidence-replay resets.
+        """
+
+        if (
+            self._no_progress_rounds_threshold is None
+            or self._no_progress_nudge_template is None
+        ):
+            return None
+        async with self._lock:
+            if tool_name in _OUTPUT_TOOL_NAMES:
+                self._no_progress_rounds = 0
+                return None
+            if tool_name not in _EVIDENCE_TOOL_NAMES:
+                return None
+            self._no_progress_rounds += 1
+            if self._no_progress_rounds >= self._no_progress_rounds_threshold:
+                self._no_progress_rounds = 0
+                return self._no_progress_nudge_template.format(
+                    no_progress_rounds=self._no_progress_rounds_threshold
+                )
+            return None
+
+    async def _observe_coverage(self, tool_name: str, result: str) -> str | None:
+        """Nudge the model when all review files have been read.
+
+        After a successful evidence call, checks whether every review target path
+        has been visited.  Emits the nudge once per coverage cycle; output tool
+        calls reset the flag so the nudge can fire again after new output.
+        """
+
+        if (
+            self._coverage_probe is None
+            or self._all_files_reviewed_nudge_template is None
+        ):
+            return None
+        async with self._lock:
+            if tool_name in _OUTPUT_TOOL_NAMES:
+                self._all_files_reviewed_nudge_emitted = False
+                return None
+            if tool_name not in _EVIDENCE_TOOL_NAMES:
+                return None
+            if self._all_files_reviewed_nudge_emitted:
+                return None
+        try:
+            parsed = parse_tool_result(result)
+        except ToolResultError:
+            return None
+        if parsed.status not in {ToolResultStatus.SUCCESS, ToolResultStatus.PARTIAL}:
+            return None
+        review_files = set(self._coverage_probe.review_file_paths)
+        if not review_files:
+            return None
+        reviewed = set(self._coverage_probe.reviewed_paths)
+        if reviewed >= review_files:
+            async with self._lock:
+                if self._all_files_reviewed_nudge_emitted:
+                    return None
+                self._all_files_reviewed_nudge_emitted = True
+            return self._all_files_reviewed_nudge_template
+        return None
 
     @classmethod
     def _fingerprint(cls, tool_name: str, arguments: str, result: object) -> str:
         normalized_arguments = cls._normalize_json(arguments)
-        normalized_result = cls._normalize_json(result) if isinstance(result, str) else str(result)
+        normalized_result = (
+            cls._normalize_result_for_fingerprint(result)
+            if isinstance(result, str)
+            else str(result)
+        )
         payload = json.dumps(
             [tool_name, normalized_arguments, normalized_result],
             ensure_ascii=False,
@@ -152,11 +509,54 @@ class ToolExecutionLimiter:
 
     @staticmethod
     def _normalize_json(value: str) -> str:
+        return canonicalize_tool_arguments(value)
+
+    @staticmethod
+    def _normalize_result_for_fingerprint(result: str) -> str:
+        """Canonicalize semantic result state while dropping localized or volatile fields."""
+
         try:
-            parsed = json.loads(value)
-        except json.JSONDecodeError:
+            parsed = parse_tool_result(result)
+        except ToolResultError:
+            return canonicalize_tool_arguments(result)
+
+        def stable_value(value: object) -> object:
+            if isinstance(value, dict):
+                return {
+                    key: stable_value(item)
+                    for key, item in value.items()
+                    if key not in _VOLATILE_RESULT_FIELDS
+                }
+            if isinstance(value, list):
+                return [stable_value(item) for item in value]
             return value
-        return json.dumps(parsed, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
+
+        diagnostics = [
+            {
+                "code": diagnostic.code,
+                "retryable": diagnostic.retryable,
+                **({"field": diagnostic.field} if diagnostic.field is not None else {}),
+                **(
+                    {"suggested_arguments": stable_value(diagnostic.suggested_arguments)}
+                    if diagnostic.suggested_arguments is not None
+                    else {}
+                ),
+            }
+            for diagnostic in parsed.diagnostics
+            if diagnostic.code != "repeated_identical_call"
+        ]
+        return json.dumps(
+            {
+                "schema_version": parsed.schema_version,
+                "tool": parsed.tool,
+                "status": parsed.status.value,
+                "data": stable_value(parsed.data),
+                "diagnostics": diagnostics,
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+            separators=(",", ":"),
+        )
 
 
 def enforce_tool_execution_limits(
@@ -166,6 +566,12 @@ def enforce_tool_execution_limits(
     max_identical_tool_results: int,
     tool_timeout_seconds: float,
     tool_loop_warning_template: str,
+    evidence_replay_registry: CompactedEvidenceReplayRegistry | None = None,
+    loop_reset_signal: ToolLoopResetSignal | None = None,
+    no_progress_rounds_threshold: int | None = None,
+    no_progress_nudge_template: str | None = None,
+    all_files_reviewed_nudge_template: str | None = None,
+    coverage_probe: ReviewCoverageProbe | None = None,
 ) -> list[Tool]:
     """Apply one shared execution limiter to every function tool in an Agent run."""
 
@@ -174,10 +580,17 @@ def enforce_tool_execution_limits(
         max_identical_tool_results=max_identical_tool_results,
         tool_timeout_seconds=tool_timeout_seconds,
         tool_loop_warning_template=tool_loop_warning_template,
+        evidence_replay_registry=evidence_replay_registry,
+        loop_reset_signal=loop_reset_signal,
+        no_progress_rounds_threshold=no_progress_rounds_threshold,
+        no_progress_nudge_template=no_progress_nudge_template,
+        all_files_reviewed_nudge_template=all_files_reviewed_nudge_template,
+        coverage_probe=coverage_probe,
     )
+    coordinator = ToolBatchPhaseCoordinator()
     limited: list[Tool] = []
     for tool in tools:
         if not isinstance(tool, FunctionTool):
             raise TypeError("execution limits require function tools")
-        limited.append(limiter.wrap(tool))
+        limited.append(limiter.wrap(coordinator.wrap(tool)))
     return limited

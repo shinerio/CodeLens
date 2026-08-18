@@ -17,14 +17,11 @@ class RecordingGitCli(GitCli):
         self.verified_repository = repository
 
 
-def test_start_command_uses_validated_loopback_and_data_directory_options(tmp_path: Path) -> None:
-    repository = tmp_path / "repository"
-    repository.mkdir()
+def test_start_command_uses_default_lan_host_and_data_directory_option(tmp_path: Path) -> None:
+    parsed = _parse_start_args(["start", "--data-dir", str(tmp_path / "data")])
 
-    parsed = _parse_start_args(["start", str(repository), "--data-dir", str(tmp_path / "data")])
-
-    assert parsed.settings.host == "127.0.0.1"
-    assert parsed.settings.repository_roots == (repository.resolve(),)
+    assert parsed.settings.host == "0.0.0.0"
+    assert parsed.settings.repository_roots == ()
 
 
 async def test_prepare_runtime_rejects_a_non_directory_data_path(tmp_path: Path) -> None:

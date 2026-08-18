@@ -6,6 +6,7 @@ import { createBrowserRouter, Navigate, RouterProvider } from "react-router-dom"
 import { App } from "./app/App";
 import { CatalogPreviewPage } from "./features/catalog/CatalogPreviewPage";
 import { PluginsPage } from "./features/plugins/PluginsPage";
+import { ReviewProfilesPage } from "./features/review-profiles/ReviewProfilesPage";
 import { NewReviewPage } from "./features/reviews/NewReviewPage";
 import { RunListPage } from "./features/reviews/RunListPage";
 import { ReviewRunPage } from "./features/reviews/ReviewRunPage";
@@ -37,6 +38,7 @@ const router = createBrowserRouter([
       { path: "capabilities", element: <CatalogPreviewPage kind="capabilities" /> },
       { path: "plugins", element: <PluginsPage /> },
       { path: "settings", element: <SettingsPage /> },
+      { path: "settings/review-profiles", element: <ReviewProfilesPage /> },
     ],
   },
 ]);

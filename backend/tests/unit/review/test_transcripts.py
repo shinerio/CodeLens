@@ -1,4 +1,7 @@
+import logging
 from pathlib import Path
+
+import pytest
 
 from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
@@ -15,7 +18,7 @@ async def test_transcript_redacts_credentials_and_preserves_entry_order(tmp_path
         task_id,
         "prompt",
         "Authorization: Bearer secret-value\napi_key=another-secret\nReview this change.",
-        metadata={"agent": "correctness:v1"},
+        metadata={"agent": "correctness:v2"},
     )
 
     entries = await store.list(task_id)
@@ -24,7 +27,7 @@ async def test_transcript_redacts_credentials_and_preserves_entry_order(tmp_path
     assert entries[1].redacted
     assert "secret-value" not in entries[1].content
     assert "another-secret" not in entries[1].content
-    assert entries[1].metadata == {"agent": "correctness:v1"}
+    assert entries[1].metadata == {"agent": "correctness:v2"}
 
 
 async def test_transcript_append_many_reads_and_writes_one_complete_batch(tmp_path: Path) -> None:
@@ -34,9 +37,9 @@ async def test_transcript_append_many_reads_and_writes_one_complete_batch(tmp_pa
     await store.append_many(
         task_id,
         (
-            ("model_started", "", {"agent": "correctness:v1"}),
-            ("model_reasoning_delta", "Checking change map", {"agent": "correctness:v1"}),
-            ("model_output_delta", "No defect found", {"agent": "correctness:v1"}),
+            ("model_started", "", {"agent": "correctness:v2"}),
+            ("model_reasoning_delta", "Checking change map", {"agent": "correctness:v2"}),
+            ("model_output_delta", "No defect found", {"agent": "correctness:v2"}),
         ),
     )
 
@@ -64,7 +67,7 @@ async def test_transcript_keeps_complete_stream_chunks_without_truncation(tmp_pa
         "review_" + "c" * 32,
         "model_output_delta",
         content,
-        metadata={"agent": "correctness:v1", "message_id": "message-1"},
+        metadata={"agent": "correctness:v2", "message_id": "message-1"},
     )
 
     (entry,) = await store.list("review_" + "c" * 32)
@@ -132,3 +135,145 @@ async def test_worker_transcript_assigns_contiguous_sequences_across_batches(
     entries = await worker_store.list(task_id)
 
     assert [entry.sequence for entry in entries] == [1, 2, 3, 4, 5]
+
+
+async def test_worker_transcript_appends_each_delta_without_merging(
+    tmp_path: Path,
+) -> None:
+    """Each delta is stored as a separate entry; the backend emits full text per call."""
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    task_id = "review_" + "i" * 32
+
+    await worker_store.append_many(
+        task_id,
+        (
+            (
+                "model_output_delta",
+                "Security ",
+                {"agent": "security:v2", "message_id": "provider-message"},
+            ),
+            (
+                "model_output_delta",
+                "Correctness ",
+                {"agent": "correctness:v2", "message_id": "provider-message"},
+            ),
+        ),
+    )
+    await worker_store.append_many(
+        task_id,
+        (
+            (
+                "model_output_delta",
+                "complete",
+                {"agent": "security:v2", "message_id": "provider-message"},
+            ),
+            (
+                "model_output_delta",
+                "complete",
+                {"agent": "correctness:v2", "message_id": "provider-message"},
+            ),
+        ),
+    )
+
+    active_entries = await worker_store.list(task_id)
+    assert [entry.sequence for entry in active_entries] == [1, 2, 3, 4]
+    assert [entry.content for entry in active_entries] == [
+        "Security ",
+        "Correctness ",
+        "complete",
+        "complete",
+    ]
+
+    await worker_store.finalize(task_id)
+
+    durable_entries = await durable.list(task_id)
+    assert [entry.sequence for entry in durable_entries] == [1, 2, 3, 4]
+    assert [entry.content for entry in durable_entries] == [
+        "Security ",
+        "Correctness ",
+        "complete",
+        "complete",
+    ]
+
+
+async def test_worker_transcript_starts_a_new_model_event_after_an_agent_boundary(
+    tmp_path: Path,
+) -> None:
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    task_id = "review_" + "j" * 32
+    metadata = {"agent": "security:v2", "message_id": "reused-provider-message"}
+
+    await worker_store.append(task_id, "model_output_delta", "first response", metadata=metadata)
+    await worker_store.append(
+        task_id,
+        "tool_call",
+        "get_diff",
+        metadata={"agent": "security:v2", "tool_name": "get_diff"},
+    )
+    await worker_store.append(task_id, "model_output_delta", "second response", metadata=metadata)
+
+    entries = await worker_store.list(task_id)
+    assert [entry.sequence for entry in entries] == [1, 2, 3]
+    assert [entry.content for entry in entries] == [
+        "first response",
+        "get_diff",
+        "second response",
+    ]
+
+
+async def test_worker_transcript_persists_rejected_tool_reason_to_outbox(
+    tmp_path: Path,
+    caplog: pytest.LogCaptureFixture,
+) -> None:
+    class RecordingOutbox:
+        def __init__(self) -> None:
+            self.records: list[tuple[str, str, dict[str, object]]] = []
+
+        async def append(
+            self, task_id: str, event_type: str, payload: dict[str, object]
+        ) -> None:
+            self.records.append((task_id, event_type, payload))
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    outbox = RecordingOutbox()
+    worker_store = WorkerTranscriptStore(durable, rejection_events=outbox)
+    task_id = "review_" + "k" * 32
+    caplog.set_level(logging.WARNING, logger="codelens.worker.transcripts")
+
+    await worker_store.append(
+        task_id,
+        "tool_result",
+        '"validation error"',
+        metadata={
+            "agent": "security:v2",
+            "tool_name": "comment",
+            "tool_call_id": "call-rejected",
+            "tool_outcome": "rejected",
+            "tool_rejection_reason_code": "invalid_tool_arguments",
+            "tool_rejection_reason": "Tool arguments failed schema validation.",
+        },
+    )
+
+    assert outbox.records == [
+        (
+            task_id,
+            "agent_tool_call.rejected.v2",
+            {
+                "agent": "security:v2",
+                "tool_name": "comment",
+                "tool_call_id": "call-rejected",
+                "reason_code": "invalid_tool_arguments",
+                "reason": "Tool arguments failed schema validation.",
+            },
+        )
+    ]
+    rejection_record = next(
+        record
+        for record in caplog.records
+        if record.message == "Model-visible tool invocation rejected"
+    )
+    assert rejection_record.task_id == task_id
+    assert rejection_record.reason_code == "invalid_tool_arguments"

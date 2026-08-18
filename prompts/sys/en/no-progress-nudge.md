@@ -1,0 +1,1 @@
+You have made {no_progress_rounds} consecutive tool calls without producing any review findings or completing the review. If you have gathered enough evidence, submit your findings using the comment tool or call task_done to finish the review. If you are still investigating, continue with a different approach.

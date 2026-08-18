@@ -5,7 +5,7 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 
 
 class GitIgnoreResolver:
-    """Apply Git's current ignore rules to tracked and untracked candidates."""
+    """Apply Git's native ignore semantics without hiding already tracked files."""
 
     def __init__(self, git: GitCli) -> None:
         self._git = git
@@ -23,7 +23,6 @@ class GitIgnoreResolver:
         result = await self._git.run(
             repository,
             "check-ignore",
-            "--no-index",
             "-v",
             "-z",
             "--stdin",

@@ -24,6 +24,14 @@ export type PluginManifest = {
   min_codelens_version: string | null;
   name_i18n?: Record<string, string>;
   description_i18n?: Record<string, string>;
+  plugin_api_version?: "1" | "2";
+};
+
+export type PluginProfileSource = {
+  profile_id: string;
+  profile_name: string;
+  profile_revision: number;
+  copied_at: string;
 };
 
 export type PluginRecord = {
@@ -38,6 +46,11 @@ export type PluginRecord = {
   report_config: Record<string, unknown>;
   git_url: string | null;
   git_ref: string | null;
+  plugin_api_version?: "1" | "2";
+  compatibility_status?: string;
+  config_revision?: number;
+  config?: Record<string, unknown>;
+  profile_source?: PluginProfileSource | null;
 };
 
 export type ExportResult = {
@@ -62,6 +75,7 @@ export type InstallPluginResponse = {
 
 export type UpdateConfigRequest = {
   config: Record<string, unknown>;
+  profile_source?: Omit<PluginProfileSource, "copied_at"> | null;
 };
 
 export type HookStatusResponse = {

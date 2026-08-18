@@ -1,4 +1,4 @@
-import { cleanup, render, screen, waitFor, within } from "@testing-library/react";
+import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, beforeEach, expect, it, vi } from "vitest";
 
@@ -7,7 +7,7 @@ import { SettingsPage } from "./SettingsPage";
 
 const fetchMock = vi.fn();
 
-function instructionSettingsResponse(rootMaxLines = 500, nestedMaxLines = 200) {
+function instructionSettingsResponse(rootMaxLines = 1000, nestedMaxLines = 500) {
   return new Response(JSON.stringify({
     root_max_lines: rootMaxLines,
     nested_max_lines: nestedMaxLines,
@@ -26,21 +26,47 @@ function reviewCompletionSettingsResponse(maxIncompleteReviewRetries = 3) {
   });
 }
 
+function triggerIdempotencySettingsResponse(enabled = false) {
+  return new Response(JSON.stringify({ enabled }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
+function fileExclusionSettingsResponse(
+  suffixes: string[] = [],
+  pathRegexes: string[] = [],
+) {
+  return new Response(JSON.stringify({
+    suffixes,
+    path_regexes: pathRegexes,
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function toolLimitsResponse() {
   return new Response(JSON.stringify({
     max_results: 200,
     max_read_bytes: 65536,
     max_scan_bytes: 1048576,
     max_source_bytes: 1048576,
-    max_lines: 500,
+    max_lines: 1000,
     max_path_chars: 1024,
     max_pattern_chars: 512,
     regex_timeout_seconds: 30.0,
     comment_batch_size: 20,
-    reviewed_files_batch: 2000,
     short_text_max: 240,
     long_text_max: 8000,
     task_summary_max: 8000,
+    context_compaction_enabled: true,
+    context_compaction_trigger_tokens: 160000,
+    context_compaction_keep_recent_evidence_results: 6,
+    context_compaction_max_retries: 3,
+    context_compaction_retry_backoff_base: 2.0,
+    context_compaction_retry_max_delay: 30.0,
+    context_compaction_max_consecutive_failures: 3,
   }), {
     status: 200,
     headers: { "Content-Type": "application/json" },
@@ -54,6 +80,50 @@ beforeEach(() => {
 
 afterEach(() => cleanup());
 
+it("shows context and tool sizes in KB with compaction enabled by default", async () => {
+  fetchMock.mockImplementation((url: string) => {
+    if (url === "/api/settings/model-gateways") {
+      return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
+    }
+    if (url === "/api/settings/logging") {
+      return Promise.resolve(new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true })));
+    }
+    if (url === "/api/settings/repositories") {
+      return Promise.resolve(new Response(JSON.stringify({ recent_repository_limit: 10 })));
+    }
+    if (url === "/api/settings/instruction-files") {
+      return Promise.resolve(instructionSettingsResponse());
+    }
+    if (url === "/api/settings/review-completion") {
+      return Promise.resolve(reviewCompletionSettingsResponse());
+    }
+    if (url === "/api/settings/trigger-idempotency") {
+      return Promise.resolve(triggerIdempotencySettingsResponse());
+    }
+    if (url === "/api/settings/tool-limits") {
+      return Promise.resolve(toolLimitsResponse());
+    }
+    if (url === "/api/settings/file-exclusions") {
+      return Promise.resolve(fileExclusionSettingsResponse());
+    }
+    throw new Error(`Unexpected request: ${url}`);
+  });
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  expect(await screen.findByRole("spinbutton", { name: "Max read size (KB)" })).toHaveValue(64);
+  expect(screen.getByRole("spinbutton", { name: "Max scan size (KB)" })).toHaveValue(1024);
+  expect(screen.getByRole("spinbutton", { name: "Max source size (KB)" })).toHaveValue(1024);
+  expect(screen.getByRole("spinbutton", { name: "Context compaction trigger (tokens)" })).toHaveValue(160000);
+  expect(
+    screen.getByRole("checkbox", { name: "Enable deterministic context compaction" }),
+  ).toBeChecked();
+  expect(screen.getByRole("spinbutton", { name: "Compaction max retries" })).toHaveValue(3);
+  expect(screen.getByRole("spinbutton", { name: "Compaction retry backoff base (seconds)" })).toHaveValue(2);
+  expect(screen.getByRole("spinbutton", { name: "Compaction retry max delay (seconds)" })).toHaveValue(30);
+  expect(screen.getByRole("spinbutton", { name: "Compaction consecutive failure circuit breaker" })).toHaveValue(3);
+});
+
 it("creates the first persistent model gateway without retaining its API key", async () => {
   fetchMock
     .mockResolvedValueOnce(
@@ -63,7 +133,7 @@ it("creates the first persistent model gateway without retaining its API key", a
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -76,7 +146,9 @@ it("creates the first persistent model gateway without retaining its API key", a
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -122,15 +194,72 @@ it("creates the first persistent model gateway without retaining its API key", a
     api_type: "chat_completions",
     max_tokens: 65536,
     thinking_level: "disabled",
-    agent_timeout: 1800,
-    max_agent_turns: 100,
-    max_tool_calls: 300,
+    agent_timeout: 3600,
+    max_agent_turns: 500,
+    max_tool_calls: 500,
     max_identical_tool_results: 3,
     tool_timeout_seconds: 30,
+    max_retries: 10,
+    retry_backoff_base: 1.0,
+    retry_max_delay: 30.0,
+    no_progress_rounds_threshold: 10,
   });
   expect(await screen.findByText("Active gateway")).toBeInTheDocument();
   expect(screen.getByLabelText("API Key")).toHaveValue("");
 }, 10_000);
+
+it("edits, deduplicates, validates, and saves Web file exclusion rules", async () => {
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    if (url === "/api/settings/file-exclusions" && init?.method === "PUT") {
+      return Promise.resolve(fileExclusionSettingsResponse([".map"], ["^generated/"]));
+    }
+    if (url === "/api/settings/file-exclusions") {
+      return Promise.resolve(fileExclusionSettingsResponse());
+    }
+    if (url === "/api/settings/model-gateways") {
+      return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
+    }
+    if (url === "/api/settings/logging") {
+      return Promise.resolve(new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true })));
+    }
+    if (url === "/api/settings/repositories") {
+      return Promise.resolve(new Response(JSON.stringify({ recent_repository_limit: 10 })));
+    }
+    if (url === "/api/settings/instruction-files") {
+      return Promise.resolve(instructionSettingsResponse());
+    }
+    if (url === "/api/settings/review-completion") {
+      return Promise.resolve(reviewCompletionSettingsResponse());
+    }
+    if (url === "/api/settings/trigger-idempotency") {
+      return Promise.resolve(triggerIdempotencySettingsResponse());
+    }
+    return Promise.resolve(toolLimitsResponse());
+  });
+  const user = userEvent.setup();
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  const suffixes = await screen.findByLabelText("Excluded literal suffixes");
+  const regexes = screen.getByLabelText("Excluded path regular expressions");
+  await user.type(suffixes, ".map\n.map");
+  fireEvent.change(regexes, { target: { value: "[" } });
+  expect(screen.getByRole("alert")).toHaveTextContent(
+    "At least one path regular expression is invalid.",
+  );
+  await user.clear(regexes);
+  await user.type(regexes, "^generated/");
+  await user.click(screen.getByRole("button", { name: "Save file exclusions" }));
+
+  await waitFor(() => {
+    const updateCall = fetchMock.mock.calls.find(
+      ([url, init]) => url === "/api/settings/file-exclusions" && init?.method === "PUT",
+    );
+    expect(JSON.parse(String(updateCall?.[1]?.body))).toEqual({
+      suffixes: [".map"],
+      path_regexes: ["^generated/"],
+    });
+  });
+});
 
 it("switches the active gateway without asking for the stored key", async () => {
   const initialCatalog = {
@@ -160,7 +289,7 @@ it("switches the active gateway without asking for the stored key", async () => 
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -173,7 +302,9 @@ it("switches the active gateway without asking for the stored key", async () => 
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({
@@ -219,6 +350,10 @@ it("updates the selected model execution limits from the runtime rail", async ()
     max_tool_calls: 300,
     max_identical_tool_results: 3,
     tool_timeout_seconds: 30,
+    max_retries: 10,
+    retry_backoff_base: 1.0,
+    retry_max_delay: 30.0,
+    no_progress_rounds_threshold: 10,
   };
   fetchMock
     .mockResolvedValueOnce(
@@ -228,7 +363,7 @@ it("updates the selected model execution limits from the runtime rail", async ()
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -264,6 +399,7 @@ it("updates the selected model execution limits from the runtime rail", async ()
   expect(screen.getByLabelText("Maximum tool calls")).toHaveValue(240);
   expect(screen.getByLabelText("Identical result limit")).toHaveValue(3);
   expect(screen.getByLabelText("Tool timeout (s)")).toHaveValue(30);
+  expect(screen.getByLabelText("No-progress rounds threshold")).toHaveValue(10);
   const saveButton = screen.getByRole("button", { name: "Save model execution limits" });
   expect(saveButton).toBeEnabled();
   await user.click(saveButton);
@@ -293,6 +429,10 @@ it("updates the selected model execution limits from the runtime rail", async ()
     max_tool_calls: 240,
     max_identical_tool_results: 3,
     tool_timeout_seconds: 30,
+    max_retries: 10,
+    retry_backoff_base: 1.0,
+    retry_max_delay: 30.0,
+    no_progress_rounds_threshold: 10,
   });
 });
 
@@ -317,7 +457,7 @@ it("sends a connectivity test request when the test connectivity button is click
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -330,7 +470,9 @@ it("sends a connectivity test request when the test connectivity button is click
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: true, latency_ms: 42, detail: "TCP connection succeeded." }),
@@ -378,7 +520,7 @@ it("sends an availability test request when the test availability button is clic
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -391,7 +533,9 @@ it("sends an availability test request when the test availability button is clic
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
         JSON.stringify({ ok: false, latency_ms: 100, detail: "Connection failed." }),
@@ -427,7 +571,7 @@ it("updates the recent repository list limit", async () => {
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -440,7 +584,9 @@ it("updates the recent repository list limit", async () => {
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ recent_repository_limit: 15 }), {
         status: 200,
@@ -455,7 +601,7 @@ it("updates the recent repository list limit", async () => {
   await waitFor(() => expect(limitInput).toBeEnabled());
   await user.clear(limitInput);
   await user.type(limitInput, "15");
-  const saveButton = screen.getByRole("button", { name: "Save recent repository limit" });
+  const saveButton = screen.getByRole("button", { name: "Save review settings" });
   await waitFor(() => expect(saveButton).toBeEnabled());
   await user.click(saveButton);
 
@@ -477,7 +623,7 @@ it("updates instruction file limits and omits credential handling details", asyn
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -490,7 +636,9 @@ it("updates instruction file limits and omits credential handling details", asyn
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(instructionSettingsResponse(800, 240));
   const user = userEvent.setup();
 
@@ -506,7 +654,7 @@ it("updates instruction file limits and omits credential handling details", asyn
   await user.type(rootLimit, "800");
   await user.clear(nestedLimit);
   await user.type(nestedLimit, "240");
-  await user.click(screen.getByRole("button", { name: "Save instruction file limits" }));
+  await user.click(screen.getByRole("button", { name: "Save review settings" }));
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/settings/instruction-files",
@@ -526,7 +674,7 @@ it("updates the maximum incomplete review retry count", async () => {
       }),
     )
     .mockResolvedValueOnce(
-      new Response(JSON.stringify({ level: "info" }), {
+      new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true }), {
         status: 200,
         headers: { "Content-Type": "application/json" },
       }),
@@ -539,7 +687,9 @@ it("updates the maximum incomplete review retry count", async () => {
     )
     .mockResolvedValueOnce(instructionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
+    .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse(5));
   const user = userEvent.setup();
 
@@ -549,13 +699,65 @@ it("updates the maximum incomplete review retry count", async () => {
   await waitFor(() => expect(retryLimit).toBeEnabled());
   await user.clear(retryLimit);
   await user.type(retryLimit, "5");
-  await user.click(screen.getByRole("button", { name: "Save incomplete review retry limit" }));
+  await user.click(screen.getByRole("button", { name: "Save review settings" }));
 
   expect(fetchMock).toHaveBeenCalledWith(
     "/api/settings/review-completion",
     expect.objectContaining({
       method: "PUT",
       body: JSON.stringify({ max_incomplete_review_retries: 5 }),
+    }),
+  );
+});
+
+it("uses one panel-level action for all review settings", async () => {
+  fetchMock.mockImplementation((url: string, init?: RequestInit) => {
+    if (url === "/api/settings/model-gateways") {
+      return Promise.resolve(new Response(JSON.stringify({ active_gateway_id: null, gateways: [] })));
+    }
+    if (url === "/api/settings/logging") {
+      return Promise.resolve(new Response(JSON.stringify({ default_level: "info", level: "info", model_output_enabled: true })));
+    }
+    if (url === "/api/settings/repositories") {
+      return Promise.resolve(new Response(JSON.stringify({ recent_repository_limit: 10 })));
+    }
+    if (url === "/api/settings/instruction-files") {
+      return Promise.resolve(instructionSettingsResponse());
+    }
+    if (url === "/api/settings/review-completion") {
+      return Promise.resolve(reviewCompletionSettingsResponse());
+    }
+    if (url === "/api/settings/trigger-idempotency" && init?.method === "PUT") {
+      return Promise.resolve(triggerIdempotencySettingsResponse(true));
+    }
+    if (url === "/api/settings/trigger-idempotency") {
+      return Promise.resolve(triggerIdempotencySettingsResponse());
+    }
+    if (url === "/api/settings/file-exclusions") {
+      return Promise.resolve(fileExclusionSettingsResponse());
+    }
+    return Promise.resolve(toolLimitsResponse());
+  });
+  const user = userEvent.setup();
+
+  render(<SettingsPage />, { wrapper: TestProviders });
+
+  const reviewHeading = await screen.findByRole("heading", { name: "Review Settings" });
+  const reviewPanel = reviewHeading.closest("section");
+  expect(reviewPanel).not.toBeNull();
+  const panel = within(reviewPanel as HTMLElement);
+  expect(panel.getAllByRole("button")).toHaveLength(1);
+
+  const idempotencyCheckbox = panel.getByRole("checkbox", { name: "Trigger idempotency" });
+  expect(idempotencyCheckbox.closest("label")).toHaveClass("settings-field--checkbox");
+  await user.click(idempotencyCheckbox);
+  await user.click(panel.getByRole("button", { name: "Save review settings" }));
+
+  expect(fetchMock).toHaveBeenCalledWith(
+    "/api/settings/trigger-idempotency",
+    expect.objectContaining({
+      method: "PUT",
+      body: JSON.stringify({ enabled: true }),
     }),
   );
 });

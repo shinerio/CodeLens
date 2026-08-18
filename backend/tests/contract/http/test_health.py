@@ -12,4 +12,4 @@ def test_health_reports_ready(tmp_path: Path) -> None:
     response = client.get("/api/health")
 
     assert response.status_code == 200
-    assert response.json() == {"status": "ready", "auth": "none"}
+    assert response.json() == {"status": "ready"}

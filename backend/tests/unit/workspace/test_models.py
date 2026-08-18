@@ -1,4 +1,5 @@
 from codelens.workspace.domain.models import BranchScope, SnapshotManifest
+from codelens.workspace.domain.review_file_scope import ReviewFileScope
 
 
 def test_branch_scope_carries_base_and_target_refs() -> None:
@@ -14,11 +15,12 @@ def test_branch_scope_carries_base_and_target_refs() -> None:
 
 def test_manifest_separates_targets_from_context() -> None:
     manifest = SnapshotManifest(
-        target_paths=("src/payment.py",),
-        context_paths=("src/payment.py", "tests/test_payment.py"),
-        excluded_paths=(),
+        review_scope=ReviewFileScope.include_all(
+            ("src/payment.py",),
+            ("src/payment.py", "tests/test_payment.py"),
+        ),
     )
 
-    assert manifest.is_target("src/payment.py")
-    assert not manifest.is_target("tests/test_payment.py")
+    assert manifest.is_review_path("src/payment.py")
+    assert not manifest.is_review_path("tests/test_payment.py")
     assert manifest.is_context("tests/test_payment.py")

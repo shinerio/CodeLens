@@ -1,14 +1,18 @@
 """Export review findings with source code snippets for AI agents and human review."""
 
+import hashlib
+import json
 from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Any, Literal, Protocol, cast
 from zoneinfo import ZoneInfo
 
-from codelens.findings.domain.models import Finding, RuleReference, SourceLocation
-from codelens.review.domain.ports import ReviewExecutionRecord, ReviewRecord
+from codelens.findings.domain.models import Evidence, Finding, RuleReference, SourceLocation
+from codelens.review.domain.ports import ReviewExecutionRecord, ReviewPlanRecord, ReviewRecord
+from codelens.review.domain.review_plan import ReviewPlanNodeType
+from codelens.review.domain.review_strategy import AdaptiveReviewerSelection
 
 
 class _ReviewStorePort(Protocol):
@@ -26,6 +30,19 @@ class _RevisionReaderPort(Protocol):
         revision: str,
         path: str,
     ) -> bytes | None: ...
+
+
+class _ReviewPlanStorePort(Protocol):
+    async def get(self, task_id: str) -> ReviewPlanRecord | None: ...
+
+
+class _CheckpointView(Protocol):
+    status: str
+    agent_version: str | None
+
+
+class _CheckpointStorePort(Protocol):
+    async def list_for_task(self, task_id: str) -> Sequence[_CheckpointView]: ...
 
 
 @dataclass(frozen=True)
@@ -57,12 +74,12 @@ class FindingExportItem:
     title: str
     severity: str
     disposition: str
-    confidence: float
+    confidence: float | None
     change_origin: str
     changed_hunk_id: str | None
     primary_location: SourceLocation
     related_locations: tuple[SourceLocation, ...]
-    evidence: tuple
+    evidence: tuple[Evidence, ...]
     impact: str
     explanation: str
     reproduction: str | None
@@ -72,8 +89,35 @@ class FindingExportItem:
 
 
 @dataclass(frozen=True)
-class ReviewExportMeta:
-    """Review metadata for the export envelope."""
+class SelectionRequestDto:
+    """Immutable reviewer selection requested before planning."""
+
+    mode: Literal["fixed", "adaptive"]
+    reviewer_versions: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
+class ReviewPlanSummaryDto:
+    """Stable summary of the persisted, hash-verified Review Plan."""
+
+    strategy: Literal["fixed", "adaptive"]
+    selected_reviewer_versions: tuple[str, ...]
+    planner_version: str | None
+    plan_hash: str
+
+
+@dataclass(frozen=True)
+class ReviewCoverageDto:
+    """Terminal reviewer coverage without exposing orchestration checkpoints."""
+
+    completed_reviewer_versions: tuple[str, ...]
+    failed_reviewer_versions: tuple[str, ...]
+    omitted_reviewer_versions: tuple[str, ...]
+
+
+@dataclass(frozen=True)
+class ReviewExportMetaV2:
+    """Published review metadata for report envelope 2.0."""
 
     task_id: str
     repository_name: str
@@ -82,20 +126,28 @@ class ReviewExportMeta:
     head_oid: str
     base_ref: str | None
     target_ref: str | None
-    selected_agent_versions: tuple[str, ...]
-    status: str
+    status: Literal["completed", "partial"]
+    selection_request: SelectionRequestDto
+    plan_summary: ReviewPlanSummaryDto
+    coverage: ReviewCoverageDto
     created_at: datetime
-    external_context: dict | None = None
+    external_context: dict[str, Any] | None = None
 
 
 @dataclass(frozen=True)
-class FindingExportEnvelope:
-    """Canonical export structure with versioned schema."""
+class FindingExportEnvelopeV2:
+    """Canonical Published-Finding export structure for plugin API v2."""
 
-    schema_version: str
+    schema_version: Literal["2.0"]
     exported_at: datetime
-    review: ReviewExportMeta
+    review: ReviewExportMetaV2
     findings: tuple[FindingExportItem, ...]
+
+
+# Canonical aliases keep domain-facing names concise while the public plugin
+# contract remains explicitly versioned.
+ReviewExportMeta = ReviewExportMetaV2
+FindingExportEnvelope = FindingExportEnvelopeV2
 
 
 class FindingExportFormatterPort(Protocol):
@@ -121,16 +173,24 @@ class FindingExportFormatterPort(Protocol):
         ...
 
 
-_TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled"}
+_EXPORTABLE_STATUSES = {"completed", "partial"}
 _SNIPPET_CONTEXT_LINES = 3
 
 
 class ExportFindingsHandler:
     """Orchestrate findings export with source code snippets."""
 
-    def __init__(self, store: _ReviewStorePort, reader: _RevisionReaderPort) -> None:
+    def __init__(
+        self,
+        store: _ReviewStorePort,
+        reader: _RevisionReaderPort,
+        plan_store: _ReviewPlanStorePort | None = None,
+        checkpoint_store: _CheckpointStorePort | None = None,
+    ) -> None:
         self._store = store
         self._reader = reader
+        self._plan_store = plan_store
+        self._checkpoint_store = checkpoint_store
 
     async def handle(
         self, task_id: str, formatter: FindingExportFormatterPort
@@ -153,7 +213,7 @@ class ExportFindingsHandler:
         review = await self._store.get_review(task_id)
         if review is None:
             raise KeyError(task_id)
-        if review.status not in _TERMINAL_STATUSES:
+        if review.status not in _EXPORTABLE_STATUSES:
             raise ValueError(
                 f"Review is not in a terminal state: {review.status}. "
                 "Export is only available for completed reviews."
@@ -167,9 +227,7 @@ class ExportFindingsHandler:
         if not findings:
             raise ValueError("No findings to export for this review.")
 
-        return await self._build_envelope_from_findings(
-            task_id, review, execution, findings
-        )
+        return await self._build_envelope_from_findings(task_id, review, execution, findings)
 
     async def _build_envelope_from_findings(
         self,
@@ -182,9 +240,7 @@ class ExportFindingsHandler:
 
         export_items: list[FindingExportItem] = []
         for finding in findings:
-            source_excerpt = await self._build_source_snippet(
-                execution, finding.primary_location
-            )
+            source_excerpt = await self._build_source_snippet(execution, finding.primary_location)
 
             export_items.append(
                 FindingExportItem(
@@ -210,10 +266,65 @@ class ExportFindingsHandler:
                 )
             )
 
-        return FindingExportEnvelope(
-            schema_version="1.0",
+        plan_record = await self._plan_store.get(task_id) if self._plan_store is not None else None
+        selected_versions = (
+            plan_record.plan.reviewer_references
+            if plan_record is not None
+            else review.selected_agent_versions
+        )
+        selection = review.review_profile.reviewer_selection
+        selection_mode: Literal["fixed", "adaptive"] = (
+            "adaptive" if isinstance(selection, AdaptiveReviewerSelection) else "fixed"
+        )
+        requested_versions = (
+            () if isinstance(selection, AdaptiveReviewerSelection) else selection.reviewer_versions
+        )
+        planner_version = None
+        if plan_record is not None:
+            planner_version = next(
+                (
+                    node.agent_reference
+                    for node in plan_record.plan.nodes
+                    if node.node_type is ReviewPlanNodeType.PLANNER
+                ),
+                None,
+            )
+        checkpoints = (
+            await self._checkpoint_store.list_for_task(task_id)
+            if self._checkpoint_store is not None
+            else ()
+        )
+        reviewer_status = {
+            checkpoint.agent_version: checkpoint.status
+            for checkpoint in checkpoints
+            if checkpoint.agent_version in selected_versions
+        }
+        completed = tuple(
+            version
+            for version in selected_versions
+            if reviewer_status.get(version, "succeeded" if review.status == "completed" else "")
+            == "succeeded"
+        )
+        failed = tuple(
+            version
+            for version in selected_versions
+            if reviewer_status.get(version) in {"failed", "timed_out", "canceled"}
+        )
+        omitted = tuple(
+            version
+            for version in selected_versions
+            if version not in completed and version not in failed
+        )
+        fallback_plan_hash = hashlib.sha256(
+            json.dumps(
+                {"strategy": selection_mode, "reviewers": selected_versions},
+                separators=(",", ":"),
+            ).encode("utf-8")
+        ).hexdigest()
+        return FindingExportEnvelopeV2(
+            schema_version="2.0",
             exported_at=datetime.now(ZoneInfo("UTC")),
-            review=ReviewExportMeta(
+            review=ReviewExportMetaV2(
                 task_id=review.task_id,
                 repository_name=review.repository_name,
                 scope_type=review.scope_type,
@@ -221,8 +332,26 @@ class ExportFindingsHandler:
                 head_oid=review.head_oid,
                 base_ref=review.base_ref,
                 target_ref=review.target_ref,
-                selected_agent_versions=review.selected_agent_versions,
-                status=review.status,
+                status=cast(Literal["completed", "partial"], review.status),
+                selection_request=SelectionRequestDto(
+                    mode=selection_mode,
+                    reviewer_versions=requested_versions,
+                ),
+                plan_summary=ReviewPlanSummaryDto(
+                    strategy=selection_mode,
+                    selected_reviewer_versions=selected_versions,
+                    planner_version=planner_version,
+                    plan_hash=(
+                        plan_record.plan.plan_hash
+                        if plan_record is not None
+                        else fallback_plan_hash
+                    ),
+                ),
+                coverage=ReviewCoverageDto(
+                    completed_reviewer_versions=completed,
+                    failed_reviewer_versions=failed,
+                    omitted_reviewer_versions=omitted,
+                ),
                 created_at=review.created_at,
                 external_context=review.external_context,
             ),

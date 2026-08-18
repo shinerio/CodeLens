@@ -3,7 +3,9 @@
 import asyncio
 import logging
 from collections.abc import Sequence
+from pathlib import Path
 
+from codelens.bootstrap.logging import get_model_output_logging_enabled
 from codelens.review.infrastructure.transcripts import TranscriptEntry
 
 _LOGGER = logging.getLogger("codelens.model")
@@ -14,7 +16,9 @@ _MODEL_LOG_KINDS = frozenset(
     {
         "prompt",
         "model_raw_output",
+        "checkpoint_compaction",
         "tool_call",
+        "invalid_tool_call",
         "tool_result",
         "model_output",
     }
@@ -29,11 +33,24 @@ class ModelTranscriptLogWriter:
     whose bounded compressed handler is installed by the process bootstrap.
     """
 
+    def __init__(
+        self,
+        data_directory: Path,
+        *,
+        default_enabled: bool = True,
+    ) -> None:
+        self._data_directory = data_directory
+        self._default_enabled = default_enabled
+
     async def write(self, task_id: str, entries: Sequence[TranscriptEntry]) -> None:
         """Write model-relevant terminal transcript entries without truncating their content."""
 
+        enabled = get_model_output_logging_enabled(
+            self._data_directory,
+            default_enabled=self._default_enabled,
+        )
         records = tuple(entry for entry in entries if entry.kind in _MODEL_LOG_KINDS)
-        if records:
+        if enabled and records:
             await asyncio.to_thread(self._write, task_id, records)
 
     @staticmethod

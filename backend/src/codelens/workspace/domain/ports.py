@@ -9,6 +9,7 @@ from codelens.workspace.domain.models import (
     ReviewScopeType,
     TaskWorktree,
 )
+from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 
 
 @dataclass(frozen=True)
@@ -47,11 +48,17 @@ class RepositoryCommit:
 
 @dataclass(frozen=True)
 class RepositoryCatalog:
-    """Return branch choices and one page of recent commit summaries."""
+    """Return branch choices, the selected branch tip, and one page of recent commit summaries.
+
+    ``commits`` excludes the tip because the tip is the review target, not a base
+    candidate; its metadata is exposed separately via ``target_commit`` so callers
+    can render a readable label instead of a bare object id.
+    """
 
     branches: tuple[RepositoryBranch, ...]
     commits: tuple[RepositoryCommit, ...]
     next_commit_offset: int | None
+    target_commit: RepositoryCommit | None = None
 
 
 @dataclass(frozen=True)
@@ -81,9 +88,10 @@ class ScopePlan:
 
     base_oid: str
     head_oid: str
-    target_paths: tuple[str, ...]
+    candidate_paths: tuple[str, ...]
     capture_workspace_overlay: bool
     scope_type: ReviewScopeType
+    file_exclusion_policy: ReviewFileExclusionPolicy = ReviewFileExclusionPolicy()
     warnings: tuple[str, ...] = ()
 
 
@@ -217,13 +225,13 @@ class ReviewInputCapturePort(Protocol):
     async def fingerprint(
         self,
         repository: Path,
-        target_paths: tuple[str, ...],
+        candidate_paths: tuple[str, ...],
     ) -> RepositoryFingerprint:
         """Fingerprint tracked, untracked, and applicable control input state."""
 
         raise NotImplementedError
 
-    async def capture_overlay(self, repository: Path, target_paths: tuple[str, ...]) -> bytes:
+    async def capture_overlay(self, repository: Path, candidate_paths: tuple[str, ...]) -> bytes:
         """Return a bounded canonical overlay payload for immutable persistence."""
 
         raise NotImplementedError

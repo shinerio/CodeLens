@@ -44,6 +44,21 @@ async def test_git_cli_rejects_output_over_limit(git_repository: Path) -> None:
         await GitCli(max_output_bytes=32).run(git_repository, "show", "HEAD:large.txt")
 
 
+async def test_git_cli_default_accepts_output_up_to_two_mebibytes(
+    git_repository: Path,
+) -> None:
+    payload = b"x" * (1024 * 1024 + 1)
+    large_file = git_repository / "large-default.txt"
+    large_file.write_bytes(payload)
+    setup_git = GitCli()
+    await setup_git.run(git_repository, "add", "large-default.txt")
+    await setup_git.run(git_repository, "commit", "-m", "add default limit fixture")
+
+    result = await GitCli().run(git_repository, "show", "HEAD:large-default.txt")
+
+    assert result.stdout == payload
+
+
 async def test_git_cli_reports_missing_executable(
     monkeypatch: pytest.MonkeyPatch,
     tmp_path: Path,

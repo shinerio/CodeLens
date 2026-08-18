@@ -5,15 +5,23 @@ import json
 import shutil
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from jsonschema.exceptions import SchemaError
 from jsonschema.validators import validator_for
+from packaging.version import InvalidVersion, Version
 
+import codelens
 from codelens.plugin.domain.models import (
     PluginInstallError,
     PluginManifest,
     ReportCapability,
     TriggerCapability,
+)
+from codelens.plugin.domain.versioning import (
+    PluginApiVersion,
+    PluginCompatibilityError,
+    ensure_plugin_compatible,
 )
 from codelens.shared.domain.errors import InvalidRepositoryError
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -41,16 +49,12 @@ class GitPluginInstaller:
             try:
                 await self._git.clone(git_url, temp_dir, ref=ref)
             except InvalidRepositoryError:
-                raise PluginInstallError(
-                    "Git repository could not be cloned"
-                ) from None
+                raise PluginInstallError("Git repository could not be cloned") from None
             manifest = await asyncio.to_thread(self._read_manifest, temp_dir)
             self._validate_manifest(manifest)
             install_path = self._plugins_dir / manifest.plugin_id
             if install_path.exists():
-                raise PluginInstallError(
-                    f"plugin '{manifest.plugin_id}' is already installed"
-                )
+                raise PluginInstallError(f"plugin '{manifest.plugin_id}' is already installed")
             install_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.move(str(temp_dir), str(install_path))
             return manifest
@@ -83,9 +87,7 @@ class GitPluginInstaller:
             try:
                 await self._git.clone(git_url, temp_dir, ref=ref)
             except InvalidRepositoryError:
-                raise PluginInstallError(
-                    "Git repository could not be cloned"
-                ) from None
+                raise PluginInstallError("Git repository could not be cloned") from None
             manifest = await asyncio.to_thread(self._read_manifest, temp_dir)
             self._validate_manifest(manifest)
 
@@ -125,16 +127,17 @@ class GitPluginInstaller:
                 author=raw.get("author", ""),
                 platform=raw.get("platform", "local"),
                 capabilities=capabilities,
-                min_codelens_version=raw.get("min_codelens_version"),
+                min_codelens_version=raw["min_codelens_version"],
                 name_i18n=raw.get("name_i18n", {}),
                 description_i18n=raw.get("description_i18n", {}),
+                plugin_api_version=PluginApiVersion(str(raw["plugin_api_version"])),
             )
-        except KeyError as error:
+        except (KeyError, ValueError) as error:
             raise PluginInstallError(
-                f"plugin manifest missing required field: {error}"
+                f"plugin manifest is incompatible or missing a required field: {error}"
             ) from error
 
-    def _parse_capabilities(self, raw_capabilities: dict) -> dict:
+    def _parse_capabilities(self, raw_capabilities: dict[str, Any]) -> dict[str, Any]:
         """Parse capabilities dict into TriggerCapability/ReportCapability objects."""
         from typing import Any
 
@@ -156,6 +159,20 @@ class GitPluginInstaller:
         return capabilities
 
     def _validate_manifest(self, manifest: PluginManifest) -> None:
+        try:
+            plugin_version = Version(manifest.version)
+            if manifest.min_codelens_version is None:
+                raise PluginCompatibilityError("v2 plugin requires min_codelens_version")
+            if plugin_version.major < 2:
+                raise PluginCompatibilityError("v2 plugin API requires plugin version 2 or later")
+            minimum = Version(manifest.min_codelens_version)
+            ensure_plugin_compatible(
+                plugin_api_version=manifest.plugin_api_version,
+                minimum_codelens_version=minimum,
+                current_codelens_version=Version(codelens.__version__),
+            )
+        except (InvalidVersion, PluginCompatibilityError) as error:
+            raise PluginInstallError(str(error)) from error
         if not manifest.plugin_id or not manifest.plugin_id.replace("-", "_").isidentifier():
             raise PluginInstallError(
                 f"plugin_id must be a valid identifier, got: {manifest.plugin_id}"

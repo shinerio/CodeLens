@@ -1,5 +1,8 @@
+from dataclasses import replace
 from pathlib import Path
-from typing import Literal
+from typing import Literal, cast
+
+import pytest
 
 from codelens.findings.domain.models import (
     ChangeOrigin,
@@ -14,7 +17,11 @@ from codelens.review.domain.ports import ReviewExecutionRecord
 
 
 class Store:
-    async def get_execution(self, _task_id: str) -> ReviewExecutionRecord:
+    visible = True
+
+    async def get_execution(self, _task_id: str) -> ReviewExecutionRecord | None:
+        if not self.visible:
+            return None
         return ReviewExecutionRecord(
             task_id="review_" + "a" * 32,
             repository_path=Path("/repo"),
@@ -27,8 +34,12 @@ class Store:
             target_ref="feature",
             overlay_hash=None,
             overlay_artifact_ref=None,
-            target_paths=("src/example.py",),
-            selected_agent_versions=("correctness:v1",),
+            candidate_paths=("src/example.py",),
+            file_exclusion_policy_json=('{"exclude_binary":true,"path_regexes":[],"suffixes":[]}'),
+            file_exclusion_policy_hash=(
+                "f135f14995e69bb776fd5c18af7fa0d19e45f867501b3274e9cb38cfbc7676c3"
+            ),
+            selected_agent_versions=("correctness:v2",),
             prompt_locale="en",
             status="completed",
             cancellation_requested=False,
@@ -52,6 +63,100 @@ class Reader:
         if revision == "d" * 40:
             return b"one\ntwo\nthree\nfour\nfive\n"
         raise AssertionError(f"unexpected revision: {revision}")
+
+    async def resolve_old_path_optional(
+        self,
+        repository: Path,
+        base_revision: str,
+        target_revision: str,
+        path: str,
+    ) -> str | None:
+        assert (repository, path) == (Path("/repo"), "src/example.py")
+        return None
+
+
+async def test_source_preview_hides_tombstoned_reviews() -> None:
+    store = Store()
+    store.visible = False
+
+    with pytest.raises(KeyError):
+        await FindingSourcePreviewService(store, Reader()).get(
+            "review_" + "a" * 32, "finding-1"
+        )
+
+
+async def test_source_preview_reads_renamed_base_from_old_path() -> None:
+    class RenamedReader(Reader):
+        async def resolve_old_path_optional(
+            self,
+            repository: Path,
+            base_revision: str,
+            target_revision: str,
+            path: str,
+        ) -> str | None:
+            assert path == "src/example.py"
+            return "src/old-example.py"
+
+        async def read_revision_optional(
+            self,
+            repository: Path,
+            revision: str,
+            path: str,
+        ) -> bytes | None:
+            assert repository == Path("/repo")
+            if revision == "c" * 40:
+                assert path == "src/old-example.py"
+                return b"old named file\n"
+            assert revision == "d" * 40
+            assert path == "src/example.py"
+            return b"new named file\n"
+
+    preview = await FindingSourcePreviewService(Store(), RenamedReader()).get(
+        "review_" + "a" * 32, "finding-1"
+    )
+
+    assert preview.base is not None
+    assert preview.base.path == "src/old-example.py"
+    assert preview.base.content == "old named file\n"
+    assert preview.target is not None
+    assert preview.target.path == "src/example.py"
+    assert preview.target.content == "new named file\n"
+
+
+async def test_source_preview_reads_target_from_verified_overlay_artifact() -> None:
+    class OverlayStore(Store):
+        async def get_execution(self, task_id: str) -> ReviewExecutionRecord:
+            base = cast(ReviewExecutionRecord, await Store.get_execution(self, task_id))
+            return replace(
+                base,
+                overlay_hash="e" * 64,
+                overlay_artifact_ref="input_" + "1" * 32,
+            )
+
+    class VerifiedArtifacts:
+        async def read_bytes(self, reference: str, expected_hash: str) -> bytes:
+            assert reference == "input_" + "1" * 32
+            assert expected_hash == "e" * 64
+            return b"trusted overlay payload"
+
+    class OverlaySource:
+        async def read_overlay_optional(
+            self,
+            repository: Path,
+            revision: str,
+            path: str,
+            payload: bytes,
+        ) -> bytes | None:
+            assert (repository, revision, path) == (Path("/repo"), "d" * 40, "src/example.py")
+            assert payload == b"trusted overlay payload"
+            return b"overlay target\n"
+
+    preview = await FindingSourcePreviewService(
+        OverlayStore(), Reader(), VerifiedArtifacts(), OverlaySource()
+    ).get("review_" + "a" * 32, "finding-1")
+
+    assert preview.target is not None
+    assert preview.target.content == "overlay target\n"
 
 
 async def test_source_preview_reads_both_pinned_revisions_and_highlights_finding_side() -> None:

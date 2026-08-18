@@ -9,6 +9,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol
 
+from codelens.plugin.api.v2 import ExistingFindingV2, TriggerReviewPolicy
 from codelens.plugin.domain.models import (
     ExportHistoryEntry,
     ExportResult,
@@ -29,15 +30,19 @@ class ReviewCreatorPort(Protocol):
         repository_path: Path,
         scope_type: str,
         scope_params: dict[str, str | None],
-        selected_agents: tuple[str, ...],
-        prompt_locale: str,
+        review_policy: TriggerReviewPolicy,
         external_context: dict[str, Any] | None = None,
+        existing_findings: tuple[ExistingFindingV2, ...] = (),
     ) -> str:
         """Create a review and return the task_id.
 
         ``external_context`` carries platform routing information injected by
         the trigger (e.g. GitHub webhook payload fields). Local triggers pass
         ``None``.
+
+        ``existing_findings`` is the only supported model-input injection path.
+        Core validates, bounds, freezes, and later presents these untrusted issue
+        records to Reviewer and Verifier agents.
         """
         ...
 

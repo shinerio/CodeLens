@@ -15,6 +15,7 @@ __pycache__/
 .codelens-data/
 data/
 logs/
+backend/.tiktoken_cache/
 artifacts/
 backend/dist/
 backend/*.egg-info/
@@ -28,3 +29,4 @@ integration-tests/playwright-report/
 integration-tests/test-results/
 .codegraph
 CodeLensReview
+.cac

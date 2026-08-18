@@ -4,7 +4,7 @@ from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.git_ignore import GitIgnoreResolver
 
 
-async def test_excludes_tracked_file_matching_current_gitignore(git_repository: Path) -> None:
+async def test_keeps_tracked_file_matching_current_gitignore(git_repository: Path) -> None:
     tracked = git_repository / "tracked.log"
     tracked.write_text("old log\n", encoding="utf-8")
     git = GitCli()
@@ -18,9 +18,8 @@ async def test_excludes_tracked_file_matching_current_gitignore(git_repository: 
         ("tracked.log", "important.log", "README.md"),
     )
 
-    assert result.included == ("README.md", "important.log")
-    assert result.excluded[0].path == "tracked.log"
-    assert result.excluded[0].source == ".gitignore:1:*.log"
+    assert result.included == ("README.md", "important.log", "tracked.log")
+    assert result.excluded == ()
 
 
 async def test_honors_nested_gitignore(git_repository: Path) -> None:

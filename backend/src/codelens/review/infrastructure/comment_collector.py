@@ -1,229 +1,499 @@
-"""Collect and resolve model review comments against one immutable Snapshot."""
+"""Resolve canonical Comment submissions against one immutable Review Snapshot."""
 
+import asyncio
+import hashlib
 import json
+import re
+from collections.abc import Collection
 from dataclasses import dataclass, field
-from typing import Annotated, Literal
+from typing import Annotated, Literal, Protocol, cast
 
 from agents import Tool, function_tool
-from pydantic import BaseModel, ConfigDict, Field, StringConstraints, create_model
+from pydantic import Field, StringConstraints
 
+from codelens.findings.domain.candidates import (
+    CandidateFinding,
+    CandidateFindingBatch,
+    EvidenceStrength,
+)
+from codelens.findings.domain.models import FindingSeverity
+from codelens.findings.infrastructure.comment_output import CommentFindingSchema
 from codelens.review.application.settings import (
     MAX_MAX_INCOMPLETE_REVIEW_RETRIES,
     MIN_MAX_INCOMPLETE_REVIEW_RETRIES,
 )
 from codelens.review.domain.tool_limits import ToolLimits
-from codelens.review.infrastructure.line_resolver import (
-    resolve_from_file_content,
-    resolve_from_hunk,
+from codelens.review.domain.tool_results import (
+    JsonValue,
+    ToolDiagnostic,
+    ToolResult,
+    ToolResultStatus,
 )
-from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
+from codelens.review.infrastructure.line_resolver import split_and_normalize
+from codelens.review.infrastructure.location_resolver import (
+    LocationOutsideChangedHunkError,
+    SnapshotLocationResolver,
+)
 from codelens.review.infrastructure.tool_contract import reject_unknown_arguments
 from codelens.workspace.domain.models import ReviewSnapshot
-
-_DEFAULT_LIMITS = ToolLimits()
-
-_ShortText = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True, min_length=1, max_length=_DEFAULT_LIMITS.short_text_max
-    ),
-]
-_ReviewPath = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True, min_length=1, max_length=_DEFAULT_LIMITS.max_path_chars
-    ),
-]
-_LongText = Annotated[
-    str,
-    StringConstraints(
-        strip_whitespace=True, min_length=1, max_length=_DEFAULT_LIMITS.long_text_max
-    ),
-]
-
-ReviewCommentSubmission = create_model(
-    "ReviewCommentSubmission",
-    __config__=ConfigDict(frozen=True, extra="forbid"),
-    path=(_ReviewPath, ...),
-    side=(Literal["old", "new"], ...),
-    existing_code=(_LongText, ...),
-    title=(_ShortText, ...),
-    content=(_LongText, ...),
-    recommendation=(_LongText, ...),
-    category=(_ShortText, ...),
-    severity=(Literal["critical", "high", "medium", "low", "info"], ...),
-    confidence=(Annotated[float, Field(ge=0.0, le=1.0)], ...),
-)
-
-ReviewCompletionSubmission = create_model(
-    "ReviewCompletionSubmission",
-    __config__=ConfigDict(frozen=True, extra="forbid"),
-    summary=(
-        Annotated[
-            str,
-            StringConstraints(
-                strip_whitespace=True,
-                min_length=1,
-                max_length=_DEFAULT_LIMITS.task_summary_max,
-            ),
-        ],
-        ...,
-    ),
-)
-
-ReviewFileCompletionSubmission = create_model(
-    "ReviewFileCompletionSubmission",
-    __config__=ConfigDict(frozen=True, extra="forbid"),
-    reviewed_files=(
-        Annotated[
-            list[_ReviewPath],
-            Field(min_length=1, max_length=_DEFAULT_LIMITS.reviewed_files_batch),
-        ],
-        ...,
-    ),
-)
 
 
 class CommentCandidateRejectedError(ValueError):
     """Report one semantically invalid candidate without rejecting its batch."""
 
+    def __init__(self, message: str, *, reason_code: str | None = None) -> None:
+        super().__init__(message)
+        self.reason_code = reason_code
+
+
+class _EvidenceTools(Protocol):
+    """Expose only bounded Snapshot operations needed for comment resolution."""
+
+    @property
+    def review_file_paths(self) -> tuple[str, ...]: ...
+
+    @property
+    def reviewed_paths(self) -> Collection[str]: ...
+
+    async def read_diff_for_resolution(self, path: str) -> str: ...
+
+    async def read_full_file(
+        self,
+        path: str,
+        version: Literal["base", "current"],
+    ) -> str: ...
+
+    async def excerpt_identity(
+        self,
+        path: str,
+        start_line: int,
+        end_line: int,
+        version: Literal["base", "current"],
+    ) -> tuple[str, bool]: ...
+
+
+def _canonical_hash(value: object) -> str:
+    payload = json.dumps(
+        value,
+        ensure_ascii=False,
+        sort_keys=True,
+        separators=(",", ":"),
+    ).encode("utf-8")
+    return hashlib.sha256(payload).hexdigest()
+
+
+def _normalized_excerpt_hash(existing_code: str) -> str:
+    normalized = "\n".join(split_and_normalize(existing_code)).encode("utf-8")
+    return hashlib.sha256(normalized).hexdigest()
+
+
+@dataclass
+class _CandidateRecord:
+    """Retain one Candidate payload and its auditable active/retracted transition."""
+
+    candidate: CandidateFinding
+    business_key: str
+    status: Literal["active", "retracted"] = "active"
+    retraction_reason: str | None = None
+    transitions: list[tuple[Literal["active", "retracted"], str | None]] = field(
+        default_factory=lambda: [("active", None)]
+    )
+
 
 @dataclass
 class ReviewCommentCollector:
-    """Task-local stateful tool that resolves accepted comments into Finding candidates.
+    """Resolve Comment v2 items and enforce evidence coverage at task completion.
 
-    The collector has no persistence, workspace, network, or arbitrary-process access.
-    It accepts comments only when their complete selected-side range is inside one
-    frozen changed hunk, then derives trusted location metadata from that Snapshot.
+    The collector has no persistence, network, workspace, or process access. It
+    accepts only the assigned reviewer's primary dimensions and derives every
+    location, hunk, hash, and identity from the frozen Snapshot.
     """
 
+    task_id: str
+    run_id: str
     snapshot: ReviewSnapshot
-    reviewer_id: str
-    confidence_floor: float
-    tools: FilesystemReviewTools
+    reviewer_reference: str
+    reviewer_dimensions: tuple[str, ...]
+    tools: _EvidenceTools
+    review_feedback: str | None = None
+    tool_limits: ToolLimits = field(default_factory=ToolLimits)
     max_incomplete_review_retries: int = 3
-    tool_descriptions: dict[str, str] = field(default_factory=dict)
-    tool_limits: ToolLimits | None = None
-    _findings: list[dict[str, object]] = field(default_factory=list)
-    _completion: object | None = None
-    _reviewed_files: set[str] = field(default_factory=set)
-    _incomplete_retry_count: int = 0
-    _incomplete_review_files: tuple[str, ...] = ()
+    _candidate_records: list[_CandidateRecord] = field(default_factory=list, init=False)
+    _state_lock: asyncio.Lock = field(default_factory=asyncio.Lock, init=False)
+    _completion_summary: str | None = field(default=None, init=False)
+    _incomplete_retry_count: int = field(default=0, init=False)
+    _incomplete_review_files: tuple[str, ...] = field(default=(), init=False)
 
     def __post_init__(self) -> None:
-        """Reject invalid retry policies even when constructed outside a composition root."""
-
-        value = self.max_incomplete_review_retries
+        if re.fullmatch(r"[a-z][a-z0-9_.-]*:v[1-9][0-9]*", self.reviewer_reference) is None:
+            raise ValueError("Comment v2 reviewer reference is invalid")
+        if not self.reviewer_dimensions:
+            raise ValueError("Comment v2 reviewer requires at least one assigned dimension")
+        if len(self.reviewer_dimensions) != len(set(self.reviewer_dimensions)):
+            raise ValueError("Comment v2 reviewer dimensions contain duplicates")
+        retries = self.max_incomplete_review_retries
         if (
-            isinstance(value, bool)
-            or value < MIN_MAX_INCOMPLETE_REVIEW_RETRIES
-            or value > MAX_MAX_INCOMPLETE_REVIEW_RETRIES
+            isinstance(retries, bool)
+            or retries < MIN_MAX_INCOMPLETE_REVIEW_RETRIES
+            or retries > MAX_MAX_INCOMPLETE_REVIEW_RETRIES
         ):
             raise ValueError("max incomplete review retries must be between 0 and 20")
-        if self.tool_limits is None:
-            self.tool_limits = ToolLimits()
 
-    def as_agent_tools(self) -> list[Tool]:
-        """Expose bounded comment collection and explicit completion through the SDK."""
+    async def submit(self, submission: CommentFindingSchema) -> CandidateFinding:
+        """Resolve one submission or reject it without retaining partial state."""
 
-        limits = self.tool_limits if self.tool_limits is not None else ToolLimits()
+        if self.is_completed:
+            raise CommentCandidateRejectedError(
+                "reviewer has already completed",
+                reason_code="reviewer_already_completed",
+            )
 
-        ShortText = Annotated[
-            str,
-            StringConstraints(
-                strip_whitespace=True, min_length=1, max_length=limits.short_text_max
-            ),
-        ]
-        ReviewPath = Annotated[
-            str,
-            StringConstraints(
-                strip_whitespace=True, min_length=1, max_length=limits.max_path_chars
-            ),
-        ]
-        LongText = Annotated[
-            str,
-            StringConstraints(
-                strip_whitespace=True, min_length=1, max_length=limits.long_text_max
-            ),
-        ]
+        expected_reviewer_id = self.reviewer_reference.rpartition(":v")[0]
+        if submission.reviewer_id != expected_reviewer_id:
+            raise CommentCandidateRejectedError(
+                "comment reviewer does not match this Agent Run",
+                reason_code="reviewer_mismatch",
+            )
+        if submission.primary_dimension not in self.reviewer_dimensions:
+            raise CommentCandidateRejectedError(
+                "comment primary dimension is outside this reviewer's assignment",
+                reason_code="dimension_outside_assignment",
+            )
+        if submission.path not in self.tools.review_file_paths:
+            raise CommentCandidateRejectedError(
+                "comment path is outside this Review",
+                reason_code="path_outside_review",
+            )
 
-        ReviewCommentSubmissionModel = create_model(  # type: ignore[misc]
-            "ReviewCommentSubmission",
-            __config__=ConfigDict(frozen=True, extra="forbid"),
-            path=(ReviewPath, ...),
-            side=(Literal["old", "new"], ...),
-            existing_code=(LongText, ...),
-            title=(ShortText, ...),
-            content=(LongText, ...),
-            recommendation=(LongText, ...),
-            category=(ShortText, ...),
-            severity=(Literal["critical", "high", "medium", "low", "info"], ...),
-            confidence=(Annotated[float, Field(ge=0.0, le=1.0)], ...),
+        try:
+            location, changed_hunk_id = await SnapshotLocationResolver(
+                self.snapshot, self.tools
+            ).resolve(
+                submission.path,
+                submission.side,
+                submission.existing_code,
+            )
+        except LocationOutsideChangedHunkError as error:
+            raise CommentCandidateRejectedError(
+                self.review_feedback or str(error),
+                reason_code="comment_outside_diff",
+            ) from error
+        except ValueError as error:
+            raise CommentCandidateRejectedError(str(error)) from error
+        existing_code_hash = _normalized_excerpt_hash(submission.existing_code)
+        evidence_hashes = (existing_code_hash,)
+        axes = {
+            "evidence_strength": submission.evidence_strength,
+        }
+        fingerprint = _canonical_hash(
+            {
+                "snapshot_id": self.snapshot.snapshot_id,
+                "location": {
+                    "path": location.path,
+                    "start_line": location.start_line,
+                    "end_line": location.end_line,
+                    "side": location.side,
+                    "excerpt_hash": location.excerpt_hash,
+                },
+                "category": submission.category,
+                "title": submission.title,
+                "content": submission.content,
+                "primary_dimension": submission.primary_dimension,
+                "axes": axes,
+                "evidence_hashes": evidence_hashes,
+            }
         )
+        business_key = _canonical_hash(
+            {
+                "task_id": self.task_id,
+                "run_id": self.run_id,
+                "reviewer_reference": self.reviewer_reference,
+                "location": {
+                    "path": location.path,
+                    "start_line": location.start_line,
+                    "end_line": location.end_line,
+                    "side": location.side,
+                },
+                "title": submission.title,
+                "axes": axes,
+            }
+        )
+        async with self._state_lock:
+            if self.is_completed:
+                raise CommentCandidateRejectedError(
+                    "reviewer has already completed",
+                    reason_code="reviewer_already_completed",
+                )
+            if any(
+                record.business_key == business_key and record.status == "active"
+                for record in self._candidate_records
+            ):
+                raise CommentCandidateRejectedError(
+                    "comment duplicates an active candidate",
+                    reason_code="duplicate_comment",
+                )
+            candidate_id = "candidate_" + _canonical_hash(
+                {
+                    "run_id": self.run_id,
+                    "acceptance_index": len(self._candidate_records),
+                    "business_key": business_key,
+                }
+            )
+            candidate = CandidateFinding(
+                task_id=self.task_id,
+                candidate_id=candidate_id,
+                run_id=self.run_id,
+                snapshot_id=self.snapshot.snapshot_id,
+                reviewer_reference=self.reviewer_reference,
+                category=submission.category,
+                title=submission.title,
+                severity=FindingSeverity(submission.severity),
+                primary_dimension=submission.primary_dimension,
+                evidence_strength=EvidenceStrength(submission.evidence_strength),
+                primary_location=location,
+                related_locations=(),
+                changed_hunk_id=changed_hunk_id,
+                existing_code_hash=existing_code_hash,
+                evidence_hashes=evidence_hashes,
+                content=submission.content,
+                recommendation=submission.recommendation,
+                fingerprint=fingerprint,
+            )
+            self._candidate_records.append(
+                _CandidateRecord(candidate=candidate, business_key=business_key)
+            )
+        return candidate
 
-        ReviewCompletionSubmissionModel = create_model(
-            "ReviewCompletionSubmission",
-            __config__=ConfigDict(frozen=True, extra="forbid"),
-            summary=(
-                Annotated[
-                    str,
-                    StringConstraints(
-                        strip_whitespace=True,
-                        min_length=1,
-                        max_length=limits.task_summary_max,
+    async def submit_many(self, submissions: list[CommentFindingSchema]) -> str:
+        """Retain valid submissions while reporting each rejected item by index."""
+
+        if self.is_completed:
+            return ToolResult(
+                "comment",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "reviewer_already_completed",
+                        "The reviewer has already completed this Agent Run.",
+                        False,
                     ),
-                ],
-                ...,
-            ),
+                ),
+            ).to_json()
+        if not submissions or len(submissions) > self.tool_limits.comment_batch_size:
+            return ToolResult(
+                "comment",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "invalid_argument_value",
+                        "comment batch size is outside the configured limit.",
+                        True,
+                        "comments",
+                    ),
+                ),
+            ).to_json()
+        accepted_comments: list[dict[str, JsonValue]] = []
+        rejected_comments: list[dict[str, JsonValue]] = []
+        for input_index, submission in enumerate(submissions):
+            try:
+                candidate = await self.submit(submission)
+            except CommentCandidateRejectedError as error:
+                rejected_comments.append(
+                    {
+                        "input_index": input_index,
+                        "code": error.reason_code or "comment_rejected",
+                        "message": str(error),
+                    }
+                )
+            else:
+                accepted_comments.append(
+                    {
+                        "input_index": input_index,
+                        "candidate_id": candidate.candidate_id,
+                        "path": candidate.primary_location.path,
+                        "side": candidate.primary_location.side,
+                        "title": candidate.title,
+                    }
+                )
+        accepted_count = len(accepted_comments)
+        rejected_count = len(rejected_comments)
+        status = (
+            ToolResultStatus.SUCCESS
+            if accepted_count and not rejected_count
+            else (ToolResultStatus.PARTIAL if accepted_count else ToolResultStatus.REJECTED)
+        )
+        diagnostics = tuple(
+            ToolDiagnostic(
+                str(rejection["code"]),
+                str(rejection["message"]),
+                True,
+            )
+            for rejection in rejected_comments
+        )
+        return ToolResult(
+            "comment",
+            status,
+            {
+                "submitted_count": len(submissions),
+                "accepted_count": accepted_count,
+                "rejected_count": rejected_count,
+                "active_comment_count": self.active_comment_count,
+                "accepted_comments": cast(JsonValue, accepted_comments),
+                "rejected_comments": cast(JsonValue, rejected_comments),
+            },
+            diagnostics,
+        ).to_json()
+
+    def retract_many(self, candidate_ids: list[str], reason: str) -> str:
+        """Idempotently retract current-Run Candidates while preserving their audit records."""
+
+        if self.is_completed:
+            return ToolResult(
+                "retract_comment",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "reviewer_already_completed",
+                        "The reviewer has already completed this Agent Run.",
+                        False,
+                    ),
+                ),
+            ).to_json()
+        normalized_reason = reason.strip()
+        if (
+            not candidate_ids
+            or len(candidate_ids) > self.tool_limits.comment_batch_size
+            or len(candidate_ids) != len(set(candidate_ids))
+            or not normalized_reason
+            or len(normalized_reason) > self.tool_limits.long_text_max
+        ):
+            return ToolResult(
+                "retract_comment",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "invalid_argument_value",
+                        "Retraction IDs and reason must satisfy the strict input limits.",
+                        True,
+                    ),
+                ),
+            ).to_json()
+        records_by_id = {
+            record.candidate.candidate_id: record for record in self._candidate_records
+        }
+        results: list[dict[str, JsonValue]] = []
+        retracted_count = 0
+        already_retracted_count = 0
+        unknown_count = 0
+        for candidate_id in candidate_ids:
+            record = records_by_id.get(candidate_id)
+            if record is None:
+                item_status = "unknown_candidate"
+                unknown_count += 1
+            elif record.status == "retracted":
+                item_status = "already_retracted"
+                already_retracted_count += 1
+            else:
+                record.status = "retracted"
+                record.retraction_reason = normalized_reason
+                record.transitions.append(("retracted", normalized_reason))
+                item_status = "retracted"
+                retracted_count += 1
+            results.append({"candidate_id": candidate_id, "status": item_status})
+        status = (
+            ToolResultStatus.REJECTED
+            if unknown_count == len(candidate_ids)
+            else (ToolResultStatus.PARTIAL if unknown_count else ToolResultStatus.SUCCESS)
+        )
+        diagnostics: tuple[ToolDiagnostic, ...] = ()
+        if retracted_count == 0 and unknown_count == 0:
+            diagnostics = (
+                ToolDiagnostic(
+                    "no_state_change",
+                    "All requested Candidates were already retracted.",
+                    False,
+                ),
+            )
+        elif unknown_count:
+            diagnostics = (
+                ToolDiagnostic(
+                    "unknown_candidate",
+                    "At least one Candidate does not belong to this Reviewer Agent Run.",
+                    False,
+                    "candidate_ids",
+                ),
+            )
+        return ToolResult(
+            "retract_comment",
+            status,
+            {
+                "results": cast(JsonValue, results),
+                "retracted_count": retracted_count,
+                "already_retracted_count": already_retracted_count,
+                "unknown_count": unknown_count,
+                "active_comment_count": self.active_comment_count,
+            },
+            diagnostics,
+        ).to_json()
+
+    def candidate_batch(self) -> CandidateFindingBatch:
+        """Return only fully resolved candidates in stable acceptance order."""
+
+        return CandidateFindingBatch(
+            tuple(
+                record.candidate for record in self._candidate_records if record.status == "active"
+            )
         )
 
-        ReviewFileCompletionSubmissionModel = create_model(
-            "ReviewFileCompletionSubmission",
-            __config__=ConfigDict(frozen=True, extra="forbid"),
-            reviewed_files=(
-                Annotated[
-                    list[ReviewPath],
-                    Field(min_length=1, max_length=limits.reviewed_files_batch),
-                ],
-                ...,
-            ),
-        )
+    def as_agent_tools(self, tool_descriptions: dict[str, str]) -> list[Tool]:
+        """Expose the canonical comment and task completion contracts.
+
+        The schema is mutated to inject the reviewer's assigned dimensions and
+        reviewer identifier as enums so the model picks valid values instead of
+        guessing free-form strings.
+        """
 
         CommentBatch = Annotated[
-            list[ReviewCommentSubmissionModel],  # type: ignore[valid-type]
-            Field(min_length=1, max_length=limits.comment_batch_size),
+            list[CommentFindingSchema],
+            Field(min_length=1, max_length=self.tool_limits.comment_batch_size),
+        ]
+        CandidateIds = Annotated[
+            list[
+                Annotated[
+                    str,
+                    StringConstraints(strip_whitespace=True, min_length=1, max_length=128),
+                ]
+            ],
+            Field(min_length=1, max_length=self.tool_limits.comment_batch_size),
         ]
 
-        @function_tool(
-            name_override="comment",
-            description_override=self.tool_descriptions["comment"],
-        )
+        @function_tool(name_override="comment", description_override=tool_descriptions["comment"])
         async def comment_tool(comments: CommentBatch) -> str:
-            """Submit one or more concrete changed-code comments for deterministic resolution."""
-
             return await self.submit_many(comments)
 
         @function_tool(
-            name_override="review_file_done",
-            description_override=self.tool_descriptions["review_file_done"],
+            name_override="retract_comment",
+            description_override=tool_descriptions["retract_comment"],
         )
-        async def review_file_done_tool(
-            reviewed_files: Annotated[
-                list[ReviewPath],
-                Field(min_length=1, max_length=limits.reviewed_files_batch),
+        async def retract_comment_tool(
+            candidate_ids: CandidateIds,
+            reason: Annotated[
+                str,
+                StringConstraints(
+                    strip_whitespace=True,
+                    min_length=1,
+                    max_length=self.tool_limits.long_text_max,
+                ),
             ],
         ) -> str:
-            """Record files reviewed after successful model-visible evidence access."""
-
-            return self.complete_files(
-                ReviewFileCompletionSubmissionModel.model_validate(
-                    {"reviewed_files": reviewed_files}
-                )
-            )
+            return self.retract_many(candidate_ids, reason)
 
         @function_tool(
-            name_override="task_done",
-            description_override=self.tool_descriptions["task_done"],
+            name_override="task_done", description_override=tool_descriptions["task_done"]
         )
         async def task_done_tool(
             summary: Annotated[
@@ -231,244 +501,131 @@ class ReviewCommentCollector:
                 StringConstraints(
                     strip_whitespace=True,
                     min_length=1,
-                    max_length=limits.task_summary_max,
+                    max_length=self.tool_limits.task_summary_max,
                 ),
             ],
         ) -> str:
-            """Declare that changed-file investigation is complete without creating a Finding."""
+            return self.complete(summary)
 
-            return self.complete(
-                ReviewCompletionSubmissionModel.model_validate({"summary": summary})
-            )
-
+        tool = reject_unknown_arguments(comment_tool)
+        expected_reviewer_id = self.reviewer_reference.rpartition(":v")[0]
+        finding_schema = tool.params_json_schema.get("$defs", {}).get("CommentFindingSchema", {})
+        properties = finding_schema.get("properties", {})
+        properties["primary_dimension"]["enum"] = list(self.reviewer_dimensions)
+        properties["reviewer_id"]["enum"] = [expected_reviewer_id]
         return [
-            reject_unknown_arguments(comment_tool),
-            reject_unknown_arguments(review_file_done_tool),
+            tool,
+            reject_unknown_arguments(retract_comment_tool),
             reject_unknown_arguments(task_done_tool),
         ]
 
-    async def submit(self, submission: BaseModel) -> str:
-        """Resolve one candidate or return a bounded tool error without retaining it."""
+    def complete(self, summary: str) -> str:
+        """Accept task completion after all Review files have model-visible evidence."""
 
-        if submission.confidence < self.confidence_floor:  # type: ignore[attr-defined]
-            raise CommentCandidateRejectedError(
-                "comment confidence is below this reviewer's threshold"
-            )
-        if submission.path not in self.tools.review_file_paths:  # type: ignore[attr-defined]
-            raise CommentCandidateRejectedError("comment path is outside this Review")
-
-        # Resolve line numbers from quoted code
-        start_line, end_line = await self._resolve_line_numbers(
-            submission.path, submission.existing_code, submission.side  # type: ignore[attr-defined]
-        )
-
-        hunks = tuple(
-            hunk
-            for hunk in self.snapshot.change_index.hunks
-            if (
-                hunk.path == submission.path  # type: ignore[attr-defined]
-                and hunk.side == submission.side  # type: ignore[attr-defined]
-                and start_line >= hunk.start_line
-                and end_line <= hunk.end_line
-            )
-        )
-        if len(hunks) != 1:
-            raise CommentCandidateRejectedError(
-                f"existing_code must quote only consecutive changed {submission.side}-side "  # type: ignore[attr-defined]
-                "lines without diff markers; do not include unchanged context lines"
-            )
-        excerpt_hash, excerpt_truncated = await self.tools.excerpt_identity(
-            submission.path,  # type: ignore[attr-defined]
-            start_line,
-            end_line,
-            "base" if submission.side == "old" else "current",  # type: ignore[attr-defined]
-        )
-        if excerpt_truncated:
-            raise CommentCandidateRejectedError(
-                "comment location cannot be resolved to a complete frozen excerpt"
-            )
-        hunk = hunks[0]
-        self._findings.append(
-            {
-                "reviewer_id": self.reviewer_id,
-                "category": submission.category,  # type: ignore[attr-defined]
-                "title": submission.title,  # type: ignore[attr-defined]
-                "severity": submission.severity,  # type: ignore[attr-defined]
-                "disposition": (
-                    "blocking"
-                    if submission.severity in {"critical", "high", "medium"}  # type: ignore[attr-defined]
-                    else "non_blocking"
+        if self._completion_summary is not None:
+            return ToolResult(
+                "task_done",
+                ToolResultStatus.REJECTED,
+                {},
+                (
+                    ToolDiagnostic(
+                        "reviewer_already_completed",
+                        "The reviewer has already completed this Agent Run.",
+                        False,
+                    ),
                 ),
-                "confidence": submission.confidence,  # type: ignore[attr-defined]
-                "primary_location": {
-                    "path": submission.path,  # type: ignore[attr-defined]
-                    "start_line": start_line,
-                    "end_line": end_line,
-                    "side": submission.side,  # type: ignore[attr-defined]
-                    "excerpt_hash": excerpt_hash,
-                    "is_deleted": self._is_deleted_path(submission.path),  # type: ignore[attr-defined]
-                },
-                "changed_hunk_id": hunk.hunk_id,
-                "change_origin": "introduced",
-                "evidence": (
-                    {
-                        "kind": "excerpt",
-                        "description": submission.content,  # type: ignore[attr-defined]
-                        "excerpt_hash": excerpt_hash,
-                    },
-                ),
-                "impact": submission.content,  # type: ignore[attr-defined]
-                "explanation": submission.content,  # type: ignore[attr-defined]
-                "recommendation": submission.recommendation,  # type: ignore[attr-defined]
-            }
-        )
-        return json.dumps(
-            {"accepted": True, "comment_count": len(self._findings)},
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-    async def submit_many(self, submissions: list[BaseModel]) -> str:
-        """Resolve a bounded batch while retaining only individually accepted comments."""
-
-        if not submissions or len(submissions) > self.tool_limits.comment_batch_size:  # type: ignore[union-attr]
-            raise ValueError(
-                f"comment requires between one and {self.tool_limits.comment_batch_size} comments"  # type: ignore[union-attr]
-            )
-        accepted_count = 0
-        rejected_comments: list[dict[str, object]] = []
-        for index, submission in enumerate(submissions):
-            try:
-                await self.submit(submission)
-            except CommentCandidateRejectedError as error:
-                rejected_comments.append({"index": index, "reason": str(error)})
-            else:
-                accepted_count += 1
-        return json.dumps(
-            {
-                "accepted": accepted_count > 0,
-                "accepted_count": accepted_count,
-                "comment_count": len(self._findings),
-                "rejected_comments": rejected_comments,
-                "rejected_count": len(rejected_comments),
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-    def complete(self, submission: BaseModel) -> str:
-        """Accept final completion only after every evidenced Review file was declared."""
-
-        if self._completion is not None:
-            raise ValueError("task_done has already been called")
+            ).to_json()
         targets = set(self.tools.review_file_paths)
-        viewed = set(self.tools.evidence_viewed_paths)
-        missing_evidence = tuple(sorted(targets - viewed))
-        undeclared = tuple(sorted((targets & viewed) - self._reviewed_files))
-        incomplete = tuple(sorted(targets - self._reviewed_files))
+        reviewed_targets = targets.intersection(self.tools.reviewed_paths)
+        incomplete = tuple(sorted(targets - reviewed_targets))
+        total_review_file_count = len(targets)
+        reviewed_file_count = len(reviewed_targets)
+        missing_file_count = len(incomplete)
         if incomplete:
             self._incomplete_retry_count += 1
             if self._incomplete_retry_count <= self.max_incomplete_review_retries:
-                return json.dumps(
+                # 提供更明确的指导，告诉 reviewer 需要先读取所有文件
+                if self._incomplete_retry_count == 1:
+                    diagnostic_message = (
+                        f"You have only reviewed {reviewed_file_count} out of {total_review_file_count} files. "
+                        f"Please read all {missing_file_count} missing file(s) listed in missing_review_files "
+                        f"before calling task_done again. Complete review of all files first, then submit."
+                    )
+                else:
+                    diagnostic_message = (
+                        f"Still missing {missing_file_count} file(s). You must read every file in "
+                        f"missing_review_files before calling task_done. Do not submit until all "
+                        f"{total_review_file_count} files have been reviewed."
+                    )
+                return ToolResult(
+                    "task_done",
+                    ToolResultStatus.NEEDS_ACTION,
                     {
-                        "accepted": False,
                         "incomplete_retry_count": self._incomplete_retry_count,
                         "max_incomplete_review_retries": self.max_incomplete_review_retries,
-                        "missing_evidence_files": missing_evidence,
-                        "undeclared_files": undeclared,
+                        "missing_review_files": cast(JsonValue, list(incomplete)),
+                        "missing_file_count": missing_file_count,
+                        "reviewed_file_count": reviewed_file_count,
+                        "total_review_file_count": total_review_file_count,
+                        "active_comment_count": self.active_comment_count,
                     },
-                    ensure_ascii=False,
-                    sort_keys=True,
-                    separators=(",", ":"),
-                )
+                    (
+                        ToolDiagnostic(
+                            "missing_review_files",
+                            diagnostic_message,
+                            True,
+                        ),
+                    ),
+                ).to_json()
             self._incomplete_review_files = incomplete
-        self._completion = submission
-        return json.dumps(
+        self._completion_summary = summary
+        return ToolResult(
+            "task_done",
+            ToolResultStatus.SUCCESS,
             {
-                "accepted": True,
-                "comment_count": len(self._findings),
+                "active_comment_count": self.active_comment_count,
                 "forced_completion": bool(incomplete),
-                **({"incomplete_files": incomplete} if incomplete else {}),
-                "reviewed_files": tuple(sorted(self._reviewed_files)),
+                "incomplete_files": cast(JsonValue, list(incomplete)),
+                "missing_file_count": missing_file_count,
+                "reviewed_file_count": reviewed_file_count,
+                "total_review_file_count": total_review_file_count,
             },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
-
-    def complete_files(self, submission: BaseModel) -> str:
-        """Record only known paths already exposed by a successful evidence tool call."""
-
-        if self._completion is not None:
-            raise ValueError("review task has already been completed")
-        targets = set(self.tools.review_file_paths)
-        requested = set(submission.reviewed_files)  # type: ignore[attr-defined]
-        unknown = tuple(sorted(requested - targets))
-        if unknown:
-            raise ValueError(f"reviewed_files contains paths outside this Review: {unknown[0]}")
-        missing_evidence = tuple(sorted(requested - self.tools.evidence_viewed_paths))
-        recorded = tuple(sorted(requested - set(missing_evidence)))
-        self._reviewed_files.update(recorded)
-        return json.dumps(
-            {
-                "accepted": not missing_evidence,
-                "missing_evidence_files": missing_evidence,
-                "recorded_files": recorded,
-            },
-            ensure_ascii=False,
-            sort_keys=True,
-            separators=(",", ":"),
-        )
+        ).to_json()
 
     @property
     def is_completed(self) -> bool:
-        """Return whether the model explicitly ended this investigation."""
+        """Return whether task_done was accepted."""
 
-        return self._completion is not None
+        return self._completion_summary is not None
 
     @property
     def incomplete_review_files(self) -> tuple[str, ...]:
-        """Return paths left incomplete when the configured retry limit was exceeded."""
+        """Return paths missing evidence when forced completion was accepted."""
 
         return self._incomplete_review_files
 
-    async def _resolve_line_numbers(
+    @property
+    def active_comment_count(self) -> int:
+        """Return the number of Candidates eligible for final publication."""
+
+        return sum(record.status == "active" for record in self._candidate_records)
+
+    @property
+    def candidate_audit(
         self,
-        path: str,
-        existing_code: str,
-        side: Literal["old", "new"],
-    ) -> tuple[int, int]:
-        """Resolve line numbers from quoted code via diff hunk or file content matching."""
+    ) -> tuple[
+        tuple[
+            str,
+            tuple[tuple[Literal["active", "retracted"], str | None], ...],
+        ],
+        ...,
+    ]:
+        """Expose bounded Candidate state transitions for tests and transcript projection."""
 
-        # Tier 1: Try hunk matching
-        diff_result = json.loads(await self.tools.read_diff_for_resolution(path))
-        diff_text = diff_result.get("content", "")
-        resolved = resolve_from_hunk(diff_text, existing_code, side=side)
-        if resolved is not None:
-            return resolved
-
-        # Tier 2: Try full file content matching
-        file_content = await self.tools.read_full_file(
-            path,
-            "base" if side == "old" else "current",
+        return tuple(
+            (
+                record.candidate.candidate_id,
+                tuple(record.transitions),
+            )
+            for record in self._candidate_records
         )
-        resolved = resolve_from_file_content(file_content, existing_code)
-        if resolved is not None:
-            return resolved
-
-        raise CommentCandidateRejectedError(
-            "existing_code cannot be resolved to a line range"
-        )
-
-    def _is_deleted_path(self, path: str) -> bool:
-        entry = next((item for item in self.snapshot.manifest.entries if item.path == path), None)
-        if entry is None:
-            raise ValueError("comment path is outside the frozen Snapshot")
-        return entry.kind == "deleted"
-
-    def finding_batch(self) -> dict[str, object]:
-        """Return only resolved candidates in the stable output envelope."""
-
-        return {"schema_version": "1", "findings": tuple(self._findings)}

@@ -8,6 +8,7 @@ enabled before report can be enabled.
 
 import asyncio
 import shutil
+import tempfile
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -16,11 +17,13 @@ from jsonschema.exceptions import SchemaError
 from jsonschema.protocols import Validator
 from jsonschema.validators import validator_for
 
+from codelens.plugin.api.v2 import TriggerReviewPolicy
 from codelens.plugin.domain.models import (
     PluginCapabilityError,
     PluginConfigurationError,
     PluginInstallError,
     PluginManifest,
+    PluginProfileSource,
     PluginRecord,
     ReportCapability,
     TriggerCapability,
@@ -31,6 +34,7 @@ from codelens.plugin.domain.ports import (
     PluginInstallerPort,
     PluginStorePort,
 )
+from codelens.plugin.domain.versioning import PluginApiVersion
 
 
 class PluginManager:
@@ -74,19 +78,17 @@ class PluginManager:
         report (file-export) capabilities.
         """
         existing = await self._store.get_plugin(self.BUILTIN_PLUGIN_ID)
-        if existing is not None:
-            return
-
         manifest = PluginManifest(
             plugin_id=self.BUILTIN_PLUGIN_ID,
             name="Local Development Plugin",
-            version="1.0.0",
+            version="2.0.0",
             description=(
-                "Local git hook trigger and file-based report export "
-                "for development workflows"
+                "Local git hook trigger and file-based report export for development workflows"
             ),
             author="CodeLens Team",
             platform="local",
+            min_codelens_version="0.2.0",
+            plugin_api_version=PluginApiVersion.V2,
             capabilities={
                 "trigger": TriggerCapability(
                     trigger_type="local-hook",
@@ -118,11 +120,13 @@ class PluginManager:
                                 "type": ["string", "null"],
                                 "description": "Target reference for branch scope (e.g., 'HEAD')",
                             },
-                            "selected_agents": {
-                                "type": "array",
-                                "items": {"type": "string"},
-                                "minItems": 1,
-                                "description": "Agent IDs to use for reviews",
+                            "reviewer_selection": {
+                                "type": "object",
+                                "description": "Fixed or Adaptive reviewer policy",
+                            },
+                            "supersede_policy": {
+                                "type": "string",
+                                "enum": ["latest_snapshot", "preserve_all"],
                             },
                             "prompt_locale": {
                                 "type": "string",
@@ -146,8 +150,7 @@ class PluginManager:
                                 "type": "string",
                                 "default": "CodeLensReview",
                                 "description": (
-                                    "Output directory name relative "
-                                    "to reviewed repo root"
+                                    "Output directory name relative to reviewed repo root"
                                 ),
                             },
                             "formats": {
@@ -155,11 +158,36 @@ class PluginManager:
                                 "items": {"type": "string", "enum": ["json", "markdown"]},
                                 "default": ["json", "markdown"],
                             },
+                            "use_as_existing_findings": {
+                                "type": "boolean",
+                                "default": True,
+                                "description": (
+                                    "Inject prior JSON exports into new reviews "
+                                    "to suppress duplicates"
+                                ),
+                            },
                         },
                     },
                 ),
             },
         )
+
+        if existing is not None:
+            try:
+                TriggerReviewPolicy.from_config(existing.trigger_config)
+            except ValueError as error:
+                raise PluginConfigurationError(str(error)) from error
+            if existing.manifest == manifest:
+                return
+            await self._store.save_plugin(
+                replace(
+                    existing,
+                    manifest=manifest,
+                    config_revision=existing.config_revision + 1,
+                )
+            )
+            self._invalidate_plugin(existing.plugin_id)
+            return
 
         record = PluginRecord(
             plugin_id=self.BUILTIN_PLUGIN_ID,
@@ -175,13 +203,18 @@ class PluginManager:
                 "scope_type": "commit",
                 "base_ref": None,
                 "target_ref": None,
-                "selected_agents": ["correctness:v1"],
+                "reviewer_selection": {
+                    "mode": "fixed",
+                    "reviewer_versions": ["correctness:v2"],
+                },
+                "supersede_policy": "latest_snapshot",
                 "prompt_locale": "en",
                 "debounce_seconds": 10,
             },
             report_config={
                 "output_dir": "CodeLensReview",
                 "formats": ["json", "markdown"],
+                "use_as_existing_findings": True,
             },
         )
 
@@ -276,9 +309,7 @@ class PluginManager:
             raise PluginInstallError(f"Plugin '{plugin_id}' not found")
 
         if record.is_builtin:
-            raise PluginInstallError(
-                f"Built-in plugin '{plugin_id}' cannot be updated"
-            )
+            raise PluginInstallError(f"Built-in plugin '{plugin_id}' cannot be updated")
 
         if not record.git_url:
             raise PluginInstallError(
@@ -286,37 +317,45 @@ class PluginManager:
             )
 
         if not record.install_path:
-            raise PluginInstallError(
-                f"Plugin '{plugin_id}' has no install path"
-            )
+            raise PluginInstallError(f"Plugin '{plugin_id}' has no install path")
 
         install_path = Path(record.install_path)
         update_ref = ref if ref is not None else record.git_ref
 
-        # Clone new version and swap directories
-        new_manifest = await self._installer.update(
-            record.git_url, install_path, update_ref
-        )
-
-        # Merge existing config with new schema defaults
-        new_trigger_config = self._merge_config(
-            record.trigger_config,
-            new_manifest.capabilities.get("trigger"),
-        )
-        new_report_config = self._merge_config(
-            record.report_config,
-            new_manifest.capabilities.get("report"),
-        )
-
-        updated = replace(
-            record,
-            manifest=new_manifest,
-            trigger_config=new_trigger_config,
-            report_config=new_report_config,
-            git_ref=update_ref,
-        )
-
-        await self._store.save_plugin(updated)
+        rollback_root = Path(tempfile.mkdtemp(prefix="codelens-plugin-rollback-"))
+        rollback_path = rollback_root / record.plugin_id
+        has_checkout = await asyncio.to_thread(install_path.is_dir)
+        if has_checkout:
+            await asyncio.to_thread(shutil.copytree, install_path, rollback_path)
+        try:
+            new_manifest = await self._installer.update(record.git_url, install_path, update_ref)
+            merged_trigger_config = self._merge_config(
+                record.trigger_config,
+                new_manifest.capabilities.get("trigger"),
+            )
+            if record.is_builtin and new_manifest.trigger is not None:
+                TriggerReviewPolicy.from_config(merged_trigger_config)
+            new_trigger_config = merged_trigger_config
+            new_report_config = self._merge_config(
+                record.report_config,
+                new_manifest.capabilities.get("report"),
+            )
+            updated = replace(
+                record,
+                manifest=new_manifest,
+                trigger_config=new_trigger_config,
+                report_config=new_report_config,
+                git_ref=update_ref,
+                config_revision=record.config_revision + 1,
+            )
+            await self._store.save_plugin(updated)
+        except BaseException:
+            if has_checkout:
+                await asyncio.to_thread(shutil.rmtree, install_path, True)
+                await asyncio.to_thread(shutil.copytree, rollback_path, install_path)
+            raise
+        finally:
+            await asyncio.to_thread(shutil.rmtree, rollback_root, True)
         self._invalidate_plugin(plugin_id)
         return updated
 
@@ -444,7 +483,12 @@ class PluginManager:
         return updated
 
     async def update_trigger_config(
-        self, plugin_id: str, config: dict[str, Any]
+        self,
+        plugin_id: str,
+        config: dict[str, Any],
+        *,
+        profile_source: PluginProfileSource | None = None,
+        should_replace_profile_source: bool = False,
     ) -> PluginRecord | None:
         """Update the trigger configuration of a plugin.
 
@@ -461,7 +505,19 @@ class PluginManager:
 
         merged = {**record.trigger_config, **config}
         self.validate_trigger_config(record, merged)
-        updated = replace(record, trigger_config=merged)
+        if record.is_builtin:
+            try:
+                TriggerReviewPolicy.from_config(merged)
+            except ValueError as error:
+                raise PluginConfigurationError(str(error)) from error
+        updated = replace(
+            record,
+            trigger_config=merged,
+            config_revision=record.config_revision + 1,
+            profile_source=(
+                profile_source if should_replace_profile_source else record.profile_source
+            ),
+        )
         await self._store.save_plugin(updated)
         return updated
 
@@ -483,7 +539,11 @@ class PluginManager:
 
         merged = {**record.report_config, **config}
         self.validate_report_config(record, merged)
-        updated = replace(record, report_config=merged)
+        updated = replace(
+            record,
+            report_config=merged,
+            config_revision=record.config_revision + 1,
+        )
         await self._store.save_plugin(updated)
         return updated
 
@@ -527,9 +587,7 @@ class PluginManager:
             return False
 
         if record.is_builtin:
-            raise PluginInstallError(
-                f"Built-in plugin '{plugin_id}' cannot be uninstalled"
-            )
+            raise PluginInstallError(f"Built-in plugin '{plugin_id}' cannot be uninstalled")
 
         # Remove installation directory
         if record.install_path:
@@ -596,10 +654,7 @@ class PluginManager:
         validation_error = next(validator.iter_errors(config), None)
         if validation_error is None:
             return
-        field = (
-            ".".join(str(part) for part in validation_error.absolute_path)
-            or "configuration"
-        )
+        field = ".".join(str(part) for part in validation_error.absolute_path) or "configuration"
         raise PluginConfigurationError(
             f"Plugin '{plugin_id}' {capability_name} config field '{field}' "
             f"violates schema rule '{validation_error.validator}'"

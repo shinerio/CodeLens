@@ -24,6 +24,8 @@ from codelens.interface.http.dto import (
 )
 from codelens.review.application.commands import CreateReviewCommand
 from codelens.review.application.process_report import ProcessTranscriptEntry, build_process_report
+from codelens.review.domain.ports import ReviewRecord
+from codelens.review.domain.review_plan import ReviewPlanNodeType
 
 router = APIRouter(prefix="/api/reviews", tags=["reviews"])
 _LOGGER = logging.getLogger("codelens.reviews")
@@ -33,12 +35,59 @@ TaskId = Annotated[
     StringConstraints(pattern=r"^review_[0-9a-f]{32}$", min_length=39, max_length=39),
 ]
 _TERMINAL_EVENTS = {
-    "review.completed",
-    "review.partial",
-    "review.failed",
-    "review.canceled",
+    "review.completed.v2",
+    "review.partial.v2",
+    "review.failed.v2",
+    "review.canceled.v2",
+    "review.superseded.v2",
 }
-_TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled"}
+_TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled", "superseded"}
+
+
+async def _review_response(review: ReviewRecord, components: HttpComponents) -> ReviewResponse:
+    """Project public multi-Agent state exclusively from durable Plan and checkpoints."""
+
+    plan_record = await components.review_plan_store.get(review.task_id)
+    if plan_record is None:
+        return ReviewResponse.from_domain(review)
+    plan = plan_record.plan
+    checkpoint_records = {
+        item.node_key: item for item in await components.checkpoints.list_for_task(review.task_id)
+    }
+    coverage: dict[str, list[str]] = {
+        "planned": [],
+        "completed": [],
+        "failed": [],
+        "omitted": [],
+    }
+    for node in plan.nodes:
+        if node.node_type is not ReviewPlanNodeType.REVIEWER:
+            continue
+        checkpoint = checkpoint_records.get(node.node_id)
+        status = checkpoint.status if checkpoint is not None else "pending"
+        target = (
+            "completed"
+            if status == "succeeded"
+            else "failed"
+            if status in {"failed", "timed_out", "canceled"}
+            else "omitted"
+            if status in {"skipped", "superseded"}
+            else "planned"
+        )
+        coverage[target].append(node.agent_reference)
+    decisions = await components.verdict_store.list_decisions(review.task_id)
+    verdict_summary = {"accept": 0, "deny": 0, "merge": 0}
+    for decision in decisions:
+        verdict_summary[decision.outcome.value] += 1
+    review_plan = json.loads(plan.canonical_json())
+    review_plan["plan_hash"] = plan.plan_hash
+    return ReviewResponse.from_domain(
+        review,
+        selected_agents=list(plan.reviewer_references),
+        review_plan=review_plan,
+        coverage=coverage,
+        verdict_summary=verdict_summary,
+    )
 
 
 @router.post("", response_model=ReviewResponse, status_code=202)
@@ -55,9 +104,12 @@ async def create_review(
             CreateReviewCommand(
                 repository=repository,
                 scope=request.scope.to_domain(),
-                selected_agent_versions=tuple(request.selected_agents),
+                review_profile=request.review_profile_snapshot(),
                 prompt_locale=request.prompt_locale,
                 external_context=request.external_context,
+                existing_findings=tuple(
+                    finding.to_domain() for finding in request.existing_findings
+                ),
             )
         )
     except ValueError as error:
@@ -72,7 +124,7 @@ async def create_review(
         "Review created",
         extra={"task_id": record.task_id, "scope_type": request.scope.type},
     )
-    return ReviewResponse.from_domain(record)
+    return await _review_response(record, components)
 
 
 @router.get("", response_model=list[ReviewResponse])
@@ -81,7 +133,18 @@ async def list_reviews(
 ) -> list[ReviewResponse]:
     """Return persistent visible Review workspaces in newest-first order."""
 
-    return [ReviewResponse.from_domain(record) for record in await components.list_reviews.handle()]
+    results = []
+    for record in await components.list_reviews.handle():
+        try:
+            response = await _review_response(record, components)
+            results.append(response)
+        except Exception as exc:
+            _LOGGER.warning(
+                "Failed to serialize review %s, skipping: %s",
+                record.task_id,
+                exc,
+            )
+    return results
 
 
 @router.get("/{task_id}", response_model=ReviewResponse)
@@ -91,7 +154,7 @@ async def get_review(
 ) -> ReviewResponse:
     """Return one path-free persisted review summary."""
 
-    return ReviewResponse.from_domain(await components.get_review.handle(task_id))
+    return await _review_response(await components.get_review.handle(task_id), components)
 
 
 @router.delete("/{task_id}", status_code=204)
@@ -113,7 +176,7 @@ async def cancel_review(
 ) -> ReviewResponse:
     """Persist cancellation intent; the singleton Worker performs propagation."""
 
-    return ReviewResponse.from_domain(await components.cancel_review.handle(task_id))
+    return await _review_response(await components.cancel_review.handle(task_id), components)
 
 
 @router.post("/{task_id}/retry", response_model=ReviewResponse, status_code=202)
@@ -124,7 +187,7 @@ async def retry_review(
 ) -> ReviewResponse:
     """Create and enqueue an independent Review from one failed task's frozen input."""
 
-    return ReviewResponse.from_domain(await components.retry_review.handle(task_id))
+    return await _review_response(await components.retry_review.handle(task_id), components)
 
 
 @router.get("/{task_id}/report")
@@ -159,22 +222,15 @@ async def get_process_report(
     task_id: TaskId,
     components: Annotated[HttpComponents, Depends(get_components)],
 ) -> ReviewProcessReportResponse:
-    """Return deterministic usage and tool metrics after one Review reaches a terminal state."""
+    """Return live usage and tool metrics from the active or durable transcript."""
 
     review = await components.get_review.handle(task_id)
-    if review.status not in _TERMINAL_STATUSES:
-        raise HttpProblem(
-            409,
-            "process_report_not_ready",
-            "The review process report is available after execution finishes.",
-        )
-    entries = await components.transcripts.list(task_id)
-    if not entries:
-        raise HttpProblem(
-            409,
-            "process_report_not_ready",
-            "The terminal review transcript has not been persisted yet.",
-        )
+    if review.status in _TERMINAL_STATUSES:
+        entries = await components.transcripts.list(task_id)
+        if not entries:
+            entries = await components.worker_transcripts.list(task_id)
+    else:
+        entries = await components.worker_transcripts.list(task_id)
     findings = await components.review_store.list_findings(task_id)
     report = build_process_report(
         task_id=task_id,
@@ -300,14 +356,26 @@ async def _event_stream(
 ) -> AsyncIterator[str]:
     queue = await components.event_bus.subscribe(task_id)
     try:
-        # Replay events from database (catch-up phase)
+        # Replay events from database (catch-up phase).
+        # A task may have multiple terminal events in its history (e.g.
+        # review.partial → review.failed → review.completed) when it was
+        # recovered after an initial failure. The SSE replay must only
+        # send the LAST terminal event so the frontend observes the final
+        # status, not a stale intermediate one.
         replay_events = await components.events.list_after(task_id, after_event_id=after_event_id)
+        last_terminal_idx = -1
+        for idx, event in enumerate(replay_events):
+            if event.event_type in _TERMINAL_EVENTS:
+                last_terminal_idx = idx
+
         current_id = after_event_id
-        for event in replay_events:
+        for idx, event in enumerate(replay_events):
             current_id = event.event_id
+            if event.event_type in _TERMINAL_EVENTS and idx != last_terminal_idx:
+                continue
             payload = json.dumps(event.payload, sort_keys=True, separators=(",", ":"))
             yield f"id: {event.event_id}\nevent: {event.event_type}\ndata: {payload}\n\n"
-            if event.event_type in _TERMINAL_EVENTS:
+            if idx == last_terminal_idx:
                 return
 
         # If task is already terminal, we're done

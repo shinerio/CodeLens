@@ -121,7 +121,10 @@ class PluginManifest:
     min_codelens_version: str | None = None
     name_i18n: dict[str, str] = field(default_factory=dict)           # locale → 翻译名称
     description_i18n: dict[str, str] = field(default_factory=dict)    # locale → 翻译描述
+    plugin_api_version: PluginApiVersion = PluginApiVersion.V1        # "1" | "2"
 ```
+
+`plugin_api_version` 未声明时默认为 `PluginApiVersion.V1`（即 `"1"`）。v2 插件必须在 `plugin.json` 中显式声明 `"plugin_api_version": "2"`，详见 [插件 API v2 升级指南](./plugin-upgradev2.md)。
 
 **国际化字段说明**：
 
@@ -162,6 +165,10 @@ class PluginRecord:
     report_auto_export: bool                   # report 是否在 review 完成时自动导出
     trigger_config: dict = field(default_factory=dict)
     report_config: dict = field(default_factory=dict)
+    git_url: str | None = None                 # 安装来源 Git URL（外置插件）
+    git_ref: str | None = None                 # 安装来源 Git ref（外置插件）
+    config_revision: int = 1                   # 配置版本号，每次配置更新递增
+    profile_source: PluginProfileSource | None = None  # 配置来源 Profile 元数据
 ```
 
 ### 3.3 能力开关规则
@@ -298,6 +305,24 @@ CodeLens 核心**不校验** `external_context` 的内部结构，只做 dict �
 - 现有 API 调用不传 `external_context` 时行为不变
 - 现有内置插件（如 `local` 的 file-export）不读取该字段，不受影响
 
+### 4.6 已有问题注入与本地报告回读
+
+已有问题与 `external_context` 的职责不同：前者进入 Reviewer/Verifier 的模型可见去重上下文，后者只用于平台路由。二者不得互相替代。
+
+内置 `local` 插件在 Report 配置中提供：
+
+```json
+{
+  "output_dir": "CodeLensReview",
+  "formats": ["json", "markdown"],
+  "use_as_existing_findings": true
+}
+```
+
+启用后，每次创建 Review 都会从被审仓库根目录下的 `output_dir` 读取 `findings-*.json` v2 报告。读取器按原报告的 side 和位置从 `source_excerpt` 提取精确 `existing_code`；后续去重以这段旧代码和问题语义为主要基准，旧 path/side/行号仅作提示，因此 PR 更新导致行号移动时不要求旧位置仍能在新版本解析。读取发生在创建边界并立即冻结；已创建任务不会因目录中新增、删除或修改报告而改变。只读取原子导出的 JSON 文件，不解析 Markdown；超过 100 个报告文件、单文件超过 2 MiB、目录越出仓库或报告结构损坏都会明确拒绝创建，避免静默漏掉历史意见。设置 `use_as_existing_findings=false` 可关闭回读而继续保留导出。
+
+远端平台插件应在 webhook 处理时获取平台已有意见，映射为公开 API v2 的 `ExistingFindingV2`，并通过 `ReviewCreatorPort.create_review_from_trigger(..., existing_findings=...)` 提交。Core 不允许插件传入任意 Prompt 片段；历史意见始终是不可信的去重数据，不能扩大工具或仓库权限。
+
 ---
 
 ## 5. 平台匹配与路由
@@ -415,10 +440,13 @@ WebhookTriggerPlugin.handle_event()
 RepoManager.ensure_repo(project, source_branch)
        │
        ▼
+policy = TriggerReviewPolicy.from_config(config)
+
 ReviewCreatorAdapter.create_review_from_trigger(
     repository_path=clone_dir,
     scope_type="branch",
     scope_params={"base_ref": target_branch, "target_ref": source_branch},
+    review_policy=policy,
     external_context={
         "platform": "github",
         "project": "owner/repo",
@@ -573,15 +601,11 @@ class RepoManager:
 
 当前 `BuiltinTriggerPluginLoader` 只支持内置的 `local` 插件。外置插件的 trigger 能力需要支持从 `install_path` 动态加载。
 
-#### CompositeTriggerPluginLoader
+#### CompositePluginLoader
 
 ```python
-class CompositeTriggerPluginLoader(TriggerPluginLoaderPort):
-    """组合加载器：内置插件 + importlib 外部插件。"""
-
-    def __init__(self, builtin_loader: BuiltinTriggerPluginLoader):
-        self._builtin = builtin_loader
-        self._external_cache: dict[str, TriggerSinkPort] = {}
+class CompositePluginLoader:
+    """组合加载器：内置插件 + importlib 外部插件。同时处理 Trigger 和 Report。"""
 
     def load_plugin(
         self,
@@ -591,17 +615,16 @@ class CompositeTriggerPluginLoader(TriggerPluginLoaderPort):
         manifest: PluginManifest | None = None,
         install_path: Path | None = None,
     ) -> TriggerSinkPort:
-        # 1. 尝试内置加载器
-        try:
-            return self._builtin.load_plugin(plugin_id, review_creator)
-        except ValueError:
-            pass
+        ...
 
-        # 2. 从 install_path 加载外部插件（importlib）
-        if manifest and install_path:
-            return self._load_external(manifest, install_path, review_creator)
-
-        raise ValueError(f"Unsupported trigger plugin: {plugin_id}")
+    def load_sink(
+        self,
+        plugin_id: str,
+        *,
+        manifest: PluginManifest | None = None,
+        install_path: Path | None = None,
+    ) -> ReportSinkPort:
+        ...
 ```
 
 加载机制与 Report 能力的 `ImportlibPluginLoader` 相同：
@@ -626,15 +649,25 @@ class CompositeTriggerPluginLoader(TriggerPluginLoaderPort):
       "description": "触发 review 的 git hook 事件"
     },
     "scope_type": { "enum": ["commit", "branch", "uncommitted"] },
-    "base_ref": { "type": "string" },
-    "target_ref": { "type": "string" },
-    "selected_agents": { "type": "array", "items": { "type": "string" } },
-    "prompt_locale": { "type": "string", "default": "en" },
-    "debounce_seconds": { "type": "integer", "default": 10 }
+    "base_ref": { "type": ["string", "null"] },
+    "target_ref": { "type": ["string", "null"] },
+    "reviewer_selection": {
+      "type": "object",
+      "description": "Reviewer 选择策略（fixed 或 adaptive）"
+    },
+    "supersede_policy": {
+      "type": "string",
+      "enum": ["latest_snapshot", "preserve_all"],
+      "default": "latest_snapshot"
+    },
+    "prompt_locale": { "type": "string", "enum": ["en", "zh-CN"], "default": "en" },
+    "debounce_seconds": { "type": "integer", "minimum": 0, "default": 10 }
   },
-  "required": ["repository_paths", "events", "selected_agents"]
+  "required": ["repository_paths", "events", "reviewer_selection", "supersede_policy", "prompt_locale", "debounce_seconds"]
 }
 ```
+
+`reviewer_selection` 的详细结构和校验规则参见 [插件 API v2 升级指南](./plugin-upgradev2.md) §5。
 
 **github / gitlab 平台（webhook）**：
 
@@ -646,12 +679,20 @@ class CompositeTriggerPluginLoader(TriggerPluginLoaderPort):
       "type": "string",
       "description": "仓库克隆目录，默认为 {plugin_data_dir}/repos"
     },
-    "selected_agents": { "type": "array", "items": { "type": "string" } },
-    "prompt_locale": { "type": "string", "default": "en" },
+    "reviewer_selection": {
+      "type": "object",
+      "description": "Reviewer 选择策略（fixed 或 adaptive）"
+    },
+    "supersede_policy": {
+      "type": "string",
+      "enum": ["latest_snapshot", "preserve_all"],
+      "default": "latest_snapshot"
+    },
+    "prompt_locale": { "type": "string", "enum": ["en", "zh-CN"], "default": "en" },
     "webhook_secret": { "type": "string", "description": "Webhook 签名验证密钥" },
-    "debounce_seconds": { "type": "integer", "default": 30 }
+    "debounce_seconds": { "type": "integer", "minimum": 0, "default": 30 }
   },
-  "required": ["selected_agents"]
+  "required": ["reviewer_selection", "supersede_policy", "prompt_locale"]
 }
 ```
 
@@ -687,8 +728,8 @@ class ReportSinkPort(Protocol):
 
     async def export(
         self,
-        envelope: FindingExportEnvelope,
-        config: dict,
+        envelope: FindingExportEnvelopeV2,     # v2 Envelope（schema_version: "2.0"）
+        config: Mapping[str, object],
         repository_path: Path,
     ) -> ExportResult: ...
 ```
@@ -704,23 +745,45 @@ Report 插件接收的 `envelope` 参数结构如下（插件通过属性访问�
 
 ```python
 @dataclass(frozen=True)
-class FindingExportEnvelope:
-    schema_version: str                          # 导出结构版本号
+class FindingExportEnvelopeV2:
+    schema_version: Literal["2.0"]               # 导出结构版本号
     exported_at: datetime                        # 导出时间
-    review: ReviewExportMeta                     # Review 元数据
+    review: ReviewExportMetaV2                   # Review 元数据
     findings: tuple[FindingExportItem, ...]      # 发现项列表
 
 @dataclass(frozen=True)
-class ReviewExportMeta:
+class ReviewExportMetaV2:
     task_id: str                                 # Review 任务 ID
     repository_name: str                         # 仓库名称
     scope_type: str                              # "commit" | "branch" | "uncommitted"
     base_oid: str                                # 基准 commit SHA
     head_oid: str                                # 目标 commit SHA
-    selected_agent_versions: tuple[str, ...]     # 使用的 Agent 版本列表
-    status: str                                  # "completed" | "partial" | "failed" | "canceled"
+    base_ref: str | None                         # 基准分支 ref
+    target_ref: str | None                       # 目标分支 ref
+    status: Literal["completed", "partial"]      # V2 Envelope 只有两种终态
+    selection_request: SelectionRequestDto       # 请求的 Reviewer 选择模式
+    plan_summary: ReviewPlanSummaryDto           # Plan 执行摘要
+    coverage: ReviewCoverageDto                  # Reviewer 覆盖情况
     created_at: datetime                         # 创建时间
     external_context: dict | None = None         # 平台上下文（用于路由）
+
+@dataclass(frozen=True)
+class SelectionRequestDto:
+    mode: Literal["fixed", "adaptive"]           # 选择模式
+    reviewer_versions: tuple[str, ...] = ()      # Fixed 模式下的 Reviewer 版本列表
+
+@dataclass(frozen=True)
+class ReviewPlanSummaryDto:
+    strategy: Literal["fixed", "adaptive"]       # 实际执行策略
+    selected_reviewer_versions: tuple[str, ...]  # 实际执行的 Reviewer 版本
+    planner_version: str | None                  # Planner 版本
+    plan_hash: str                               # Plan 哈希
+
+@dataclass(frozen=True)
+class ReviewCoverageDto:
+    completed_reviewer_versions: tuple[str, ...] # 成功完成的 Reviewer
+    failed_reviewer_versions: tuple[str, ...]    # 执行失败的 Reviewer
+    omitted_reviewer_versions: tuple[str, ...]   # 被省略的 Reviewer
 
 @dataclass(frozen=True)
 class FindingExportItem:
@@ -960,7 +1023,7 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 
 | 端点 | 方法 | 说明 |
 |---|---|---|
-| `/api/reviews` | POST | 创建 review（支持 `external_context`） |
+| `/api/reviews` | POST | 创建 review（支持 `external_context` 和结构化 `existing_findings`） |
 | `/api/reviews/{task_id}/export` | POST | 手动触发插件 report 导出 |
 | `/api/trigger-events` | POST | 接收本地 Git Hook 事件 |
 | `/api/webhooks/{platform}` | POST | 接收远端平台 webhook |
@@ -969,7 +1032,7 @@ Report 能力作为插件的一部分，**不导入任何 CodeLens 模块**。�
 | `/api/plugins/{id}/trigger/*` | PUT/POST/GET | Trigger 能力、Hook 与状态管理 |
 | `/api/plugins/{id}/report/*` | PUT | Report 能力与自动导出管理 |
 
-### 10.2 ReviewCreatorPort 扩展
+### 10.2 ReviewCreatorPort（v2）
 
 ```python
 class ReviewCreatorPort(Protocol):
@@ -978,28 +1041,54 @@ class ReviewCreatorPort(Protocol):
         repository_path: Path,
         scope_type: str,
         scope_params: dict[str, str | None],
-        selected_agents: tuple[str, ...],
-        prompt_locale: str,
-        external_context: dict | None = None,   # 新增
+        review_policy: TriggerReviewPolicy,
+        external_context: dict[str, object] | None = None,
+        existing_findings: tuple[ExistingFindingV2, ...] = (),
     ) -> str:
         ...
 ```
 
-### 10.3 FindingExportEnvelope 扩展
+`TriggerReviewPolicy` 是只读值对象，由 `TriggerReviewPolicy.from_config(config)` 从插件配置构造。详见 [插件 API v2 升级指南](./plugin-upgradev2.md) §7。
+
+`existing_findings` 是唯一允许插件影响去重上下文的入口。插件只能提交 `ExistingFindingV2` 结构，不能提交 Prompt 文本；Core 会校验路径与位置、限制最多 500 条和 512 KiB 规范 JSON、按 `(source_id, finding_id)` 去重，并在创建任务时冻结。GitHub 插件通常读取 PR 当前未解决的 review comments 后映射为：
+
+```python
+ExistingFindingV2(
+    source_id="github",
+    finding_id=comment.node_id,
+    title=comment.title,
+    content=comment.body,
+    path=comment.path,
+    side="new",
+    start_line=comment.line,
+    end_line=comment.line,
+    existing_code=comment.diff_code,
+)
+```
+
+对 inline comment，`existing_code` 必须是意见所针对的原 revision 原样连续代码，不得用当前 PR 行号重新读取后替换；旧行号只用于帮助理解原位置。没有代码位置的 PR general comment 可以省略整组 path/side/start_line/end_line/existing_code。
+
+### 10.3 FindingExportEnvelope（v2）
 
 ```python
 @dataclass(frozen=True)
-class ReviewExportMeta:
+class ReviewExportMetaV2:
     task_id: str
     repository_name: str
     scope_type: str
     base_oid: str
     head_oid: str
-    selected_agent_versions: tuple[str, ...]
-    status: str
+    base_ref: str | None
+    target_ref: str | None
+    status: Literal["completed", "partial"]
+    selection_request: SelectionRequestDto
+    plan_summary: ReviewPlanSummaryDto
+    coverage: ReviewCoverageDto
     created_at: datetime
-    external_context: dict | None = None        # 新增
+    external_context: dict | None = None
 ```
+
+V1 插件接收 `FindingExportEnvelopeV1`（含 `selected_agent_versions`），由 Core 从 V2 自动投影。
 
 ---
 
@@ -1079,17 +1168,53 @@ CodeLens-GitHub-Plugin/
               "zh-CN": "GitHub API 令牌，用于 git clone（或设置 GITHUB_TOKEN 环境变量）"
             }
           },
-          "selected_agents": {
-            "type": "array",
-            "items": {"type": "string"},
-            "default": [],
-            "description": "Agent IDs to use for review (empty = default agents)",
+          "reviewer_selection": {
+            "default": {
+              "mode": "fixed",
+              "reviewer_versions": ["correctness:v2"]
+            },
+            "oneOf": [
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mode": { "const": "fixed" },
+                  "reviewer_versions": {
+                    "type": "array",
+                    "items": { "type": "string", "minLength": 1 },
+                    "minItems": 1,
+                    "maxItems": 32,
+                    "uniqueItems": true
+                  }
+                },
+                "required": ["mode", "reviewer_versions"]
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "properties": {
+                  "mode": { "const": "adaptive" }
+                },
+                "required": ["mode"]
+              }
+            ],
+            "description": "Reviewer selection strategy",
             "description_i18n": {
-              "zh-CN": "用于评审的 Agent ID（空 = 默认 Agent）"
+              "zh-CN": "Reviewer 选择策略（fixed 指定固定列表，adaptive 由 Planner 动态决定）"
+            }
+          },
+          "supersede_policy": {
+            "type": "string",
+            "enum": ["latest_snapshot", "preserve_all"],
+            "default": "latest_snapshot",
+            "description": "How to handle existing tasks when a new snapshot arrives",
+            "description_i18n": {
+              "zh-CN": "新 Snapshot 到达时如何处理旧任务（latest_snapshot 替换，preserve_all 保留全部）"
             }
           },
           "prompt_locale": {
             "type": "string",
+            "enum": ["en", "zh-CN"],
             "default": "en",
             "description": "Locale for review prompts (en, zh-CN)",
             "description_i18n": {
@@ -1375,6 +1500,9 @@ external_context = {
 **创建 Review**：
 
 ```python
+# 从配置构造 v2 策略值对象
+policy = TriggerReviewPolicy.from_config(config)
+
 # 调用注入的 review_creator 创建 review
 task_id = await self._review_creator.create_review_from_trigger(
     repository_path=repo_path,         # 本地仓库路径
@@ -1383,8 +1511,7 @@ task_id = await self._review_creator.create_review_from_trigger(
         "base_ref": target_branch,     # 基准分支
         "target_ref": source_branch,   # 目标分支
     },
-    selected_agents=tuple(agents),     # Agent ID 列表
-    prompt_locale=config.get("prompt_locale", "en"),
+    review_policy=policy,              # TriggerReviewPolicy 值对象
     external_context=external_context, # 平台上下文，透传到 report
 )
 return task_id
@@ -1578,7 +1705,8 @@ curl -X PUT http://localhost:8000/api/plugins/<plugin_id>/trigger/config \
   -H "Content-Type: application/json" \
   -d '{
     "debounce_seconds": 60,
-    "selected_agents": ["correctness:v1"],
+    "reviewer_selection": {"mode": "fixed", "reviewer_versions": ["correctness:v2"]},
+    "supersede_policy": "latest_snapshot",
     "prompt_locale": "zh-CN"
   }'
 
