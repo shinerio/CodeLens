@@ -304,10 +304,19 @@ class ExportOrchestrator:
                 exported_at=datetime.now(UTC),
             )
 
+        # Merge trigger_config into the config passed to the sink so that
+        # shared credentials (e.g. codehub_token) configured on the trigger
+        # side are available to the report sink without duplicating config.
+        # report_config takes precedence on key conflicts.
+        merged_config: dict[str, Any] = {
+            **plugin_record.trigger_config,
+            **plugin_record.report_config,
+        }
+
         try:
             raw_result = await sink.export(
                 envelope=envelope,
-                config=plugin_record.report_config,
+                config=merged_config,
                 repository_path=execution.repository_path,
             )
         except Exception:
