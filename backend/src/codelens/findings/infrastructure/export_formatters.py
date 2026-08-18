@@ -77,6 +77,14 @@ class MarkdownFindingExportFormatter:
 
         lines.append("---\n")
 
+        # A review with no findings is a valid outcome; state it explicitly so
+        # the report is self-explanatory instead of ending after the metadata.
+        if not envelope.findings:
+            lines.append("## 评审结论\n")
+            lines.append("本次评审未发现意见。\n")
+            content = "\n".join(lines)
+            return content.encode("utf-8")
+
         # Findings
         for idx, finding in enumerate(envelope.findings, 1):
             lines.append(f"## {idx}. [{finding.severity.upper()}] {finding.title}\n")

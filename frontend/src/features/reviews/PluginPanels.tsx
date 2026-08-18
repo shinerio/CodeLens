@@ -8,6 +8,7 @@ interface PluginPanelsProps {
   externalContext: Record<string, unknown> | null;
   plugins: PluginRecord[];
   exportHistory: ExportResultResponse[];
+  findingsCount: number;
 }
 
 const CODEHUB_HOST_DEFAULT = "codehub-g.huawei.com";
@@ -25,7 +26,7 @@ function formatExportTime(iso: string): string {
   }
 }
 
-export function PluginPanels({ externalContext, plugins, exportHistory }: PluginPanelsProps) {
+export function PluginPanels({ externalContext, plugins, exportHistory, findingsCount }: PluginPanelsProps) {
   const { t } = useI18n();
 
   if (!externalContext && exportHistory.length === 0) {
@@ -101,7 +102,11 @@ export function PluginPanels({ externalContext, plugins, exportHistory }: Plugin
                   <time>{formatExportTime(entry.exported_at)}</time>
                 </div>
                 <span className="plugin-panel__export-status">
-                  {entry.success ? t("plugins.exportSuccess") : t("plugins.exportFailed")}
+                  {!entry.success
+                    ? t("plugins.exportFailed")
+                    : findingsCount === 0
+                      ? t("plugins.exportNoFindings")
+                      : t("plugins.exportSuccess")}
                 </span>
                 {entry.error && (
                   <p className="plugin-panel__export-error">{entry.error}</p>

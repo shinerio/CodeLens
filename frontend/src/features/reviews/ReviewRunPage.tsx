@@ -349,9 +349,11 @@ export function ReviewRunPage() {
           </div>
           {exportResult && (
             <span className={`run-export-result ${exportResult.success ? "run-export-result--ok" : "run-export-result--err"}`}>
-              {exportResult.success
-                ? t("plugins.exportSuccess")
-                : t("plugins.exportFailed")}
+              {!exportResult.success
+                ? t("plugins.exportFailed")
+                : findingsQuery.data.length === 0
+                  ? t("plugins.exportNoFindings")
+                  : t("plugins.exportSuccess")}
             </span>
           )}
         </div>
@@ -604,6 +606,7 @@ export function ReviewRunPage() {
             externalContext={reviewQuery.data?.external_context ?? null}
             plugins={pluginsQuery.data ?? []}
             exportHistory={exportHistoryQuery.data}
+            findingsCount={findingsQuery.data.length}
           />
         </section>
       ) : null}

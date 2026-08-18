@@ -206,8 +206,10 @@ class ExportFindingsHandler:
     async def build_envelope(self, task_id: str) -> FindingExportEnvelope:
         """Build and return the structured export envelope for one review.
 
-        Validates that the review exists, is in a terminal state, and has
-        findings. Reads source snippets from pinned revisions.
+        Validates that the review exists and is in a terminal state. A review
+        with no findings produces a valid envelope with an empty findings
+        tuple so downstream plugins and reports still run (label application,
+        local file export, etc.). Reads source snippets from pinned revisions.
         """
 
         review = await self._store.get_review(task_id)
@@ -224,8 +226,6 @@ class ExportFindingsHandler:
             raise KeyError(task_id)
 
         findings = await self._store.list_findings(task_id)
-        if not findings:
-            raise ValueError("No findings to export for this review.")
 
         return await self._build_envelope_from_findings(task_id, review, execution, findings)
 
