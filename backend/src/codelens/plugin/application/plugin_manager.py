@@ -1,9 +1,10 @@
 """Unified plugin lifecycle management.
 
 The PluginManager orchestrates installation, configuration, and removal of
-plugins. Each plugin declares a platform and optional trigger/report capabilities.
-Built-in plugins have no constraints; external plugins require trigger to be
-enabled before report can be enabled.
+plugins. Each plugin declares a platform and optional trigger, report, and/or
+manual_review capabilities. Built-in plugins have no constraints; external
+plugins require at least one of trigger or manual_review to be enabled before
+report can be enabled.
 """
 
 import asyncio
@@ -19,6 +20,7 @@ from jsonschema.validators import validator_for
 
 from codelens.plugin.api.v2 import TriggerReviewPolicy
 from codelens.plugin.domain.models import (
+    ManualReviewCapability,
     PluginCapabilityError,
     PluginConfigurationError,
     PluginInstallError,
@@ -43,8 +45,8 @@ class PluginManager:
     Responsibilities:
     - Initialize built-in plugins on startup
     - Install external plugins from Git repositories
-    - Enable/disable trigger and report capabilities independently
-    - Update trigger and report configuration separately
+    - Enable/disable trigger, report, and manual_review capabilities independently
+    - Update trigger, report, and manual_review configuration separately
     - Manage auto-export settings for report capability
     - Uninstall plugins and clean up resources
     """
@@ -266,6 +268,11 @@ class PluginManager:
             report_cap = manifest.capabilities["report"]
             report_config = self._extract_defaults(report_cap.config_schema)
 
+        manual_review_config = {}
+        if "manual_review" in manifest.capabilities:
+            mr_cap = manifest.capabilities["manual_review"]
+            manual_review_config = self._extract_defaults(mr_cap.config_schema)
+
         record = PluginRecord(
             plugin_id=manifest.plugin_id,
             manifest=manifest,
@@ -276,6 +283,8 @@ class PluginManager:
             report_auto_export=False,
             trigger_config=trigger_config,
             report_config=report_config,
+            manual_review_enabled=False,
+            manual_review_config=manual_review_config,
             git_url=git_url,
             git_ref=ref,
         )
@@ -340,11 +349,16 @@ class PluginManager:
                 record.report_config,
                 new_manifest.capabilities.get("report"),
             )
+            new_manual_review_config = self._merge_config(
+                record.manual_review_config,
+                new_manifest.capabilities.get("manual_review"),
+            )
             updated = replace(
                 record,
                 manifest=new_manifest,
                 trigger_config=new_trigger_config,
                 report_config=new_report_config,
+                manual_review_config=new_manual_review_config,
                 git_ref=update_ref,
                 config_revision=record.config_revision + 1,
             )
@@ -362,7 +376,7 @@ class PluginManager:
     @staticmethod
     def _merge_config(
         existing_config: dict[str, Any],
-        capability: TriggerCapability | ReportCapability | None,
+        capability: TriggerCapability | ReportCapability | ManualReviewCapability | None,
     ) -> dict[str, Any]:
         """Merge existing config with new schema defaults.
 
@@ -408,7 +422,8 @@ class PluginManager:
     async def disable_trigger(self, plugin_id: str) -> PluginRecord | None:
         """Disable the trigger capability of a plugin.
 
-        For external plugins, disabling trigger also disables report (cascade).
+        For external plugins, disabling trigger also disables report unless
+        manual_review is enabled (cascade).
 
         Args:
             plugin_id: Unique identifier of the plugin.
@@ -422,9 +437,10 @@ class PluginManager:
 
         self._require_capability(record, "trigger")
 
-        # For external plugins, report depends on trigger
+        # For external plugins, report requires trigger OR manual_review.
+        # Only cascade-disable report when manual_review is also disabled.
         report_enabled = record.report_enabled
-        if not record.is_builtin and report_enabled:
+        if not record.is_builtin and report_enabled and not record.manual_review_enabled:
             report_enabled = False
 
         updated = replace(
@@ -438,7 +454,8 @@ class PluginManager:
     async def enable_report(self, plugin_id: str) -> PluginRecord | None:
         """Enable the report capability of a plugin.
 
-        For external plugins, trigger must be enabled first.
+        For external plugins, at least one of trigger or manual_review must
+        be enabled first.
 
         Args:
             plugin_id: Unique identifier of the plugin.
@@ -447,7 +464,7 @@ class PluginManager:
             Updated plugin record if found, None otherwise.
 
         Raises:
-            ValueError: If external plugin's trigger is not enabled.
+            PluginCapabilityError: If neither trigger nor manual_review is enabled.
         """
         record = await self._store.get_plugin(plugin_id)
         if record is None:
@@ -547,7 +564,87 @@ class PluginManager:
         await self._store.save_plugin(updated)
         return updated
 
-    async def set_auto_export(self, plugin_id: str, enabled: bool) -> PluginRecord | None:
+    async def enable_manual_review(self, plugin_id: str) -> PluginRecord | None:
+        """Enable the manual-review capability of a plugin.
+
+        Args:
+            plugin_id: Unique identifier of the plugin.
+
+        Returns:
+            Updated plugin record if found, None otherwise.
+        """
+        record = await self._store.get_plugin(plugin_id)
+        if record is None:
+            return None
+
+        self._require_capability(record, "manual_review")
+        self.validate_manual_review_config(record, record.manual_review_config)
+
+        updated = replace(record, manual_review_enabled=True)
+        await self._store.save_plugin(updated)
+        return updated
+
+    async def disable_manual_review(self, plugin_id: str) -> PluginRecord | None:
+        """Disable the manual-review capability of a plugin.
+
+        For external plugins, disabling manual_review also disables report
+        unless trigger is still enabled (cascade).
+
+        Args:
+            plugin_id: Unique identifier of the plugin.
+
+        Returns:
+            Updated plugin record if found, None otherwise.
+        """
+        record = await self._store.get_plugin(plugin_id)
+        if record is None:
+            return None
+
+        self._require_capability(record, "manual_review")
+
+        # For external plugins, report requires trigger OR manual_review.
+        # Only cascade-disable report when trigger is also disabled.
+        report_enabled = record.report_enabled
+        if not record.is_builtin and report_enabled and not record.trigger_enabled:
+            report_enabled = False
+
+        updated = replace(
+            record,
+            manual_review_enabled=False,
+            report_enabled=report_enabled,
+        )
+        await self._store.save_plugin(updated)
+        return updated
+
+    async def update_manual_review_config(
+        self, plugin_id: str, config: dict[str, Any]
+    ) -> PluginRecord | None:
+        """Update the manual-review configuration of a plugin.
+
+        Args:
+            plugin_id: Unique identifier of the plugin.
+            config: New manual-review configuration (merged with existing).
+
+        Returns:
+            Updated plugin record if found, None otherwise.
+        """
+        record = await self._store.get_plugin(plugin_id)
+        if record is None:
+            return None
+
+        merged = {**record.manual_review_config, **config}
+        self.validate_manual_review_config(record, merged)
+        updated = replace(
+            record,
+            manual_review_config=merged,
+            config_revision=record.config_revision + 1,
+        )
+        await self._store.save_plugin(updated)
+        return updated
+
+    async def set_auto_export(
+        self, plugin_id: str, enabled: bool
+    ) -> PluginRecord | None:
         """Enable or disable auto-export for a plugin's report capability.
 
         Args:
@@ -625,6 +722,21 @@ class PluginManager:
             self._require_capability(record, "report")
         assert capability is not None
         self._validate_config(record.plugin_id, "report", config, capability.config_schema)
+
+    def validate_manual_review_config(
+        self,
+        record: PluginRecord,
+        config: dict[str, Any],
+    ) -> None:
+        """Validate complete manual-review configuration before persistence."""
+
+        capability = record.manifest.manual_review
+        if capability is None:
+            self._require_capability(record, "manual_review")
+        assert capability is not None
+        self._validate_config(
+            record.plugin_id, "manual_review", config, capability.config_schema
+        )
 
     @staticmethod
     def _require_capability(record: PluginRecord, capability_name: str) -> None:

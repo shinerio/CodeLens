@@ -16,6 +16,7 @@ from codelens.instruction_policy.infrastructure.file_settings import (
 )
 from codelens.plugin.application.export_orchestrator import ExportOrchestrator
 from codelens.plugin.application.hook_management import TriggerHookService
+from codelens.plugin.application.manual_review_orchestrator import ManualReviewOrchestrator
 from codelens.plugin.application.plugin_manager import PluginManager
 from codelens.plugin.application.trigger_orchestrator import TriggerOrchestrator
 from codelens.plugin.infrastructure.export_history_store import SqliteExportHistoryStore
@@ -163,6 +164,7 @@ class HttpComponents:
     export_orchestrator: ExportOrchestrator
     export_history: SqliteExportHistoryStore
     trigger_orchestrator: TriggerOrchestrator
+    manual_review_orchestrator: ManualReviewOrchestrator
     hook_installer: HookInstaller
     trigger_hooks: TriggerHookService
 
@@ -280,6 +282,9 @@ def build_components(settings: Settings) -> HttpComponents:
         repository_inspector,
     )
     trigger_orchestrator = TriggerOrchestrator(plugin_store, review_creator_adapter, plugin_loader)
+    manual_review_orchestrator = ManualReviewOrchestrator(
+        plugin_store, review_creator_adapter, plugin_loader
+    )
     trigger_hooks = TriggerHookService(
         plugin_manager,
         hook_installer,
@@ -350,6 +355,7 @@ def build_components(settings: Settings) -> HttpComponents:
         export_orchestrator=export_orchestrator,
         export_history=export_history,
         trigger_orchestrator=trigger_orchestrator,
+        manual_review_orchestrator=manual_review_orchestrator,
         hook_installer=hook_installer,
         trigger_hooks=trigger_hooks,
     )
@@ -363,7 +369,11 @@ async def initialize_plugins(components: HttpComponents) -> None:
     plugins = await plugin_store.list_plugins()
     _LOGGER.debug("Found %d plugin(s)", len(plugins))
     for plugin in plugins:
-        if plugin.install_path and (plugin.trigger_enabled or plugin.report_enabled):
+        if plugin.install_path and (
+            plugin.trigger_enabled
+            or plugin.report_enabled
+            or plugin.manual_review_enabled
+        ):
             install_path = Path(plugin.install_path)
             components.repository_inspector.add_root(install_path)
             # Always add repos/ as trusted root — webhook plugins clone

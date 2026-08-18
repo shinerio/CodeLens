@@ -60,6 +60,23 @@ class ReportCapability:
 
 
 @dataclass(frozen=True)
+class ManualReviewCapability:
+    """Declare a plugin's manual-review capability.
+
+    Enables user-initiated review creation from an external source URL
+    (e.g. a CodeHub MR URL) without requiring the webhook trigger to be
+    enabled. The loaded instance implements ``ManualReviewSourcePort``.
+
+    Attributes:
+        entry_point: ``"module:ClassName"`` pointer resolved by the loader.
+        config_schema: JSON Schema describing the manual-review configuration.
+    """
+
+    entry_point: str
+    config_schema: dict[str, Any] = field(default_factory=dict)
+
+
+@dataclass(frozen=True)
 class PluginManifest:
     """Declare a plugin's identity, platform, and capabilities.
 
@@ -67,8 +84,9 @@ class PluginManifest:
     read from ``plugin.json`` at install time and persisted alongside the
     installation record.
 
-    ``capabilities`` maps capability names (``"trigger"``, ``"report"``) to
-    their declaration dataclasses. A plugin may declare either or both.
+    ``capabilities`` maps capability names (``"trigger"``, ``"report"``,
+    ``"manual_review"``) to their declaration dataclasses. A plugin may
+    declare any combination.
 
     ``name_i18n`` and ``description_i18n`` are optional locale-keyed dicts
     (e.g. ``{"zh-CN": "..."}``) that override ``name``/``description`` when
@@ -97,6 +115,11 @@ class PluginManifest:
         value = self.capabilities.get("report")
         return value if isinstance(value, ReportCapability) else None
 
+    @property
+    def manual_review(self) -> ManualReviewCapability | None:
+        value = self.capabilities.get("manual_review")
+        return value if isinstance(value, ManualReviewCapability) else None
+
 
 @dataclass(frozen=True, slots=True)
 class PluginProfileSource:
@@ -120,9 +143,13 @@ class PluginRecord:
     External plugins store their on-disk install path and the Git source
     URL/reference used for installation, enabling in-place updates.
 
-    Trigger and report capabilities have independent enable flags and
-    independent configuration dicts so that a single plugin can evolve each
-    capability without disturbing the other.
+    Trigger, report, and manual_review capabilities have independent enable
+    flags and independent configuration dicts so that a single plugin can
+    evolve each capability without disturbing the other.
+
+    The report capability requires at least one of trigger or manual_review
+    to be enabled — either can provide the ``external_context`` needed to
+    route findings back to the originating platform.
     """
 
     plugin_id: str
@@ -134,6 +161,8 @@ class PluginRecord:
     report_auto_export: bool
     trigger_config: dict[str, Any] = field(default_factory=dict)
     report_config: dict[str, Any] = field(default_factory=dict)
+    manual_review_enabled: bool = False
+    manual_review_config: dict[str, Any] = field(default_factory=dict)
     git_url: str | None = None
     git_ref: str | None = None
     config_revision: int = 1
@@ -157,14 +186,15 @@ def validate_capability_toggle(
     *,
     enable_trigger: bool | None = None,
     enable_report: bool | None = None,
+    enable_manual_review: bool | None = None,
 ) -> None:
     """Validate that a capability toggle is legal for the given plugin.
 
-    Built-in plugins have no dependency constraints between trigger and
-    report capabilities. External plugins require trigger to be enabled
-    whenever report is enabled — without the trigger the report capability
-    cannot receive the ``external_context`` needed to route findings back
-    to the originating platform.
+    Built-in plugins have no dependency constraints between capabilities.
+    External plugins require at least one of trigger or manual_review to be
+    enabled whenever report is enabled — either capability can provide the
+    ``external_context`` needed to route findings back to the originating
+    platform.
 
     Raises:
         PluginCapabilityError: If the resulting state would be invalid.
@@ -175,11 +205,14 @@ def validate_capability_toggle(
 
     final_trigger = enable_trigger if enable_trigger is not None else record.trigger_enabled
     final_report = enable_report if enable_report is not None else record.report_enabled
+    final_manual_review = (
+        enable_manual_review if enable_manual_review is not None else record.manual_review_enabled
+    )
 
-    if final_report and not final_trigger:
+    if final_report and not final_trigger and not final_manual_review:
         raise PluginCapabilityError(
             f"External plugin '{record.plugin_id}': "
-            "report capability requires trigger to be enabled"
+            "report capability requires trigger or manual_review to be enabled"
         )
 
 

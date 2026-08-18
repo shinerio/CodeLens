@@ -24,6 +24,7 @@ from codelens.interface.http.dependencies import (
 )
 from codelens.plugin.application.export_orchestrator import ExportOrchestrator
 from codelens.plugin.application.hook_management import TriggerHookService
+from codelens.plugin.application.manual_review_orchestrator import ManualReviewOrchestrator
 from codelens.plugin.application.plugin_manager import PluginManager
 from codelens.plugin.application.trigger_orchestrator import TriggerOrchestrator
 from codelens.plugin.infrastructure.export_history_store import SqliteExportHistoryStore
@@ -417,6 +418,9 @@ def build_unified_backend(
         repository_inspector,
     )
     trigger_orchestrator = TriggerOrchestrator(plugin_store, review_creator_adapter, plugin_loader)
+    manual_review_orchestrator = ManualReviewOrchestrator(
+        plugin_store, review_creator_adapter, plugin_loader
+    )
     trigger_hooks = TriggerHookService(
         plugin_manager,
         hook_installer,
@@ -486,6 +490,7 @@ def build_unified_backend(
         export_orchestrator=export_orchestrator,
         export_history=export_history,
         trigger_orchestrator=trigger_orchestrator,
+        manual_review_orchestrator=manual_review_orchestrator,
         hook_installer=hook_installer,
         trigger_hooks=trigger_hooks,
         tool_limits=tool_limits,

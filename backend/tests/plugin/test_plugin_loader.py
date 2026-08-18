@@ -1,8 +1,14 @@
 from pathlib import Path
+from typing import cast
 
 import pytest
 
-from codelens.plugin.domain.models import PluginManifest, ReportCapability
+from codelens.plugin.domain.models import (
+    ManualReviewCapability,
+    PluginManifest,
+    ReportCapability,
+)
+from codelens.plugin.domain.ports import ReviewCreatorPort
 from codelens.plugin.domain.versioning import PluginApiVersion
 from codelens.plugin.infrastructure.plugin_loader import CompositePluginLoader, PluginLoadError
 
@@ -16,6 +22,23 @@ def _manifest() -> PluginManifest:
         author="test",
         platform="local",
         capabilities={"report": ReportCapability(entry_point="report_sink:ExternalSink")},
+        min_codelens_version="0.2.0",
+    )
+
+
+def _manual_review_manifest() -> PluginManifest:
+    return PluginManifest(
+        plugin_id="external-manual",
+        name="External manual review",
+        version="2.1.0",
+        description="",
+        author="test",
+        platform="codehub",
+        capabilities={
+            "manual_review": ManualReviewCapability(
+                entry_point="codehub_source:CodehubSource"
+            )
+        },
         min_codelens_version="0.2.0",
     )
 
@@ -71,3 +94,50 @@ def test_loader_rejects_incompatible_v2_manifest_before_import(tmp_path: Path) -
 
     with pytest.raises(PluginLoadError, match="incompatible"):
         CompositePluginLoader().load_sink(manifest, tmp_path)
+
+
+def test_load_source_returns_manual_review_instance(tmp_path: Path) -> None:
+    """load_source loads a ManualReviewSourcePort via importlib."""
+    (tmp_path / "codehub_source.py").write_text(
+        "class CodehubSource:\n"
+        "    def __init__(self, review_creator):\n"
+        "        self._review_creator = review_creator\n"
+        "    source_id = 'codehub'\n"
+        "    display_name = 'CodeHub'\n"
+        "    async def create_review_from_url(self, source_url, config):\n"
+        "        return 'task-123'\n",
+        encoding="utf-8",
+    )
+
+    loader = CompositePluginLoader()
+    source = loader.load_source(
+        "external-manual",
+        cast(ReviewCreatorPort, object()),
+        manifest=_manual_review_manifest(),
+        install_path=tmp_path,
+    )
+
+    assert source.source_id == "codehub"
+    assert source.display_name == "CodeHub"
+
+
+def test_load_source_rejects_missing_source_id(tmp_path: Path) -> None:
+    """load_source raises PluginLoadError when source_id is missing."""
+    (tmp_path / "codehub_source.py").write_text(
+        "class CodehubSource:\n"
+        "    def __init__(self, review_creator):\n"
+        "        self._review_creator = review_creator\n"
+        "    display_name = 'CodeHub'\n"
+        "    async def create_review_from_url(self, source_url, config):\n"
+        "        return None\n",
+        encoding="utf-8",
+    )
+
+    loader = CompositePluginLoader()
+    with pytest.raises(PluginLoadError, match="ManualReviewSourcePort"):
+        loader.load_source(
+            "external-manual",
+            cast(ReviewCreatorPort, object()),
+            manifest=_manual_review_manifest(),
+            install_path=tmp_path,
+        )

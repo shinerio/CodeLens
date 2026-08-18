@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from codelens.plugin.domain.models import (
+    ManualReviewCapability,
     PluginManifest,
     PluginProfileSource,
     PluginRecord,
@@ -150,6 +151,12 @@ def _serialize_record(record: PluginRecord) -> dict[str, Any]:
                 "entry_point": cap.entry_point,
                 "config_schema": cap.config_schema,
             }
+        elif isinstance(cap, ManualReviewCapability):
+            capabilities_dict[key] = {
+                "type": "manual_review",
+                "entry_point": cap.entry_point,
+                "config_schema": cap.config_schema,
+            }
     manifest_dict["capabilities"] = capabilities_dict
 
     return {
@@ -162,6 +169,8 @@ def _serialize_record(record: PluginRecord) -> dict[str, Any]:
         "report_auto_export": record.report_auto_export,
         "trigger_config": record.trigger_config,
         "report_config": record.report_config,
+        "manual_review_enabled": record.manual_review_enabled,
+        "manual_review_config": record.manual_review_config,
         "git_url": record.git_url,
         "git_ref": record.git_ref,
         "config_revision": record.config_revision,
@@ -184,7 +193,7 @@ def _deserialize_record(data: dict[str, Any]) -> PluginRecord | None:
         manifest_data = data.get("manifest", {})
 
         # Deserialize capabilities
-        capabilities: dict[str, TriggerCapability | ReportCapability] = {}
+        capabilities: dict[str, TriggerCapability | ReportCapability | ManualReviewCapability] = {}
         for key, cap_data in manifest_data.get("capabilities", {}).items():
             cap_type = cap_data.get("type")
             if cap_type == "trigger":
@@ -196,6 +205,11 @@ def _deserialize_record(data: dict[str, Any]) -> PluginRecord | None:
                 )
             elif cap_type == "report":
                 capabilities[key] = ReportCapability(
+                    entry_point=cap_data["entry_point"],
+                    config_schema=cap_data.get("config_schema", {}),
+                )
+            elif cap_type == "manual_review":
+                capabilities[key] = ManualReviewCapability(
                     entry_point=cap_data["entry_point"],
                     config_schema=cap_data.get("config_schema", {}),
                 )
@@ -235,6 +249,8 @@ def _deserialize_record(data: dict[str, Any]) -> PluginRecord | None:
             report_auto_export=data.get("report_auto_export", False),
             trigger_config=data.get("trigger_config", {}),
             report_config=data.get("report_config", {}),
+            manual_review_enabled=data.get("manual_review_enabled", False),
+            manual_review_config=data.get("manual_review_config", {}),
             git_url=data.get("git_url"),
             git_ref=data.get("git_ref"),
             config_revision=int(data.get("config_revision", 1)),

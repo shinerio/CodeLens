@@ -6,6 +6,7 @@ import pytest
 
 from codelens.plugin.application.plugin_manager import PluginManager
 from codelens.plugin.domain.models import (
+    ManualReviewCapability,
     PluginCapabilityError,
     PluginConfigurationError,
     PluginInstallError,
@@ -474,3 +475,187 @@ async def test_update_plugin_rejects_missing_git_url() -> None:
 
     with pytest.raises(PluginInstallError, match="no Git source URL"):
         await manager.update_plugin("test-plugin")
+
+
+def _manual_review_external_record(
+    *,
+    trigger_enabled: bool = False,
+    report_enabled: bool = False,
+    manual_review_enabled: bool = False,
+) -> PluginRecord:
+    """Build an external record with trigger, report, and manual_review capabilities."""
+    manifest = PluginManifest(
+        plugin_id="multi-cap",
+        name="Multi Capability",
+        version="2.1.0",
+        description="",
+        author="test",
+        platform="codehub",
+        capabilities={
+            "trigger": TriggerCapability(
+                trigger_type="webhook",
+                supported_events=("webhook",),
+                entry_point="trigger:Trigger",
+                config_schema={
+                    "type": "object",
+                    "properties": {"host": {"type": "string", "default": "localhost"}},
+                },
+            ),
+            "report": ReportCapability(
+                entry_point="sink:Sink",
+                config_schema={
+                    "type": "object",
+                    "properties": {"format": {"type": "string", "default": "json"}},
+                },
+            ),
+            "manual_review": ManualReviewCapability(
+                entry_point="trigger:Trigger",
+                config_schema={
+                    "type": "object",
+                    "properties": {"host": {"type": "string", "default": "localhost"}},
+                },
+            ),
+        },
+    )
+    return PluginRecord(
+        plugin_id=manifest.plugin_id,
+        manifest=manifest,
+        is_builtin=False,
+        install_path="/data/plugins/multi-cap",
+        trigger_enabled=trigger_enabled,
+        report_enabled=report_enabled,
+        report_auto_export=False,
+        trigger_config={"host": "example.com"},
+        report_config={"format": "json"},
+        manual_review_enabled=manual_review_enabled,
+        manual_review_config={"host": "example.com"},
+        git_url="https://github.com/test/multi-cap.git",
+        git_ref="v2.1.0",
+    )
+
+
+async def test_enable_manual_review_sets_flag() -> None:
+    record = _manual_review_external_record()
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    updated = await manager.enable_manual_review("multi-cap")
+
+    assert updated.manual_review_enabled is True
+
+
+async def test_disable_manual_review_cascades_to_report_when_trigger_off() -> None:
+    """Disabling manual_review should also disable report when trigger is off."""
+    record = _manual_review_external_record(
+        manual_review_enabled=True,
+        report_enabled=True,
+    )
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    updated = await manager.disable_manual_review("multi-cap")
+
+    assert updated.manual_review_enabled is False
+    assert updated.report_enabled is False
+
+
+async def test_disable_manual_review_keeps_report_when_trigger_on() -> None:
+    """Disabling manual_review should NOT cascade when trigger is still enabled."""
+    record = _manual_review_external_record(
+        trigger_enabled=True,
+        manual_review_enabled=True,
+        report_enabled=True,
+    )
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    updated = await manager.disable_manual_review("multi-cap")
+
+    assert updated.manual_review_enabled is False
+    assert updated.report_enabled is True
+
+
+async def test_disable_trigger_cascades_to_report_only_when_manual_review_off() -> None:
+    """Disabling trigger cascades to report only when manual_review is also off."""
+    record = _manual_review_external_record(
+        trigger_enabled=True,
+        manual_review_enabled=False,
+        report_enabled=True,
+    )
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    updated = await manager.disable_trigger("multi-cap")
+
+    assert updated.trigger_enabled is False
+    assert updated.report_enabled is False
+
+
+async def test_disable_trigger_keeps_report_when_manual_review_on() -> None:
+    """Disabling trigger should NOT cascade when manual_review is enabled."""
+    record = _manual_review_external_record(
+        trigger_enabled=True,
+        manual_review_enabled=True,
+        report_enabled=True,
+    )
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    updated = await manager.disable_trigger("multi-cap")
+
+    assert updated.trigger_enabled is False
+    assert updated.report_enabled is True
+
+
+async def test_enable_report_succeeds_with_manual_review_on() -> None:
+    """Enabling report is allowed when manual_review is enabled (no trigger needed)."""
+    record = _manual_review_external_record(
+        manual_review_enabled=True,
+        report_enabled=False,
+    )
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    updated = await manager.enable_report("multi-cap")
+
+    assert updated.report_enabled is True
+
+
+async def test_enable_report_fails_without_trigger_or_manual_review() -> None:
+    """Enabling report fails when neither trigger nor manual_review is enabled."""
+    record = _manual_review_external_record()
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    with pytest.raises(PluginCapabilityError, match="requires trigger or manual_review"):
+        await manager.enable_report("multi-cap")
+
+    assert store.record.report_enabled is False
+
+
+async def test_update_manual_review_config_merges_and_persists() -> None:
+    """update_manual_review_config merges new config with existing."""
+    record = _manual_review_external_record(manual_review_enabled=True)
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    updated = await manager.update_manual_review_config(
+        "multi-cap", {"host": "updated.example.com"}
+    )
+
+    assert updated.manual_review_config["host"] == "updated.example.com"
+    assert updated.config_revision == record.config_revision + 1
+
+
+async def test_update_manual_review_config_rejects_unknown_fields() -> None:
+    """Unknown config fields are rejected by schema validation."""
+    record = _manual_review_external_record(manual_review_enabled=True)
+    store = MemoryPluginStore(record)
+    manager = _manager(store)
+
+    with pytest.raises(PluginConfigurationError):
+        await manager.update_manual_review_config(
+            "multi-cap", {"unknown_field": "value"}
+        )
+
+    assert store.record.manual_review_config == {"host": "example.com"}

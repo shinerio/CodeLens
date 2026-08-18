@@ -3,6 +3,7 @@ import type {
   HookStatusResponse,
   InstallPluginRequest,
   InstallPluginResponse,
+  ManualReviewResponse,
   PluginRecord,
   UpdateConfigRequest,
 } from "./types";
@@ -105,4 +106,36 @@ export async function uninstallHooks(pluginId: string): Promise<HookStatusRespon
 
 export async function getHookStatus(pluginId: string): Promise<HookStatusResponse> {
   return api<HookStatusResponse>(`/plugins/${pluginId}/trigger/hook-status`);
+}
+
+export async function enableManualReview(pluginId: string): Promise<PluginRecord> {
+  return api<PluginRecord>(`/plugins/${pluginId}/manual-review/enable`, {
+    method: "PUT",
+  });
+}
+
+export async function disableManualReview(pluginId: string): Promise<PluginRecord> {
+  return api<PluginRecord>(`/plugins/${pluginId}/manual-review/disable`, {
+    method: "PUT",
+  });
+}
+
+export async function updateManualReviewConfig(
+  pluginId: string,
+  request: UpdateConfigRequest,
+): Promise<PluginRecord> {
+  return api<PluginRecord>(`/plugins/${pluginId}/manual-review/config`, {
+    method: "PUT",
+    body: JSON.stringify(request),
+  });
+}
+
+export async function createManualReview(
+  pluginId: string,
+  sourceUrl: string,
+): Promise<ManualReviewResponse> {
+  return api<ManualReviewResponse>(`/plugins/${pluginId}/manual-review`, {
+    method: "POST",
+    body: JSON.stringify({ source_url: sourceUrl }),
+  });
 }

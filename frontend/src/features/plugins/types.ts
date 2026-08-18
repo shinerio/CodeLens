@@ -10,6 +10,11 @@ export type ReportCapability = {
   config_schema: Record<string, unknown>;
 };
 
+export type ManualReviewCapability = {
+  entry_point: string;
+  config_schema: Record<string, unknown>;
+};
+
 export type PluginManifest = {
   plugin_id: string;
   name: string;
@@ -20,6 +25,7 @@ export type PluginManifest = {
   capabilities: {
     trigger?: TriggerCapability;
     report?: ReportCapability;
+    manual_review?: ManualReviewCapability;
   };
   min_codelens_version: string | null;
   name_i18n?: Record<string, string>;
@@ -44,6 +50,8 @@ export type PluginRecord = {
   report_auto_export: boolean;
   trigger_config: Record<string, unknown>;
   report_config: Record<string, unknown>;
+  manual_review_enabled: boolean;
+  manual_review_config: Record<string, unknown>;
   git_url: string | null;
   git_ref: string | null;
   plugin_api_version?: "1" | "2";
@@ -89,4 +97,9 @@ export type RepositoryHookStatus = {
   repository_path: string;
   hooks: Record<string, boolean>;
   is_installed: boolean;
+};
+
+export type ManualReviewResponse = {
+  plugin_id: string;
+  task_id: string;
 };

@@ -13,6 +13,7 @@ from packaging.version import InvalidVersion, Version
 
 import codelens
 from codelens.plugin.domain.models import (
+    ManualReviewCapability,
     PluginInstallError,
     PluginManifest,
     ReportCapability,
@@ -156,6 +157,12 @@ class GitPluginInstaller:
                 entry_point=report_raw["entry_point"],
                 config_schema=report_raw.get("config_schema", {}),
             )
+        if "manual_review" in raw_capabilities and raw_capabilities["manual_review"]:
+            mr_raw = raw_capabilities["manual_review"]
+            capabilities["manual_review"] = ManualReviewCapability(
+                entry_point=mr_raw["entry_point"],
+                config_schema=mr_raw.get("config_schema", {}),
+            )
         return capabilities
 
     def _validate_manifest(self, manifest: PluginManifest) -> None:
@@ -183,10 +190,10 @@ class GitPluginInstaller:
             )
         if not manifest.capabilities:
             raise PluginInstallError(
-                "plugin must declare at least one capability (trigger or report)"
+                "plugin must declare at least one capability (trigger, report, or manual_review)"
             )
         for cap_name, cap in manifest.capabilities.items():
-            if cap_name not in ("trigger", "report"):
+            if cap_name not in ("trigger", "report", "manual_review"):
                 raise PluginInstallError(f"unknown capability: {cap_name}")
             if not cap.entry_point or ":" not in cap.entry_point:
                 raise PluginInstallError(

@@ -241,6 +241,62 @@
   line-height: 1.45;
 }
 
+.source-radio-group {
+  display: flex;
+  gap: 24px;
+  padding: 18px;
+  align-items: center;
+}
+
+.source-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.source-radio input[type="radio"] {
+  width: 18px;
+  height: 18px;
+  cursor: pointer;
+  accent-color: var(--page-accent);
+}
+
+.source-radio__label {
+  font-weight: 600;
+  font-size: 0.95rem;
+  color: var(--page-ink);
+}
+
+.source-radio-group {
+  display: flex;
+  gap: 24px;
+  padding: 14px 18px;
+  align-items: center;
+}
+
+.source-radio {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  cursor: pointer;
+  font-size: 0.95rem;
+  font-weight: 600;
+  color: var(--page-ink);
+}
+
+.source-radio input[type="radio"] {
+  width: 16px;
+  height: 16px;
+  cursor: pointer;
+  accent-color: var(--page-accent);
+}
+
+.source-radio__label {
+  user-select: none;
+}
+
 .scope-toggle-grid {
   display: grid;
   gap: 10px;

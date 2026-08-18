@@ -21,6 +21,7 @@ import { Link, useNavigate } from "react-router-dom";
 import { formatUserDateTime } from "../../shared/i18n/format-user-date-time";
 import { useI18n, type TranslationKey } from "../../shared/i18n/i18n";
 import { listReviewerCatalog } from "../catalog/api";
+import { createManualReview, listPlugins } from "../plugins/api";
 import { createReviewProfile, listReviewProfiles } from "../review-profiles/api";
 import { ReviewProfilePicker } from "../review-profiles/ReviewProfilePicker";
 import { ReviewStrategyEditor } from "../review-strategy/ReviewStrategyEditor";
@@ -64,6 +65,9 @@ export function NewReviewPage() {
   const queryClient = useQueryClient();
   const { t, locale } = useI18n();
   const [browserOpen, setBrowserOpen] = useState(false);
+  const [reviewSource, setReviewSource] = useState<"local" | "codehub">("local");
+  const [codehubPluginId, setCodehubPluginId] = useState("");
+  const [codehubMrUrl, setCodehubMrUrl] = useState("");
   const [repositoryPath, setRepositoryPath] = useState("");
   const [inspection, setInspection] = useState<RepositoryInspectionResponse | null>(null);
   const [catalog, setCatalog] = useState<RepositoryCatalog | null>(null);
@@ -101,6 +105,22 @@ export function NewReviewPage() {
   const recentRepositoriesQuery = useQuery({
     queryKey: ["recent-repositories"],
     queryFn: listRecentRepositories,
+  });
+  const pluginsQuery = useQuery({
+    queryKey: ["plugins"],
+    queryFn: listPlugins,
+  });
+  const manualReviewPlugins = (pluginsQuery.data ?? []).filter(
+    (plugin) => plugin.manual_review_enabled,
+  );
+
+  const manualReviewMutation = useMutation({
+    mutationFn: ({ pluginId, sourceUrl }: { pluginId: string; sourceUrl: string }) =>
+      createManualReview(pluginId, sourceUrl),
+    onSuccess: async (result) => {
+      await queryClient.invalidateQueries({ queryKey: ["reviews"] });
+      navigate(`/runs/${result.task_id}`);
+    },
   });
   const deleteRecentRepositoryMutation = useMutation({
     mutationFn: deleteRecentRepository,
@@ -229,7 +249,12 @@ export function NewReviewPage() {
     (scopeType === "branch" && branchBaseRef !== "" && branchTargetRef !== "") ||
     (scopeType === "commit" && commitBranchRef !== "" && commitBaseRef !== "" && commitTargetRef !== "") ||
     (scopeType === "full" && fullTargetRef !== "");
-  const startDisabled =
+  const codehubStartDisabled =
+    codehubPluginId === "" ||
+    codehubMrUrl.trim() === "" ||
+    !hasActiveGateway ||
+    manualReviewMutation.isPending;
+  const localStartDisabled =
     inspection === null ||
     profilesQuery.data === undefined ||
     profilesQuery.data.length === 0 ||
@@ -240,10 +265,13 @@ export function NewReviewPage() {
     !selectedScopeIsValid ||
     inspectMutation.isPending ||
     createMutation.isPending;
+  const startDisabled =
+    reviewSource === "codehub" ? codehubStartDisabled : localStartDisabled;
   const errorMessage = [
     inspectMutation.error,
     commitCatalogMutation.error,
     createMutation.error,
+    manualReviewMutation.error,
     gatewayQuery.error,
     profilesQuery.error,
     reviewerCatalogQuery.error,
@@ -330,6 +358,13 @@ export function NewReviewPage() {
     if (startDisabled) {
       return;
     }
+    if (reviewSource === "codehub") {
+      manualReviewMutation.mutate({
+        pluginId: codehubPluginId,
+        sourceUrl: codehubMrUrl.trim(),
+      });
+      return;
+    }
     const selectedProfile = profilesQuery.data?.find((profile) => profile.id === selectedProfileId);
     const request = toCreateReviewRequest({
       repositoryPath,
@@ -374,6 +409,73 @@ export function NewReviewPage() {
 
       <div className="new-review-page__grid">
         <form className="new-review-page__form" onSubmit={handleStartReview}>
+          <section className="panel panel--source-selector">
+            <div className="source-radio-group" role="radiogroup" aria-label={t("review.sourceGroup")}>
+              <label className="source-radio">
+                <input
+                  type="radio"
+                  name="reviewSource"
+                  value="local"
+                  checked={reviewSource === "local"}
+                  onChange={() => setReviewSource("local")}
+                />
+                <span className="source-radio__label">{t("review.localRepository")}</span>
+              </label>
+              <label className="source-radio">
+                <input
+                  type="radio"
+                  name="reviewSource"
+                  value="codehub"
+                  checked={reviewSource === "codehub"}
+                  onChange={() => setReviewSource("codehub")}
+                />
+                <span className="source-radio__label">{t("review.codehubMr")}</span>
+              </label>
+            </div>
+          </section>
+
+          {reviewSource === "codehub" ? (
+            <section className="panel panel--primary">
+              <div className="panel__heading">
+                <FolderGit2 aria-hidden="true" />
+                <h2>{t("review.codehubMr")}</h2>
+              </div>
+              <label className="field">
+                <span className="field__label">{t("review.plugin")}</span>
+                <select
+                  aria-label={t("review.plugin")}
+                  className="field__control"
+                  value={codehubPluginId}
+                  onChange={(event) => setCodehubPluginId(event.currentTarget.value)}
+                >
+                  {manualReviewPlugins.length === 0 ? (
+                    <option value="">{t("review.noManualReviewPlugins")}</option>
+                  ) : (
+                    <option value="">{t("review.selectPlugin")}</option>
+                  )}
+                  {manualReviewPlugins.map((plugin) => (
+                    <option key={plugin.plugin_id} value={plugin.plugin_id}>
+                      {plugin.manifest.name_i18n?.[locale] ?? plugin.manifest.name}
+                    </option>
+                  ))}
+                </select>
+              </label>
+              <label className="field">
+                <span className="field__label">{t("review.mrUrl")}</span>
+                <input
+                  aria-label={t("review.mrUrl")}
+                  className="field__control"
+                  placeholder={t("review.mrUrlPlaceholder")}
+                  value={codehubMrUrl}
+                  onChange={(event) => setCodehubMrUrl(event.currentTarget.value)}
+                />
+              </label>
+              {manualReviewPlugins.length === 0 ? (
+                <p className="hint">{t("review.noManualReviewPluginsHint")}</p>
+              ) : null}
+            </section>
+          ) : (
+            <>
           <section className="panel panel--primary">
             <div className="panel__heading">
               <FolderSearch aria-hidden="true" />
@@ -620,6 +722,8 @@ export function NewReviewPage() {
               <div className="alert" role="alert">{t("review.noProfiles")}</div>
             ) : null}
           </section>
+            </>
+          )}
 
           {errorMessage !== undefined ? <div className="alert" role="alert">{errorMessage}</div> : null}
           {gatewayQuery.data?.active_gateway_id === null ? (
@@ -631,12 +735,18 @@ export function NewReviewPage() {
 
           <div className="form-actions">
             <div className="form-actions__summary">
-              <span>{inspection === null ? t("repository.notReady") : t("repository.ready")}</span>
-              <span>{strategy.reviewerSelection.mode === "adaptive" ? t("review.adaptivePlan") : t("review.agentCount", { count: strategy.reviewerSelection.reviewerVersions.length })}</span>
+              {reviewSource === "codehub" ? (
+                <span>{codehubMrUrl.trim() === "" || codehubPluginId === "" ? t("review.mrUrlRequired") : t("repository.ready")}</span>
+              ) : (
+                <span>{inspection === null ? t("repository.notReady") : t("repository.ready")}</span>
+              )}
+              {reviewSource === "local" ? (
+                <span>{strategy.reviewerSelection.mode === "adaptive" ? t("review.adaptivePlan") : t("review.agentCount", { count: strategy.reviewerSelection.reviewerVersions.length })}</span>
+              ) : null}
               <span>{hasActiveGateway ? t("review.gatewayReady") : t("review.gatewayMissing")}</span>
             </div>
             <button className="action-button" disabled={startDisabled} type="submit">
-              {createMutation.isPending ? t("review.starting") : t("review.start")}
+              {createMutation.isPending || manualReviewMutation.isPending ? t("review.starting") : t("review.start")}
             </button>
           </div>
         </form>

@@ -105,6 +105,49 @@ class ReportSinkPort(Protocol):
         ...
 
 
+class ManualReviewSourcePort(Protocol):
+    """Resolve an external source URL to a review creation.
+
+    A manual-review source is the extension point for user-initiated review
+    creation from an external platform (e.g. a CodeHub MR URL). The source
+    parses the URL, resolves repository metadata, clones the repo, and
+    calls ``ReviewCreatorPort.create_review_from_trigger`` with the
+    appropriate ``external_context`` so that auto-export routing works
+    on review completion.
+
+    Implementations should return ``None`` when the URL is invalid or the
+    review is declined (e.g. closed MR, no diff). Exceptions are caught by
+    the caller.
+    """
+
+    @property
+    def source_id(self) -> str:
+        """Stable identifier matching the plugin manifest ``plugin_id``."""
+        ...
+
+    @property
+    def display_name(self) -> str:
+        """Human-readable name for UI display."""
+        ...
+
+    async def create_review_from_url(
+        self,
+        source_url: str,
+        config: dict[str, Any],
+    ) -> str | None:
+        """Create a review from an external source URL.
+
+        Args:
+            source_url: The external URL (e.g. CodeHub MR URL).
+            config: Manual-review configuration from ``PluginRecord``.
+
+        Returns:
+            The created task_id, or ``None`` when the URL is invalid or
+            the review is declined.
+        """
+        ...
+
+
 class PluginStorePort(Protocol):
     """Persist plugin installation and configuration state."""
 
@@ -171,11 +214,16 @@ class PluginLoaderPort(Protocol):
 
 
 class TriggerPluginLoaderPort(Protocol):
-    """Load trigger plugin implementations by ``plugin_id``.
+    """Load trigger and manual-review plugin implementations by ``plugin_id``.
 
     The loader abstracts the mechanism (built-in registry vs. importlib
     external loading) so the application layer remains independent of
     specific plugin implementations.
+
+    Both ``load_plugin`` (trigger) and ``load_source`` (manual-review)
+    take a ``ReviewCreatorPort`` because both capabilities create reviews.
+    When the same ``entry_point`` is declared for both capabilities, the
+    loader may return a shared cached instance.
     """
 
     def load_plugin(
@@ -187,6 +235,21 @@ class TriggerPluginLoaderPort(Protocol):
         install_path: Path | None = None,
     ) -> TriggerSinkPort:
         """Load and instantiate a trigger plugin by its ID.
+
+        ``manifest`` and ``install_path`` are required for external plugins
+        and ignored for built-in ones.
+        """
+        ...
+
+    def load_source(
+        self,
+        plugin_id: str,
+        review_creator: ReviewCreatorPort,
+        *,
+        manifest: PluginManifest | None = None,
+        install_path: Path | None = None,
+    ) -> ManualReviewSourcePort:
+        """Load and instantiate a manual-review source by its ID.
 
         ``manifest`` and ``install_path`` are required for external plugins
         and ignored for built-in ones.

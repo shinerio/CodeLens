@@ -25,8 +25,10 @@ import { validateStrategy, type StrategyValidationError } from "../review-strate
 import type { ReviewStrategySnapshot } from "../reviews/types";
 import { RepositoryBrowser } from "../repositories/RepositoryBrowser";
 import {
+  disableManualReview,
   disableReport,
   disableTrigger,
+  enableManualReview,
   enableReport,
   enableTrigger,
   getHookStatus,
@@ -36,6 +38,7 @@ import {
   PLUGIN_QUERY_KEY,
   setAutoExport,
   uninstallPlugin,
+  updateManualReviewConfig,
   updatePlugin,
   updateReportConfig,
   updateTriggerConfig,
@@ -116,6 +119,16 @@ export function PluginsPage() {
 
   const disableReportMutation = useMutation({
     mutationFn: (pluginId: string) => disableReport(pluginId),
+    onSuccess: invalidatePlugins,
+  });
+
+  const enableManualReviewMutation = useMutation({
+    mutationFn: (pluginId: string) => enableManualReview(pluginId),
+    onSuccess: invalidatePlugins,
+  });
+
+  const disableManualReviewMutation = useMutation({
+    mutationFn: (pluginId: string) => disableManualReview(pluginId),
     onSuccess: invalidatePlugins,
   });
 
@@ -211,6 +224,8 @@ export function PluginsPage() {
             onDisableTrigger={(id) => disableTriggerMutation.mutate(id)}
             onEnableReport={(id) => enableReportMutation.mutate(id)}
             onDisableReport={(id) => disableReportMutation.mutate(id)}
+            onEnableManualReview={(id) => enableManualReviewMutation.mutate(id)}
+            onDisableManualReview={(id) => disableManualReviewMutation.mutate(id)}
             onToggleAutoExport={(id, enabled) => autoExportMutation.mutate({ pluginId: id, enabled })}
             onUninstall={(id) => uninstallMutation.mutate(id)}
             onUpdate={(id, ref) => updateMutation.mutate({ pluginId: id, ref })}
@@ -229,6 +244,8 @@ type PluginCardProps = {
   onDisableTrigger: (pluginId: string) => void;
   onEnableReport: (pluginId: string) => void;
   onDisableReport: (pluginId: string) => void;
+  onEnableManualReview: (pluginId: string) => void;
+  onDisableManualReview: (pluginId: string) => void;
   onToggleAutoExport: (pluginId: string, enabled: boolean) => void;
   onUninstall: (pluginId: string) => void;
   onUpdate: (pluginId: string, ref?: string) => void;
@@ -242,6 +259,8 @@ function PluginCard({
   onDisableTrigger,
   onEnableReport,
   onDisableReport,
+  onEnableManualReview,
+  onDisableManualReview,
   onToggleAutoExport,
   onUninstall,
   onUpdate,
@@ -251,6 +270,7 @@ function PluginCard({
   const { t, locale } = useI18n();
   const hasTrigger = !!plugin.manifest.capabilities.trigger;
   const hasReport = !!plugin.manifest.capabilities.report;
+  const hasManualReview = !!plugin.manifest.capabilities.manual_review;
 
   // Get localized name and description
   const displayName = plugin.manifest.name_i18n?.[locale] ?? plugin.manifest.name;
@@ -308,6 +328,15 @@ function PluginCard({
           onEnable={(id) => onEnableReport(id)}
           onDisable={(id) => onDisableReport(id)}
           onToggleAutoExport={(id, enabled) => onToggleAutoExport(id, enabled)}
+          onConfigUpdate={onConfigUpdate}
+        />
+      )}
+
+      {hasManualReview && (
+        <ManualReviewCapabilitySection
+          plugin={plugin}
+          onEnable={(id) => onEnableManualReview(id)}
+          onDisable={(id) => onDisableManualReview(id)}
           onConfigUpdate={onConfigUpdate}
         />
       )}
@@ -975,6 +1004,87 @@ function ReportCapabilitySection({
         </label>
         <span className="auto-export-hint">{t("plugins.autoExportHint")}</span>
       </div>
+    </div>
+  );
+}
+
+type ManualReviewCapabilitySectionProps = {
+  plugin: PluginRecord;
+  onEnable: (pluginId: string) => void;
+  onDisable: (pluginId: string) => void;
+  onConfigUpdate: () => void;
+};
+
+function ManualReviewCapabilitySection({
+  plugin,
+  onEnable,
+  onDisable,
+  onConfigUpdate,
+}: ManualReviewCapabilitySectionProps) {
+  const { t, locale } = useI18n();
+  const [configDraft, setConfigDraft] = useState<Record<string, unknown>>(
+    plugin.manual_review_config,
+  );
+
+  useEffect(() => {
+    setConfigDraft(plugin.manual_review_config);
+  }, [plugin.plugin_id, plugin.manual_review_config]);
+
+  const configMutation = useMutation({
+    mutationFn: (config: Record<string, unknown>) =>
+      updateManualReviewConfig(plugin.plugin_id, { config }),
+    onSuccess: () => {
+      onConfigUpdate();
+    },
+  });
+
+  const configChanged =
+    JSON.stringify(configDraft) !== JSON.stringify(plugin.manual_review_config);
+  const configSchema = plugin.manifest.capabilities.manual_review?.config_schema ?? {};
+  const configProperties = extractConfigProperties(configSchema, locale);
+
+  return (
+    <div className="capability-section capability-section--manual-review">
+      <div className="capability-section__header">
+        <Package aria-hidden="true" className="capability-section__icon" />
+        <h4 className="capability-section__title">{t("plugins.manualReviewCapability")}</h4>
+        <button
+          className={`capability-toggle ${plugin.manual_review_enabled ? "capability-toggle--on" : ""}`}
+          onClick={() =>
+            plugin.manual_review_enabled
+              ? onDisable(plugin.plugin_id)
+              : onEnable(plugin.plugin_id)
+          }
+        >
+          <Power aria-hidden="true" />
+          {plugin.manual_review_enabled ? t("plugins.enabled") : t("plugins.disabled")}
+        </button>
+      </div>
+
+      {configProperties.length > 0 && (
+        <div className="capability-config">
+          {configProperties.map((prop) => (
+            <ConfigField
+              key={prop.key}
+              label={prop.label}
+              value={configDraft[prop.key]}
+              defaultValue={prop.default}
+              type={prop.type}
+              enumValues={prop.enumValues}
+              itemEnumValues={prop.itemEnumValues}
+              onChange={(value) => setConfigDraft({ ...configDraft, [prop.key]: value })}
+            />
+          ))}
+          <button
+            className="config-save"
+            disabled={!configChanged || configMutation.isPending}
+            onClick={() => configMutation.mutate(configDraft)}
+          >
+            <Check aria-hidden="true" />
+            {t("plugins.saveConfig")}
+          </button>
+        </div>
+      )}
     </div>
   );
 }

@@ -19,6 +19,7 @@ from codelens.plugin.application.hook_management import (
     RepositoryHookStatus,
 )
 from codelens.plugin.domain.models import (
+    ManualReviewCapability,
     PluginCapabilityError,
     PluginConfigurationError,
     PluginInstallError,
@@ -64,6 +65,8 @@ class PluginRecordResponse(BaseModel):
     report_auto_export: bool
     trigger_config: dict[str, Any]
     report_config: dict[str, Any]
+    manual_review_enabled: bool = False
+    manual_review_config: dict[str, Any] = Field(default_factory=dict)
     git_url: str | None = None
     git_ref: str | None = None
     plugin_api_version: str
@@ -85,6 +88,11 @@ class PluginRecordResponse(BaseModel):
                     "config_schema": cap.config_schema,
                 }
             elif isinstance(cap, ReportCapability):
+                capabilities[key] = {
+                    "entry_point": cap.entry_point,
+                    "config_schema": cap.config_schema,
+                }
+            elif isinstance(cap, ManualReviewCapability):
                 capabilities[key] = {
                     "entry_point": cap.entry_point,
                     "config_schema": cap.config_schema,
@@ -111,6 +119,8 @@ class PluginRecordResponse(BaseModel):
             report_auto_export=record.report_auto_export,
             trigger_config=record.trigger_config,
             report_config=record.report_config,
+            manual_review_enabled=record.manual_review_enabled,
+            manual_review_config=record.manual_review_config,
             git_url=record.git_url,
             git_ref=record.git_ref,
             plugin_api_version=record.manifest.plugin_api_version.value,
@@ -524,3 +534,113 @@ async def get_hook_status(
     if statuses is None:
         raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
     return _hook_status_response(statuses)
+
+
+class ManualReviewRequest(BaseModel):
+    """Request body for manual review creation from an external URL."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    source_url: Annotated[str, Field(min_length=1, max_length=2048)]
+
+
+class ManualReviewResponse(BaseModel):
+    """Result of manual review creation."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    plugin_id: str
+    task_id: str
+
+
+@router.put("/{plugin_id}/manual-review/enable", response_model=PluginRecordResponse)
+async def enable_manual_review(
+    plugin_id: str,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> PluginRecordResponse:
+    """Enable manual-review capability for a plugin."""
+
+    _LOGGER.info("Enabling manual-review for plugin: %s", plugin_id)
+    try:
+        record = await components.plugin_manager.enable_manual_review(plugin_id)
+    except (PluginCapabilityError, PluginConfigurationError) as error:
+        _raise_plugin_problem(error)
+    if record is None:
+        raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
+    return PluginRecordResponse.from_domain(record)
+
+
+@router.put("/{plugin_id}/manual-review/disable", response_model=PluginRecordResponse)
+async def disable_manual_review(
+    plugin_id: str,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> PluginRecordResponse:
+    """Disable manual-review capability for a plugin."""
+
+    _LOGGER.info("Disabling manual-review for plugin: %s", plugin_id)
+    try:
+        record = await components.plugin_manager.disable_manual_review(plugin_id)
+    except PluginCapabilityError as error:
+        _raise_plugin_problem(error)
+    if record is None:
+        raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
+    return PluginRecordResponse.from_domain(record)
+
+
+@router.put("/{plugin_id}/manual-review/config", response_model=PluginRecordResponse)
+async def update_manual_review_config(
+    plugin_id: str,
+    request: UpdateConfigRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> PluginRecordResponse:
+    """Update manual-review configuration for a plugin."""
+
+    _LOGGER.info("Updating manual-review config for plugin: %s", plugin_id)
+    try:
+        record = await components.plugin_manager.update_manual_review_config(
+            plugin_id, request.config
+        )
+    except (PluginCapabilityError, PluginConfigurationError) as error:
+        _raise_plugin_problem(error)
+    if record is None:
+        raise HttpProblem(404, "plugin_not_found", f"Plugin {plugin_id} not found.")
+    return PluginRecordResponse.from_domain(record)
+
+
+@router.post(
+    "/{plugin_id}/manual-review",
+    response_model=ManualReviewResponse,
+    status_code=202,
+)
+async def create_manual_review(
+    plugin_id: str,
+    request: ManualReviewRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> ManualReviewResponse:
+    """Create a review from an external source URL via a plugin's manual_review capability.
+
+    The plugin resolves the URL (e.g. a CodeHub MR URL), clones the
+    repository, and creates a review with the appropriate
+    ``external_context`` so that auto-export routing works on completion.
+    """
+
+    from codelens.plugin.application.manual_review_orchestrator import (
+        ManualReviewRequestError,
+    )
+
+    _LOGGER.info("Creating manual review via plugin %s", plugin_id)
+    try:
+        task_id = await components.manual_review_orchestrator.create_review(
+            plugin_id=plugin_id,
+            source_url=request.source_url,
+        )
+    except ManualReviewRequestError as error:
+        message = str(error)
+        if "not found" in message:
+            raise HttpProblem(404, "plugin_not_found", message) from error
+        if "not enabled" in message:
+            raise HttpProblem(400, "manual_review_not_enabled", message) from error
+        if "declined" in message:
+            raise HttpProblem(422, "manual_review_declined", message) from error
+        raise HttpProblem(400, "manual_review_failed", message) from error
+    return ManualReviewResponse(plugin_id=plugin_id, task_id=task_id)

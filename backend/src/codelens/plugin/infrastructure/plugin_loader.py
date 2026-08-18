@@ -15,6 +15,7 @@ from packaging.version import InvalidVersion, Version
 import codelens
 from codelens.plugin.domain.models import PluginManifest
 from codelens.plugin.domain.ports import (
+    ManualReviewSourcePort,
     ReportSinkPort,
     ReviewCreatorPort,
     TriggerSinkPort,
@@ -45,6 +46,7 @@ class CompositePluginLoader:
         """Initialize with empty instance caches."""
         self._trigger_instances: dict[str, TriggerSinkPort] = {}
         self._report_instances: dict[str, ReportSinkPort] = {}
+        self._manual_review_instances: dict[str, ManualReviewSourcePort] = {}
         self._generations: dict[str, int] = {}
 
     def load_plugin(
@@ -102,6 +104,72 @@ class CompositePluginLoader:
         self._trigger_instances[plugin_id] = external_instance
         return external_instance
 
+    def load_source(
+        self,
+        plugin_id: str,
+        review_creator: ReviewCreatorPort,
+        *,
+        manifest: PluginManifest | None = None,
+        install_path: Path | None = None,
+    ) -> ManualReviewSourcePort:
+        """Load a manual-review source instance.
+
+        If the same ``entry_point`` is used for both trigger and
+        manual_review, the already-cached trigger instance is returned
+        directly (shared mutable state like per-project locks is intended
+        to be shared across both capabilities).
+
+        Args:
+            plugin_id: Unique plugin identifier.
+            review_creator: Port for creating reviews (injected into source).
+            manifest: Plugin manifest (required for external plugins).
+            install_path: Plugin install directory (required for external plugins).
+
+        Returns:
+            Instantiated source implementing ``ManualReviewSourcePort``.
+
+        Raises:
+            ValueError: If plugin_id is not a supported built-in and no install_path provided.
+            PluginLoadError: If external plugin cannot be loaded.
+        """
+        if plugin_id in self._manual_review_instances:
+            return self._manual_review_instances[plugin_id]
+
+        # Reuse the trigger instance if the same entry_point is already loaded.
+        # This shares _repo_locks and other mutable state between both capabilities.
+        if plugin_id in self._trigger_instances:
+            trigger_instance = self._trigger_instances[plugin_id]
+            if hasattr(trigger_instance, "source_id") and hasattr(
+                trigger_instance, "create_review_from_url"
+            ):
+                self._manual_review_instances[plugin_id] = cast(
+                    ManualReviewSourcePort, trigger_instance
+                )
+                return self._manual_review_instances[plugin_id]
+
+        # Fall back to external plugin loading
+        if manifest is None or install_path is None:
+            raise ValueError(
+                f"Unsupported manual-review plugin: {plugin_id}. "
+                f"External plugins require manifest and install_path."
+            )
+        self._ensure_compatible(manifest)
+
+        manual_review_cap = manifest.manual_review
+        if manual_review_cap is None:
+            raise PluginLoadError(
+                f"plugin {manifest.plugin_id} does not declare manual_review capability"
+            )
+
+        external_instance: ManualReviewSourcePort = self._load_external_manual_review(
+            manual_review_cap.entry_point,
+            install_path,
+            review_creator,
+            plugin_id,
+        )
+        self._manual_review_instances[plugin_id] = external_instance
+        return external_instance
+
     def load_sink(
         self,
         manifest: PluginManifest,
@@ -137,6 +205,7 @@ class CompositePluginLoader:
 
         self._trigger_instances.pop(plugin_id, None)
         self._report_instances.pop(plugin_id, None)
+        self._manual_review_instances.pop(plugin_id, None)
         module_prefix = self._module_cache_prefix(plugin_id)
         for module_name in tuple(sys.modules):
             if module_name == module_prefix or module_name.startswith(f"{module_prefix}_"):
@@ -202,6 +271,73 @@ class CompositePluginLoader:
             sys.modules.pop(cache_key, None)
             raise PluginLoadError(f"plugin {plugin_id} trigger does not implement TriggerSinkPort")
         return cast(TriggerSinkPort, instance)
+
+    def _load_external_manual_review(
+        self,
+        entry_point: str,
+        install_path: Path,
+        review_creator: ReviewCreatorPort,
+        plugin_id: str,
+    ) -> ManualReviewSourcePort:
+        """Load an external manual-review source via importlib.
+
+        Mirrors ``_load_external_trigger`` but validates the loaded instance
+        implements ``ManualReviewSourcePort`` (``source_id`` and
+        ``create_review_from_url``).
+        """
+        if ":" not in entry_point:
+            raise PluginLoadError(
+                f"plugin {plugin_id} entry_point must be 'module:Class', got: {entry_point}"
+            )
+        module_name, class_name = entry_point.split(":", 1)
+        if not module_name or not class_name:
+            raise PluginLoadError(f"plugin {plugin_id} entry_point has empty module or class")
+
+        module_file = install_path / module_name
+        if not module_file.exists() and not module_file.with_suffix(".py").exists():
+            resolved = module_file if module_file.exists() else module_file.with_suffix(".py")
+            raise PluginLoadError(f"plugin {plugin_id} module file not found: {resolved}")
+        if not module_file.suffix:
+            module_file = module_file.with_suffix(".py")
+
+        cache_key = self._module_cache_key(plugin_id)
+        spec = importlib.util.spec_from_file_location(cache_key, module_file)
+        if spec is None or spec.loader is None:
+            raise PluginLoadError(f"plugin {plugin_id} module spec could not be created")
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[cache_key] = module
+
+        # Add install_path to sys.path so plugin can import sibling modules.
+        # Use append (lowest priority) to avoid shadowing stdlib or third-party packages.
+        install_path_str = str(install_path.resolve())
+        if install_path_str not in sys.path:
+            sys.path.append(install_path_str)
+
+        try:
+            source = module_file.read_text(encoding="utf-8")
+            exec(compile(source, str(module_file), "exec"), module.__dict__)
+        except Exception as error:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(f"plugin {plugin_id} module failed to load: {error}") from error
+
+        source_class = getattr(module, class_name, None)
+        if source_class is None:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(f"plugin {plugin_id} class '{class_name}' not found in module")
+        try:
+            instance = source_class(review_creator)
+        except Exception as error:
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} manual-review instantiation failed: {error}"
+            ) from error
+
+        if not hasattr(instance, "source_id") or not hasattr(instance, "create_review_from_url"):
+            sys.modules.pop(cache_key, None)
+            raise PluginLoadError(
+                f"plugin {plugin_id} source does not implement ManualReviewSourcePort"
+            )
+        return cast(ManualReviewSourcePort, instance)
 
     def _load_external_report(
         self,
