@@ -106,6 +106,26 @@ class FailingStore:
         return self.duplicate
 
 
+class TriggeredStore:
+    """Store that tracks triggered reviews for supersede testing."""
+
+    def __init__(self) -> None:
+        self.triggered: list[ReviewTask] = []
+        self.manual: list[ReviewTask] = []
+
+    async def create_triggered_with_job(
+        self, task: ReviewTask
+    ) -> tuple[ReviewRecord | None, bool]:
+        self.triggered.append(task)
+        return SimpleNamespace(task_id=task.task_id), True
+
+    async def create_with_job(self, task: ReviewTask) -> None:
+        self.manual.append(task)
+
+    async def get_review(self, _task_id: str) -> ReviewRecord | None:
+        return SimpleNamespace(task_id=_task_id)
+
+
 class EnabledIdempotencySettings:
     async def get(self) -> object:
         return SimpleNamespace(enabled=True)
@@ -289,3 +309,157 @@ async def test_delete_review_removes_its_registered_owned_worktree(tmp_path: Pat
     await handler.handle(task_id)
 
     assert manager.removed == [worktree]
+
+
+async def test_supersede_policy_computes_trigger_keys(tmp_path: Path) -> None:
+    """When supersede_policy is set, handler computes trigger_slot_key and idempotency_key."""
+    artifacts = RecordingArtifacts()
+    store = TriggeredStore()
+    handler = CreateReviewHandler(
+        ScopePlanner(FixedPlanner()),
+        ReviewInputCaptureService(StableCaptureSource(), artifacts),
+        store,
+        artifacts,
+        id_factory=lambda: "review_" + "1" * 32,
+        clock=lambda: datetime(2026, 7, 17, tzinfo=UTC),
+    )
+
+    base_command = _command(tmp_path)
+    command = CreateReviewCommand(
+        repository=base_command.repository,
+        scope=base_command.scope,
+        review_profile=base_command.review_profile,
+        trigger_source="plugin",
+        supersede_policy="latest_snapshot",
+        skip_if_duplicate=True,
+    )
+
+    await handler.handle(command)
+
+    # Verify triggered path was used (not manual path)
+    assert len(store.triggered) == 1
+    assert len(store.manual) == 0
+
+    task = store.triggered[0]
+    # Verify keys were computed
+    assert task.trigger_slot_key is not None
+    assert task.idempotency_key is not None
+    assert task.supersede_policy == "latest_snapshot"
+
+
+async def test_same_repository_profile_share_slot_key(tmp_path: Path) -> None:
+    """Same repository + profile + locale should produce the same trigger_slot_key."""
+    artifacts = RecordingArtifacts()
+    store = TriggeredStore()
+    handler = CreateReviewHandler(
+        ScopePlanner(FixedPlanner()),
+        ReviewInputCaptureService(StableCaptureSource(), artifacts),
+        store,
+        artifacts,
+        id_factory=lambda: f"review_{len(store.triggered):032x}",
+        clock=lambda: datetime(2026, 7, 17, tzinfo=UTC),
+    )
+
+    base_command = _command(tmp_path)
+    command = CreateReviewCommand(
+        repository=base_command.repository,
+        scope=base_command.scope,
+        review_profile=base_command.review_profile,
+        trigger_source="plugin",
+        supersede_policy="latest_snapshot",
+        skip_if_duplicate=True,
+    )
+
+    # Create two reviews with same repository + profile + locale
+    await handler.handle(command)
+    await handler.handle(command)
+
+    assert len(store.triggered) == 2
+    task1 = store.triggered[0]
+    task2 = store.triggered[1]
+
+    # Same slot key (same repository + profile + locale)
+    assert task1.trigger_slot_key == task2.trigger_slot_key
+    # Different idempotency keys (different task_id means different capture time)
+    assert task1.idempotency_key != task2.idempotency_key
+
+
+async def test_different_locale_different_slot_key(tmp_path: Path) -> None:
+    """Different prompt_locale should produce different trigger_slot_key."""
+    artifacts = RecordingArtifacts()
+    store = TriggeredStore()
+    handler = CreateReviewHandler(
+        ScopePlanner(FixedPlanner()),
+        ReviewInputCaptureService(StableCaptureSource(), artifacts),
+        store,
+        artifacts,
+        id_factory=lambda: f"review_{len(store.triggered):032x}",
+        clock=lambda: datetime(2026, 7, 17, tzinfo=UTC),
+    )
+
+    base_command = _command(tmp_path)
+
+    # Create review with en locale
+    command_en = CreateReviewCommand(
+        repository=base_command.repository,
+        scope=base_command.scope,
+        review_profile=base_command.review_profile,
+        trigger_source="plugin",
+        supersede_policy="latest_snapshot",
+        prompt_locale="en",
+        skip_if_duplicate=True,
+    )
+    await handler.handle(command_en)
+
+    # Create review with zh locale
+    command_zh = CreateReviewCommand(
+        repository=base_command.repository,
+        scope=base_command.scope,
+        review_profile=base_command.review_profile,
+        trigger_source="plugin",
+        supersede_policy="latest_snapshot",
+        prompt_locale="zh",
+        skip_if_duplicate=True,
+    )
+    await handler.handle(command_zh)
+
+    assert len(store.triggered) == 2
+    task_en = store.triggered[0]
+    task_zh = store.triggered[1]
+
+    # Different slot keys (different locale)
+    assert task_en.trigger_slot_key != task_zh.trigger_slot_key
+
+
+async def test_no_supersede_policy_uses_manual_path(tmp_path: Path) -> None:
+    """When supersede_policy is None, handler uses manual create_with_job path."""
+    artifacts = RecordingArtifacts()
+    store = TriggeredStore()
+    handler = CreateReviewHandler(
+        ScopePlanner(FixedPlanner()),
+        ReviewInputCaptureService(StableCaptureSource(), artifacts),
+        store,
+        artifacts,
+        id_factory=lambda: "review_" + "1" * 32,
+        clock=lambda: datetime(2026, 7, 17, tzinfo=UTC),
+    )
+
+    base_command = _command(tmp_path)
+    command = CreateReviewCommand(
+        repository=base_command.repository,
+        scope=base_command.scope,
+        review_profile=base_command.review_profile,
+        trigger_source="manual",
+        supersede_policy=None,  # No supersede
+    )
+
+    await handler.handle(command)
+
+    # Verify manual path was used (not triggered path)
+    assert len(store.manual) == 1
+    assert len(store.triggered) == 0
+
+    task = store.manual[0]
+    # Verify keys are None for manual path
+    assert task.trigger_slot_key is None
+    assert task.idempotency_key is None

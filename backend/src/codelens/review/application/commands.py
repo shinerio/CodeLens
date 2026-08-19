@@ -1,6 +1,8 @@
+import hashlib
+import json
 import logging
 import uuid
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -45,6 +47,11 @@ class ExistingFindingsProviderPort(Protocol):
     """Load structured historical issues before a Review task is frozen."""
 
     async def load(self, repository_path: Path) -> tuple[ExistingFinding, ...]: ...
+
+
+def _canonical(value: Mapping[str, object]) -> str:
+    """Serialize a mapping to a deterministic JSON string for hashing."""
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 @dataclass(frozen=True)
@@ -100,10 +107,33 @@ class CreateReviewHandler:
         captured = await self._capture.capture(command.repository.path, scope_plan)
         artifact = captured.overlay_artifact
 
+        # Compute trigger identity keys when supersede policy is active
+        trigger_slot_key: str | None = None
+        idempotency_key: str | None = None
+        if command.supersede_policy is not None:
+            selection = command.review_profile.reviewer_selection
+            selection_policy: dict[str, object] = {"mode": selection.mode}
+            if isinstance(selection, FixedReviewerSelection):
+                selection_policy["reviewer_versions"] = list(selection.reviewer_versions)
+            policy = {
+                "repository_id": command.repository.repository_id,
+                "review_profile": {"selection": selection_policy},
+                "prompt_locale": command.prompt_locale,
+            }
+            trigger_slot_key = hashlib.sha256(_canonical(policy).encode()).hexdigest()
+            exact = dict(policy)
+            exact["snapshot"] = {
+                "base_oid": captured.target.base_oid,
+                "head_oid": captured.target.head_oid,
+                "overlay_hash": captured.target.overlay_hash,
+            }
+            idempotency_key = hashlib.sha256(_canonical(exact).encode()).hexdigest()
+
         if (
             command.skip_if_duplicate
             and self._idempotency_settings is not None
             and not isinstance(command.scope, UncommittedScope)
+            and trigger_slot_key is None  # Skip pre-check when using triggered path
         ):
             settings = await self._idempotency_settings.get()
             if settings.enabled:
@@ -157,6 +187,8 @@ class CreateReviewHandler:
                 review_profile=command.review_profile,
                 trigger_source=command.trigger_source,
                 supersede_policy=command.supersede_policy,
+                idempotency_key=idempotency_key,
+                trigger_slot_key=trigger_slot_key,
                 prompt_locale=command.prompt_locale,
                 created_at=self._clock(),
                 overlay_artifact_ref=artifact.reference if artifact is not None else None,
@@ -169,18 +201,32 @@ class CreateReviewHandler:
                 await self._input_artifacts.discard(artifact.reference)
             raise
         try:
-            await self._store.create_with_job(task)
+            if trigger_slot_key is not None:
+                # Use triggered path with supersede/idempotency logic
+                record, was_created = await self._store.create_triggered_with_job(task)
+                if not was_created and artifact is not None:
+                    await self._input_artifacts.discard(artifact.reference)
+                _LOGGER.info(
+                    "Triggered review %s",
+                    "created" if was_created else "deduplicated",
+                    extra={"task_id": task.task_id},
+                )
+                return record
+            else:
+                # Manual review path (no supersede)
+                await self._store.create_with_job(task)
         except BaseException:
             _LOGGER.exception("Review persistence failed", extra={"task_id": task.task_id})
             if artifact is not None:
                 await self._input_artifacts.discard(artifact.reference)
             raise
-        record = await self._store.get_review(task.task_id)
-        if record is None:
+        # This code only runs for the manual path (triggered path returns early)
+        reloaded_record = await self._store.get_review(task.task_id)
+        if reloaded_record is None:
             _LOGGER.error("Persisted review could not be reloaded", extra={"task_id": task.task_id})
             raise RuntimeError("persisted ReviewTask could not be reloaded")
         _LOGGER.info("Review task persisted", extra={"task_id": task.task_id})
-        return record
+        return reloaded_record
 
 
 class GetReviewHandler:
