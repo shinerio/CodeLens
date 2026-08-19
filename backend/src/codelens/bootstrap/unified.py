@@ -81,9 +81,9 @@ from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
     WorkerTranscriptStore,
 )
-from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
+from codelens.reviewer_catalog.application.prompt_settings import AgentPromptSettingsService
 from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
-    FilesystemReviewerPromptStore,
+    FilesystemAgentPromptStore,
 )
 from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
@@ -304,8 +304,8 @@ def build_unified_backend(
         checkpoints=SqlCheckpointStore(database),
         semaphores=semaphores,
         transcripts=worker_transcripts,
-        reviewer_prompts=ReviewerPromptSettingsService(
-            FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
+        agent_prompts=AgentPromptSettingsService(
+            FilesystemAgentPromptStore(settings.data_dir), settings.prompt_dir
         ),
         repository_inspector=repository_inspector,
         provider_config=provider_config_store,
@@ -480,8 +480,8 @@ def build_unified_backend(
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()
         ),
-        reviewer_prompts=ReviewerPromptSettingsService(
-            FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
+        agent_prompts=AgentPromptSettingsService(
+            FilesystemAgentPromptStore(settings.data_dir), settings.prompt_dir
         ),
         transcripts=transcripts_store,
         worker_transcripts=worker_transcripts,

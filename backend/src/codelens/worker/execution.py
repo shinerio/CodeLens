@@ -75,7 +75,7 @@ from codelens.review.infrastructure.repositories import (
 from codelens.review.infrastructure.run_artifacts import FilesystemRunArtifactStore
 from codelens.review.infrastructure.transcripts import WorkerTranscriptStore
 from codelens.review.infrastructure.verdict_tools import VerdictValidator
-from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
+from codelens.reviewer_catalog.application.prompt_settings import AgentPromptSettingsService
 from codelens.reviewer_catalog.domain.models import AgentVersion
 from codelens.reviewer_catalog.domain.provider_config import (
     ModelProviderConfig,
@@ -83,7 +83,7 @@ from codelens.reviewer_catalog.domain.provider_config import (
 )
 from codelens.reviewer_catalog.infrastructure.builtin_agents import builtin_agent_catalog
 from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
-    FilesystemReviewerPromptStore,
+    FilesystemAgentPromptStore,
 )
 from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
@@ -418,7 +418,7 @@ class WorkerReviewExecutor:
         checkpoints: SqlCheckpointStore,
         semaphores: WorkerSemaphores,
         transcripts: WorkerTranscriptStore,
-        reviewer_prompts: ReviewerPromptSettingsService | None = None,
+        agent_prompts: AgentPromptSettingsService | None = None,
         repository_inspector: RepositoryInspector | None = None,
         provider_config: ModelProviderConfigPort | None = None,
         tool_limits_service: ToolLimitsService | None = None,
@@ -441,8 +441,8 @@ class WorkerReviewExecutor:
         self._checkpoints = SqlCheckpointPortAdapter(checkpoints)
         self._semaphores = semaphores
         self._transcripts = transcripts
-        self._reviewer_prompts = reviewer_prompts or ReviewerPromptSettingsService(
-            FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
+        self._agent_prompts = agent_prompts or AgentPromptSettingsService(
+            FilesystemAgentPromptStore(settings.data_dir), settings.prompt_dir
         )
         self._repository_inspector = repository_inspector or RepositoryInspector(
             GitRepositoryMetadataAdapter(GitCli()),
@@ -1187,7 +1187,7 @@ class WorkerReviewExecutor:
             specs: list[FrozenAgentExecutionSpec] = []
             for reference in references:
                 agent = catalog[reference]
-                view = await self._reviewer_prompts.get(
+                view = await self._agent_prompts.get(
                     agent, "zh-CN" if locale == "zh-CN" else "en"
                 )
                 resolved_agent = replace(agent, prompt_template=view.prompt)

@@ -73,12 +73,12 @@ from codelens.review.infrastructure.transcripts import (
     ExecutionTranscriptStore,
     WorkerTranscriptStore,
 )
-from codelens.reviewer_catalog.application.prompt_settings import ReviewerPromptSettingsService
+from codelens.reviewer_catalog.application.prompt_settings import AgentPromptSettingsService
 from codelens.reviewer_catalog.application.provider_settings import (
     ModelGatewaySettingsService,
 )
 from codelens.reviewer_catalog.infrastructure.file_prompt_settings import (
-    FilesystemReviewerPromptStore,
+    FilesystemAgentPromptStore,
 )
 from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
@@ -156,7 +156,7 @@ class HttpComponents:
     verdict_store: SqlVerdictStore
     input_artifacts: FilesystemInputArtifactStore
     model_gateways: ModelGatewaySettingsService
-    reviewer_prompts: ReviewerPromptSettingsService
+    agent_prompts: AgentPromptSettingsService
     transcripts: ExecutionTranscriptStore
     worker_transcripts: WorkerTranscriptStore
     finding_source_preview: FindingSourcePreviewService
@@ -345,8 +345,8 @@ def build_components(settings: Settings) -> HttpComponents:
         model_gateways=ModelGatewaySettingsService(
             provider_config, OpenAIModelGatewayProbeAdapter()
         ),
-        reviewer_prompts=ReviewerPromptSettingsService(
-            FilesystemReviewerPromptStore(settings.data_dir), settings.prompt_dir
+        agent_prompts=AgentPromptSettingsService(
+            FilesystemAgentPromptStore(settings.data_dir), settings.prompt_dir
         ),
         transcripts=transcripts,
         worker_transcripts=worker_transcripts,

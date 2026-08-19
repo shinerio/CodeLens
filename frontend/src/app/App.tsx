@@ -29,7 +29,7 @@ export function App() {
             <p className="nav-label">{t("nav.configuration")}</p>
             <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/agents">
               <Bot aria-hidden="true" />
-              <span>{t("nav.reviewAgents")}</span>
+              <span>{t("nav.promptManagement")}</span>
             </NavLink>
             <NavLink className={({ isActive }) => (isActive ? "nav-link active" : "nav-link")} to="/settings/review-profiles">
               <SlidersHorizontal aria-hidden="true" />

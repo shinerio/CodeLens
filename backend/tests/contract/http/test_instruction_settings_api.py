@@ -34,16 +34,16 @@ def test_instruction_line_limits_are_validated_and_persistent(tmp_path: Path) ->
     assert persisted.json() == {"root_max_lines": 800, "nested_max_lines": 240}
 
 
-def test_reviewer_prompt_http_contract_requires_the_canonical_v2_version(
+def test_agent_prompt_http_contract_requires_the_canonical_v2_version(
     tmp_path: Path,
 ) -> None:
     settings = Settings(data_dir=tmp_path / "data")
 
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
-        missing_version = client.get("/api/reviewer-prompts/correctness?locale=en")
-        version_two = client.get("/api/reviewer-prompts/correctness?version=2&locale=en")
+        missing_version = client.get("/api/agent-prompts/correctness?locale=en")
+        version_two = client.get("/api/agent-prompts/correctness?version=2&locale=en")
         updated = client.put(
-            "/api/reviewer-prompts/correctness?version=2&locale=en",
+            "/api/agent-prompts/correctness?version=2&locale=en",
             json={"prompt": "Custom correctness v2 prompt."},
         )
 
@@ -54,10 +54,25 @@ def test_reviewer_prompt_http_contract_requires_the_canonical_v2_version(
     assert updated.json()["prompt"] == "Custom correctness v2 prompt."
 
 
-def test_reviewer_prompt_http_contract_rejects_unknown_versions(tmp_path: Path) -> None:
+def test_agent_prompt_http_contract_rejects_unknown_versions(tmp_path: Path) -> None:
     settings = Settings(data_dir=tmp_path / "data")
 
     with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
-        response = client.get("/api/reviewer-prompts/correctness?version=999&locale=en")
+        response = client.get("/api/agent-prompts/correctness?version=999&locale=en")
 
     assert response.status_code == 404
+
+
+def test_agent_prompt_catalog_lists_internal_dag_roles(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path / "data")
+
+    with TestClient(create_app(settings), base_url="http://127.0.0.1:8765") as client:
+        response = client.get("/api/agent-prompts")
+
+    assert response.status_code == 200
+    entries = {entry["agent_id"]: entry for entry in response.json()}
+    # Internal DAG roles must appear so their prompts are editable via the web UI.
+    assert entries["review-planner"]["role"] == "planner"
+    assert entries["review-verifier"]["role"] == "verifier"
+    # Public reviewers are still listed alongside the internal roles.
+    assert entries["correctness"]["role"] == "reviewer"

@@ -1,4 +1,4 @@
-"""Atomic local persistence for user-authored reviewer prompt overrides."""
+"""Atomic local persistence for user-authored agent prompt overrides."""
 
 import asyncio
 import json
@@ -8,10 +8,19 @@ from pathlib import Path
 
 from codelens.reviewer_catalog.application.prompt_settings import PromptLocale
 
+_LEGACY_FILENAME = "reviewer-prompts.json"
+_FILENAME = "agent-prompts.json"
 
-class FilesystemReviewerPromptStore:
+
+class FilesystemAgentPromptStore:
     def __init__(self, data_dir: Path) -> None:
-        self._path = data_dir.expanduser().resolve() / "reviewer-prompts.json"
+        resolved = data_dir.expanduser().resolve()
+        self._path = resolved / _FILENAME
+        legacy = resolved / _LEGACY_FILENAME
+        # One-time migration from the pre-rename file. Not a compatibility layer:
+        # once the legacy file is gone this branch never runs again.
+        if not self._path.exists() and legacy.exists():
+            legacy.replace(self._path)
 
     async def load_override(self, reference: str, locale: PromptLocale) -> str | None:
         return await asyncio.to_thread(self._load_override_sync, reference, locale)
@@ -38,7 +47,7 @@ class FilesystemReviewerPromptStore:
             agent[locale] = prompt
         self._path.parent.mkdir(parents=True, exist_ok=True)
         descriptor, name = tempfile.mkstemp(
-            dir=self._path.parent, prefix=".reviewer-prompts-", suffix=".tmp"
+            dir=self._path.parent, prefix=".agent-prompts-", suffix=".tmp"
         )
         temporary = Path(name)
         try:
@@ -60,5 +69,5 @@ class FilesystemReviewerPromptStore:
             return {}
         raw = json.loads(self._path.read_text(encoding="utf-8"))
         if not isinstance(raw, dict):
-            raise ValueError("reviewer prompt settings are invalid")
+            raise ValueError("agent prompt settings are invalid")
         return raw

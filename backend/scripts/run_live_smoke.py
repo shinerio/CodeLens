@@ -6,8 +6,6 @@ import tempfile
 import time
 from pathlib import Path
 
-from codelens.testing.correctness_fixture import prepare_simple_branch_repository
-
 from codelens.bootstrap.settings import Settings
 from codelens.bootstrap.unified import build_unified_backend
 from codelens.review.application.commands import CreateReviewCommand
@@ -15,6 +13,7 @@ from codelens.reviewer_catalog.domain.provider_config import ModelGateway, Model
 from codelens.reviewer_catalog.infrastructure.file_provider_config import (
     FilesystemModelProviderConfigAdapter,
 )
+from codelens.testing.correctness_fixture import prepare_simple_branch_repository
 from codelens.workspace.domain.models import BranchScope
 
 

@@ -4,13 +4,16 @@ test("lists backend reviewers and edits a non-correctness prompt", async ({ page
   await page.goto("/agents");
 
   const reviewerCards = page.getByTestId("reviewer-card");
-  await expect(reviewerCards).toHaveCount(8);
+  await expect(reviewerCards).toHaveCount(10);
   await expect(reviewerCards.filter({ hasText: "correctness:v2" })).toHaveCount(1);
   await expect(reviewerCards.filter({ hasText: "security:v2" })).toHaveCount(1);
   await expect(reviewerCards.filter({ hasText: "general:v2" })).toHaveCount(1);
+  // Internal DAG roles are listed so their prompts are editable too.
+  await expect(reviewerCards.filter({ hasText: "review-planner:v2" })).toHaveCount(1);
+  await expect(reviewerCards.filter({ hasText: "review-verifier:v2" })).toHaveCount(1);
   const securityCard = reviewerCards.filter({ hasText: "security:v2" });
   await securityCard.getByRole("button", { name: "Edit prompt" }).click();
-  const promptEditor = page.getByLabel("Reviewer prompt");
+  const promptEditor = page.getByLabel("Agent prompt");
   await expect(promptEditor).not.toHaveValue("");
 
   const customPrompt = `Security E2E override ${Date.now()}`;

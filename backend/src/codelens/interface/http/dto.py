@@ -498,17 +498,26 @@ class ReviewProfileSourceDto(StrictDto):
     revision: Annotated[int, Field(ge=1)]
 
 
-class UpdateReviewerPromptRequest(StrictDto):
+class UpdateAgentPromptRequest(StrictDto):
     prompt: Annotated[str, Field(min_length=1, max_length=100_000)]
 
 
-class ReviewerPromptResponse(StrictDto):
+class AgentPromptResponse(StrictDto):
     agent_id: str
     version: int
     locale: Literal["en", "zh-CN"]
     system_prompt: str
     prompt: str
     is_custom: bool
+
+
+class AgentPromptCatalogEntryResponse(StrictDto):
+    reference: str
+    agent_id: str
+    version: int
+    role: Literal["planner", "reviewer", "verifier"]
+    dimensions: list[str]
+    capability_readiness: Literal["ready"]
 
 
 class ReviewResponse(StrictDto):

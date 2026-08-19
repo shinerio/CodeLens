@@ -1,5 +1,5 @@
 import { api } from "../../shared/api/client";
-import type { ReviewerCatalogEntry } from "./types";
+import type { AgentPromptCatalogEntry, ReviewerCatalogEntry } from "./types";
 
 type ReviewerCatalogDto = {
   reference: string;
@@ -7,6 +7,15 @@ type ReviewerCatalogDto = {
   version: number;
   dimensions: string[];
   planner_eligible: boolean;
+  capability_readiness: "ready";
+};
+
+type AgentPromptCatalogDto = {
+  reference: string;
+  agent_id: string;
+  version: number;
+  role: "planner" | "reviewer" | "verifier";
+  dimensions: string[];
   capability_readiness: "ready";
 };
 
@@ -22,19 +31,32 @@ export async function listReviewerCatalog(): Promise<ReviewerCatalogEntry[]> {
   }));
 }
 
-export type ReviewerPrompt = { agent_id: string; version: number; locale: "en" | "zh-CN"; system_prompt: string; prompt: string; is_custom: boolean };
-function reviewerPromptPath(agentId: string, version: number, locale: ReviewerPrompt["locale"]) {
-  return `/reviewer-prompts/${encodeURIComponent(agentId)}?locale=${encodeURIComponent(locale)}&version=${version}`;
+export async function listAgentPromptCatalog(): Promise<AgentPromptCatalogEntry[]> {
+  const entries = await api<AgentPromptCatalogDto[]>("/agent-prompts");
+  return entries.map((entry) => ({
+    reference: entry.reference,
+    agentId: entry.agent_id,
+    version: entry.version,
+    role: entry.role,
+    dimensions: entry.dimensions,
+    capabilityStatus: entry.capability_readiness,
+  }));
 }
 
-export function getReviewerPrompt(agentId: string, version: number, locale: ReviewerPrompt["locale"]) {
-  return api<ReviewerPrompt>(reviewerPromptPath(agentId, version, locale));
+export type AgentPrompt = { agent_id: string; version: number; locale: "en" | "zh-CN"; system_prompt: string; prompt: string; is_custom: boolean };
+
+function agentPromptPath(agentId: string, version: number, locale: AgentPrompt["locale"]) {
+  return `/agent-prompts/${encodeURIComponent(agentId)}?locale=${encodeURIComponent(locale)}&version=${version}`;
 }
 
-export function updateReviewerPrompt(agentId: string, version: number, locale: ReviewerPrompt["locale"], prompt: string) {
-  return api<ReviewerPrompt>(reviewerPromptPath(agentId, version, locale), { method: "PUT", body: JSON.stringify({ prompt }) });
+export function getAgentPrompt(agentId: string, version: number, locale: AgentPrompt["locale"]) {
+  return api<AgentPrompt>(agentPromptPath(agentId, version, locale));
 }
 
-export function resetReviewerPrompt(agentId: string, version: number, locale: ReviewerPrompt["locale"]) {
-  return api<ReviewerPrompt>(reviewerPromptPath(agentId, version, locale), { method: "DELETE" });
+export function updateAgentPrompt(agentId: string, version: number, locale: AgentPrompt["locale"], prompt: string) {
+  return api<AgentPrompt>(agentPromptPath(agentId, version, locale), { method: "PUT", body: JSON.stringify({ prompt }) });
+}
+
+export function resetAgentPrompt(agentId: string, version: number, locale: AgentPrompt["locale"]) {
+  return api<AgentPrompt>(agentPromptPath(agentId, version, locale), { method: "DELETE" });
 }
