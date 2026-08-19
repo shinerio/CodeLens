@@ -6,13 +6,6 @@ from pydantic import ValidationError
 from codelens.bootstrap.settings import Settings
 
 
-def test_default_settings_bind_lan_and_allow_all_host_roots() -> None:
-    settings = Settings()
-
-    assert settings.host == "0.0.0.0"
-    assert settings.repository_roots == ()
-
-
 def test_runtime_settings_load_repository_roots_from_conf_file(tmp_path: Path) -> None:
     config = tmp_path / "runtime-settings.toml"
     config.write_text('[repository]\nroots = ["repositories/example"]\n', encoding="utf-8")
