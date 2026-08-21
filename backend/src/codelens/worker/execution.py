@@ -680,9 +680,8 @@ class WorkerReviewExecutor:
         payloads: dict[str, bytes] = {}
         for execution_spec in execution_specs:
             agent_input = self._context_builder.build(snapshot, instructions)
-            payloads[execution_spec.agent.reference] = add_existing_findings_context(
-                agent_input.canonical_bytes(), existing_findings
-            )
+            # Fallback 路径无 plan，dedup 不会运行，不注入 existing_findings
+            payloads[execution_spec.agent.reference] = agent_input.canonical_bytes()
         return PreparedReview(
             snapshot=snapshot,
             execution_specs=execution_specs,

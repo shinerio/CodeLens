@@ -427,6 +427,10 @@ class ReviewOrchestrator:
                             await self._publish_findings(task_id)
                         await self._finish_persisted_task(task_id, status)
                         return
+                    # 中间态（output_saved/validating/running）：重新执行 dedup 节点以恢复验证流程
+                    await self._execute_plan_node(task_id, prepared, deduplicator)
+                    # 重新读取状态并继续循环
+                    continue
                 else:
                     if self._publish_findings is not None:
                         await self._publish_findings(task_id)
