@@ -46,8 +46,10 @@ from openai import (
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.application.validate_candidates import CandidateBatchCodec
 from codelens.findings.domain.candidates import CandidateFindingBatch
+from codelens.findings.domain.dedup import DedupDecision
 from codelens.findings.domain.models import FindingSeverity
 from codelens.findings.domain.verdict import VerdictDecision
+from codelens.findings.infrastructure.dedup_codec import DedupCodec
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
 from codelens.review.application.settings import (
@@ -89,6 +91,7 @@ from codelens.review.infrastructure.context_checkpoint import (
     build_context_checkpoint_filter,
     checkpoint_summary_from_text,
 )
+from codelens.review.infrastructure.dedup_tools import DeduplicationCollector
 from codelens.review.infrastructure.evidence_replay import ToolLoopResetSignal
 from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
@@ -349,6 +352,7 @@ class OpenAIAgentRuntime:
             else ToolLimits()
         )
         is_reviewer = agent.role is AgentRole.REVIEWER
+        is_deduplicator = agent.role is AgentRole.DEDUPLICATOR
         if is_reviewer and agent.output_contract_version != "2":
             raise PermanentAgentOutputError("Agent output contract is unsupported")
 
@@ -374,6 +378,7 @@ class OpenAIAgentRuntime:
         role_output_tools: tuple[RoleOutputToolBinding, ...] = ()
         planner_codec: PlannerOutputCodec | None = None
         verdict_codec: VerdictCodec | None = None
+        dedup_codec: DedupCodec | None = None
         if agent.role is AgentRole.PLANNER:
             planner_codec = _planner_codec(role_context)
             planner_collector = ReviewPlanSubmissionCollector(planner_codec)
@@ -396,6 +401,14 @@ class OpenAIAgentRuntime:
             finalize_description = prompts.tools["finalize_verdicts"].description
             role_output_tools = verdict_collector.bindings(
                 verdict_description, merge_description, finalize_description
+            )
+        elif agent.role is AgentRole.DEDUPLICATOR:
+            dedup_codec = _dedup_codec(role_context)
+            dedup_collector = DeduplicationCollector(dedup_codec)
+            dedup_description = prompts.tools["deduplicate"].description
+            done_description = prompts.tools["deduplicate_done"].description
+            role_output_tools = dedup_collector.bindings(
+                dedup_description, done_description
             )
         checkpoint_tracker = ContextCheckpointTracker()
         loop_reset_signal = ToolLoopResetSignal()
@@ -430,7 +443,9 @@ class OpenAIAgentRuntime:
         model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)
         tool_names = tuple(str(getattr(tool, "name", "")) for tool in model_tools)
-        instruction_sections = [prompts.review_policy, repository_instructions]
+        instruction_sections: list[str] = []
+        if not is_deduplicator:
+            instruction_sections.extend([prompts.review_policy, repository_instructions])
         if is_reviewer:
             instruction_sections.append(prompts.review_workflow)
         instruction_sections.extend(
@@ -839,6 +854,13 @@ class OpenAIAgentRuntime:
                 ):
                     raise ValueError("Verdict output state has the wrong value")
                 canonical_bytes = verdict_codec.canonical_bytes(final_output)
+            elif dedup_codec is not None:
+                final_output = tool_context.final_output()
+                if not isinstance(final_output, tuple) or not all(
+                    isinstance(item, DedupDecision) for item in final_output
+                ):
+                    raise ValueError("Dedup output state has the wrong value")
+                canonical_bytes = dedup_codec.canonical_bytes(final_output)
             else:
                 final_output = tool_context.final_output()
                 if not isinstance(final_output, CandidateFindingBatch):
@@ -1476,6 +1498,31 @@ def _verdict_codec(role_context: dict[str, object] | None) -> VerdictCodec:
         return VerdictCodec(clusters=clusters)
     except (KeyError, TypeError, ValueError) as error:
         raise PermanentAgentOutputError("Verdict role context has an invalid value") from error
+
+
+def _dedup_codec(role_context: dict[str, object] | None) -> DedupCodec:
+    """Rebuild Dedup constraints from the frozen survived-finding projection."""
+
+    context = role_context.get("dedup_context") if role_context is not None else None
+    if not isinstance(context, dict) or set(context) != {
+        "survived_findings",
+        "schema_version",
+    }:
+        raise PermanentAgentOutputError("Dedup role context has an invalid shape")
+    raw_findings = context["survived_findings"]
+    if context["schema_version"] != "1" or not isinstance(raw_findings, list):
+        raise PermanentAgentOutputError("Dedup role context has an invalid value")
+    try:
+        expected_ids = frozenset(
+            str(item["verdict_decision_id"])
+            for item in raw_findings
+            if isinstance(item, dict)
+        )
+        if len(expected_ids) != len(raw_findings):
+            raise ValueError("Dedup projection contains duplicate or non-object values")
+        return DedupCodec(expected_ids=expected_ids)
+    except (KeyError, TypeError, ValueError) as error:
+        raise PermanentAgentOutputError("Dedup role context has an invalid value") from error
 
 
 def _model_input(

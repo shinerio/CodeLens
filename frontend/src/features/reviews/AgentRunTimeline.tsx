@@ -5,6 +5,7 @@ const ROLE_LABELS = {
   planner: "execution.rolePlanner",
   reviewer: "execution.roleReviewer",
   verifier: "execution.roleVerifier",
+  deduplicator: "execution.roleDeduplicator",
 } as const;
 
 export function AgentRunTimeline({ plan }: { plan: ReviewPlanProjection | null }) {

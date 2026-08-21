@@ -16,6 +16,7 @@ const STAGE_OPTIONS: ReadonlyArray<{ id: ReviewPlanNodeRole; labelKey: Translati
   { id: "planner", labelKey: "logs.stagePlanner" },
   { id: "reviewer", labelKey: "logs.stageReviewers" },
   { id: "verifier", labelKey: "logs.stageVerifier" },
+  { id: "deduplicator", labelKey: "logs.stageDeduplicator" },
 ];
 
 /** Present live execution metrics in a compact, comparison-oriented report. */

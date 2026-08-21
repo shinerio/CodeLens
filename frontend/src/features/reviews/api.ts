@@ -39,7 +39,7 @@ export function parseReviewResponse(value: ReviewResponseDto): ReviewResponse {
   }
   const reviewPlan = value.review_plan ?? null;
   if (reviewPlan !== null) {
-    const validRoles = new Set(["planner", "reviewer", "verifier"]);
+    const validRoles = new Set(["planner", "reviewer", "verifier", "deduplicator"]);
     if (reviewPlan.nodes.some((node) => !validRoles.has(node.node_type))) {
       throw new Error("Unknown Review Plan node role");
     }

@@ -5,6 +5,7 @@ import {
   Bug,
   ClipboardList,
   Database,
+  Filter,
   Gauge,
   Plus,
   RefreshCw,
@@ -48,6 +49,7 @@ const AGENT_PRESENTATIONS: Readonly<Record<string, AgentPresentation>> = {
   general: { nameKey: "catalog.generalReviewer", descriptionKey: "catalog.generalDescription", icon: Bot },
   "review-planner": { nameKey: "catalog.planner", descriptionKey: "catalog.plannerDescription", icon: ClipboardList },
   "review-verifier": { nameKey: "catalog.verifier", descriptionKey: "catalog.verifierDescription", icon: Scale },
+  "review-deduplicator": { nameKey: "catalog.deduplicator", descriptionKey: "catalog.deduplicatorDescription", icon: Filter },
 };
 
 const STATUS_KEYS: Readonly<Record<ReviewerCapabilityStatus, TranslationKey>> = {
