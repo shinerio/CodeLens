@@ -185,7 +185,17 @@ def _response_diagnostic(
 
 
 class _SdkCheckpointSummarizer:
-    """Run checkpoint compaction as one isolated, provider-neutral text call."""
+    """Run checkpoint compaction as one isolated, provider-neutral text call.
+
+    Some MaaS gateways (e.g. Zhipu GLM) ignore ``stream=False`` and always
+    return SSE chunks.  When that happens the SDK's
+    ``OpenAIChatCompletionsModel.get_response`` raises ``AttributeError``
+    because ``_fetch_response`` returns a ``tuple`` instead of a
+    ``ChatCompletion``.  For ``OpenAIChatCompletionsModel`` we bypass
+    ``Runner.run`` entirely and call the provider directly with
+    ``stream=True``, avoiding the slow failure-and-retry cycle inside the
+    SDK.  Other model types still go through ``Runner.run``.
+    """
 
     async def summarize(
         self,
@@ -202,6 +212,20 @@ class _SdkCheckpointSummarizer:
             parallel_tool_calls=None,
             context_management=None,
         )
+        from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+
+        if isinstance(agent.model, OpenAIChatCompletionsModel):
+            return await self._summarize_via_stream(agent, checkpoint_settings, request)
+
+        return await self._summarize_via_runner(agent, checkpoint_settings, request)
+
+    async def _summarize_via_runner(
+        self,
+        agent: Agent[Any],
+        checkpoint_settings: Any,
+        request: CheckpointSummaryRequest,
+    ) -> CheckpointSummaryResult:
+        """Run compaction through the SDK ``Runner.run`` loop."""
         checkpoint_agent: Agent[None] = Agent(
             name=f"{agent.name}:checkpoint-compaction",
             instructions=request.prompt,
@@ -222,6 +246,78 @@ class _SdkCheckpointSummarizer:
             diagnostics=tuple(
                 _response_diagnostic(response, phase="checkpoint_compaction")
                 for response in result.raw_responses
+            ),
+        )
+
+    async def _summarize_via_stream(
+        self,
+        agent: Agent[Any],
+        checkpoint_settings: Any,
+        request: CheckpointSummaryRequest,
+    ) -> CheckpointSummaryResult:
+        """Call the provider directly with stream=True and collect chunks.
+
+        This bypasses ``Runner.run`` entirely, so it only works with
+        ``OpenAIChatCompletionsModel`` whose internal client is accessible.
+        """
+        from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+
+        model = agent.model
+        if not isinstance(model, OpenAIChatCompletionsModel):
+            raise
+
+        client = model._get_client()
+        messages: list[dict[str, str]] = [
+            {"role": "system", "content": request.prompt},
+            {"role": "user", "content": request.model_input()},
+        ]
+        create_kwargs: dict[str, Any] = {
+            "model": model.model,
+            "messages": messages,
+            "max_tokens": checkpoint_settings.max_tokens,
+            "stream": True,
+        }
+        if checkpoint_settings.extra_body is not None:
+            create_kwargs["extra_body"] = checkpoint_settings.extra_body
+        if checkpoint_settings.extra_headers is not None:
+            create_kwargs["extra_headers"] = checkpoint_settings.extra_headers
+        if checkpoint_settings.extra_query is not None:
+            create_kwargs["extra_query"] = checkpoint_settings.extra_query
+
+        stream = await client.chat.completions.create(**create_kwargs)
+        content_parts: list[str] = []
+        usage: Any = None
+        response_id: str | None = None
+        async for chunk in stream:
+            if chunk.choices:
+                delta = chunk.choices[0].delta
+                if delta and delta.content:
+                    content_parts.append(delta.content)
+            if hasattr(chunk, "usage") and chunk.usage is not None:
+                usage = chunk.usage
+            if hasattr(chunk, "id") and chunk.id:
+                response_id = chunk.id
+
+        final_output = "".join(content_parts)
+        if not final_output.strip():
+            raise ValueError("checkpoint model returned empty output")
+
+        input_tokens = getattr(usage, "prompt_tokens", 0) if usage else 0
+        output_tokens = getattr(usage, "completion_tokens", 0) if usage else 0
+        cached_tokens = _cached_input_token_count(usage) if usage else 0
+
+        return CheckpointSummaryResult(
+            summary=checkpoint_summary_from_text(final_output),
+            diagnostics=(
+                AgentResponseDiagnostic(
+                    response_id=response_id,
+                    request_id=None,
+                    input_tokens=input_tokens,
+                    output_tokens=output_tokens,
+                    output_item_count=1,
+                    cached_input_tokens=cached_tokens,
+                    phase="checkpoint_compaction",
+                ),
             ),
         )
 

@@ -5,14 +5,16 @@ import traceback
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from types import SimpleNamespace
+from typing import cast
 
 import httpx
 import pytest
 from agents import Agent, RunConfig, Usage
 from agents.exceptions import ModelBehaviorError
+from agents.model_settings import ModelSettings
 from agents.run_config import CallModelData, ModelInputData
 from agents.tool_context import ToolContext
-from openai import APIConnectionError, InternalServerError, RateLimitError
+from openai import APIConnectionError, AsyncOpenAI, InternalServerError, RateLimitError
 
 from codelens.capabilities.application.resolve import CapabilityResolver
 from codelens.capabilities.domain.models import (
@@ -229,6 +231,87 @@ async def test_sdk_checkpoint_summarizer_rejects_empty_output(
             ),
             Agent(name="reviewer", instructions="review"),
         )
+
+
+async def test_sdk_checkpoint_summarizer_streaming_fallback(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When the model is OpenAIChatCompletionsModel, compaction uses stream=True directly.
+
+    MaaS gateways that ignore ``stream=False`` cause ``Runner.run`` to raise
+    ``AttributeError``.  The summarizer must detect ``OpenAIChatCompletionsModel``
+    and bypass ``Runner.run`` with a direct streaming call.
+    """
+
+    payload = "Checkpoint summary from streaming fallback."
+
+    class FakeStreamChunk:
+        def __init__(self, content: str | None, *, usage: object | None = None) -> None:
+            self.choices = [
+                SimpleNamespace(delta=SimpleNamespace(content=content))
+            ] if content is not None else []
+            self.usage = usage
+            self.id = "chatcmpl-fake-stream"
+
+    class FakeUsage:
+        prompt_tokens = 42
+        completion_tokens = 7
+        input_tokens_details = None
+
+    class FakeStream:
+        def __aiter__(self) -> "FakeStream":
+            self._chunks = [
+                FakeStreamChunk("Checkpoint "),
+                FakeStreamChunk("summary from "),
+                FakeStreamChunk("streaming fallback."),
+                FakeStreamChunk(None, usage=FakeUsage()),
+            ]
+            return self
+
+        async def __anext__(self) -> FakeStreamChunk:
+            if not self._chunks:
+                raise StopAsyncIteration
+            return self._chunks.pop(0)
+
+    class FakeChatCompletions:
+        async def create(self, **kwargs: object) -> FakeStream:
+            assert kwargs.get("stream") is True
+            return FakeStream()
+
+    class FakeChat:
+        completions = FakeChatCompletions()
+
+    class FakeClient:
+        chat = FakeChat()
+
+    from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+
+    model = OpenAIChatCompletionsModel(
+        model="maas-glm-5.2-aliyun",
+        openai_client=cast("AsyncOpenAI", FakeClient()),
+    )
+    agent = Agent(
+        name="reviewer",
+        instructions="review",
+        model=model,
+        model_settings=ModelSettings(max_tokens=65536),
+    )
+    summarizer = _SdkCheckpointSummarizer()
+    result = await summarizer.summarize(
+        CheckpointSummaryRequest(
+            prompt="Return a concise checkpoint.",
+            previous_summary=None,
+            compacted_items=(),
+            evidence_index=(),
+        ),
+        agent,
+    )
+    assert result.summary.investigation_summary == payload
+    assert len(result.diagnostics) == 1
+    diag = result.diagnostics[0]
+    assert diag.input_tokens == 42
+    assert diag.output_tokens == 7
+    assert diag.phase == "checkpoint_compaction"
 
 
 class SlowRunner(FakeRunner):
