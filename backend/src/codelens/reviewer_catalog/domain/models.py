@@ -8,6 +8,7 @@ class AgentRole(StrEnum):
     PLANNER = "planner"
     REVIEWER = "reviewer"
     VERIFIER = "verifier"
+    DEDUPLICATOR = "deduplicator"
 
 
 @dataclass(frozen=True)

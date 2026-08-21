@@ -253,6 +253,7 @@ class ReviewPlanCompiler:
             should_run_verifier = len(reviewers) > 1
             if should_run_verifier:
                 required.append("review-verifier:v2")
+            required.append("review-deduplicator:v2")
             missing = [reference for reference in required if reference not in execution_specs]
             if missing:
                 raise ValueError(f"frozen execution spec is missing: {missing}")
@@ -374,6 +375,18 @@ class ReviewPlanCompiler:
                 depends_on=tuple(node.node_id for node in reviewer_nodes),
             )
             nodes.append(verifier)
+            dedup_depends: tuple[str, ...] = (verifier.node_id,)
+        else:
+            dedup_depends = tuple(node.node_id for node in reviewer_nodes)
+        deduplicator = self._node(
+            task_id,
+            ReviewPlanNodeType.DEDUPLICATOR,
+            "review-deduplicator:v2",
+            ReviewPass.DEDUPLICATOR,
+            shard_id="batch",
+            depends_on=dedup_depends,
+        )
+        nodes.append(deduplicator)
         guidance: tuple[ReviewerPlanGuidance, ...] = ()
         return ReviewPlan.create(
             task_id=task_id,

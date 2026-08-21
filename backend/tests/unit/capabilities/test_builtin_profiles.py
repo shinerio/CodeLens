@@ -36,6 +36,10 @@ def test_builtin_profiles_expose_only_the_approved_tools() -> None:
         "merge",
         "finalize_verdicts",
     )
+    assert _tool_names("deduplicator:v2") == (
+        "deduplicate",
+        "deduplicate_done",
+    )
 
 
 def test_every_visible_tool_contract_is_v2() -> None:
@@ -51,6 +55,7 @@ def test_every_builtin_profile_is_read_only_and_contains_no_forbidden_tool() -> 
         "reviewer:v2",
         "planner:v2",
         "verifier:v2",
+        "deduplicator:v2",
     }
     assert all(profile.is_read_only for profile in profiles.values())
     assert (

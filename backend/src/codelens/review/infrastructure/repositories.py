@@ -24,6 +24,7 @@ from codelens.findings.domain.candidates import (
     EvidenceStrength,
 )
 from codelens.findings.domain.clusters import FindingCluster
+from codelens.findings.domain.dedup import DedupDecision, DedupOutcome
 from codelens.findings.domain.existing_findings import ExistingFindingSet
 from codelens.findings.domain.models import (
     ChangeOrigin,
@@ -34,7 +35,7 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
-from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome
+from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome, verdict_decision_id
 from codelens.review.domain.agent_run import AgentRun, InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.ports import (
@@ -70,6 +71,7 @@ from codelens.review.infrastructure.tables import (
     artifacts,
     candidate_findings,
     dag_checkpoints,
+    dedup_decisions,
     events,
     finding_cluster_candidates,
     finding_clusters,
@@ -1070,12 +1072,7 @@ class SqlVerdictStore:
         async def operation(session: AsyncSession) -> None:
             for decision in decisions:
                 payload = _verdict_payload(decision)
-                decision_id = (
-                    "verdict_"
-                    + hashlib.sha256(
-                        f"{task_id}\0{','.join(decision.cluster_ids)}".encode()
-                    ).hexdigest()
-                )
+                decision_id = verdict_decision_id(task_id, decision.cluster_ids)
                 await session.execute(
                     sqlite_insert(verdict_decisions)
                     .values(
@@ -2650,12 +2647,7 @@ class SqlReviewStore:
                 raise InvalidAgentRunStateError("Verifier AgentRun is not ready for completion")
             for decision in decisions:
                 payload = _verdict_payload(decision)
-                decision_id = (
-                    "verdict_"
-                    + hashlib.sha256(
-                        f"{task_id}\0{','.join(decision.cluster_ids)}".encode()
-                    ).hexdigest()
-                )
+                decision_id = verdict_decision_id(task_id, decision.cluster_ids)
                 await session.execute(
                     sqlite_insert(verdict_decisions)
                     .values(
@@ -2746,6 +2738,140 @@ class SqlReviewStore:
         if event is not None:
             await self._publish_events([event])
 
+    async def save_dedup_decisions(
+        self,
+        task_id: str,
+        decisions: tuple[DedupDecision, ...],
+        *,
+        run_id: str | None = None,
+    ) -> None:
+        """Upsert dedup decisions (idempotent per verdict_decision_id)."""
+
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> None:
+            for decision in decisions:
+                await session.execute(
+                    sqlite_insert(dedup_decisions)
+                    .values(
+                        verdict_decision_id=decision.verdict_decision_id,
+                        task_id=task_id,
+                        outcome=decision.outcome.value,
+                        decision_source=decision.decision_source.value,
+                        deduplicator_run_id=run_id,
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(dedup_decisions.c.verdict_decision_id,)
+                    )
+                )
+
+        await self._database.run_transaction(operation)
+
+    async def list_denied_verdict_ids(self, task_id: str) -> frozenset[str]:
+        """Return verdict_decision_ids that were denied (suppressed)."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(dedup_decisions.c.verdict_decision_id).where(
+                        dedup_decisions.c.task_id == task_id,
+                        dedup_decisions.c.outcome == DedupOutcome.DENY.value,
+                    )
+                )
+            ).scalars()
+            return frozenset(str(row) for row in rows)
+
+    async def complete_with_dedup(
+        self,
+        task_id: str,
+        node_key: str,
+        decisions: tuple[DedupDecision, ...],
+    ) -> None:
+        """Atomically persist Deduplicator decisions and complete the Deduplicator run."""
+
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> ReviewEvent | None:
+            checkpoint_status = await session.scalar(
+                select(dag_checkpoints.c.status).where(
+                    dag_checkpoints.c.task_id == task_id,
+                    dag_checkpoints.c.node_key == node_key,
+                )
+            )
+            if checkpoint_status == "succeeded":
+                return None
+            if checkpoint_status not in {"output_saved", "validating"}:
+                raise InvalidAgentRunStateError("Deduplicator AgentRun is not ready for completion")
+            for decision in decisions:
+                await session.execute(
+                    sqlite_insert(dedup_decisions)
+                    .values(
+                        verdict_decision_id=decision.verdict_decision_id,
+                        task_id=task_id,
+                        outcome=decision.outcome.value,
+                        decision_source=decision.decision_source.value,
+                        deduplicator_run_id="",
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(dedup_decisions.c.verdict_decision_id,)
+                    )
+                )
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status.in_(("output_saved", "validating")),
+                    )
+                    .values(
+                        status="succeeded",
+                        result_summary_json=_json({"dedup_count": len(decisions)}),
+                        updated_at=timestamp,
+                    )
+                ),
+            )
+            if result.rowcount != 1:
+                raise InvalidAgentRunStateError("Deduplicator completion lost its expected state")
+            event_payload = {
+                "node_key": node_key,
+                "dedup_count": len(decisions),
+            }
+            await session.execute(
+                insert(events).values(
+                    **_event_values(task_id, "agent_run.completed.v2", event_payload)
+                )
+            )
+            await session.execute(
+                insert(events).values(
+                    **_event_values(
+                        task_id,
+                        "review.dedup_completed.v2",
+                        {"dedup_count": len(decisions)},
+                    )
+                )
+            )
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, "agent.succeeded.v2", event_payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is None:
+                raise RuntimeError("Deduplicator completion event was not persisted")
+            return ReviewEvent(
+                event_id=int(event_id),
+                task_id=task_id,
+                event_type="agent.succeeded.v2",
+                payload=event_payload,
+            )
+
+        event = await self._database.run_transaction(operation)
+        if event is not None:
+            await self._publish_events([event])
+
     async def publish_verdict_findings(
         self,
         task_id: str,
@@ -2769,12 +2895,7 @@ class SqlReviewStore:
                 if finding is None:
                     continue
                 payload = _finding_payload(finding)
-                decision_id = (
-                    "verdict_"
-                    + hashlib.sha256(
-                        f"{task_id}\0{','.join(verdict.cluster_ids)}".encode()
-                    ).hexdigest()
-                )
+                decision_id = verdict_decision_id(task_id, verdict.cluster_ids)
                 # Idempotency: skip event emission when the Finding already
                 # exists from a previous publication attempt. This keeps
                 # replay calls from duplicating finding.published events while

@@ -9,5 +9,7 @@
   "finalize_plan": {"description": "一次提交并最终确定完整选择：General 单独运行或至少两个专项 Reviewer，二者不得混用。所有引用必须 eligible 且 available；恰好调用一次。"},
   "verdict": {"description": "接受或拒绝 cluster_ids。accept 发布 canonical 字段；deny 抑制与快照矛盾、不可执行、重复，或证据链不足以建立缺陷的意见。仅 weak/inferred 不足以拒绝。"},
   "merge": {"description": "仅将根因相同的 cluster_ids 合成一条 Finding。所有 Comment 字段和精确变更源码摘录均必填并成为最终值；每项主张、维度、位置、证据强度和严重级别都必须有证据支持。"},
-  "finalize_verdicts": {"description": "每个 Cluster 恰好被 accept、deny 或 merge 覆盖一次后完成裁决；未知、重复或未覆盖的 Cluster 会被拒绝。"}
+  "finalize_verdicts": {"description": "每个 Cluster 恰好被 accept、deny 或 merge 覆盖一次后完成裁决；未知、重复或未覆盖的 Cluster 会被拒绝。"},
+  "deduplicate": {"description": "按 verdict_decision_id 批量提交存活意见的 accept/deny 决策。仅当意见明显与存量意见重复——同一问题在同一或偏移位置——时才 deny。"},
+  "deduplicate_done": {"description": "声明每条存活意见均已决策。仅在 deduplicate 完整覆盖所有意见恰好一次后调用。"}
 }

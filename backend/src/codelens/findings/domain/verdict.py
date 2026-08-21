@@ -11,12 +11,27 @@ Every cluster must be covered by exactly one verdict decision before the
 Final Verifier can finalize.
 """
 
+import hashlib
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Literal
 
 from codelens.findings.domain.candidates import EvidenceStrength
 from codelens.findings.domain.models import FindingSeverity, SourceLocation
+
+
+def verdict_decision_id(task_id: str, cluster_ids: tuple[str, ...]) -> str:
+    """Derive the deterministic persistent identifier for one verdict decision.
+
+    The formula is shared by ``SqlVerdictStore.save_decisions``,
+    ``_prepare_dedup`` (building dedup_context), and ``_publish_findings``
+    (filtering denied verdicts) so that all layers agree on identity without
+    storing a separate id field on the ``VerdictDecision`` domain object.
+    """
+
+    return "verdict_" + hashlib.sha256(
+        f"{task_id}\0{','.join(cluster_ids)}".encode()
+    ).hexdigest()
 
 
 class VerdictOutcome(StrEnum):

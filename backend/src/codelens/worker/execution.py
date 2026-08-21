@@ -23,7 +23,15 @@ from codelens.capabilities.infrastructure.builtin_profiles import (
 from codelens.findings.application.publish_findings import FindingPublisher
 from codelens.findings.application.resolve_clusters import ClusterService, publish_all_verdicts
 from codelens.findings.application.validate_candidates import CandidateValidator
+from codelens.findings.domain.candidates import CandidateFinding
+from codelens.findings.domain.clusters import FindingCluster
+from codelens.findings.domain.dedup import (
+    SurvivedFinding,
+    run_deterministic_filter,
+)
 from codelens.findings.domain.existing_findings import ExistingFindingSet
+from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome, verdict_decision_id
+from codelens.findings.infrastructure.dedup_codec import DedupCodec
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.instruction_policy.domain.models import ResolvedInstructionSet
 from codelens.review.application.context_builder import ContextBuilder
@@ -59,6 +67,7 @@ from codelens.review.domain.review_strategy import (
     AdaptiveReviewerSelection,
     FixedReviewerSelection,
 )
+from codelens.review.infrastructure.dedup_tools import DedupValidator
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.repositories import (
@@ -468,6 +477,7 @@ class WorkerReviewExecutor:
         self._candidate_store = candidate_store
         self._verdict_store = verdict_store
         self._verdict_codecs: dict[tuple[str, str], VerdictCodec] = {}
+        self._dedup_codecs: dict[tuple[str, str], DedupCodec] = {}
 
     async def recover(self) -> None:
         """Recover Task 11 checkpoints and reconcile every registered owned worktree."""
@@ -505,6 +515,7 @@ class WorkerReviewExecutor:
                 max_active_reviews=self._settings.max_active_reviews,
             ),
             prepare_verdict=self._prepare_verdict,
+            prepare_dedup=self._prepare_dedup,
             publish_findings=self._publish_findings,
             transcript=self._transcripts,
         )
@@ -565,6 +576,7 @@ class WorkerReviewExecutor:
                 execution_specs=(),
                 input_payloads={},
                 prompt_locale=record.prompt_locale,
+                existing_findings=existing_findings,
             )
         provider_config = await self._provider_config.load()
         if provider_config is None:
@@ -610,6 +622,7 @@ class WorkerReviewExecutor:
                 prompt_locale=record.prompt_locale,
                 plan=plan,
                 execution_specs_by_node=execution_specs_by_node,
+                existing_findings=existing_findings,
             )
         if (
             plan_record is None
@@ -642,6 +655,7 @@ class WorkerReviewExecutor:
                 prompt_locale=record.prompt_locale,
                 plan=plan,
                 execution_specs_by_node=execution_specs_by_node,
+                existing_findings=existing_findings,
             )
         if stored_specs:
             if set(selected_stored_specs) != set(record.selected_agent_versions):
@@ -674,6 +688,7 @@ class WorkerReviewExecutor:
             execution_specs=execution_specs,
             input_payloads=payloads,
             prompt_locale=record.prompt_locale,
+            existing_findings=existing_findings,
         )
 
     async def _persist_adaptive_plan(
@@ -704,6 +719,7 @@ class WorkerReviewExecutor:
             *MANDATORY_ADAPTIVE_REVIEWERS,
             "review-planner:v2",
             "review-verifier:v2",
+            "review-deduplicator:v2",
         )
         specs_by_reference = {spec.agent.reference: spec for spec in stored_specs.values()}
         missing = tuple(
@@ -848,6 +864,9 @@ class WorkerReviewExecutor:
         )
         if plan != compiled_plan:
             raise ValueError("persisted Adaptive Review Plan changed during preparation")
+        adaptive_existing_findings = ExistingFindingSet.from_json(
+            record.existing_findings_json, record.existing_findings_hash
+        )
         return PreparedReview(
             snapshot=snapshot,
             execution_specs=tuple(specs_by_node.values()),
@@ -856,13 +875,12 @@ class WorkerReviewExecutor:
                 plan,
                 specs_by_node,
                 base_input,
-                ExistingFindingSet.from_json(
-                    record.existing_findings_json, record.existing_findings_hash
-                ),
+                adaptive_existing_findings,
             ),
             prompt_locale=record.prompt_locale,
             plan=plan,
             execution_specs_by_node=specs_by_node,
+            existing_findings=adaptive_existing_findings,
         )
 
     async def _invoke_planner_observably(
@@ -980,6 +998,7 @@ class WorkerReviewExecutor:
         required_references = list(selection.reviewer_versions)
         if len(selection.reviewer_versions) > 1:
             required_references.append("review-verifier:v2")
+        required_references.append("review-deduplicator:v2")
         specs_by_reference = {spec.agent.reference: spec for spec in stored_specs.values()}
         missing_references = tuple(
             reference for reference in required_references if reference not in specs_by_reference
@@ -1099,10 +1118,7 @@ class WorkerReviewExecutor:
                 if guidance is not None
                 else base_input
             )
-            if node.node_type in {
-                ReviewPlanNodeType.REVIEWER,
-                ReviewPlanNodeType.VERIFIER,
-            }:
+            if node.node_type is ReviewPlanNodeType.DEDUPLICATOR:
                 visible_payload = add_existing_findings_context(visible_payload, existing_findings)
             run = AgentRun.create(
                 task_id=task_id,
@@ -1237,7 +1253,12 @@ class WorkerReviewExecutor:
         prepared: PreparedReview,
         agent: AgentVersion,
         checkpoint: CheckpointRecord,
-    ) -> CandidateValidator | VerdictValidator:
+    ) -> CandidateValidator | VerdictValidator | DedupValidator:
+        if agent.role.value == "deduplicator":
+            dedup_codec = self._dedup_codecs.get((task_id, node_key))
+            if dedup_codec is None:
+                raise ValueError("Dedup constraints were not prepared")
+            return DedupValidator(dedup_codec)
         if agent.role.value == "verifier":
             verdict_codec = self._verdict_codecs.get((task_id, node_key))
             if verdict_codec is None:
@@ -1353,6 +1374,13 @@ class WorkerReviewExecutor:
         candidates = await self._candidate_store.list_for_task(task_id)
         clusters = await self._verdict_store.list_clusters(task_id)
         verdicts = await self._verdict_store.list_decisions(task_id)
+        denied_ids = await self._review_store.list_denied_verdict_ids(task_id)
+        if denied_ids:
+            verdicts = tuple(
+                verdict
+                for verdict in verdicts
+                if verdict_decision_id(task_id, verdict.cluster_ids) not in denied_ids
+            )
         publications = tuple(
             (verdict.cluster_ids[0], finding)
             for verdict in verdicts
@@ -1364,6 +1392,149 @@ class WorkerReviewExecutor:
             )
         )
         await self._review_store.publish_verdict_findings(task_id, verdicts, publications)
+
+    async def _prepare_dedup(self, task_id: str, prepared: PreparedReview) -> bool:
+        """Prepare Deduplicator input and deterministic pre-filter.
+
+        Returns ``True`` when the deduplicator should be skipped.
+        """
+
+        if self._candidate_store is None or self._verdict_store is None:
+            return True
+        existing = prepared.existing_findings
+        if existing is None or not existing.items:
+            return True
+        plan = prepared.plan
+        if plan is None:
+            return True
+        dedup_node = next(
+            (
+                node
+                for node in plan.nodes
+                if node.node_type is ReviewPlanNodeType.DEDUPLICATOR
+            ),
+            None,
+        )
+        if dedup_node is None:
+            return True
+        verdicts = await self._verdict_store.list_decisions(task_id)
+        clusters = await self._verdict_store.list_clusters(task_id)
+        candidates = await self._candidate_store.list_for_task(task_id)
+        dedup_spec = prepared.execution_specs_by_node.get(dedup_node.node_id)
+        max_read_bytes = (
+            dedup_spec.execution_limits.max_tool_result_bytes
+            if dedup_spec is not None
+            else 65536
+        )
+        survived = await self._build_survived_findings(
+            task_id, verdicts, clusters, candidates, prepared, max_read_bytes
+        )
+        if not survived:
+            return True
+        deterministic_denies = run_deterministic_filter(survived, existing.items)
+        if deterministic_denies:
+            await self._review_store.save_dedup_decisions(
+                task_id, tuple(deterministic_denies)
+            )
+        denied_set = {
+            decision.verdict_decision_id for decision in deterministic_denies
+        }
+        unresolved = tuple(
+            finding for finding in survived if finding.verdict_decision_id not in denied_set
+        )
+        if not unresolved:
+            return True
+        dedup_context = {
+            "schema_version": "1",
+            "survived_findings": [finding.as_payload() for finding in unresolved],
+        }
+        envelope = json.loads(prepared.input_payloads[dedup_node.node_id])
+        role_context = envelope.setdefault("role_context", {})
+        if not isinstance(role_context, dict):
+            raise ValueError("Deduplicator role context must be an object")
+        role_context["dedup_context"] = dedup_context
+        prepared.input_payloads[dedup_node.node_id] = json.dumps(
+            envelope, sort_keys=True, separators=(",", ":")
+        ).encode()
+        self._dedup_codecs[(task_id, dedup_node.node_id)] = DedupCodec(
+            expected_ids=frozenset(
+                finding.verdict_decision_id for finding in unresolved
+            )
+        )
+        return False
+
+    async def _build_survived_findings(
+        self,
+        task_id: str,
+        verdicts: tuple[VerdictDecision, ...],
+        clusters: tuple[FindingCluster, ...],
+        candidates: tuple[CandidateFinding, ...],
+        prepared: PreparedReview,
+        max_read_bytes: int,
+    ) -> tuple[SurvivedFinding, ...]:
+        """Resolve publishable verdicts to flat survived findings for dedup."""
+
+        by_candidate = {item.candidate_id: item for item in candidates}
+        cluster_by_id = {cluster.cluster_id: cluster for cluster in clusters}
+        survived: list[SurvivedFinding] = []
+        for verdict in verdicts:
+            if not verdict.is_publishable:
+                continue
+            primary_cluster = cluster_by_id.get(verdict.cluster_ids[0])
+            if primary_cluster is None:
+                continue
+            decision_id = verdict_decision_id(task_id, verdict.cluster_ids)
+            if verdict.outcome is VerdictOutcome.MERGE:
+                assert verdict.primary_location is not None
+                assert verdict.existing_code is not None
+                survived.append(
+                    SurvivedFinding(
+                        verdict_decision_id=decision_id,
+                        cluster_ids=verdict.cluster_ids,
+                        title=verdict.title or "",
+                        content=verdict.content or "",
+                        path=verdict.path,
+                        side=verdict.side,
+                        start_line=verdict.primary_location.start_line,
+                        end_line=verdict.primary_location.end_line,
+                        existing_code=verdict.existing_code,
+                        category=verdict.category,
+                        severity=verdict.severity.value if verdict.severity else None,
+                        recommendation=verdict.recommendation,
+                    )
+                )
+            else:
+                canonical = by_candidate.get(primary_cluster.canonical_candidate_id)
+                if canonical is None:
+                    continue
+                location = canonical.primary_location
+                excerpt = await self._excerpt_reader.read(
+                    prepared.snapshot,
+                    location.path,
+                    location.start_line,
+                    location.end_line,
+                    location.side,
+                    max_read_bytes,
+                )
+                survived.append(
+                    SurvivedFinding(
+                        verdict_decision_id=decision_id,
+                        cluster_ids=verdict.cluster_ids,
+                        title=primary_cluster.title,
+                        content=primary_cluster.content,
+                        path=location.path,
+                        side=location.side,
+                        start_line=location.start_line,
+                        end_line=location.end_line,
+                        existing_code=excerpt.content.decode(
+                            "utf-8", errors="replace"
+                        ),
+                        category=primary_cluster.category,
+                        severity=primary_cluster.severity.value,
+                        recommendation=primary_cluster.recommendation,
+                    )
+                )
+        return tuple(survived)
 
 
 def _failure_summary(error: AgentRuntimeError) -> str:

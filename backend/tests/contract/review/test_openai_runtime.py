@@ -951,6 +951,8 @@ def test_prompt_loader_validates_the_complete_model_visible_tool_set_for_each_lo
         "verdict",
         "merge",
         "finalize_verdicts",
+        "deduplicate",
+        "deduplicate_done",
     }
 
     assert set(loader.get("en").tools) == expected

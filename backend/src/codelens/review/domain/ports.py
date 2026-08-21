@@ -8,6 +8,7 @@ from typing import Any, Literal, Protocol
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFinding, CandidateFindingBatch
 from codelens.findings.domain.clusters import FindingCluster
+from codelens.findings.domain.dedup import DedupDecision
 from codelens.findings.domain.verdict import VerdictDecision
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.review_plan import ReviewPlan
@@ -518,6 +519,16 @@ class AgentRunCompletionPort(Protocol):
 
         raise NotImplementedError
 
+    async def complete_with_dedup(
+        self,
+        task_id: str,
+        node_key: str,
+        decisions: tuple[DedupDecision, ...],
+    ) -> None:
+        """Atomically persist Deduplicator decisions and complete their AgentRun."""
+
+        raise NotImplementedError
+
     async def persist_partial_candidates(
         self,
         task_id: str,
@@ -525,6 +536,26 @@ class AgentRunCompletionPort(Protocol):
         candidates: CandidateFindingBatch,
     ) -> None:
         """Persist partial Candidates from a failed Agent Run without completing it."""
+
+        raise NotImplementedError
+
+
+class DedupDecisionStorePort(Protocol):
+    """Persist and query Deduplicator decisions for the publish gate."""
+
+    async def save_decisions(
+        self,
+        task_id: str,
+        decisions: tuple[DedupDecision, ...],
+        *,
+        run_id: str | None = None,
+    ) -> None:
+        """Upsert dedup decisions (idempotent per verdict_decision_id)."""
+
+        raise NotImplementedError
+
+    async def list_denied_verdict_ids(self, task_id: str) -> frozenset[str]:
+        """Return verdict_decision_ids that were denied (suppressed)."""
 
         raise NotImplementedError
 

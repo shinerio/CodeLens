@@ -27,6 +27,7 @@ TASK_ID = "review_" + "a" * 32
 def _specs(*references: str) -> dict[str, FrozenAgentExecutionSpec]:
     catalog = builtin_agent_catalog()
     resolver = CapabilityResolver.testing()
+    all_references = {*references, "review-deduplicator:v2"}
     return {
         reference: resolver.resolve(
             agent=catalog[reference],
@@ -34,7 +35,7 @@ def _specs(*references: str) -> dict[str, FrozenAgentExecutionSpec]:
             facts=SkillActivationFacts.empty(),
             execution_limits=AgentExecutionLimits.default(),
         )
-        for reference in references
+        for reference in all_references
     }
 
 
@@ -82,7 +83,10 @@ def test_fixed_single_reviewer_plan_omits_verifier() -> None:
         readiness=_ready(),
     )
 
-    assert [node.agent_reference for node in plan.nodes] == ["general:v2"]
+    assert [node.agent_reference for node in plan.nodes] == [
+        "general:v2",
+        "review-deduplicator:v2",
+    ]
 
 
 def test_adaptive_accepts_general_alone_without_verifier() -> None:
@@ -100,6 +104,7 @@ def test_adaptive_accepts_general_alone_without_verifier() -> None:
     assert {node.agent_reference for node in plan.nodes} == {
         "review-planner:v2",
         "general:v2",
+        "review-deduplicator:v2",
     }
     assert all(node.node_type.value != "verifier" for node in plan.nodes)
 

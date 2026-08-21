@@ -92,7 +92,7 @@ class PersistedDagScheduler:
         dependency_statuses = tuple(status_by_node[dependency] for dependency in node.depends_on)
         if not dependency_statuses:
             return True
-        if node.node_type is ReviewPlanNodeType.VERIFIER:
+        if node.node_type in {ReviewPlanNodeType.VERIFIER, ReviewPlanNodeType.DEDUPLICATOR}:
             return all(status in _TERMINAL_NODE_STATUSES for status in dependency_statuses) and any(
                 status == "succeeded" for status in dependency_statuses
             )

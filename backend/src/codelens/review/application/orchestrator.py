@@ -9,6 +9,8 @@ from typing import Literal, Protocol, TypeVar
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFindingBatch
+from codelens.findings.domain.existing_findings import ExistingFindingSet
+from codelens.findings.infrastructure.dedup_codec import ValidatedDedupBatch
 from codelens.findings.infrastructure.verdict_codec import ValidatedVerdictBatch
 from codelens.review.application.dag_scheduler import (
     PersistedDagScheduler,
@@ -58,6 +60,7 @@ class PreparedReview:
     prompt_locale: str
     plan: ReviewPlan | None = None
     execution_specs_by_node: dict[str, FrozenAgentExecutionSpec] = field(default_factory=dict)
+    existing_findings: ExistingFindingSet | None = None
 
 
 class _WorkflowPort(Protocol):
@@ -137,7 +140,9 @@ class _ValidatorPort(Protocol):
     @property
     def warnings(self) -> tuple[FindingValidationWarning, ...]: ...
 
-    async def validate(self, payload: bytes) -> CandidateFindingBatch | ValidatedVerdictBatch: ...
+    async def validate(
+        self, payload: bytes
+    ) -> CandidateFindingBatch | ValidatedVerdictBatch | ValidatedDedupBatch: ...
 
 
 class _CrashInjectorPort(Protocol):
@@ -184,6 +189,7 @@ class ReviewOrchestrator:
         agent_semaphore: asyncio.Semaphore,
         max_agent_runs_per_review: int,
         prepare_verdict: Callable[[str, PreparedReview], Awaitable[bool]] | None = None,
+        prepare_dedup: Callable[[str, PreparedReview], Awaitable[bool]] | None = None,
         publish_findings: Callable[[str], Awaitable[None]] | None = None,
         transcript: _TranscriptPort | None = None,
         crash_injector: _CrashInjectorPort | None = None,
@@ -198,6 +204,7 @@ class ReviewOrchestrator:
         self._agent_semaphore = agent_semaphore
         self._review_agent_semaphore = asyncio.Semaphore(max_agent_runs_per_review)
         self._prepare_verdict = prepare_verdict
+        self._prepare_dedup = prepare_dedup
         self._publish_findings = publish_findings
         self._crash_injector = crash_injector
         self._transcript = transcript
@@ -362,34 +369,69 @@ class ReviewOrchestrator:
                 (node for node in plan.nodes if node.node_type is ReviewPlanNodeType.VERIFIER),
                 None,
             )
+            verdict_phase_done = False
             if verifier is not None and reviewers_terminal:
                 skip_verifier = False
                 if self._prepare_verdict is not None:
                     skip_verifier = await self._prepare_verdict(task_id, prepared)
                 if skip_verifier:
-                    if self._publish_findings is not None:
-                        await self._publish_findings(task_id)
-                    await self._finish_persisted_task(task_id, status)
-                    return
-                verifier_status = by_node[verifier.node_id].status
-                if verifier_status in {"failed", "timed_out"}:
-                    await self._workflow.mark_partial_coverage(task_id)
-                    if self._publish_findings is not None:
-                        await self._publish_findings(task_id)
-                    await self._finish_persisted_task(task_id, status)
-                    return
-                if verifier_status == "succeeded":
-                    if self._publish_findings is not None:
-                        await self._publish_findings(task_id)
-                    await self._finish_persisted_task(task_id, status)
-                    return
+                    await self._checkpoints.mark_skipped(
+                        task_id, verifier.node_id, "verifier_skipped"
+                    )
+                    verdict_phase_done = True
+                else:
+                    verifier_status = by_node[verifier.node_id].status
+                    if verifier_status in {"failed", "timed_out"}:
+                        await self._workflow.mark_partial_coverage(task_id)
+                        if self._publish_findings is not None:
+                            await self._publish_findings(task_id)
+                        await self._finish_persisted_task(task_id, status)
+                        return
+                    if verifier_status == "succeeded":
+                        verdict_phase_done = True
             elif verifier is None and reviewers_terminal:
                 if self._prepare_verdict is not None:
                     await self._prepare_verdict(task_id, prepared)
-                if self._publish_findings is not None:
-                    await self._publish_findings(task_id)
-                await self._finish_persisted_task(task_id, status)
-                return
+                verdict_phase_done = True
+
+            if verdict_phase_done:
+                deduplicator = next(
+                    (
+                        node
+                        for node in plan.nodes
+                        if node.node_type is ReviewPlanNodeType.DEDUPLICATOR
+                    ),
+                    None,
+                )
+                if deduplicator is not None:
+                    skip_dedup = False
+                    if self._prepare_dedup is not None:
+                        skip_dedup = await self._prepare_dedup(task_id, prepared)
+                    if skip_dedup:
+                        await self._checkpoints.mark_skipped(
+                            task_id, deduplicator.node_id, "dedup_skipped"
+                        )
+                        if self._publish_findings is not None:
+                            await self._publish_findings(task_id)
+                        await self._finish_persisted_task(task_id, status)
+                        return
+                    dedup_status = by_node[deduplicator.node_id].status
+                    if dedup_status in {"failed", "timed_out"}:
+                        await self._workflow.mark_partial_coverage(task_id)
+                        if self._publish_findings is not None:
+                            await self._publish_findings(task_id)
+                        await self._finish_persisted_task(task_id, status)
+                        return
+                    if dedup_status == "succeeded":
+                        if self._publish_findings is not None:
+                            await self._publish_findings(task_id)
+                        await self._finish_persisted_task(task_id, status)
+                        return
+                else:
+                    if self._publish_findings is not None:
+                        await self._publish_findings(task_id)
+                    await self._finish_persisted_task(task_id, status)
+                    return
 
             ready = await scheduler.next_ready_nodes(task_id)
             ready = tuple(
@@ -661,6 +703,8 @@ class ReviewOrchestrator:
             )
         if isinstance(validated, ValidatedVerdictBatch):
             await self._completion.complete_with_verdicts(task_id, node_key, validated.decisions)
+        elif isinstance(validated, ValidatedDedupBatch):
+            await self._completion.complete_with_dedup(task_id, node_key, validated.decisions)
         elif isinstance(validated, CandidateFindingBatch):
             await self._completion.complete_with_candidates(
                 task_id,

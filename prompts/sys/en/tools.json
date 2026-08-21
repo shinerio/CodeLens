@@ -9,5 +9,7 @@
   "finalize_plan": {"description": "Submit and finalize one complete selection: General alone or at least two specialists, never mixed. Every reference must be eligible and available. Call exactly once."},
   "verdict": {"description": "Accept or deny cluster_ids. Accept publishes canonical fields. Deny suppresses a contradicted, nonactionable, duplicate, or evidence-incomplete claim whose defect cannot be established; weak/inferred alone is insufficient."},
   "merge": {"description": "Merge only same-root-cause cluster_ids into one Finding. All Comment fields and an exact changed source excerpt are required and become final; each claim, dimension, location, evidence strength, and severity must remain evidence-backed."},
-  "finalize_verdicts": {"description": "Finalize after every cluster is covered exactly once by accept, deny, or merge. Unknown, repeated, or uncovered clusters are rejected."}
+  "finalize_verdicts": {"description": "Finalize after every cluster is covered exactly once by accept, deny, or merge. Unknown, repeated, or uncovered clusters are rejected."},
+  "deduplicate": {"description": "Submit batch accept/deny decisions for survived findings by verdict_decision_id. Deny a finding only when it clearly duplicates an existing finding — same issue at the same or shifted location."},
+  "deduplicate_done": {"description": "Declare every survived finding has been decided. Call only after deduplicate covers all findings exactly once."}
 }

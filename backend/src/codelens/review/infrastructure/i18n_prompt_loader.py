@@ -25,6 +25,8 @@ _REQUIRED_TOOL_NAMES = frozenset(
         "verdict",
         "merge",
         "finalize_verdicts",
+        "deduplicate",
+        "deduplicate_done",
     }
 )
 

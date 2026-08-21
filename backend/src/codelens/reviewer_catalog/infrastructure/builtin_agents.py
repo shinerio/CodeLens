@@ -153,6 +153,14 @@ def _catalog_entries() -> Iterable[AgentVersion]:
         capability_profile_ref="verifier:v2",
         failure_policy="partial_task",
     )
+    yield _internal_agent(
+        agent_id="review-deduplicator",
+        role=AgentRole.DEDUPLICATOR,
+        prompt_key="review-dedup",
+        output_contract_version="dedup:1",
+        capability_profile_ref="deduplicator:v2",
+        failure_policy="partial_task",
+    )
 
 
 def builtin_agent_catalog() -> dict[str, AgentVersion]:

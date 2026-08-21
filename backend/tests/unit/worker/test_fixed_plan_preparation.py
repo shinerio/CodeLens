@@ -278,17 +278,31 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
     assert {node.node_type for node in prepared.plan.nodes} == {
         ReviewPlanNodeType.REVIEWER,
         ReviewPlanNodeType.VERIFIER,
+        ReviewPlanNodeType.DEDUPLICATOR,
     }
     assert set(spec_store.records) == {node.node_id for node in prepared.plan.nodes}
     assert all(
         json.loads(payload)["role_context"]["_host_run_id"].startswith("run_")
         for payload in prepared.input_payloads.values()
     )
-    assert all(
-        json.loads(payload)["role_context"]["existing_findings"]["findings"]
-        == [existing_findings.items[0].as_payload()]
-        for payload in prepared.input_payloads.values()
+    # existing_findings is injected only into the DEDUPLICATOR node
+    dedup_node = next(
+        node for node in prepared.plan.nodes
+        if node.node_type is ReviewPlanNodeType.DEDUPLICATOR
     )
+    dedup_payload = json.loads(prepared.input_payloads[dedup_node.node_id])
+    assert dedup_payload["role_context"]["existing_findings"]["findings"] == [
+        existing_findings.items[0].as_payload()
+    ]
+    # reviewer and verifier nodes must NOT carry existing_findings
+    non_dedup_nodes = [
+        node for node in prepared.plan.nodes
+        if node.node_type is not ReviewPlanNodeType.DEDUPLICATOR
+    ]
+    for node in non_dedup_nodes:
+        assert "existing_findings" not in json.loads(
+            prepared.input_payloads[node.node_id]
+        )["role_context"]
     first_payloads = prepared.input_payloads
     artifact_count = len(artifacts.payloads)
 
@@ -436,12 +450,12 @@ async def test_prepare_runs_and_persists_adaptive_planner_before_reviewers(
     assert "existing_findings" not in planner_payload.get("role_context", {})
     for node in prepared.plan.nodes:
         node_payload = json.loads(prepared.input_payloads[node.node_id])
-        if node.node_type is ReviewPlanNodeType.PLANNER:
-            assert "existing_findings" not in node_payload["role_context"]
-        else:
+        if node.node_type is ReviewPlanNodeType.DEDUPLICATOR:
             assert node_payload["role_context"]["existing_findings"]["findings"] == [
                 existing_findings.items[0].as_payload()
             ]
+        else:
+            assert "existing_findings" not in node_payload["role_context"]
     planner_records = executor._transcripts.append.await_args_list
     assert {call.args[1] for call in planner_records} >= {
         "prompt",

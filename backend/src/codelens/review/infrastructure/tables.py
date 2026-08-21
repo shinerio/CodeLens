@@ -415,3 +415,25 @@ findings = Table(
     Column("created_at", DateTime(timezone=True), nullable=False),
     UniqueConstraint("task_id", "fingerprint", name="uq_findings_task_fingerprint"),
 )
+
+dedup_decisions = Table(
+    "dedup_decisions",
+    metadata,
+    Column(
+        "verdict_decision_id",
+        String(128),
+        ForeignKey("verdict_decisions.verdict_decision_id", ondelete="CASCADE"),
+        primary_key=True,
+    ),
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("outcome", String(16), nullable=False),
+    Column("decision_source", String(16), nullable=False),
+    Column("deduplicator_run_id", String(128)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+)

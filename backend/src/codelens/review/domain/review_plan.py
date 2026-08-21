@@ -13,6 +13,7 @@ class ReviewPass(IntEnum):
     PLANNER = 0
     REVIEWER = 1
     VERIFIER = 2
+    DEDUPLICATOR = 3
 
 
 class ReviewPlanNodeType(StrEnum):
@@ -21,6 +22,7 @@ class ReviewPlanNodeType(StrEnum):
     PLANNER = "planner"
     REVIEWER = "reviewer"
     VERIFIER = "verifier"
+    DEDUPLICATOR = "deduplicator"
 
 
 @dataclass(frozen=True)
@@ -67,6 +69,7 @@ _PASS_BY_NODE_TYPE = {
     ReviewPlanNodeType.PLANNER: ReviewPass.PLANNER,
     ReviewPlanNodeType.REVIEWER: ReviewPass.REVIEWER,
     ReviewPlanNodeType.VERIFIER: ReviewPass.VERIFIER,
+    ReviewPlanNodeType.DEDUPLICATOR: ReviewPass.DEDUPLICATOR,
 }
 
 
@@ -326,6 +329,25 @@ class ReviewPlan:
                 raise ValueError("batched verifier must depend on every Reviewer node")
         elif verifier_nodes:
             raise ValueError("Fixed single-Reviewer plan cannot contain a Verifier")
+        deduplicator_nodes = tuple(
+            node for node in nodes if node.node_type is ReviewPlanNodeType.DEDUPLICATOR
+        )
+        if len(deduplicator_nodes) > 1:
+            raise ValueError("Review plan cannot contain multiple deduplicators")
+        if deduplicator_nodes:
+            if deduplicator_nodes[0].shard_id != "batch":
+                raise ValueError("Deduplicator must use the batch shard")
+            if should_run_verifier:
+                expected_dedup_deps: tuple[str, ...] = (verifier_nodes[0].node_id,)
+            else:
+                expected_dedup_deps = tuple(
+                    sorted(node.node_id for node in reviewer_nodes)
+                )
+            if deduplicator_nodes[0].depends_on != expected_dedup_deps:
+                raise ValueError(
+                    "Deduplicator must depend on the verifier (if present) "
+                    "or all reviewer nodes"
+                )
 
         canonical_reviewers = tuple(sorted(reviewer_references))
         canonical_nodes = tuple(sorted(nodes, key=lambda node: node.node_id))
