@@ -1,5 +1,6 @@
-import pytest
 from pathlib import Path
+
+import pytest
 
 pytest_plugins = ["tests.fixtures.git_repository"]
 

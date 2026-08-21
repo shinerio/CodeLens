@@ -44,6 +44,7 @@ const STAGE_OPTIONS: ReadonlyArray<{
   { id: "reviewer", labelKey: "logs.stageReviewers" },
   { id: "verifier", labelKey: "logs.stageVerifier" },
   { id: "deduplicator", labelKey: "logs.stageDeduplicator" },
+  { id: "remediator", labelKey: "logs.stageRemediator" },
 ];
 
 /** Render the durable transcript as a lossless timeline scoped by Plan stage and Reviewer. */

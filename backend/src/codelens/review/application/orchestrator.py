@@ -11,6 +11,7 @@ from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFindingBatch
 from codelens.findings.domain.existing_findings import ExistingFindingSet
 from codelens.findings.infrastructure.dedup_codec import ValidatedDedupBatch
+from codelens.findings.infrastructure.remediation_codec import ValidatedRemediationBatch
 from codelens.findings.infrastructure.verdict_codec import ValidatedVerdictBatch
 from codelens.review.application.dag_scheduler import (
     PersistedDagScheduler,
@@ -142,7 +143,12 @@ class _ValidatorPort(Protocol):
 
     async def validate(
         self, payload: bytes
-    ) -> CandidateFindingBatch | ValidatedVerdictBatch | ValidatedDedupBatch: ...
+    ) -> (
+        CandidateFindingBatch
+        | ValidatedVerdictBatch
+        | ValidatedDedupBatch
+        | ValidatedRemediationBatch
+    ): ...
 
 
 class _CrashInjectorPort(Protocol):
@@ -190,6 +196,7 @@ class ReviewOrchestrator:
         max_agent_runs_per_review: int,
         prepare_verdict: Callable[[str, PreparedReview], Awaitable[bool]] | None = None,
         prepare_dedup: Callable[[str, PreparedReview], Awaitable[bool]] | None = None,
+        prepare_remediation: Callable[[str, PreparedReview], Awaitable[bool]] | None = None,
         publish_findings: Callable[[str], Awaitable[None]] | None = None,
         transcript: _TranscriptPort | None = None,
         crash_injector: _CrashInjectorPort | None = None,
@@ -205,6 +212,7 @@ class ReviewOrchestrator:
         self._review_agent_semaphore = asyncio.Semaphore(max_agent_runs_per_review)
         self._prepare_verdict = prepare_verdict
         self._prepare_dedup = prepare_dedup
+        self._prepare_remediation = prepare_remediation
         self._publish_findings = publish_findings
         self._crash_injector = crash_injector
         self._transcript = transcript
@@ -339,6 +347,18 @@ class ReviewOrchestrator:
             if planner_checkpoint.status != "succeeded":
                 raise RuntimeError("Adaptive Planner output must be durable before Plan execution")
 
+        # Prepare Remediator before main loop (runs in parallel with reviewers)
+        remediator_node = next(
+            (node for node in plan.nodes if node.node_type is ReviewPlanNodeType.REMEDIATOR),
+            None,
+        )
+        if remediator_node is not None and self._prepare_remediation is not None:
+            skip_remediation = await self._prepare_remediation(task_id, prepared)
+            if skip_remediation:
+                await self._checkpoints.mark_skipped(
+                    task_id, remediator_node.node_id, "remediation_skipped"
+                )
+
         while True:
             if await self._cancel_if_requested(task_id):
                 return
@@ -395,6 +415,29 @@ class ReviewOrchestrator:
                 verdict_phase_done = True
 
             if verdict_phase_done:
+                # Remediator runs in parallel with reviewers (no deps).
+                # Ensure it is terminal before publishing findings so the
+                # export envelope can include remediation decisions.
+                remediator = next(
+                    (
+                        node
+                        for node in plan.nodes
+                        if node.node_type is ReviewPlanNodeType.REMEDIATOR
+                    ),
+                    None,
+                )
+                if remediator is not None:
+                    remediator_record = by_node.get(remediator.node_id)
+                    if (
+                        remediator_record is None
+                        or remediator_record.status
+                        not in {"succeeded", "failed", "timed_out", "skipped"}
+                    ):
+                        await self._execute_plan_node(task_id, prepared, remediator)
+                        continue
+                    if remediator_record.status in {"failed", "timed_out"}:
+                        await self._workflow.mark_partial_coverage(task_id)
+
                 deduplicator = next(
                     (
                         node
@@ -709,6 +752,10 @@ class ReviewOrchestrator:
             await self._completion.complete_with_verdicts(task_id, node_key, validated.decisions)
         elif isinstance(validated, ValidatedDedupBatch):
             await self._completion.complete_with_dedup(task_id, node_key, validated.decisions)
+        elif isinstance(validated, ValidatedRemediationBatch):
+            await self._completion.complete_with_remediation(
+                task_id, node_key, validated.decisions
+            )
         elif isinstance(validated, CandidateFindingBatch):
             await self._completion.complete_with_candidates(
                 task_id,

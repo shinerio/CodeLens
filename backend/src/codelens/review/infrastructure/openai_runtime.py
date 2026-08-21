@@ -48,8 +48,10 @@ from codelens.findings.application.validate_candidates import CandidateBatchCode
 from codelens.findings.domain.candidates import CandidateFindingBatch
 from codelens.findings.domain.dedup import DedupDecision
 from codelens.findings.domain.models import FindingSeverity
+from codelens.findings.domain.remediation import RemediationDecision
 from codelens.findings.domain.verdict import VerdictDecision
 from codelens.findings.infrastructure.dedup_codec import DedupCodec
+from codelens.findings.infrastructure.remediation_codec import RemediationCodec
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
 from codelens.review.application.settings import (
@@ -97,6 +99,7 @@ from codelens.review.infrastructure.location_resolver import SnapshotLocationRes
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
 from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
+from codelens.review.infrastructure.remediation_tools import RemediationCollector
 from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
 from codelens.review.infrastructure.token_counter import TiktokenCounterAdapter
 from codelens.review.infrastructure.verdict_tools import VerdictSubmissionCollector
@@ -475,6 +478,7 @@ class OpenAIAgentRuntime:
         planner_codec: PlannerOutputCodec | None = None
         verdict_codec: VerdictCodec | None = None
         dedup_codec: DedupCodec | None = None
+        remediation_codec: RemediationCodec | None = None
         if agent.role is AgentRole.PLANNER:
             planner_codec = _planner_codec(role_context)
             planner_collector = ReviewPlanSubmissionCollector(planner_codec)
@@ -505,6 +509,14 @@ class OpenAIAgentRuntime:
             done_description = prompts.tools["deduplicate_done"].description
             role_output_tools = dedup_collector.bindings(
                 dedup_description, done_description
+            )
+        elif agent.role is AgentRole.REMEDIATOR:
+            remediation_codec = _remediation_codec(role_context)
+            remediation_collector = RemediationCollector(remediation_codec)
+            resolved_review_description = prompts.tools["resolved_review"].description
+            done_description = prompts.tools["remediation_done"].description
+            role_output_tools = remediation_collector.bindings(
+                resolved_review_description, done_description
             )
         checkpoint_tracker = ContextCheckpointTracker()
         loop_reset_signal = ToolLoopResetSignal()
@@ -957,6 +969,13 @@ class OpenAIAgentRuntime:
                 ):
                     raise ValueError("Dedup output state has the wrong value")
                 canonical_bytes = dedup_codec.canonical_bytes(final_output)
+            elif remediation_codec is not None:
+                final_output = tool_context.final_output()
+                if not isinstance(final_output, tuple) or not all(
+                    isinstance(item, RemediationDecision) for item in final_output
+                ):
+                    raise ValueError("Remediation output state has the wrong value")
+                canonical_bytes = remediation_codec.canonical_bytes(final_output)
             else:
                 final_output = tool_context.final_output()
                 if not isinstance(final_output, CandidateFindingBatch):
@@ -1619,6 +1638,31 @@ def _dedup_codec(role_context: dict[str, object] | None) -> DedupCodec:
         return DedupCodec(expected_ids=expected_ids)
     except (KeyError, TypeError, ValueError) as error:
         raise PermanentAgentOutputError("Dedup role context has an invalid value") from error
+
+
+def _remediation_codec(role_context: dict[str, object] | None) -> RemediationCodec:
+    """Rebuild Remediation constraints from the frozen pending-finding projection."""
+
+    context = role_context.get("remediation_context") if role_context is not None else None
+    if not isinstance(context, dict) or set(context) != {
+        "pending_findings",
+        "schema_version",
+    }:
+        raise PermanentAgentOutputError("Remediation role context has an invalid shape")
+    raw_findings = context["pending_findings"]
+    if context["schema_version"] != "1" or not isinstance(raw_findings, list):
+        raise PermanentAgentOutputError("Remediation role context has an invalid value")
+    try:
+        expected_refs = frozenset(
+            str(item["remediation_ref"])
+            for item in raw_findings
+            if isinstance(item, dict)
+        )
+        if len(expected_refs) != len(raw_findings):
+            raise ValueError("Remediation projection contains duplicate or non-object values")
+        return RemediationCodec(expected_refs=expected_refs)
+    except (KeyError, TypeError, ValueError) as error:
+        raise PermanentAgentOutputError("Remediation role context has an invalid value") from error
 
 
 def _model_input(

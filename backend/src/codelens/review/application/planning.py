@@ -254,6 +254,7 @@ class ReviewPlanCompiler:
             if should_run_verifier:
                 required.append("review-verifier:v2")
             required.append("review-deduplicator:v2")
+            required.append("review-remediator:v2")
             missing = [reference for reference in required if reference not in execution_specs]
             if missing:
                 raise ValueError(f"frozen execution spec is missing: {missing}")
@@ -387,6 +388,15 @@ class ReviewPlanCompiler:
             depends_on=dedup_depends,
         )
         nodes.append(deduplicator)
+        remediator = self._node(
+            task_id,
+            ReviewPlanNodeType.REMEDIATOR,
+            "review-remediator:v2",
+            ReviewPass.REMEDIATOR,
+            shard_id="batch",
+            depends_on=(),
+        )
+        nodes.append(remediator)
         guidance: tuple[ReviewerPlanGuidance, ...] = ()
         return ReviewPlan.create(
             task_id=task_id,

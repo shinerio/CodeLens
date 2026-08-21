@@ -15,6 +15,8 @@ from codelens.review.domain.tool_results import ToolResultError, parse_tool_resu
 _STABLE_REVIEW_TOOL_NAMES = frozenset(
     {
         "comment",
+        "deduplicate",
+        "deduplicate_done",
         "finalize_plan",
         "finalize_verdicts",
         "find_files",
@@ -22,6 +24,8 @@ _STABLE_REVIEW_TOOL_NAMES = frozenset(
         "grep",
         "merge",
         "read_file",
+        "remediation_done",
+        "resolved_review",
         "retract_comment",
         "submit_review_plan",
         "task_done",

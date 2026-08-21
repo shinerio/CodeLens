@@ -437,3 +437,31 @@ dedup_decisions = Table(
     Column("deduplicator_run_id", String(128)),
     Column("created_at", DateTime(timezone=True), nullable=False),
 )
+
+remediation_decisions = Table(
+    "remediation_decisions",
+    metadata,
+    Column(
+        "id",
+        Integer,
+        primary_key=True,
+        autoincrement=True,
+    ),
+    Column(
+        "task_id",
+        String(128),
+        ForeignKey("review_tasks.task_id", ondelete="CASCADE"),
+        nullable=False,
+        index=True,
+    ),
+    Column("source_id", String(128), nullable=False),
+    Column("finding_id", String(256), nullable=False),
+    Column("outcome", String(16), nullable=False),
+    Column("evidence_summary", Text, nullable=False),
+    Column("decision_source", String(16), nullable=False),
+    Column("remediator_run_id", String(128)),
+    Column("created_at", DateTime(timezone=True), nullable=False),
+    UniqueConstraint(
+        "task_id", "source_id", "finding_id", name="uq_remediation_decisions"
+    ),
+)

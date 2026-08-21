@@ -3,6 +3,7 @@ import {
   Blocks,
   Bot,
   Bug,
+  CheckCheck,
   ClipboardList,
   Database,
   Filter,
@@ -50,6 +51,7 @@ const AGENT_PRESENTATIONS: Readonly<Record<string, AgentPresentation>> = {
   "review-planner": { nameKey: "catalog.planner", descriptionKey: "catalog.plannerDescription", icon: ClipboardList },
   "review-verifier": { nameKey: "catalog.verifier", descriptionKey: "catalog.verifierDescription", icon: Scale },
   "review-deduplicator": { nameKey: "catalog.deduplicator", descriptionKey: "catalog.deduplicatorDescription", icon: Filter },
+  "review-remediator": { nameKey: "catalog.remediator", descriptionKey: "catalog.remediatorDescription", icon: CheckCheck },
 };
 
 const STATUS_KEYS: Readonly<Record<ReviewerCapabilityStatus, TranslationKey>> = {

@@ -30,8 +30,13 @@ from codelens.findings.domain.dedup import (
     run_deterministic_filter,
 )
 from codelens.findings.domain.existing_findings import ExistingFindingSet
+from codelens.findings.domain.remediation import (
+    PendingRemediation,
+    run_deterministic_remediation_filter,
+)
 from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome, verdict_decision_id
 from codelens.findings.infrastructure.dedup_codec import DedupCodec
+from codelens.findings.infrastructure.remediation_codec import RemediationCodec
 from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.instruction_policy.domain.models import ResolvedInstructionSet
 from codelens.review.application.context_builder import ContextBuilder
@@ -70,6 +75,7 @@ from codelens.review.domain.review_strategy import (
 from codelens.review.infrastructure.dedup_tools import DedupValidator
 from codelens.review.infrastructure.file_tool_limits import FilesystemToolLimitsStore
 from codelens.review.infrastructure.planner_output import PlannerOutputCodec
+from codelens.review.infrastructure.remediation_tools import RemediationValidator
 from codelens.review.infrastructure.repositories import (
     CheckpointRecord,
     SqlAgentExecutionSpecStore,
@@ -478,6 +484,7 @@ class WorkerReviewExecutor:
         self._verdict_store = verdict_store
         self._verdict_codecs: dict[tuple[str, str], VerdictCodec] = {}
         self._dedup_codecs: dict[tuple[str, str], DedupCodec] = {}
+        self._remediation_codecs: dict[tuple[str, str], RemediationCodec] = {}
 
     async def recover(self) -> None:
         """Recover Task 11 checkpoints and reconcile every registered owned worktree."""
@@ -516,6 +523,7 @@ class WorkerReviewExecutor:
             ),
             prepare_verdict=self._prepare_verdict,
             prepare_dedup=self._prepare_dedup,
+            prepare_remediation=self._prepare_remediation,
             publish_findings=self._publish_findings,
             transcript=self._transcripts,
         )
@@ -719,6 +727,7 @@ class WorkerReviewExecutor:
             "review-planner:v2",
             "review-verifier:v2",
             "review-deduplicator:v2",
+            "review-remediator:v2",
         )
         specs_by_reference = {spec.agent.reference: spec for spec in stored_specs.values()}
         missing = tuple(
@@ -998,6 +1007,7 @@ class WorkerReviewExecutor:
         if len(selection.reviewer_versions) > 1:
             required_references.append("review-verifier:v2")
         required_references.append("review-deduplicator:v2")
+        required_references.append("review-remediator:v2")
         specs_by_reference = {spec.agent.reference: spec for spec in stored_specs.values()}
         missing_references = tuple(
             reference for reference in required_references if reference not in specs_by_reference
@@ -1118,6 +1128,8 @@ class WorkerReviewExecutor:
                 else base_input
             )
             if node.node_type is ReviewPlanNodeType.DEDUPLICATOR:
+                visible_payload = add_existing_findings_context(visible_payload, existing_findings)
+            elif node.node_type is ReviewPlanNodeType.REMEDIATOR:
                 visible_payload = add_existing_findings_context(visible_payload, existing_findings)
             run = AgentRun.create(
                 task_id=task_id,
@@ -1252,12 +1264,17 @@ class WorkerReviewExecutor:
         prepared: PreparedReview,
         agent: AgentVersion,
         checkpoint: CheckpointRecord,
-    ) -> CandidateValidator | VerdictValidator | DedupValidator:
+    ) -> CandidateValidator | VerdictValidator | DedupValidator | RemediationValidator:
         if agent.role.value == "deduplicator":
             dedup_codec = self._dedup_codecs.get((task_id, node_key))
             if dedup_codec is None:
                 raise ValueError("Dedup constraints were not prepared")
             return DedupValidator(dedup_codec)
+        if agent.role.value == "remediator":
+            remediation_codec = self._remediation_codecs.get((task_id, node_key))
+            if remediation_codec is None:
+                raise ValueError("Remediation constraints were not prepared")
+            return RemediationValidator(remediation_codec)
         if agent.role.value == "verifier":
             verdict_codec = self._verdict_codecs.get((task_id, node_key))
             if verdict_codec is None:
@@ -1458,6 +1475,82 @@ class WorkerReviewExecutor:
         self._dedup_codecs[(task_id, dedup_node.node_id)] = DedupCodec(
             expected_ids=frozenset(
                 finding.verdict_decision_id for finding in unresolved
+            )
+        )
+        return False
+
+    async def _prepare_remediation(self, task_id: str, prepared: PreparedReview) -> bool:
+        """Prepare Remediator input and deterministic pre-filter.
+
+        Returns ``True`` when the remediator should be skipped.
+        """
+
+        existing = prepared.existing_findings
+        if existing is None or not existing.items:
+            return True
+        plan = prepared.plan
+        if plan is None:
+            return True
+        remediator_node = next(
+            (
+                node
+                for node in plan.nodes
+                if node.node_type is ReviewPlanNodeType.REMEDIATOR
+            ),
+            None,
+        )
+        if remediator_node is None:
+            return True
+        record = await self._review_store.get_execution(task_id)
+        if record is not None and record.scope_type == "full":
+            return True
+        pending = tuple(
+            PendingRemediation(
+                remediation_ref=f"{item.source_id}:{item.finding_id}",
+                source_id=item.source_id,
+                finding_id=item.finding_id,
+                title=item.title,
+                content=item.content,
+                path=item.path,
+                side=item.side,
+                start_line=item.start_line,
+                end_line=item.end_line,
+                existing_code=item.existing_code,
+                category=item.category,
+                severity=item.severity,
+                recommendation=item.recommendation,
+            )
+            for item in existing.items
+        )
+        changed_paths = frozenset(prepared.snapshot.manifest.review_paths)
+        deterministic = run_deterministic_remediation_filter(pending, changed_paths)
+        if deterministic:
+            await self._review_store.save_remediation_decisions(
+                task_id, tuple(deterministic)
+            )
+        resolved_refs = {
+            f"{d.source_id}:{d.finding_id}" for d in deterministic
+        }
+        unresolved = tuple(
+            p for p in pending if p.remediation_ref not in resolved_refs
+        )
+        if not unresolved:
+            return True
+        remediation_context = {
+            "schema_version": "1",
+            "pending_findings": [p.as_payload() for p in unresolved],
+        }
+        envelope = json.loads(prepared.input_payloads[remediator_node.node_id])
+        role_context = envelope.setdefault("role_context", {})
+        if not isinstance(role_context, dict):
+            raise ValueError("Remediator role context must be an object")
+        role_context["remediation_context"] = remediation_context
+        prepared.input_payloads[remediator_node.node_id] = json.dumps(
+            envelope, sort_keys=True, separators=(",", ":")
+        ).encode()
+        self._remediation_codecs[(task_id, remediator_node.node_id)] = RemediationCodec(
+            expected_refs=frozenset(
+                p.remediation_ref for p in unresolved
             )
         )
         return False

@@ -76,7 +76,7 @@ export type ReviewResponse = {
   verdict_summary: Record<"accept" | "deny" | "merge", number>;
 };
 
-export type ReviewPlanNodeRole = "planner" | "reviewer" | "verifier" | "deduplicator";
+export type ReviewPlanNodeRole = "planner" | "reviewer" | "verifier" | "deduplicator" | "remediator";
 
 export type ReviewPlanNodeProjection = {
   node_id: string;

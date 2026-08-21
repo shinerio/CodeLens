@@ -27,7 +27,7 @@ class AgentRunStatus(StrEnum):
     SUPERSEDED = "superseded"
 
 
-type AgentRunRole = Literal["planner", "reviewer", "verifier", "deduplicator"]
+type AgentRunRole = Literal["planner", "reviewer", "verifier", "deduplicator", "remediator"]
 
 
 def _run_id(

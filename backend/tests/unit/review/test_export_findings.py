@@ -16,6 +16,7 @@ from codelens.findings.domain.models import (
     FindingSeverity,
     SourceLocation,
 )
+from codelens.findings.domain.remediation import RemediationDecision
 from codelens.review.application.export_findings import ExportFindingsHandler
 from codelens.review.domain.ports import ReviewExecutionRecord, ReviewRecord
 from codelens.review.domain.review_strategy import (
@@ -129,6 +130,9 @@ class _FakeStore:
 
     async def list_findings(self, _task_id: str) -> tuple[Finding, ...]:
         return self._findings
+
+    async def list_remediation_decisions(self, _task_id: str) -> tuple[RemediationDecision, ...]:
+        return ()
 
 
 class _FakeReader:

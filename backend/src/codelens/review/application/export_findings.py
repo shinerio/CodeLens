@@ -10,6 +10,7 @@ from typing import Any, Literal, Protocol, cast
 from zoneinfo import ZoneInfo
 
 from codelens.findings.domain.models import Evidence, Finding, RuleReference, SourceLocation
+from codelens.findings.domain.remediation import RemediationDecision
 from codelens.review.domain.ports import ReviewExecutionRecord, ReviewPlanRecord, ReviewRecord
 from codelens.review.domain.review_plan import ReviewPlanNodeType
 from codelens.review.domain.review_strategy import AdaptiveReviewerSelection
@@ -21,6 +22,10 @@ class _ReviewStorePort(Protocol):
     async def get_execution(self, task_id: str) -> ReviewExecutionRecord | None: ...
 
     async def list_findings(self, task_id: str) -> Sequence[Finding]: ...
+
+    async def list_remediation_decisions(
+        self, task_id: str
+    ) -> tuple[RemediationDecision, ...]: ...
 
 
 class _RevisionReaderPort(Protocol):
@@ -135,6 +140,28 @@ class ReviewExportMetaV2:
 
 
 @dataclass(frozen=True)
+class RemediationDecisionExport:
+    """One remediation decision over an existing finding, exposed to plugins."""
+
+    source_id: str
+    finding_id: str
+    outcome: str
+    evidence_summary: str
+    decision_source: str
+
+
+@dataclass(frozen=True)
+class RemediationSummaryExport:
+    """Aggregate remediation results for the export envelope."""
+
+    total_existing: int
+    resolved: int
+    unresolved: int
+    unclear: int
+    decisions: tuple[RemediationDecisionExport, ...]
+
+
+@dataclass(frozen=True)
 class FindingExportEnvelopeV2:
     """Canonical Published-Finding export structure for plugin API v2."""
 
@@ -142,6 +169,7 @@ class FindingExportEnvelopeV2:
     exported_at: datetime
     review: ReviewExportMetaV2
     findings: tuple[FindingExportItem, ...]
+    remediation: RemediationSummaryExport | None = None
 
 
 # Canonical aliases keep domain-facing names concise while the public plugin
@@ -321,6 +349,7 @@ class ExportFindingsHandler:
                 separators=(",", ":"),
             ).encode("utf-8")
         ).hexdigest()
+        remediation = await self._build_remediation_summary(task_id)
         return FindingExportEnvelopeV2(
             schema_version="2.0",
             exported_at=datetime.now(ZoneInfo("UTC")),
@@ -356,6 +385,35 @@ class ExportFindingsHandler:
                 external_context=review.external_context,
             ),
             findings=tuple(export_items),
+            remediation=remediation,
+        )
+
+    async def _build_remediation_summary(
+        self, task_id: str
+    ) -> RemediationSummaryExport | None:
+        """Build remediation summary from persisted decisions, if any."""
+
+        decisions = await self._store.list_remediation_decisions(task_id)
+        if not decisions:
+            return None
+        resolved = sum(1 for d in decisions if d.outcome.value == "resolved")
+        unresolved = sum(1 for d in decisions if d.outcome.value == "unresolved")
+        unclear = sum(1 for d in decisions if d.outcome.value == "unclear")
+        return RemediationSummaryExport(
+            total_existing=len(decisions),
+            resolved=resolved,
+            unresolved=unresolved,
+            unclear=unclear,
+            decisions=tuple(
+                RemediationDecisionExport(
+                    source_id=d.source_id,
+                    finding_id=d.finding_id,
+                    outcome=d.outcome.value,
+                    evidence_summary=d.evidence_summary,
+                    decision_source=d.decision_source.value,
+                )
+                for d in decisions
+            ),
         )
 
     async def _build_source_snippet(

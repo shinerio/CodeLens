@@ -14,7 +14,7 @@ type AgentPromptCatalogDto = {
   reference: string;
   agent_id: string;
   version: number;
-  role: "planner" | "reviewer" | "verifier" | "deduplicator";
+  role: "planner" | "reviewer" | "verifier" | "deduplicator" | "remediator";
   dimensions: string[];
   capability_readiness: "ready";
 };

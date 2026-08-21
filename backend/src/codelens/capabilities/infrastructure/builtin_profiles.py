@@ -67,6 +67,14 @@ def builtin_capability_profiles() -> dict[str, CapabilityProfile]:
             "deduplicator",
             _tools(("deduplicate", 2), ("deduplicate_done", 2)),
         ),
+        _profile(
+            "remediator",
+            _tools(
+                *evidence,
+                ("resolved_review", 2),
+                ("remediation_done", 2),
+            ),
+        ),
     )
     return {profile.reference: profile for profile in profiles}
 

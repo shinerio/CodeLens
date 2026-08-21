@@ -515,7 +515,7 @@ class AgentPromptCatalogEntryResponse(StrictDto):
     reference: str
     agent_id: str
     version: int
-    role: Literal["planner", "reviewer", "verifier", "deduplicator"]
+    role: Literal["planner", "reviewer", "verifier", "deduplicator", "remediator"]
     dimensions: list[str]
     capability_readiness: Literal["ready"]
 

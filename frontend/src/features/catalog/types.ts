@@ -1,6 +1,6 @@
 export type ReviewerCapabilityStatus = "ready" | "degraded" | "unavailable";
 
-export type AgentRole = "planner" | "reviewer" | "verifier" | "deduplicator";
+export type AgentRole = "planner" | "reviewer" | "verifier" | "deduplicator" | "remediator";
 
 export interface ReviewerCatalogEntry {
   reference: string;

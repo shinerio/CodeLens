@@ -76,7 +76,38 @@ class LocalExistingFindingsProvider:
             isinstance(item, Mapping) for item in raw_findings
         ):
             raise ValueError("local findings report has an invalid findings array")
-        return tuple(LocalExistingFindingsProvider._parse_finding(item) for item in raw_findings)
+        resolved_refs = LocalExistingFindingsProvider._resolved_refs(envelope)
+        parsed = [
+            LocalExistingFindingsProvider._parse_finding(item)
+            for item in raw_findings
+            if f"local:{item.get('finding_id', '')}" not in resolved_refs
+        ]
+        return tuple(parsed)
+
+    @staticmethod
+    def _resolved_refs(envelope: Mapping[object, object]) -> frozenset[str]:
+        """Extract finding IDs marked as resolved by the Remediator."""
+
+        remediation = envelope.get("remediation")
+        if not isinstance(remediation, Mapping):
+            return frozenset()
+        decisions = remediation.get("decisions")
+        if not isinstance(decisions, list):
+            return frozenset()
+        refs: set[str] = set()
+        for decision in decisions:
+            if not isinstance(decision, Mapping):
+                continue
+            outcome = decision.get("outcome")
+            source_id = decision.get("source_id")
+            finding_id = decision.get("finding_id")
+            if (
+                outcome == "resolved"
+                and isinstance(source_id, str)
+                and isinstance(finding_id, str)
+            ):
+                refs.add(f"{source_id}:{finding_id}")
+        return frozenset(refs)
 
     @staticmethod
     def _parse_finding(item: Mapping[object, object]) -> ExistingFinding:

@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any, Protocol
 
 from codelens.findings.domain.models import Finding
+from codelens.findings.domain.remediation import RemediationDecision
 from codelens.plugin.domain.models import ExportHistoryEntry, ExportResult, PluginRecord
 from codelens.plugin.domain.ports import (
     ExportHistoryPort,
@@ -46,6 +47,10 @@ class ReviewExportStorePort(Protocol):
 
     async def list_findings(self, task_id: str) -> Sequence[Finding]:
         """List all findings for a review task."""
+        raise NotImplementedError
+
+    async def list_remediation_decisions(self, task_id: str) -> tuple[RemediationDecision, ...]:
+        """List remediation decisions for a review task."""
         raise NotImplementedError
 
 

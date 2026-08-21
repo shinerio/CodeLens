@@ -6,6 +6,7 @@ const ROLE_LABELS = {
   reviewer: "execution.roleReviewer",
   verifier: "execution.roleVerifier",
   deduplicator: "execution.roleDeduplicator",
+  remediator: "execution.roleRemediator",
 } as const;
 
 export function AgentRunTimeline({ plan }: { plan: ReviewPlanProjection | null }) {

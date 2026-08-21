@@ -279,13 +279,14 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
         ReviewPlanNodeType.REVIEWER,
         ReviewPlanNodeType.VERIFIER,
         ReviewPlanNodeType.DEDUPLICATOR,
+        ReviewPlanNodeType.REMEDIATOR,
     }
     assert set(spec_store.records) == {node.node_id for node in prepared.plan.nodes}
     assert all(
         json.loads(payload)["role_context"]["_host_run_id"].startswith("run_")
         for payload in prepared.input_payloads.values()
     )
-    # existing_findings is injected only into the DEDUPLICATOR node
+    # existing_findings is injected into DEDUPLICATOR and REMEDIATOR nodes
     dedup_node = next(
         node for node in prepared.plan.nodes
         if node.node_type is ReviewPlanNodeType.DEDUPLICATOR
@@ -294,10 +295,18 @@ async def test_prepare_compiles_fixed_team_plan_without_planner(
     assert dedup_payload["role_context"]["existing_findings"]["findings"] == [
         existing_findings.items[0].as_payload()
     ]
+    remediation_node = next(
+        node for node in prepared.plan.nodes
+        if node.node_type is ReviewPlanNodeType.REMEDIATOR
+    )
+    remediation_payload = json.loads(prepared.input_payloads[remediation_node.node_id])
+    assert remediation_payload["role_context"]["existing_findings"]["findings"] == [
+        existing_findings.items[0].as_payload()
+    ]
     # reviewer and verifier nodes must NOT carry existing_findings
     non_dedup_nodes = [
         node for node in prepared.plan.nodes
-        if node.node_type is not ReviewPlanNodeType.DEDUPLICATOR
+        if node.node_type not in (ReviewPlanNodeType.DEDUPLICATOR, ReviewPlanNodeType.REMEDIATOR)
     ]
     for node in non_dedup_nodes:
         assert "existing_findings" not in json.loads(
@@ -450,7 +459,7 @@ async def test_prepare_runs_and_persists_adaptive_planner_before_reviewers(
     assert "existing_findings" not in planner_payload.get("role_context", {})
     for node in prepared.plan.nodes:
         node_payload = json.loads(prepared.input_payloads[node.node_id])
-        if node.node_type is ReviewPlanNodeType.DEDUPLICATOR:
+        if node.node_type in (ReviewPlanNodeType.DEDUPLICATOR, ReviewPlanNodeType.REMEDIATOR):
             assert node_payload["role_context"]["existing_findings"]["findings"] == [
                 existing_findings.items[0].as_payload()
             ]

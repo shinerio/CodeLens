@@ -40,6 +40,14 @@ def test_builtin_profiles_expose_only_the_approved_tools() -> None:
         "deduplicate",
         "deduplicate_done",
     )
+    assert _tool_names("remediator:v2") == (
+        "find_files",
+        "grep",
+        "read_file",
+        "get_diff",
+        "resolved_review",
+        "remediation_done",
+    )
 
 
 def test_every_visible_tool_contract_is_v2() -> None:
@@ -56,6 +64,7 @@ def test_every_builtin_profile_is_read_only_and_contains_no_forbidden_tool() -> 
         "planner:v2",
         "verifier:v2",
         "deduplicator:v2",
+        "remediator:v2",
     }
     assert all(profile.is_read_only for profile in profiles.values())
     assert (

@@ -9,6 +9,7 @@ from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFinding, CandidateFindingBatch
 from codelens.findings.domain.clusters import FindingCluster
 from codelens.findings.domain.dedup import DedupDecision
+from codelens.findings.domain.remediation import RemediationDecision
 from codelens.findings.domain.verdict import VerdictDecision
 from codelens.review.domain.models import ReviewTask
 from codelens.review.domain.review_plan import ReviewPlan
@@ -526,6 +527,16 @@ class AgentRunCompletionPort(Protocol):
         decisions: tuple[DedupDecision, ...],
     ) -> None:
         """Atomically persist Deduplicator decisions and complete their AgentRun."""
+
+        raise NotImplementedError
+
+    async def complete_with_remediation(
+        self,
+        task_id: str,
+        node_key: str,
+        decisions: tuple[RemediationDecision, ...],
+    ) -> None:
+        """Atomically persist Remediator decisions and complete their AgentRun."""
 
         raise NotImplementedError
 

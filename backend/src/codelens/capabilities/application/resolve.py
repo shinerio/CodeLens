@@ -80,6 +80,7 @@ class CapabilityResolver:
             "review-plan:2": ("finalize_plan", 2),
             "verdict:2": ("finalize_verdicts", 2),
             "dedup:1": ("deduplicate_done", 2),
+            "remediation:1": ("remediation_done", 2),
         }.get(agent.output_contract_version)
         if expected_output_tool is None:
             raise ValueError("Agent output contract is unavailable")

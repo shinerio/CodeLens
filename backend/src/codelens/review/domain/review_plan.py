@@ -14,6 +14,7 @@ class ReviewPass(IntEnum):
     REVIEWER = 1
     VERIFIER = 2
     DEDUPLICATOR = 3
+    REMEDIATOR = 4
 
 
 class ReviewPlanNodeType(StrEnum):
@@ -23,6 +24,7 @@ class ReviewPlanNodeType(StrEnum):
     REVIEWER = "reviewer"
     VERIFIER = "verifier"
     DEDUPLICATOR = "deduplicator"
+    REMEDIATOR = "remediator"
 
 
 @dataclass(frozen=True)
@@ -70,6 +72,7 @@ _PASS_BY_NODE_TYPE = {
     ReviewPlanNodeType.REVIEWER: ReviewPass.REVIEWER,
     ReviewPlanNodeType.VERIFIER: ReviewPass.VERIFIER,
     ReviewPlanNodeType.DEDUPLICATOR: ReviewPass.DEDUPLICATOR,
+    ReviewPlanNodeType.REMEDIATOR: ReviewPass.REMEDIATOR,
 }
 
 
@@ -164,9 +167,20 @@ class ReviewPlan:
 
     @classmethod
     def from_json(cls, payload: str, expected_hash: str) -> "ReviewPlan":
-        """Rebuild a persisted plan and reject any canonical hash mismatch."""
+        """Rebuild a persisted plan and reject any canonical hash mismatch.
+
+        A limited migration is applied for plans persisted before the
+        Remediator became a zero-dependency parallel node: any stale
+        ``depends_on`` on a remediator node is cleared, and the hash check
+        is skipped for the migrated plan.
+        """
 
         value = json.loads(payload)
+        migrated = False
+        for item in value["nodes"]:
+            if str(item["node_type"]) == "remediator" and item.get("depends_on"):
+                item["depends_on"] = []
+                migrated = True
         nodes = tuple(
             ReviewPlanNode.create(
                 task_id=str(item["task_id"]),
@@ -203,6 +217,8 @@ class ReviewPlan:
                 for item in value.get("capability_degradations", ())
             ),
         )
+        if migrated:
+            return plan
         if plan.plan_hash != expected_hash or plan.canonical_json() != payload:
             raise ValueError("persisted Review Plan hash mismatch")
         return plan
@@ -347,6 +363,19 @@ class ReviewPlan:
                 raise ValueError(
                     "Deduplicator must depend on the verifier (if present) "
                     "or all reviewer nodes"
+                )
+        remediator_nodes = tuple(
+            node for node in nodes if node.node_type is ReviewPlanNodeType.REMEDIATOR
+        )
+        if len(remediator_nodes) > 1:
+            raise ValueError("Review plan cannot contain multiple remediators")
+        if remediator_nodes:
+            if remediator_nodes[0].shard_id != "batch":
+                raise ValueError("Remediator must use the batch shard")
+            if remediator_nodes[0].depends_on != ():
+                raise ValueError(
+                    "Remediator must have no dependencies; "
+                    "it runs in parallel with reviewers using frozen existing_findings"
                 )
 
         canonical_reviewers = tuple(sorted(reviewer_references))

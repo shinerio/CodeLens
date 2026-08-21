@@ -35,6 +35,11 @@ from codelens.findings.domain.models import (
     RuleReference,
     SourceLocation,
 )
+from codelens.findings.domain.remediation import (
+    RemediationDecision,
+    RemediationDecisionSource,
+    RemediationOutcome,
+)
 from codelens.findings.domain.verdict import VerdictDecision, VerdictOutcome, verdict_decision_id
 from codelens.review.domain.agent_run import AgentRun, InvalidAgentRunStateError
 from codelens.review.domain.models import ReviewTask
@@ -79,6 +84,7 @@ from codelens.review.infrastructure.tables import (
     jobs,
     recent_repositories,
     recent_repository_settings,
+    remediation_decisions,
     review_file_scopes,
     review_plans,
     review_profiles,
@@ -2861,6 +2867,166 @@ class SqlReviewStore:
             )
             if event_id is None:
                 raise RuntimeError("Deduplicator completion event was not persisted")
+            return ReviewEvent(
+                event_id=int(event_id),
+                task_id=task_id,
+                event_type="agent.succeeded.v2",
+                payload=event_payload,
+            )
+
+        event = await self._database.run_transaction(operation)
+        if event is not None:
+            await self._publish_events([event])
+
+    async def save_remediation_decisions(
+        self,
+        task_id: str,
+        decisions: tuple[RemediationDecision, ...],
+        *,
+        run_id: str | None = None,
+    ) -> None:
+        """Upsert remediation decisions (idempotent per task_id+source_id+finding_id)."""
+
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> None:
+            for decision in decisions:
+                await session.execute(
+                    sqlite_insert(remediation_decisions)
+                    .values(
+                        task_id=task_id,
+                        source_id=decision.source_id,
+                        finding_id=decision.finding_id,
+                        outcome=decision.outcome.value,
+                        evidence_summary=decision.evidence_summary,
+                        decision_source=decision.decision_source.value,
+                        remediator_run_id=run_id,
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(
+                            remediation_decisions.c.task_id,
+                            remediation_decisions.c.source_id,
+                            remediation_decisions.c.finding_id,
+                        ),
+                    )
+                )
+
+        await self._database.run_transaction(operation)
+
+    async def list_remediation_decisions(
+        self, task_id: str
+    ) -> tuple[RemediationDecision, ...]:
+        """Return all remediation decisions for one task."""
+
+        async with self._database.sessions() as session:
+            rows = (
+                await session.execute(
+                    select(
+                        remediation_decisions.c.source_id,
+                        remediation_decisions.c.finding_id,
+                        remediation_decisions.c.outcome,
+                        remediation_decisions.c.evidence_summary,
+                        remediation_decisions.c.decision_source,
+                    ).where(remediation_decisions.c.task_id == task_id)
+                )
+            ).all()
+            return tuple(
+                RemediationDecision(
+                    source_id=str(row.source_id),
+                    finding_id=str(row.finding_id),
+                    outcome=RemediationOutcome(row.outcome),
+                    evidence_summary=str(row.evidence_summary),
+                    decision_source=RemediationDecisionSource(row.decision_source),
+                )
+                for row in rows
+            )
+
+    async def complete_with_remediation(
+        self,
+        task_id: str,
+        node_key: str,
+        decisions: tuple[RemediationDecision, ...],
+    ) -> None:
+        """Atomically persist Remediator decisions and complete the Remediator run."""
+
+        timestamp = _now()
+
+        async def operation(session: AsyncSession) -> ReviewEvent | None:
+            checkpoint_status = await session.scalar(
+                select(dag_checkpoints.c.status).where(
+                    dag_checkpoints.c.task_id == task_id,
+                    dag_checkpoints.c.node_key == node_key,
+                )
+            )
+            if checkpoint_status == "succeeded":
+                return None
+            if checkpoint_status not in {"output_saved", "validating"}:
+                raise InvalidAgentRunStateError("Remediator AgentRun is not ready for completion")
+            for decision in decisions:
+                await session.execute(
+                    sqlite_insert(remediation_decisions)
+                    .values(
+                        task_id=task_id,
+                        source_id=decision.source_id,
+                        finding_id=decision.finding_id,
+                        outcome=decision.outcome.value,
+                        evidence_summary=decision.evidence_summary,
+                        decision_source=decision.decision_source.value,
+                        remediator_run_id="",
+                        created_at=timestamp,
+                    )
+                    .on_conflict_do_nothing(
+                        index_elements=(
+                            remediation_decisions.c.task_id,
+                            remediation_decisions.c.source_id,
+                            remediation_decisions.c.finding_id,
+                        ),
+                    )
+                )
+            result = cast(
+                CursorResult[Any],
+                await session.execute(
+                    update(dag_checkpoints)
+                    .where(
+                        dag_checkpoints.c.task_id == task_id,
+                        dag_checkpoints.c.node_key == node_key,
+                        dag_checkpoints.c.status.in_(("output_saved", "validating")),
+                    )
+                    .values(
+                        status="succeeded",
+                        result_summary_json=_json({"remediation_count": len(decisions)}),
+                        updated_at=timestamp,
+                    )
+                ),
+            )
+            if result.rowcount != 1:
+                raise InvalidAgentRunStateError("Remediator completion lost its expected state")
+            event_payload = {
+                "node_key": node_key,
+                "remediation_count": len(decisions),
+            }
+            await session.execute(
+                insert(events).values(
+                    **_event_values(task_id, "agent_run.completed.v2", event_payload)
+                )
+            )
+            await session.execute(
+                insert(events).values(
+                    **_event_values(
+                        task_id,
+                        "review.remediation_completed.v2",
+                        {"remediation_count": len(decisions)},
+                    )
+                )
+            )
+            event_id = await session.scalar(
+                insert(events)
+                .values(**_event_values(task_id, "agent.succeeded.v2", event_payload))
+                .returning(events.c.event_id)
+            )
+            if event_id is None:
+                raise RuntimeError("Remediator completion event was not persisted")
             return ReviewEvent(
                 event_id=int(event_id),
                 task_id=task_id,

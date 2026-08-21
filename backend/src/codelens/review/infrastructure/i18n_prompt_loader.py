@@ -27,6 +27,8 @@ _REQUIRED_TOOL_NAMES = frozenset(
         "finalize_verdicts",
         "deduplicate",
         "deduplicate_done",
+        "resolved_review",
+        "remediation_done",
     }
 )
 

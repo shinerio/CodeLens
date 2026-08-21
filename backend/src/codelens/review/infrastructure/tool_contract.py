@@ -174,9 +174,10 @@ _OUTPUT_TOOL_NAMES = frozenset(
         "merge",
         "finalize_verdicts",
         "finalize_plan",
-        "review_ignore",
         "deduplicate",
         "deduplicate_done",
+        "resolved_review",
+        "remediation_done",
     )
 )
 """Tools that produce findings or declare completion, resetting no-progress state."""

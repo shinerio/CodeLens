@@ -171,5 +171,34 @@ class MarkdownFindingExportFormatter:
 
             lines.append("---\n")
 
+        # Remediation section (existing findings evaluated against current changes)
+        if envelope.remediation and envelope.remediation.decisions:
+            remediation = envelope.remediation
+            lines.append("## 已修复问题 / Resolved Issues\n")
+            resolved = [d for d in remediation.decisions if d.outcome == "resolved"]
+            unclear = [d for d in remediation.decisions if d.outcome == "unclear"]
+            if resolved:
+                lines.append("| Source | Finding ID | Evidence |")
+                lines.append("|---|---|---|")
+                for d in resolved:
+                    lines.append(
+                        f"| {d.source_id} | `{d.finding_id[:16]}` | {d.evidence_summary} |"
+                    )
+                lines.append("")
+            if unclear:
+                lines.append("## 待确认问题 / Unclear Issues\n")
+                for d in unclear:
+                    lines.append(
+                        f"- **{d.source_id}** `{d.finding_id[:16]}`: {d.evidence_summary}"
+                    )
+                lines.append("")
+            lines.append(
+                f"**Remediation Summary:** {remediation.resolved} resolved, "
+                f"{remediation.unresolved} unresolved, "
+                f"{remediation.unclear} unclear "
+                f"(out of {remediation.total_existing} existing findings)\n"
+            )
+            lines.append("---\n")
+
         content = "\n".join(lines)
         return content.encode("utf-8")
