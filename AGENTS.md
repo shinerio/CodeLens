@@ -2,7 +2,7 @@
 
 ## 1. 文档职责
 
-本文件规定 Agent 在 CodeLens 仓库中的工作方式，是实现流程、代码规范和质量门禁的唯一权威来源。系统本身的架构事实与约束由 [`docs/ARCHITECTURE.md`](./docs/ARCHITECTURE.md) 定义。
+本文件规定 Agent 在 CodeLens 仓库中的工作方式，是实现流程、代码规范和质量门禁的唯一权威来源。系统本身的架构事实与约束由 [`docs/ARCHITECTURE.md`](docs/architecture.md) 定义。
 
 内容按以下标准归属。同一规则的细节只在归属文档中维护，另一份文档只能通过链接和执行动作引用，不复制规则正文：
 

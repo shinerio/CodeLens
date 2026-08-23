@@ -1,6 +1,6 @@
 # CodeLens Prompt 构造设计
 
-本文档描述当前源码中 PLANNER、REVIEWER、VERIFIER 三种 Agent 的提示词来源、内部输入信封、角色上下文、系统指令拼接、工具暴露，以及最终传给 OpenAI Agents SDK 的参数。若本文与实现不一致，以 [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) 和当前源码为准。
+本文档描述当前源码中 PLANNER、REVIEWER、VERIFIER 三种 Agent 的提示词来源、内部输入信封、角色上下文、系统指令拼接、工具暴露，以及最终传给 OpenAI Agents SDK 的参数。若本文与实现不一致，以 [`docs/ARCHITECTURE.md`](architecture.md) 和当前源码为准。
 
 > 实现状态：REVIEWER 与多 Reviewer 场景下的 VERIFIER 已接入 Worker 主链。PLANNER 的 Agent、Prompt、工具、输入构造器和输出校验器已经实现，但当前 Worker 尚未调用 `build_planner_input_payload()`，也未调用 `ChangeRiskSummary.from_snapshot()` 来启动新的自适应规划。本文对 PLANNER 的说明因此分为“已定义的运行时契约”和“当前生产接入状态”，不能把前者误认为已经在主链执行。
 
@@ -612,7 +612,7 @@ result = await Runner.run(
 - 是否同时更新相应的 Agent Prompt、工具描述、输出 Codec、能力 Profile 和契约测试。
 - 是否保持各 locale 的系统 bundle 文件集和 `tools.json` 工具名完全一致。
 - 修改 Agent 或系统 Prompt 时，按 [`prompts/REVIEW.md`](../prompts/REVIEW.md) 同步维护多语言版本。
-- 若修改稳定输入信封、角色边界、数据安全边界或 Runtime/Provider 契约，必须同步更新 [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md)。
+- 若修改稳定输入信封、角色边界、数据安全边界或 Runtime/Provider 契约，必须同步更新 [`docs/ARCHITECTURE.md`](architecture.md)。
 
 主要实现与测试入口：
 

@@ -4,7 +4,7 @@
 
 本文档定义 CodeLens 长周期 Agent 的 Prompt Cache 与上下文生命周期设计，解释为何不能通过持续改写早期工具结果来同时获得无限上下文和稳定前缀缓存，并规定后续实现 checkpoint、证据外置、国际化压缩 Prompt 和缓存诊断时必须遵循的方案。
 
-本文是 [`docs/ARCHITECTURE.md`](./ARCHITECTURE.md) 中运行期成本与上下文边界的展开说明。若两者冲突，以 `docs/ARCHITECTURE.md` 为准。本文不改变 Review 的确定性范围划分策略；是否对 Review 范围分片不属于本方案，本阶段也不以确定性分片作为缓存优化手段。
+本文是 [`docs/ARCHITECTURE.md`](architecture.md) 中运行期成本与上下文边界的展开说明。若两者冲突，以 `docs/ARCHITECTURE.md` 为准。本文不改变 Review 的确定性范围划分策略；是否对 Review 范围分片不属于本方案，本阶段也不以确定性分片作为缓存优化手段。
 
 实现状态：Epoch checkpoint 主路径已实现，包括完整 round 切分、单一 checkpoint 替换、独立普通文本摘要调用、宿主 envelope 构造与校验、宿主 evidence 索引、国际化 Prompt、失败重试与熔断及分阶段用量统计。Checkpoint 基线不要求模型网关支持 Structured Outputs、JSON Schema、模型手写 JSON 或工具调用。旧的逐项 Tool Result 替换、占位 replay allowance 和 `context-compaction.md` 已退出运行时。仍待完成的长期增强是供应商原生压缩能力探测、确定性旧工具正文预剪枝、基于模型 token 的异步软水位、可持久恢复的完整宿主 envelope、批量工具总预算，以及缓存差异点评测；当前兼容设置仍以活跃上下文字节数触发同步 checkpoint。
 

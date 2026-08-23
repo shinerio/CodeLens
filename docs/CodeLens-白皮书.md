@@ -1,7 +1,7 @@
 # CodeLens 产品白皮书
 
 > [!NOTE]
-> 本文描述 CodeLens 的目标产品形态和长期愿景，不表示其中所有能力已经实现。当前可用功能和限制以根目录 [`README.md`](../README.md) 为准；架构事实与长期约束以 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 为准。
+> 本文描述 CodeLens 的目标产品形态和长期愿景，不表示其中所有能力已经实现。当前可用功能和限制以根目录 [`README.md`](../README.md) 为准；架构事实与长期约束以 [`ARCHITECTURE.md`](architecture.md) 为准。
 
 ## 摘要
 

@@ -1,6 +1,6 @@
 # Multi-Agent Review v2 Runtime DAG
 
-本文说明运行期 DAG 的可观察流程；稳定边界以 [`ARCHITECTURE.md`](./ARCHITECTURE.md) 为准。
+本文说明运行期 DAG 的可观察流程；稳定边界以 [`ARCHITECTURE.md`](architecture.md) 为准。
 
 ## 节点顺序
 

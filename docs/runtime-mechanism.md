@@ -1,6 +1,6 @@
 # Multi-Agent Review v2 Runtime Mechanism
 
-本文是运行机制导读；权威约束见 [`ARCHITECTURE.md`](./ARCHITECTURE.md)，执行改造见 [`2026-08-09-multi-agent-review-v2-hard-cut.md`](debet/plans/2026-08-09-multi-agent-review-v2-hard-cut.md)。
+本文是运行机制导读；权威约束见 [`ARCHITECTURE.md`](architecture.md)，执行改造见 [`2026-08-09-multi-agent-review-v2-hard-cut.md`](debet/plans/2026-08-09-multi-agent-review-v2-hard-cut.md)。
 
 ## 冻结输入
 
