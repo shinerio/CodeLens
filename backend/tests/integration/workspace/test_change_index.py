@@ -203,3 +203,91 @@ async def test_full_scope_indexes_complete_text_files_from_an_empty_baseline(
     assert [(hunk.path, hunk.start_line, hunk.end_line, hunk.side) for hunk in index.hunks] == [
         ("src/service.py", 1, 2, "new")
     ]
+
+
+async def test_whitespace_only_modified_files_are_excluded(tmp_path: Path) -> None:
+    """Files whose changes are purely whitespace must not appear in the ChangeIndex."""
+
+    await _git(tmp_path, "init")
+    await _git(tmp_path, "config", "user.email", "review@example.test")
+    await _git(tmp_path, "config", "user.name", "Review Test")
+    await _git(tmp_path, "config", "commit.gpgSign", "false")
+    (tmp_path / "real_change.py").write_text("x = 1\n", encoding="utf-8")
+    (tmp_path / "indent_only.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
+    (tmp_path / "crlf_only.py").write_text("c = 3\n", encoding="utf-8")
+    (tmp_path / "blank_lines.py").write_text("d = 4\n", encoding="utf-8")
+    await _git(tmp_path, "add", ".")
+    await _git(tmp_path, "commit", "-m", "base")
+    base_oid = await _git(tmp_path, "rev-parse", "HEAD")
+
+    # real_change.py: substantive code change
+    (tmp_path / "real_change.py").write_text("x = 100\n", encoding="utf-8")
+    # indent_only.py: only indentation changed
+    (tmp_path / "indent_only.py").write_text("    a = 1\n    b = 2\n", encoding="utf-8")
+    # crlf_only.py: only \n -> \r\n changed
+    (tmp_path / "crlf_only.py").write_bytes(b"c = 3\r\n")
+    # blank_lines.py: only extra blank lines added
+    (tmp_path / "blank_lines.py").write_text("d = 4\n\n\n", encoding="utf-8")
+    await _git(tmp_path, "add", "-A")
+    await _git(tmp_path, "commit", "-m", "head")
+    head_oid = await _git(tmp_path, "rev-parse", "HEAD")
+    worktree = TaskWorktree(
+        "worktree-ws",
+        "review-ws",
+        "a" * 64,
+        tmp_path,
+        head_oid,
+        "b" * 64,
+    )
+
+    index = await GitChangeIndexBuilder(GitCli()).build(
+        worktree,
+        base_oid,
+        ("real_change.py", "indent_only.py", "crlf_only.py", "blank_lines.py"),
+        "branch",
+    )
+
+    # Only the substantive change should appear; whitespace-only files are excluded.
+    assert index.files == (
+        ReviewFileChange("real_change.py", "modified"),
+    )
+    assert all(hunk.path == "real_change.py" for hunk in index.hunks)
+
+
+async def test_substantive_change_alongside_whitespace_is_kept(tmp_path: Path) -> None:
+    """A file with both whitespace and substantive changes must be kept."""
+
+    await _git(tmp_path, "init")
+    await _git(tmp_path, "config", "user.email", "review@example.test")
+    await _git(tmp_path, "config", "user.name", "Review Test")
+    await _git(tmp_path, "config", "commit.gpgSign", "false")
+    (tmp_path / "mixed.py").write_text("a = 1\nb = 2\nc = 3\n", encoding="utf-8")
+    await _git(tmp_path, "add", ".")
+    await _git(tmp_path, "commit", "-m", "base")
+    base_oid = await _git(tmp_path, "rev-parse", "HEAD")
+
+    # Line 1: whitespace-only change (indentation)
+    # Line 2: substantive change (value)
+    (tmp_path / "mixed.py").write_text("    a = 1\nb = 200\nc = 3\n", encoding="utf-8")
+    await _git(tmp_path, "add", "-A")
+    await _git(tmp_path, "commit", "-m", "head")
+    head_oid = await _git(tmp_path, "rev-parse", "HEAD")
+    worktree = TaskWorktree(
+        "worktree-mixed",
+        "review-mixed",
+        "a" * 64,
+        tmp_path,
+        head_oid,
+        "b" * 64,
+    )
+
+    index = await GitChangeIndexBuilder(GitCli()).build(
+        worktree,
+        base_oid,
+        ("mixed.py",),
+        "branch",
+    )
+
+    # File must be kept because it has a substantive change.
+    assert index.files == (ReviewFileChange("mixed.py", "modified"),)
+    assert len(index.hunks) > 0

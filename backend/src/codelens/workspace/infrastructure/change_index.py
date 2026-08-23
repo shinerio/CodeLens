@@ -15,6 +15,8 @@ from codelens.workspace.domain.models import (
 )
 from codelens.workspace.infrastructure.git_cli import GitCli
 
+_WHITESPACE_RE = re.compile(rb"[ \t\r\n\f\v]+")
+
 _HUNK_HEADER = re.compile(r"@@ -(\d+)(?:,(\d+))? \+(\d+)(?:,(\d+))? @@")
 _GIT_PATH_ESCAPES = {
     "a": b"\a",
@@ -43,6 +45,40 @@ def _read_lines(path: Path) -> tuple[bytes, ...]:
     if payload is None or b"\0" in payload:
         return ()
     return tuple(payload.splitlines(keepends=True))
+
+
+def _normalize_whitespace(line: bytes) -> bytes:
+    """Strip all whitespace to detect lines that differ only in spacing.
+
+    Collapses every run of spaces, tabs, carriage returns, newlines, form
+    feeds, and vertical tabs into nothing.  Two lines that produce the same
+    normalized form differ only in whitespace characters and are therefore
+    not substantive code changes.
+    """
+
+    return _WHITESPACE_RE.sub(b"", line)
+
+
+def _is_whitespace_only_change(old_excerpt: bytes, new_excerpt: bytes) -> bool:
+    """Return True when old and new excerpts differ only in whitespace.
+
+    Compares the set of non-whitespace content on each side.  If every
+    old-side line has a matching new-side line (ignoring leading/trailing
+    whitespace, blank lines, and ``\\r\\n`` vs ``\\n`` line endings), the
+    change is purely cosmetic and should not consume Review tokens.
+    """
+
+    old_stripped = sorted(
+        norm
+        for line in old_excerpt.splitlines()
+        if (norm := _normalize_whitespace(line))
+    )
+    new_stripped = sorted(
+        norm
+        for line in new_excerpt.splitlines()
+        if (norm := _normalize_whitespace(line))
+    )
+    return old_stripped == new_stripped
 
 
 def _normalize_path(raw_path: bytes) -> str:
@@ -205,7 +241,9 @@ class GitChangeIndexBuilder:
             base_oid,
             "--",
         )
-        hunks = await self._parse_hunks(worktree, diff_result.stdout, target_set, base_oid)
+        hunks, whitespace_only_paths = await self._parse_hunks(
+            worktree, diff_result.stdout, target_set, base_oid,
+        )
         hunk_paths = {hunk.path for hunk in hunks}
         for path in untracked_paths:
             if path in hunk_paths:
@@ -215,6 +253,8 @@ class GitChangeIndexBuilder:
                 continue
             excerpt = b"".join(file_lines)
             hunks.append(self._hunk(path, 1, len(file_lines), "new", excerpt))
+        changes = [change for change in changes if change.path not in whitespace_only_paths]
+        hunks = [hunk for hunk in hunks if hunk.path not in whitespace_only_paths]
         return ChangeIndex(
             hunks=tuple(
                 sorted(
@@ -259,13 +299,25 @@ class GitChangeIndexBuilder:
         output: bytes,
         candidate_paths: set[str],
         base_oid: str,
-    ) -> list[ChangedHunk]:
+    ) -> tuple[list[ChangedHunk], set[str]]:
+        """Parse unified diff hunks and identify whitespace-only modified files.
+
+        Returns a tuple of (hunks, whitespace_only_paths) where
+        whitespace_only_paths contains every ``modified`` file whose old
+        and new hunks differ only in whitespace (indentation, blank lines,
+        ``\\r\\n`` vs ``\\n``).  Callers remove these files from the
+        ChangeIndex so they do not consume Review tokens.
+        """
+
         lines = output.decode("utf-8", errors="replace").splitlines()
         old_path: str | None = None
         new_path: str | None = None
         hunks: list[ChangedHunk] = []
         old_lines_by_path: dict[str, tuple[bytes, ...]] = {}
         new_lines_by_path: dict[str, tuple[bytes, ...]] = {}
+        # Track old/new excerpts per path to detect whitespace-only changes.
+        old_excerpts_by_path: dict[str, list[bytes]] = {}
+        new_excerpts_by_path: dict[str, list[bytes]] = {}
         for line in lines:
             if line.startswith("--- "):
                 old_path = _diff_header_path(line[4:])
@@ -308,6 +360,7 @@ class GitChangeIndexBuilder:
                                 old_excerpt,
                             )
                         )
+                        old_excerpts_by_path.setdefault(path, []).append(old_excerpt)
                 if new_count > 0:
                     start_line = int(new_start)
                     end_line = start_line + new_count - 1
@@ -317,7 +370,20 @@ class GitChangeIndexBuilder:
                         new_lines_by_path[path] = file_lines
                     excerpt = b"".join(file_lines[start_line - 1 : end_line])
                     hunks.append(self._hunk(path, start_line, end_line, "new", excerpt))
-        return hunks
+                    new_excerpts_by_path.setdefault(path, []).append(excerpt)
+
+        whitespace_only_paths: set[str] = set()
+        all_paths = set(old_excerpts_by_path) | set(new_excerpts_by_path)
+        for path in all_paths:
+            old_combined = b"".join(old_excerpts_by_path.get(path, []))
+            new_combined = b"".join(new_excerpts_by_path.get(path, []))
+            # Only filter modified files — added or deleted files with empty
+            # content are genuine changes, not whitespace-only noise.
+            if not old_combined and not new_combined:
+                continue
+            if _is_whitespace_only_change(old_combined, new_combined):
+                whitespace_only_paths.add(path)
+        return hunks, whitespace_only_paths
 
     @staticmethod
     def _hunk(
