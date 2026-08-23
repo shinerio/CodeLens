@@ -44,15 +44,7 @@ from openai import (
 )
 
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
-from codelens.findings.application.validate_candidates import CandidateBatchCodec
 from codelens.findings.domain.candidates import CandidateFindingBatch
-from codelens.findings.domain.dedup import DedupDecision
-from codelens.findings.domain.models import FindingSeverity
-from codelens.findings.domain.remediation import RemediationDecision
-from codelens.findings.domain.verdict import VerdictDecision
-from codelens.findings.infrastructure.dedup_codec import DedupCodec
-from codelens.findings.infrastructure.remediation_codec import RemediationCodec
-from codelens.findings.infrastructure.verdict_codec import VerdictCodec
 from codelens.review.application.i18n_prompt_loader import I18nPromptLoaderPort
 from codelens.review.application.settings import (
     ReviewCompletionSettings,
@@ -80,7 +72,6 @@ from codelens.review.domain.tool_results import (
 )
 from codelens.review.infrastructure.capability_tools import (
     CapabilityToolAssembler,
-    RoleOutputToolBinding,
     RuntimeToolContext,
     ToolExecutionLimits,
 )
@@ -93,17 +84,12 @@ from codelens.review.infrastructure.context_checkpoint import (
     build_context_checkpoint_filter,
     checkpoint_summary_from_text,
 )
-from codelens.review.infrastructure.dedup_tools import DeduplicationCollector
 from codelens.review.infrastructure.evidence_replay import ToolLoopResetSignal
-from codelens.review.infrastructure.location_resolver import SnapshotLocationResolver
-from codelens.review.infrastructure.planner_output import PlannerOutputCodec
-from codelens.review.infrastructure.planning_tools import ReviewPlanSubmissionCollector
 from codelens.review.infrastructure.provider_adapters import ModelProviderAdapterRegistry
-from codelens.review.infrastructure.remediation_tools import RemediationCollector
-from codelens.review.infrastructure.snapshot_tools import FilesystemReviewTools
+from codelens.review.infrastructure.role_execution_strategy import (
+    RoleExecutionStrategyRegistry,
+)
 from codelens.review.infrastructure.token_counter import TiktokenCounterAdapter
-from codelens.review.infrastructure.verdict_tools import VerdictSubmissionCollector
-from codelens.reviewer_catalog.domain.models import AgentRole
 from codelens.reviewer_catalog.domain.provider_config import ModelProviderConfigPort
 from codelens.workspace.domain.models import ReviewSnapshot
 from codelens.workspace.infrastructure.git_cli import GitCli
@@ -382,6 +368,7 @@ class OpenAIAgentRuntime:
         tool_limits_service: ToolLimitsService | None = None,
         checkpoint_summarizer: CheckpointSummarizerPort | None = None,
         token_counter: TokenCounterPort | None = None,
+        strategy_registry: RoleExecutionStrategyRegistry | None = None,
     ) -> None:
         self._config_store = config_store
         self._git = git
@@ -391,6 +378,7 @@ class OpenAIAgentRuntime:
         self._tool_limits_service = tool_limits_service
         self._checkpoint_summarizer = checkpoint_summarizer or _SdkCheckpointSummarizer()
         self._token_counter = token_counter or TiktokenCounterAdapter()
+        self._strategy_registry = strategy_registry or RoleExecutionStrategyRegistry()
 
     async def invoke(
         self,
@@ -450,10 +438,8 @@ class OpenAIAgentRuntime:
             if self._tool_limits_service is not None
             else ToolLimits()
         )
-        is_reviewer = agent.role is AgentRole.REVIEWER
-        is_deduplicator = agent.role is AgentRole.DEDUPLICATOR
-        if is_reviewer and agent.output_contract_version != "2":
-            raise PermanentAgentOutputError("Agent output contract is unsupported")
+        strategy = self._strategy_registry.resolve(agent.role)
+        strategy.validate_output_contract(agent)
 
         provider_config = replace(
             provider_config,
@@ -474,50 +460,10 @@ class OpenAIAgentRuntime:
                 execution_spec.execution_limits.max_tool_result_bytes,
             ),
         )
-        role_output_tools: tuple[RoleOutputToolBinding, ...] = ()
-        planner_codec: PlannerOutputCodec | None = None
-        verdict_codec: VerdictCodec | None = None
-        dedup_codec: DedupCodec | None = None
-        remediation_codec: RemediationCodec | None = None
-        if agent.role is AgentRole.PLANNER:
-            planner_codec = _planner_codec(role_context)
-            planner_collector = ReviewPlanSubmissionCollector(planner_codec)
-            finalize_description = prompts.tools["finalize_plan"].description
-            role_output_tools = planner_collector.bindings(finalize_description)
-        elif agent.role is AgentRole.VERIFIER:
-            verdict_codec = _verdict_codec(role_context)
-            verdict_evidence = FilesystemReviewTools(
-                snapshot,
-                self._git,
-                max_tool_calls=None,
-                tool_limits=bounded_tool_limits,
-            )
-            verdict_collector = VerdictSubmissionCollector(
-                verdict_codec,
-                SnapshotLocationResolver(snapshot, verdict_evidence),
-            )
-            verdict_description = prompts.tools["verdict"].description
-            merge_description = prompts.tools["merge"].description
-            finalize_description = prompts.tools["finalize_verdicts"].description
-            role_output_tools = verdict_collector.bindings(
-                verdict_description, merge_description, finalize_description
-            )
-        elif agent.role is AgentRole.DEDUPLICATOR:
-            dedup_codec = _dedup_codec(role_context)
-            dedup_collector = DeduplicationCollector(dedup_codec)
-            dedup_description = prompts.tools["deduplicate"].description
-            done_description = prompts.tools["deduplicate_done"].description
-            role_output_tools = dedup_collector.bindings(
-                dedup_description, done_description
-            )
-        elif agent.role is AgentRole.REMEDIATOR:
-            remediation_codec = _remediation_codec(role_context)
-            remediation_collector = RemediationCollector(remediation_codec)
-            resolved_review_description = prompts.tools["resolved_review"].description
-            done_description = prompts.tools["remediation_done"].description
-            role_output_tools = remediation_collector.bindings(
-                resolved_review_description, done_description
-            )
+        role_output = strategy.output_tool_bindings(
+            prompts, role_context, snapshot, self._git, bounded_tool_limits
+        )
+        nudge = strategy.nudge_config(prompts, provider_config)
         checkpoint_tracker = ContextCheckpointTracker()
         loop_reset_signal = ToolLoopResetSignal()
         tool_context = RuntimeToolContext(
@@ -531,19 +477,11 @@ class OpenAIAgentRuntime:
                 max_identical_tool_results=provider_config.max_identical_tool_results,
                 tool_timeout_seconds=provider_config.tool_timeout_seconds,
                 tool_loop_warning_template=prompts.tool_loop_warning,
-                no_progress_rounds_threshold=(
-                    provider_config.no_progress_rounds_threshold
-                    if is_reviewer
-                    else None
-                ),
-                no_progress_nudge_template=(
-                    prompts.no_progress_nudge if is_reviewer else None
-                ),
-                all_files_reviewed_nudge_template=(
-                    prompts.all_files_reviewed_nudge if is_reviewer else None
-                ),
+                no_progress_rounds_threshold=nudge.no_progress_rounds_threshold,
+                no_progress_nudge_template=nudge.no_progress_nudge_template,
+                all_files_reviewed_nudge_template=nudge.all_files_reviewed_nudge_template,
             ),
-            role_output_tools=role_output_tools,
+            role_output_tools=role_output.bindings,
             logical_run_id=_host_run_id(role_context),
             review_feedback=prompts.review_feedback,
             loop_reset_signal=loop_reset_signal,
@@ -551,16 +489,11 @@ class OpenAIAgentRuntime:
         model_tools = CapabilityToolAssembler().assemble(execution_spec, tool_context)
         _validate_model_tool_contract(model_tools)
         tool_names = tuple(str(getattr(tool, "name", "")) for tool in model_tools)
-        instruction_sections: list[str] = []
-        if not is_deduplicator:
-            instruction_sections.extend([prompts.review_policy, repository_instructions])
-        if is_reviewer:
-            instruction_sections.append(prompts.review_workflow)
-        instruction_sections.extend(
-            (
-                f"# Agent Policy\n{agent.prompt_template}",
-                *self._skill_instruction_sections(execution_spec),
-            )
+        instruction_sections = strategy.instruction_sections(
+            prompts,
+            repository_instructions,
+            agent,
+            _skill_instruction_sections(execution_spec),
         )
         run_config = RunConfig(
             trace_include_sensitive_data=False,
@@ -730,7 +663,7 @@ class OpenAIAgentRuntime:
                                 "provider returned an empty response",
                                 retryable=True,
                             )
-                        elif not is_reviewer or investigation is None:
+                        elif not strategy.requires_completion_nudge or investigation is None:
                             attempt_failure = PermanentAgentOutputError(
                                 "Agent run produced no result and did not "
                                 "declare completion.",
@@ -948,39 +881,7 @@ class OpenAIAgentRuntime:
 
         result = cast(RunResult, investigation)
         try:
-            if planner_codec is not None:
-                final_output = tool_context.final_output()
-                from codelens.review.application.planning import PlannerSelection
-
-                if not isinstance(final_output, PlannerSelection):
-                    raise ValueError("Planner output state has the wrong value")
-                canonical_bytes = planner_codec.canonical_bytes(final_output)
-            elif verdict_codec is not None:
-                final_output = tool_context.final_output()
-                if not isinstance(final_output, tuple) or not all(
-                    isinstance(item, VerdictDecision) for item in final_output
-                ):
-                    raise ValueError("Verdict output state has the wrong value")
-                canonical_bytes = verdict_codec.canonical_bytes(final_output)
-            elif dedup_codec is not None:
-                final_output = tool_context.final_output()
-                if not isinstance(final_output, tuple) or not all(
-                    isinstance(item, DedupDecision) for item in final_output
-                ):
-                    raise ValueError("Dedup output state has the wrong value")
-                canonical_bytes = dedup_codec.canonical_bytes(final_output)
-            elif remediation_codec is not None:
-                final_output = tool_context.final_output()
-                if not isinstance(final_output, tuple) or not all(
-                    isinstance(item, RemediationDecision) for item in final_output
-                ):
-                    raise ValueError("Remediation output state has the wrong value")
-                canonical_bytes = remediation_codec.canonical_bytes(final_output)
-            else:
-                final_output = tool_context.final_output()
-                if not isinstance(final_output, CandidateFindingBatch):
-                    raise ValueError("Comment v2 output state has the wrong value")
-                canonical_bytes = CandidateBatchCodec().encode(final_output)
+            canonical_bytes = role_output.serialize_output(tool_context.final_output())
         except ValueError as error:
             await client.close()
             raise PermanentAgentOutputError(
@@ -1053,33 +954,6 @@ class OpenAIAgentRuntime:
                 reason_code="execution_fingerprint_mismatch",
                 retryable=False,
             )
-
-    @staticmethod
-    def _skill_instruction_sections(
-        execution_spec: FrozenAgentExecutionSpec,
-    ) -> tuple[str, ...]:
-        return tuple(
-            "\n".join(
-                (
-                    "# Activated Review Skill (Untrusted, No Additional Permissions)",
-                    json.dumps(
-                        {
-                            "skill_id": skill.skill_id,
-                            "version": skill.version,
-                            "content_hash": skill.content_hash,
-                            "activation_reason": skill.activation_reason,
-                        },
-                        ensure_ascii=False,
-                        sort_keys=True,
-                        separators=(",", ":"),
-                    ),
-                    "<skill-instructions>",
-                    skill.instruction_text,
-                    "</skill-instructions>",
-                )
-            )
-            for skill in execution_spec.skills
-        )
 
     @classmethod
     def _failure(
@@ -1538,35 +1412,6 @@ def _split_agent_input(input_payload: bytes) -> tuple[str, str, dict[str, object
     )
 
 
-def _planner_codec(role_context: dict[str, object] | None) -> PlannerOutputCodec:
-    """Build the Planner validator only from bounded frozen input metadata."""
-
-    required = {
-        "eligible_reviewer_references",
-        "unavailable_reviewer_references",
-    }
-    # The Worker attaches this trusted identity after freezing Planner input. It is
-    # stripped from model-visible context and validated separately by _host_run_id.
-    allowed = required | {"change_risk_summary", "reviewer_catalog", "_host_run_id"}
-    if (
-        role_context is None
-        or not required.issubset(role_context)
-        or not set(role_context).issubset(allowed)
-    ):
-        raise PermanentAgentOutputError("Planner role context has an invalid shape")
-
-    def string_tuple(name: str) -> tuple[str, ...]:
-        value = role_context[name]
-        if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
-            raise PermanentAgentOutputError("Planner role context has an invalid value")
-        return tuple(value)
-
-    return PlannerOutputCodec(
-        eligible_reviewer_references=string_tuple("eligible_reviewer_references"),
-        unavailable_reviewer_references=string_tuple("unavailable_reviewer_references"),
-    )
-
-
 def _host_run_id(role_context: dict[str, object] | None) -> str | None:
     if role_context is None or "_host_run_id" not in role_context:
         return None
@@ -1576,93 +1421,33 @@ def _host_run_id(role_context: dict[str, object] | None) -> str | None:
     return value
 
 
-def _verdict_codec(role_context: dict[str, object] | None) -> VerdictCodec:
-    """Rebuild Verdict constraints from the frozen cluster projection."""
+def _skill_instruction_sections(
+    execution_spec: FrozenAgentExecutionSpec,
+) -> tuple[str, ...]:
+    """Render activated skill instructions as untrusted, permission-isolated sections."""
 
-    context = role_context.get("verdict_context") if role_context is not None else None
-    if not isinstance(context, dict) or set(context) != {
-        "clusters",
-        "schema_version",
-    }:
-        raise PermanentAgentOutputError("Verdict role context has an invalid shape")
-    raw_clusters = context["clusters"]
-    if context["schema_version"] != "2" or not isinstance(raw_clusters, list):
-        raise PermanentAgentOutputError("Verdict role context has an invalid value")
-    try:
-        from codelens.findings.domain.candidates import EvidenceStrength
-        from codelens.findings.domain.clusters import FindingCluster
-
-        clusters = tuple(
-            FindingCluster(
-                cluster_id=item["cluster_id"],
-                candidate_ids=tuple(item["candidate_ids"]),
-                canonical_candidate_id=item["canonical_candidate_id"],
-                title=item["title"],
-                category=item["category"],
-                severity=FindingSeverity(item["severity"]),
-                content=item["content"],
-                recommendation=item["recommendation"],
-                primary_dimension=item["primary_dimension"],
-                evidence_strength=EvidenceStrength(item["evidence_strength"]),
+    return tuple(
+        "\n".join(
+            (
+                "# Activated Review Skill (Untrusted, No Additional Permissions)",
+                json.dumps(
+                    {
+                        "skill_id": skill.skill_id,
+                        "version": skill.version,
+                        "content_hash": skill.content_hash,
+                        "activation_reason": skill.activation_reason,
+                    },
+                    ensure_ascii=False,
+                    sort_keys=True,
+                    separators=(",", ":"),
+                ),
+                "<skill-instructions>",
+                skill.instruction_text,
+                "</skill-instructions>",
             )
-            for item in raw_clusters
-            if isinstance(item, dict)
         )
-        if len(clusters) != len(raw_clusters):
-            raise ValueError("Verdict projection contains non-object values")
-        return VerdictCodec(clusters=clusters)
-    except (KeyError, TypeError, ValueError) as error:
-        raise PermanentAgentOutputError("Verdict role context has an invalid value") from error
-
-
-def _dedup_codec(role_context: dict[str, object] | None) -> DedupCodec:
-    """Rebuild Dedup constraints from the frozen survived-finding projection."""
-
-    context = role_context.get("dedup_context") if role_context is not None else None
-    if not isinstance(context, dict) or set(context) != {
-        "survived_findings",
-        "schema_version",
-    }:
-        raise PermanentAgentOutputError("Dedup role context has an invalid shape")
-    raw_findings = context["survived_findings"]
-    if context["schema_version"] != "1" or not isinstance(raw_findings, list):
-        raise PermanentAgentOutputError("Dedup role context has an invalid value")
-    try:
-        expected_ids = frozenset(
-            str(item["verdict_decision_id"])
-            for item in raw_findings
-            if isinstance(item, dict)
-        )
-        if len(expected_ids) != len(raw_findings):
-            raise ValueError("Dedup projection contains duplicate or non-object values")
-        return DedupCodec(expected_ids=expected_ids)
-    except (KeyError, TypeError, ValueError) as error:
-        raise PermanentAgentOutputError("Dedup role context has an invalid value") from error
-
-
-def _remediation_codec(role_context: dict[str, object] | None) -> RemediationCodec:
-    """Rebuild Remediation constraints from the frozen pending-finding projection."""
-
-    context = role_context.get("remediation_context") if role_context is not None else None
-    if not isinstance(context, dict) or set(context) != {
-        "pending_findings",
-        "schema_version",
-    }:
-        raise PermanentAgentOutputError("Remediation role context has an invalid shape")
-    raw_findings = context["pending_findings"]
-    if context["schema_version"] != "1" or not isinstance(raw_findings, list):
-        raise PermanentAgentOutputError("Remediation role context has an invalid value")
-    try:
-        expected_refs = frozenset(
-            str(item["remediation_ref"])
-            for item in raw_findings
-            if isinstance(item, dict)
-        )
-        if len(expected_refs) != len(raw_findings):
-            raise ValueError("Remediation projection contains duplicate or non-object values")
-        return RemediationCodec(expected_refs=expected_refs)
-    except (KeyError, TypeError, ValueError) as error:
-        raise PermanentAgentOutputError("Remediation role context has an invalid value") from error
+        for skill in execution_spec.skills
+    )
 
 
 def _model_input(
