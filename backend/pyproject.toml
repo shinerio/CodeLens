@@ -18,6 +18,7 @@ dependencies = [
   "openai-agents",
   "packaging>=26,<27",
   "pathspec",
+  "psutil>=6,<7",
   "pydantic>=2,<3",
   "pydantic-settings>=2,<3",
   "python-frontmatter",
@@ -39,6 +40,7 @@ dev = [
   "pytest-cov",
   "ruff",
   "types-jsonschema>=4.26,<5",
+  "types-psutil",
 ]
 
 [tool.hatch.build.targets.wheel]

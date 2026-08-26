@@ -47,3 +47,25 @@ def test_repository_roots_normalize_to_absolute_paths(tmp_path: Path) -> None:
 def test_multiple_workers_are_rejected(tmp_path: Path) -> None:
     with pytest.raises(ValidationError, match="one Worker"):
         Settings(data_dir=tmp_path, max_workers=2)
+
+
+def test_default_memory_limit_is_2gb(tmp_path: Path) -> None:
+    settings = Settings(data_dir=tmp_path)
+    assert settings.memory_limit_mb == 2048
+    assert settings.memory_check_interval_seconds == 5.0
+    assert settings.memory_cleanup_threshold_ratio == 0.85
+    assert settings.memory_reject_threshold_ratio == 0.95
+
+
+def test_memory_limit_below_512mb_rejected(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="at least 512"):
+        Settings(data_dir=tmp_path, memory_limit_mb=256)
+
+
+def test_memory_thresholds_must_be_ordered(tmp_path: Path) -> None:
+    with pytest.raises(ValidationError, match="thresholds"):
+        Settings(
+            data_dir=tmp_path,
+            memory_cleanup_threshold_ratio=0.95,
+            memory_reject_threshold_ratio=0.85,
+        )

@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import json
+import logging
 from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from typing import cast
@@ -126,6 +127,8 @@ from codelens.workspace.domain.ports import ScopePlan
 from codelens.workspace.domain.review_file_scope import ReviewFileExclusionPolicy
 from codelens.workspace.infrastructure.git_cli import GitCli
 from codelens.workspace.infrastructure.repository_metadata import GitRepositoryMetadataAdapter
+
+_LOGGER = logging.getLogger("codelens.worker.execution")
 
 _TERMINAL_STATUSES = {"completed", "partial", "failed", "canceled"}
 
@@ -1158,8 +1161,12 @@ class WorkerReviewExecutor:
             await self._review_store.fail(task_id, "review_execution_failed")
         except InvalidAgentRunStateError:
             pass
-        await self._transcripts.finalize(task_id)
-        await self._cleanup_terminal_worktree(task_id)
+        try:
+            await self._transcripts.finalize(task_id)
+        finally:
+            # Even if finalize fails, attempt worktree cleanup so the checkout
+            # does not leak; the worktree path is guarded separately.
+            await self._cleanup_terminal_worktree(task_id)
 
     async def _finalize_if_terminal(self, task_id: str) -> None:
         record = await self._review_store.get_review(task_id)
@@ -1177,8 +1184,13 @@ class WorkerReviewExecutor:
             try:
                 await self._worktree_lifecycle.remove_owned(worktree)
             except Exception:
-                # Cleanup failures should not crash the service
-                pass
+                # Cleanup failures should not crash the service, but the
+                # registry record may now be stale; log for manual intervention.
+                _LOGGER.warning(
+                    "Worktree cleanup failed; registry record may be stale",
+                    extra={"task_id": task_id},
+                    exc_info=True,
+                )
 
     async def _validate_repository(self, record: ReviewExecutionRecord) -> None:
         repository = await self._repository_inspector.inspect(record.repository_path)

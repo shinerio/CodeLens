@@ -139,6 +139,20 @@ class ExecutionTranscriptStore:
             raise ValueError("invalid transcript task ID")
         return self._root / f"{task_id}.json"
 
+    def evict_locks(self, active_task_ids: set[str]) -> int:
+        """Remove per-task locks for tasks no longer active; returns count removed.
+
+        The durable store has no lifecycle hook to drop locks after a task
+        finalises (``_write`` is called by many paths), so locks accumulate
+        across the Worker process lifetime. This method is invoked by the memory
+        guard to prune locks for tasks that are no longer active.
+        """
+
+        stale = [tid for tid in self._locks if tid not in active_task_ids]
+        for tid in stale:
+            self._locks.pop(tid, None)
+        return len(stale)
+
     def _read(self, task_id: str) -> tuple[TranscriptEntry, ...]:
         path = self._path(task_id)
         if not path.exists():
@@ -266,6 +280,34 @@ class WorkerTranscriptStore:
                 await self._durable_store.replace(task_id, entries)
                 if self._model_log is not None:
                     await self._model_log.write(task_id, entries)
+        # Drop the per-task lock so finalised task IDs do not accumulate forever.
+        self._locks.pop(task_id, None)
+
+    async def evict_inactive(self, active_task_ids: set[str]) -> int:
+        """Flush and drop in-memory transcripts for tasks no longer active.
+
+        Used by the memory guard to reclaim memory held by transcripts whose
+        tasks crashed or were cancelled without reaching ``finalize``. Entries
+        are persisted to the durable store (best-effort) before being dropped so
+        diagnostic data is not lost. Returns the number of task IDs evicted.
+        """
+
+        evicted = 0
+        for task_id in list(self._entries.keys()):
+            if task_id in active_task_ids:
+                continue
+            entries = self._entries.pop(task_id, [])
+            if entries:
+                try:
+                    await self._durable_store.replace(task_id, entries)
+                except Exception:
+                    _LOGGER.exception(
+                        "Failed to flush evicted transcript to durable store",
+                        extra={"task_id": task_id},
+                    )
+            self._locks.pop(task_id, None)
+            evicted += 1
+        return evicted
 
 
 def _transcript_entry(

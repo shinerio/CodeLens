@@ -141,3 +141,64 @@ def test_load_source_rejects_missing_source_id(tmp_path: Path) -> None:
             manifest=_manual_review_manifest(),
             install_path=tmp_path,
         )
+
+
+def test_invalidate_removes_install_path_from_sys_path(tmp_path: Path) -> None:
+    """invalidate() must remove the plugin's install_path from sys.path."""
+    import sys
+
+    (tmp_path / "report_sink.py").write_text(
+        "class ExternalSink:\n"
+        "    sink_id = 'external-report'\n"
+        "    async def export(self, envelope, config, repository_path):\n"
+        "        return None\n",
+        encoding="utf-8",
+    )
+    loader = CompositePluginLoader()
+    loader.load_sink(_manifest(), tmp_path)
+    install_path_str = str(tmp_path.resolve())
+    assert install_path_str in sys.path
+
+    loader.invalidate("external-report")
+
+    assert install_path_str not in sys.path
+
+
+def test_invalidate_keeps_shared_install_path_when_other_plugin_uses_it(
+    tmp_path: Path,
+) -> None:
+    """When two plugins share an install_path, invalidate keeps it if still used."""
+    import sys
+
+    (tmp_path / "report_sink.py").write_text(
+        "class ExternalSink:\n"
+        "    sink_id = 'external-report'\n"
+        "    async def export(self, envelope, config, repository_path):\n"
+        "        return None\n",
+        encoding="utf-8",
+    )
+    loader = CompositePluginLoader()
+    # Load same plugin twice under different plugin_ids to share the install path.
+    manifest_a = _manifest()
+    loader.load_sink(manifest_a, tmp_path)
+    manifest_b = PluginManifest(
+        plugin_id="external-report-2",
+        name="External report 2",
+        version="2.0.0",
+        description="",
+        author="test",
+        platform="local",
+        capabilities={"report": ReportCapability(entry_point="report_sink:ExternalSink")},
+        min_codelens_version="0.2.0",
+    )
+    loader.load_sink(manifest_b, tmp_path)
+    install_path_str = str(tmp_path.resolve())
+    assert install_path_str in sys.path
+
+    # Invalidate only one; the path must remain because the other still uses it.
+    loader.invalidate("external-report")
+    assert install_path_str in sys.path
+
+    # Now invalidate the second; the path should be removed.
+    loader.invalidate("external-report-2")
+    assert install_path_str not in sys.path

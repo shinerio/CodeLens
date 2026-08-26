@@ -43,6 +43,10 @@ class Settings(BaseSettings):
     max_active_reviews: int = 4
     max_active_agent_runs: int = 8
     max_agent_runs_per_review: int = 4
+    memory_limit_mb: int = 2048
+    memory_check_interval_seconds: float = 5.0
+    memory_cleanup_threshold_ratio: float = 0.85
+    memory_reject_threshold_ratio: float = 0.95
     repository_roots: tuple[Path, ...] = ()
     database_url: str | None = None
     initialize_schema: bool = True
@@ -95,6 +99,14 @@ class Settings(BaseSettings):
             raise ValueError("review and Agent concurrency limits must be positive")
         if not 1 <= self.max_agent_runs_per_review <= self.max_active_agent_runs:
             raise ValueError("per-review Agent limit must not exceed the global limit")
+        if self.memory_limit_mb < 512:
+            raise ValueError("memory_limit_mb must be at least 512")
+        if self.memory_check_interval_seconds <= 0:
+            raise ValueError("memory_check_interval_seconds must be positive")
+        if not 0 < self.memory_cleanup_threshold_ratio < self.memory_reject_threshold_ratio <= 1:
+            raise ValueError(
+                "memory thresholds must satisfy 0 < cleanup < reject <= 1"
+            )
         return self
 
     @property

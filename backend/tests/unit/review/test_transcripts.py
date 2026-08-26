@@ -277,3 +277,79 @@ async def test_worker_transcript_persists_rejected_tool_reason_to_outbox(
     )
     assert rejection_record.task_id == task_id
     assert rejection_record.reason_code == "invalid_tool_arguments"
+
+
+async def test_worker_transcript_finalize_removes_lock(tmp_path: Path) -> None:
+    """After finalize, the per-task lock must be dropped so it cannot accumulate."""
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    task_id = "review_" + "l" * 32
+
+    await worker_store.append(task_id, "model_output_delta", "visible while running")
+    assert task_id in worker_store._locks
+
+    await worker_store.finalize(task_id)
+
+    assert task_id not in worker_store._locks
+
+
+async def test_worker_transcript_evict_inactive_flushes_inactive_task_transcripts(
+    tmp_path: Path,
+) -> None:
+    """evict_inactive persists inactive task transcripts and drops their memory."""
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    active_task = "review_" + "m" * 32
+    inactive_task = "review_" + "n" * 32
+
+    await worker_store.append(active_task, "model_output_delta", "still running")
+    await worker_store.append(inactive_task, "model_output_delta", "stale in memory")
+    assert inactive_task in worker_store._locks
+
+    evicted = await worker_store.evict_inactive({active_task})
+
+    assert evicted == 1
+    assert inactive_task not in worker_store._locks
+    # Active task transcript is untouched in memory
+    assert [entry.content for entry in await worker_store.list(active_task)] == ["still running"]
+    # Inactive task entries were flushed to durable store before being dropped
+    assert [entry.content for entry in await durable.list(inactive_task)] == ["stale in memory"]
+
+
+async def test_worker_transcript_evict_inactive_preserves_active_task_transcripts(
+    tmp_path: Path,
+) -> None:
+    """evict_inactive must not touch entries of tasks that are still active."""
+
+    durable = ExecutionTranscriptStore(tmp_path / "artifacts")
+    worker_store = WorkerTranscriptStore(durable)
+    task_id = "review_" + "o" * 32
+
+    await worker_store.append(task_id, "model_output_delta", "running")
+
+    evicted = await worker_store.evict_inactive({task_id})
+
+    assert evicted == 0
+    assert [entry.content for entry in await worker_store.list(task_id)] == ["running"]
+
+
+async def test_execution_transcript_evict_locks_removes_only_stale(tmp_path: Path) -> None:
+    """evict_locks drops locks for tasks no longer active; keeps active ones."""
+
+    store = ExecutionTranscriptStore(tmp_path)
+    active_task = "review_" + "p" * 32
+    stale_task = "review_" + "q" * 32
+
+    # Touch both tasks so locks are created
+    await store.append(active_task, "lifecycle", "active")
+    await store.append(stale_task, "lifecycle", "stale")
+    assert active_task in store._locks
+    assert stale_task in store._locks
+
+    removed = store.evict_locks({active_task})
+
+    assert removed == 1
+    assert active_task in store._locks
+    assert stale_task not in store._locks

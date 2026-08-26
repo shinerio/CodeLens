@@ -8,6 +8,7 @@ from dataclasses import dataclass
 import uvicorn
 
 from codelens.bootstrap.logging import configure_process_logging
+from codelens.bootstrap.memory_guard import MemoryGuard
 from codelens.bootstrap.settings import Settings
 from codelens.bootstrap.web_settings_defaults import load_web_settings_defaults
 from codelens.instruction_policy.application.resolver import InstructionResolver
@@ -326,7 +327,31 @@ def build_unified_backend(
         poll_min_seconds=0.05,
         poll_max_seconds=1.0,
         record_failure=executor.record_failure,
+        memory_check_interval_seconds=settings.memory_check_interval_seconds,
     )
+    # Wire memory guard now that scheduler.active_task_ids() is available; the
+    # callbacks evict stale locks/transcripts/subscribers for tasks that are no
+    # longer active, then gc.collect() reclaims cyclic references.
+    async def _evict_stale_subscribers() -> None:
+        await event_bus.evict_stale_subscribers(60.0)
+
+    async def _evict_inactive_transcripts() -> None:
+        await worker_transcripts.evict_inactive(scheduler.active_task_ids())
+
+    async def _evict_stale_locks() -> None:
+        transcripts_store.evict_locks(scheduler.active_task_ids())
+
+    memory_guard = MemoryGuard(
+        limit_bytes=settings.memory_limit_mb * 1024 * 1024,
+        cleanup_threshold_ratio=settings.memory_cleanup_threshold_ratio,
+        reject_threshold_ratio=settings.memory_reject_threshold_ratio,
+        cleanup_callbacks=[
+            _evict_stale_subscribers,
+            _evict_inactive_transcripts,
+            _evict_stale_locks,
+        ],
+    )
+    scheduler.set_memory_guard(memory_guard)
 
     # API components (sharing event_bus, review_store, worker_transcripts)
     from codelens.review.application.commands import (

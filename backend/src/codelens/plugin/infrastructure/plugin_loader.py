@@ -48,6 +48,7 @@ class CompositePluginLoader:
         self._report_instances: dict[str, ReportSinkPort] = {}
         self._manual_review_instances: dict[str, ManualReviewSourcePort] = {}
         self._generations: dict[str, int] = {}
+        self._plugin_paths: dict[str, str] = {}
 
     def load_plugin(
         self,
@@ -210,7 +211,26 @@ class CompositePluginLoader:
         for module_name in tuple(sys.modules):
             if module_name == module_prefix or module_name.startswith(f"{module_prefix}_"):
                 sys.modules.pop(module_name, None)
+        # Drop the install_path from sys.path unless another loaded plugin still uses it.
+        path_to_remove = self._plugin_paths.pop(plugin_id, None)
+        if path_to_remove and path_to_remove in sys.path:
+            still_used = any(p == path_to_remove for p in self._plugin_paths.values())
+            if not still_used:
+                sys.path.remove(path_to_remove)
         self._generations[plugin_id] = self._generations.get(plugin_id, 0) + 1
+
+    def _register_install_path(self, plugin_id: str, install_path: Path) -> None:
+        """Remember an install_path and append it to sys.path if not already present.
+
+        The path is recorded so ``invalidate`` can remove it when no other
+        plugin shares it; previously every reload appended without ever
+        removing, growing sys.path unboundedly.
+        """
+
+        path_str = str(install_path.resolve())
+        self._plugin_paths[plugin_id] = path_str
+        if path_str not in sys.path:
+            sys.path.append(path_str)
 
     def _load_external_trigger(
         self,
@@ -244,9 +264,9 @@ class CompositePluginLoader:
 
         # Add install_path to sys.path so plugin can import sibling modules.
         # Use append (lowest priority) to avoid shadowing stdlib or third-party packages.
-        install_path_str = str(install_path.resolve())
-        if install_path_str not in sys.path:
-            sys.path.append(install_path_str)
+        # The path is remembered via _register_install_path so invalidate() can
+        # remove it when no other plugin shares it.
+        self._register_install_path(plugin_id, install_path)
 
         try:
             source = module_file.read_text(encoding="utf-8")
@@ -309,9 +329,9 @@ class CompositePluginLoader:
 
         # Add install_path to sys.path so plugin can import sibling modules.
         # Use append (lowest priority) to avoid shadowing stdlib or third-party packages.
-        install_path_str = str(install_path.resolve())
-        if install_path_str not in sys.path:
-            sys.path.append(install_path_str)
+        # The path is remembered via _register_install_path so invalidate() can
+        # remove it when no other plugin shares it.
+        self._register_install_path(plugin_id, install_path)
 
         try:
             source = module_file.read_text(encoding="utf-8")
@@ -370,9 +390,9 @@ class CompositePluginLoader:
 
         # Add install_path to sys.path so plugin can import sibling modules.
         # Use append (lowest priority) to avoid shadowing stdlib or third-party packages.
-        install_path_str = str(install_path.resolve())
-        if install_path_str not in sys.path:
-            sys.path.append(install_path_str)
+        # The path is remembered via _register_install_path so invalidate() can
+        # remove it when no other plugin shares it.
+        self._register_install_path(plugin_id, install_path)
 
         try:
             source = module_file.read_text(encoding="utf-8")

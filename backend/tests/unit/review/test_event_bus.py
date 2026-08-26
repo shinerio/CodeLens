@@ -92,3 +92,55 @@ async def test_event_bus_publish_with_no_subscribers() -> None:
 
     event = ReviewEvent(event_id=1, task_id=task_id, event_type="review.created.v2", payload={})
     await bus.publish(event)  # Should not raise
+
+
+async def test_event_bus_evict_stale_removes_idle_queues() -> None:
+    """Queues that haven't received events for max_idle_seconds are evicted."""
+
+    bus = InMemoryEventBus()
+    task_id = "review_" + "g" * 32
+
+    queue = await bus.subscribe(task_id)
+    # Simulate idle: rewind last activity so the queue looks stale
+    bus._last_activity[id(queue)] -= 120.0
+
+    evicted = await bus.evict_stale_subscribers(max_idle_seconds=60.0)
+
+    assert evicted == 1
+    assert task_id not in bus._subscribers
+
+
+async def test_event_bus_evict_stale_preserves_active_queues() -> None:
+    """Queues that received events recently are not evicted."""
+
+    bus = InMemoryEventBus()
+    task_id = "review_" + "h" * 32
+
+    queue = await bus.subscribe(task_id)
+    event = ReviewEvent(event_id=1, task_id=task_id, event_type="review.created.v2", payload={})
+    await bus.publish(event)
+
+    evicted = await bus.evict_stale_subscribers(max_idle_seconds=60.0)
+
+    assert evicted == 0
+    # Queue still alive and holding the event
+    assert not queue.empty()
+    assert task_id in bus._subscribers
+
+
+async def test_event_bus_publish_updates_activity() -> None:
+    """publish updates last_activity so a recently fed queue is not stale."""
+
+    bus = InMemoryEventBus()
+    task_id = "review_" + "i" * 32
+
+    queue = await bus.subscribe(task_id)
+    # Make the queue look stale first
+    bus._last_activity[id(queue)] -= 120.0
+    # Publishing should refresh activity
+    event = ReviewEvent(event_id=1, task_id=task_id, event_type="review.created.v2", payload={})
+    await bus.publish(event)
+
+    evicted = await bus.evict_stale_subscribers(max_idle_seconds=60.0)
+
+    assert evicted == 0
