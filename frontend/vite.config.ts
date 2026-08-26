@@ -5,6 +5,15 @@ import { defineConfig } from "vitest/config";
 const apiHost = process.env.CODELENS_API_HOST ?? "127.0.0.1";
 const apiPort = process.env.CODELENS_API_PORT ?? "8800";
 const frontendPort = parseInt(process.env.CODELENS_FRONTEND_PORT ?? "5173", 10);
+// 允许访问 dev server 的主机名列表，逗号分隔。设为 "true" 或 "all" 允许全部。
+const allowedHostsEnv = process.env.CODELENS_FRONTEND_ALLOWED_HOSTS ?? "";
+const allowedHosts: string[] | true =
+  allowedHostsEnv === "true" || allowedHostsEnv === "all"
+    ? true
+    : allowedHostsEnv
+        .split(",")
+        .map((h) => h.trim())
+        .filter(Boolean);
 
 export default defineConfig({
   plugins: [react()],
@@ -20,6 +29,7 @@ export default defineConfig({
   },
   server: {
     port: frontendPort,
+    allowedHosts,
     proxy: {
       "/api": {
         target: `http://${apiHost}:${apiPort}`,
