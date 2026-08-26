@@ -2,6 +2,7 @@
   min-height: 100%;
   padding: 24px;
   color: var(--ink);
+  background: var(--page);
 }
 
 .run-list-page > header {
@@ -25,7 +26,8 @@
 .run-list-page h1 {
   margin: 0;
   font-size: clamp(1.8rem, 4vw, 2.8rem);
-  letter-spacing: -0.04em;
+  font-weight: 700;
+  letter-spacing: -0.03em;
 }
 
 .run-list-page header span {
@@ -42,24 +44,29 @@
 .run-list-page button,
 .run-list-page a {
   display: inline-flex;
-  min-height: 34px;
+  min-height: 36px;
   align-items: center;
   justify-content: center;
   gap: 7px;
-  padding: 0 11px;
+  padding: 0 14px;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   background: var(--surface);
   color: var(--ink);
   font-size: 0.78rem;
-  font-weight: 650;
+  font-weight: 600;
   text-decoration: none;
+  transition: border-color 140ms ease, background 140ms ease, color 140ms ease;
 }
 
 .run-list-page header a {
   border-color: var(--accent);
   background: var(--accent);
   color: #fff;
+}
+
+.run-list-page header a:hover {
+  background: var(--accent-emphasis);
 }
 
 .run-list-page svg {
@@ -84,7 +91,9 @@
   margin: 0 auto 12px;
   padding: 12px;
   border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   background: var(--surface);
+  box-shadow: var(--shadow-sm);
 }
 
 .run-list-page__toolbar label {
@@ -92,9 +101,9 @@
   min-width: 280px;
   align-items: center;
   gap: 8px;
-  padding: 0 9px;
+  padding: 0 10px;
   border: 1px solid var(--line);
-  border-radius: 5px;
+  border-radius: var(--radius-sm);
   color: var(--muted);
 }
 
@@ -115,7 +124,10 @@
   max-width: 1200px;
   margin: auto;
   border: 1px solid var(--line);
+  border-radius: var(--radius-md);
   background: var(--surface);
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
 }
 
 .run-list-page__row {

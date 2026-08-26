@@ -9,16 +9,16 @@
   height: 32px;
   place-items: center;
   padding: 0;
-  border: 2px solid #8a9aa3;
-  border-radius: 6px;
-  background: #fff;
+  border: 2px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
   transition: background 120ms ease, border-color 120ms ease, box-shadow 120ms ease;
 }
 
 .run-list-page__select[data-selected="true"] {
   border-color: var(--accent);
   background: var(--accent);
-  box-shadow: 0 0 0 4px rgb(8 127 140 / 18%);
+  box-shadow: 0 0 0 4px var(--accent-soft);
 }
 
 .run-list-page__select[data-selected="true"]::after {
@@ -34,12 +34,12 @@
 }
 
 .run-list-page__select:focus-visible {
-  outline: 3px solid rgb(8 127 140 / 28%);
+  outline: 3px solid rgba(0, 122, 255, 0.28%);
   outline-offset: 2px;
 }
 
 .run-list-page__batch-delete {
-  border-color: rgb(179 58 58 / 38%) !important;
+  border-color: rgba(255, 59, 48, 0.38) !important;
   color: var(--red) !important;
 }
 
@@ -61,8 +61,8 @@
 }
 
 .run-list-page__retry:hover:not(:disabled) {
-  border-color: rgb(8 127 140 / 28%) !important;
-  background: rgb(8 127 140 / 8%) !important;
+  border-color: rgba(0, 122, 255, 0.28) !important;
+  background: var(--accent-soft) !important;
 }
 
 .run-list-page__delete {
@@ -72,8 +72,8 @@
 }
 
 .run-list-page__delete:hover:not(:disabled) {
-  border-color: rgb(179 58 58 / 28%) !important;
-  background: #fff2f2 !important;
+  border-color: rgba(255, 59, 48, 0.28) !important;
+  background: rgba(255, 59, 48, 0.06) !important;
 }
 
 .run-list-page__delete:disabled {
@@ -90,8 +90,9 @@
   max-width: 1200px;
   margin: 0 auto 12px;
   padding: 10px 12px;
-  border: 1px solid rgb(179 58 58 / 30%);
-  background: #fff2f2;
+  border: 1px solid rgba(255, 59, 48, 0.25);
+  border-radius: var(--radius-sm);
+  background: rgba(255, 59, 48, 0.06);
   color: var(--red);
   font-size: 0.82rem;
 }

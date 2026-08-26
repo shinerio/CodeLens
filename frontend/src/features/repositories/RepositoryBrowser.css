@@ -5,8 +5,9 @@
   display: grid;
   padding: 24px;
   place-items: center;
-  background: rgb(15 21 17 / 74%);
-  backdrop-filter: blur(5px);
+  background: rgba(0, 0, 0, 0.4);
+  backdrop-filter: blur(20px) saturate(180%);
+  -webkit-backdrop-filter: blur(20px) saturate(180%);
 }
 
 .repository-browser {
@@ -15,9 +16,10 @@
   width: min(880px, 100%);
   max-height: min(760px, calc(100vh - 48px));
   overflow: hidden;
-  border: 1px solid #18211c;
-  background: #eff1e9;
-  box-shadow: 18px 22px 0 rgb(7 12 9 / 28%);
+  border: 1px solid var(--line);
+  border-radius: var(--radius-xl);
+  background: var(--surface);
+  box-shadow: var(--shadow-lg);
 }
 
 .repository-browser__header {
@@ -26,45 +28,46 @@
   justify-content: space-between;
   gap: 24px;
   padding: 22px 24px;
-  border-bottom: 1px solid #475149;
-  background: #19221d;
-  color: #f0f3eb;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--ink);
 }
 
 .repository-browser__header p {
   margin: 0 0 7px;
-  color: #c7ff4a;
-  font-family: "SFMono-Regular", Consolas, monospace;
-  font-size: 0.62rem;
-  font-weight: 800;
-  letter-spacing: 0.13em;
+  color: var(--accent);
+  font-size: 0.68rem;
+  font-weight: 700;
+  letter-spacing: 0.06em;
   text-transform: uppercase;
 }
 
 .repository-browser__header h2 {
   margin: 0;
-  font-family: "Iowan Old Style", "Palatino Linotype", Georgia, serif;
-  font-size: clamp(1.7rem, 4vw, 2.6rem);
-  letter-spacing: -0.045em;
+  font-size: clamp(1.5rem, 3vw, 2rem);
+  font-weight: 700;
+  letter-spacing: -0.02em;
 }
 
 .repository-browser__header span {
   display: block;
   margin-top: 8px;
-  color: #aeb9b0;
+  color: var(--muted);
   font-size: 0.82rem;
 }
 
 .repository-browser__header > button {
   display: grid;
-  width: 38px;
-  height: 38px;
+  width: 32px;
+  height: 32px;
   flex: 0 0 auto;
   place-items: center;
-  border: 1px solid #56635a;
-  background: transparent;
-  color: #f0f3eb;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  color: var(--ink);
   cursor: pointer;
+  transition: background-color 140ms ease;
 }
 
 .repository-browser__header svg {
@@ -77,21 +80,20 @@
   align-items: center;
   gap: 10px;
   padding: 12px 18px;
-  border-bottom: 1px solid #bdc2b7;
-  background: #e1e5da;
-  color: #697269;
+  border-bottom: 1px solid var(--line);
+  background: var(--surface-soft);
+  color: var(--muted);
   font-size: 0.72rem;
 }
 
 .repository-browser__location > svg {
   width: 16px;
-  color: #6d8429;
+  color: var(--accent);
 }
 
 .repository-browser__location code {
   overflow: hidden;
-  color: #263029;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  color: var(--ink);
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -100,12 +102,13 @@
   display: inline-flex;
   align-items: center;
   gap: 7px;
-  padding: 8px 10px;
-  border: 1px solid #253020;
-  background: #202a1d;
-  color: #f1f4eb;
+  padding: 6px 12px;
+  border: 0;
+  border-radius: var(--radius-sm);
+  background: var(--accent);
+  color: #fff;
   font-size: 0.72rem;
-  font-weight: 800;
+  font-weight: 600;
   cursor: pointer;
 }
 
@@ -135,21 +138,22 @@
   align-items: center;
   gap: 12px;
   padding: 14px;
-  border: 1px solid #aab1a6;
-  background: #f7f8f3;
-  color: #263029;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-md);
+  background: var(--surface-soft);
+  color: var(--ink);
   cursor: pointer;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  transition: border-color 140ms ease, box-shadow 140ms ease;
 }
 
 .repository-browser__roots button:hover {
-  border-color: #6d8429;
-  box-shadow: inset 4px 0 0 #c7ff4a;
+  border-color: var(--accent);
+  box-shadow: inset 3px 0 0 var(--accent);
 }
 
 .repository-browser__roots svg {
   width: 22px;
-  color: #6d8429;
+  color: var(--accent);
 }
 
 .repository-browser__directories {
@@ -160,8 +164,9 @@
 .directory-row {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  border: 1px solid #c1c6bb;
-  background: #f8f9f4;
+  border: 1px solid var(--line);
+  border-radius: var(--radius-sm);
+  background: var(--surface-soft);
 }
 
 .directory-row > button:first-child {
@@ -174,18 +179,19 @@
   padding: 0 13px;
   border: 0;
   background: transparent;
-  color: #2d362f;
+  color: var(--ink);
   text-align: left;
   cursor: pointer;
+  border-radius: var(--radius-sm) 0 0 var(--radius-sm);
 }
 
 .directory-row > button:first-child:hover {
-  background: #eaede4;
+  background: var(--fill);
 }
 
 .directory-row svg {
   width: 18px;
-  color: #6d8429;
+  color: var(--accent);
 }
 
 .directory-row span {
@@ -196,12 +202,12 @@
 
 .directory-row small {
   padding: 4px 7px;
-  background: #dff6a9;
-  color: #4e6618;
-  font-family: "SFMono-Regular", Consolas, monospace;
+  border-radius: var(--radius-sm);
+  background: var(--accent-soft);
+  color: var(--accent);
   font-size: 0.58rem;
-  font-weight: 800;
-  letter-spacing: 0.06em;
+  font-weight: 700;
+  letter-spacing: 0.04em;
   text-transform: uppercase;
 }
 
@@ -210,20 +216,17 @@
   width: 46px;
   place-items: center;
   border: 0;
-  border-left: 1px solid #c1c6bb;
-  background: #202a1d;
-  color: #c7ff4a;
+  border-left: 1px solid var(--line);
+  background: transparent;
+  color: var(--accent);
   cursor: pointer;
+  border-radius: 0 var(--radius-sm) var(--radius-sm) 0;
 }
 
 .directory-row--parent {
   grid-template-columns: auto minmax(0, 1fr) auto;
   border-style: dashed;
-  color: #657067;
-}
-
-.directory-row--parent code {
-  font-family: "SFMono-Regular", Consolas, monospace;
+  color: var(--muted);
 }
 
 .repository-browser__empty,
@@ -232,16 +235,16 @@
   min-height: 170px;
   place-items: center;
   padding: 24px;
-  color: #6a746c;
+  color: var(--muted);
   text-align: center;
 }
 
 .repository-browser__error {
-  color: #8c4514;
+  color: var(--amber);
 }
 
 .repository-browser__truncated {
   margin: 12px 0 0;
-  color: #7e5a2c;
+  color: var(--muted);
   font-size: 0.74rem;
 }

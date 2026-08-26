@@ -1162,7 +1162,7 @@ export function SettingsPage() {
                 <SlidersHorizontal className="settings-panel__icon" aria-hidden="true" />
                 <h2 className="settings-panel__title">{t("settings.toolLimits")}</h2>
               </header>
-              <small style={{ display: "block", marginBottom: "16px", color: "#aeb9b0" }}>
+              <small style={{ display: "block", marginBottom: "16px", color: "var(--muted)" }}>
                 {t("settings.toolLimitsHint")}
               </small>
               <div className="settings-panel__grid">
