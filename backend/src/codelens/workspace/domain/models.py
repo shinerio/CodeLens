@@ -185,10 +185,18 @@ class ReviewFileChange:
 
 @dataclass(frozen=True)
 class ChangeIndex:
-    """Provide deterministic containment checks for changed source ranges."""
+    """Provide deterministic containment checks for changed source ranges.
+
+    ``whitespace_only_paths`` records every ``modified`` file that was
+    excluded from ``files`` and ``hunks`` because its old and new hunks
+    differed only in whitespace.  Downstream consumers use this set to
+    distinguish a deliberate filter (acceptable) from a genuine metadata
+    gap (integrity error).
+    """
 
     hunks: tuple[ChangedHunk, ...]
     files: tuple[ReviewFileChange, ...] = ()
+    whitespace_only_paths: tuple[str, ...] = ()
 
     def contains(self, path: str, start_line: int, end_line: int, side: str) -> bool:
         """Return whether a location is fully contained by a matching hunk."""

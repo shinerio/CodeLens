@@ -269,6 +269,7 @@ class GitChangeIndexBuilder:
                 )
             ),
             files=tuple(sorted(changes, key=lambda item: item.path)),
+            whitespace_only_paths=tuple(sorted(whitespace_only_paths)),
         )
 
     async def _build_full_scope(

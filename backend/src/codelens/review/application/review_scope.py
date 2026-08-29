@@ -74,21 +74,16 @@ def build_review_files(
         if path is not None
     }
     # Targets without change metadata are silently excluded — they are
-    # either whitespace-only modified files (filtered by GitChangeIndexBuilder)
-    # or files whose diff was suppressed for another deterministic reason.
+    # either whitespace-only modified files (filtered by GitChangeIndexBuilder,
+    # recorded in change_index.whitespace_only_paths) or files whose diff was
+    # suppressed for another deterministic reason.
     uncovered = targets - covered_targets
     if uncovered:
-        # Re-check: uncovered targets that are NOT in change_index.files at all
-        # are acceptable (whitespace-only filtering).  Targets that ARE in
-        # change_index.files but were not picked up indicate a real integrity error.
-        remaining_changes = {
-            change.path for change in snapshot.change_index.files
-        } | {
-            change.old_path
-            for change in snapshot.change_index.files
-            if change.old_path is not None
-        }
-        truly_missing = uncovered - remaining_changes
+        # Whitespace-only files are intentionally excluded from the ChangeIndex
+        # and are acceptable here.  Any remaining uncovered target that is NOT
+        # in whitespace_only_paths indicates a genuine metadata integrity error.
+        filtered = set(snapshot.change_index.whitespace_only_paths)
+        truly_missing = uncovered - filtered
         if truly_missing:
             raise ReviewScopeError("Review target has no immutable file change metadata")
 
