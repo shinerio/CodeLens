@@ -212,6 +212,9 @@ async def test_whitespace_only_modified_files_are_excluded(tmp_path: Path) -> No
     await _git(tmp_path, "config", "user.email", "review@example.test")
     await _git(tmp_path, "config", "user.name", "Review Test")
     await _git(tmp_path, "config", "commit.gpgSign", "false")
+    # Disable CRLF normalization so the \n -> \r\n change is visible to git
+    # regardless of the host's global core.autocrlf setting.
+    await _git(tmp_path, "config", "core.autocrlf", "false")
     (tmp_path / "real_change.py").write_text("x = 1\n", encoding="utf-8")
     (tmp_path / "indent_only.py").write_text("a = 1\nb = 2\n", encoding="utf-8")
     (tmp_path / "crlf_only.py").write_text("c = 3\n", encoding="utf-8")
