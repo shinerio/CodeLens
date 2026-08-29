@@ -1671,3 +1671,63 @@ async def test_rejects_unbounded_tool_use(tmp_path: Path) -> None:
     await tools.find_files(path="src")
     with pytest.raises(ValueError, match="budget"):
         await tools.find_files(pattern="**/*.py")
+
+
+async def test_file_payload_cache_evicts_oldest_by_bytes(tmp_path: Path) -> None:
+    """The payload cache bounds total bytes, evicting oldest entries when exceeded."""
+
+    snapshot = await _snapshot(tmp_path)
+    service_payload = (tmp_path / "src" / "service.py").read_bytes()
+    helper_payload = (tmp_path / "src" / "helper.py").read_bytes()
+    # Budget fits either file alone but not both together.
+    budget = max(len(service_payload), len(helper_payload))
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_file_payload_cache_bytes=budget),
+    )
+
+    await tools.read_file("src/service.py")
+    assert ("src/service.py", "current") in tools._file_payload_cache
+    assert tools._file_payload_cache_bytes == len(service_payload)
+
+    # Reading helper evicts service because combined bytes exceed the budget.
+    await tools.read_file("src/helper.py")
+    assert ("src/service.py", "current") not in tools._file_payload_cache
+    assert ("src/helper.py", "current") in tools._file_payload_cache
+    assert tools._file_payload_cache_bytes == len(helper_payload)
+
+
+async def test_file_payload_cache_keeps_single_oversized_entry(tmp_path: Path) -> None:
+    """A single entry larger than the budget is still cached (never self-evicted)."""
+
+    snapshot = await _snapshot(tmp_path)
+    service_payload = (tmp_path / "src" / "service.py").read_bytes()
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_file_payload_cache_bytes=1),
+    )
+
+    await tools.read_file("src/service.py")
+    assert ("src/service.py", "current") in tools._file_payload_cache
+    assert tools._file_payload_cache_bytes == len(service_payload)
+
+
+async def test_file_payload_cache_serves_repeat_reads_from_cache(tmp_path: Path) -> None:
+    """A cached payload is returned without re-reading disk on subsequent reads."""
+
+    snapshot = await _snapshot(tmp_path)
+    tools = FilesystemReviewTools(
+        snapshot,
+        GitCli(),
+        max_tool_calls=20,
+        tool_limits=ToolLimits(max_file_payload_cache_bytes=32 * 1024 * 1024),
+    )
+
+    await tools.read_file("src/service.py")
+    cache_size_before = len(tools._file_payload_cache)
+    await tools.read_file("src/service.py")
+    assert len(tools._file_payload_cache) == cache_size_before

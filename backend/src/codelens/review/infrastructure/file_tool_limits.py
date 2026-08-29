@@ -14,6 +14,7 @@ class _ToolLimitsPayload(TypedDict):
     max_read_bytes: int
     max_scan_bytes: int
     max_source_bytes: int
+    max_file_payload_cache_bytes: int
     max_lines: int
     max_path_chars: int
     max_pattern_chars: int
@@ -36,6 +37,7 @@ _INT_FIELDS = (
     "max_read_bytes",
     "max_scan_bytes",
     "max_source_bytes",
+    "max_file_payload_cache_bytes",
     "max_lines",
     "max_path_chars",
     "max_pattern_chars",
@@ -107,6 +109,7 @@ class FilesystemToolLimitsStore:
             "max_read_bytes": limits.max_read_bytes,
             "max_scan_bytes": limits.max_scan_bytes,
             "max_source_bytes": limits.max_source_bytes,
+            "max_file_payload_cache_bytes": limits.max_file_payload_cache_bytes,
             "max_lines": limits.max_lines,
             "max_path_chars": limits.max_path_chars,
             "max_pattern_chars": limits.max_pattern_chars,

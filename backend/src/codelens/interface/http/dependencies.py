@@ -5,6 +5,7 @@ from pathlib import Path
 
 from fastapi import Request
 
+from codelens.bootstrap.node_settings import NodeSettings
 from codelens.bootstrap.settings import Settings
 from codelens.bootstrap.web_settings_defaults import (
     WebSettingsDefaults,
@@ -38,6 +39,7 @@ from codelens.review.application.commands import (
     RetryReviewHandler,
     UpdateRecentRepositorySettingsHandler,
 )
+from codelens.review.application.node_settings_service import NodeSettingsService
 from codelens.review.application.review_profiles import (
     CopyReviewProfileHandler,
     CreateReviewProfileHandler,
@@ -54,6 +56,7 @@ from codelens.review.application.source_preview import FindingSourcePreviewServi
 from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
+from codelens.review.infrastructure.file_node_settings import FilesystemNodeSettingsStore
 from codelens.review.infrastructure.file_settings import (
     FilesystemReviewCompletionSettingsStore,
     FilesystemTriggerIdempotencySettingsStore,
@@ -144,6 +147,7 @@ class HttpComponents:
     review_completion_settings: ReviewCompletionSettingsService
     trigger_idempotency_settings: TriggerIdempotencySettingsService
     tool_limits: ToolLimitsService
+    node_settings: NodeSettingsService
     file_exclusion_settings: FileExclusionPolicyService
     delete_review: DeleteReviewHandler
     cancel_review: CancelReviewHandler
@@ -228,6 +232,9 @@ def build_components(settings: Settings) -> HttpComponents:
     )
     tool_limits = ToolLimitsService(
         FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
+    )
+    node_settings = NodeSettingsService(
+        FilesystemNodeSettingsStore(settings.data_dir, NodeSettings.from_settings(settings))
     )
     file_exclusion_source = FilesystemFileExclusionPolicySource(
         settings.file_exclusion_config
@@ -327,6 +334,7 @@ def build_components(settings: Settings) -> HttpComponents:
         review_completion_settings=review_completion_settings,
         trigger_idempotency_settings=trigger_idempotency_settings,
         tool_limits=tool_limits,
+        node_settings=node_settings,
         file_exclusion_settings=file_exclusion_settings,
         delete_review=DeleteReviewHandler(
             review_store,

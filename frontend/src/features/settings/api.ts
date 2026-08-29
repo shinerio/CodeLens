@@ -5,6 +5,7 @@ import type {
   GatewayTestResult,
   InstructionFileSettings,
   ModelGatewayCatalog,
+  NodeSettings,
   RecentRepositorySettings,
   ResetAllSettingsResponse,
   ReviewCompletionSettings,
@@ -152,6 +153,17 @@ export async function updateToolLimits(limits: ToolLimits): Promise<ToolLimits> 
   return api<ToolLimits>("/settings/tool-limits", {
     method: "PUT",
     body: JSON.stringify(limits),
+  });
+}
+
+export async function getNodeSettings(): Promise<NodeSettings> {
+  return api<NodeSettings>("/settings/node-limits");
+}
+
+export async function updateNodeSettings(settings: NodeSettings): Promise<NodeSettings> {
+  return api<NodeSettings>("/settings/node-limits", {
+    method: "PUT",
+    body: JSON.stringify(settings),
   });
 }
 

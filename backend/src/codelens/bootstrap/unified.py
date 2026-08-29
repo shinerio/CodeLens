@@ -9,6 +9,7 @@ import uvicorn
 
 from codelens.bootstrap.logging import configure_process_logging
 from codelens.bootstrap.memory_guard import MemoryGuard
+from codelens.bootstrap.node_settings import NodeSettings
 from codelens.bootstrap.settings import Settings
 from codelens.bootstrap.web_settings_defaults import load_web_settings_defaults
 from codelens.instruction_policy.application.resolver import InstructionResolver
@@ -39,6 +40,7 @@ from codelens.plugin.trigger.local_hook.hook_installer import (
     HookInstaller,
 )
 from codelens.review.application.context_builder import ContextBuilder
+from codelens.review.application.node_settings_service import NodeSettingsService
 from codelens.review.application.review_profiles import (
     CopyReviewProfileHandler,
     CreateReviewProfileHandler,
@@ -55,6 +57,7 @@ from codelens.review.application.tool_limits_service import ToolLimitsService
 from codelens.review.domain.ports import AgentRuntimePort
 from codelens.review.infrastructure.database import Database
 from codelens.review.infrastructure.event_bus import InMemoryEventBus
+from codelens.review.infrastructure.file_node_settings import FilesystemNodeSettingsStore
 from codelens.review.infrastructure.file_settings import (
     FilesystemReviewCompletionSettingsStore,
     FilesystemTriggerIdempotencySettingsStore,
@@ -223,6 +226,33 @@ def build_unified_backend(
     tool_limits_service = ToolLimitsService(
         FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
     )
+    # Load persisted node-level resource limits (memory cap, concurrency) before
+    # constructing the MemoryGuard and WorkerSemaphores. When node-settings.json
+    # exists its values override the env-var-derived Settings; on first boot the
+    # env values seed the store defaults. Changes take effect on next restart.
+    node_settings_store = FilesystemNodeSettingsStore(
+        settings.data_dir, NodeSettings.from_settings(settings)
+    )
+    persisted_node_settings = node_settings_store.get_node_settings()
+    settings = settings.model_copy(
+        update={
+            "memory_limit_mb": persisted_node_settings.memory_limit_mb,
+            "memory_check_interval_seconds": (
+                persisted_node_settings.memory_check_interval_seconds
+            ),
+            "memory_cleanup_threshold_ratio": (
+                persisted_node_settings.memory_cleanup_threshold_ratio
+            ),
+            "memory_reject_threshold_ratio": (
+                persisted_node_settings.memory_reject_threshold_ratio
+            ),
+            "max_active_reviews": persisted_node_settings.max_active_reviews,
+            "max_active_agent_runs": persisted_node_settings.max_active_agent_runs,
+            "max_agent_runs_per_review": (
+                persisted_node_settings.max_agent_runs_per_review
+            ),
+        }
+    )
     file_exclusion_source = FilesystemFileExclusionPolicySource(settings.file_exclusion_config)
     file_exclusion_source.get_policy()
     file_exclusion_settings = FileExclusionPolicyService(
@@ -389,6 +419,7 @@ def build_unified_backend(
     tool_limits = ToolLimitsService(
         FilesystemToolLimitsStore(settings.data_dir, web_settings_defaults.tool_limits)
     )
+    node_settings = NodeSettingsService(node_settings_store)
 
     # Plugin context: store, loader, lifecycle manager, and export orchestrator.
     # The terminal hook is late-bound on the review store so that the
@@ -519,6 +550,7 @@ def build_unified_backend(
         hook_installer=hook_installer,
         trigger_hooks=trigger_hooks,
         tool_limits=tool_limits,
+        node_settings=node_settings,
         file_exclusion_settings=file_exclusion_settings,
     )
 

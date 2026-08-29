@@ -18,6 +18,7 @@ from codelens.review.domain.tool_limits import (
     DEFAULT_MAX_RESULTS,
     DEFAULT_MAX_SCAN_BYTES,
     DEFAULT_MAX_SOURCE_BYTES,
+    DEFAULT_MAX_FILE_PAYLOAD_CACHE_BYTES,
     DEFAULT_REGEX_TIMEOUT_SECONDS,
     DEFAULT_SHORT_TEXT_MAX,
     DEFAULT_TASK_SUMMARY_MAX,
@@ -34,6 +35,7 @@ from codelens.review.domain.tool_limits import (
     MAX_MAX_RESULTS,
     MAX_MAX_SCAN_BYTES,
     MAX_MAX_SOURCE_BYTES,
+    MAX_MAX_FILE_PAYLOAD_CACHE_BYTES,
     MAX_REGEX_TIMEOUT_SECONDS,
     MAX_SHORT_TEXT_MAX,
     MAX_TASK_SUMMARY_MAX,
@@ -50,6 +52,7 @@ from codelens.review.domain.tool_limits import (
     MIN_MAX_RESULTS,
     MIN_MAX_SCAN_BYTES,
     MIN_MAX_SOURCE_BYTES,
+    MIN_MAX_FILE_PAYLOAD_CACHE_BYTES,
     MIN_REGEX_TIMEOUT_SECONDS,
     MIN_SHORT_TEXT_MAX,
     MIN_TASK_SUMMARY_MAX,
@@ -63,6 +66,7 @@ def test_default_tool_limits_are_within_bounds() -> None:
     assert limits.max_read_bytes == DEFAULT_MAX_READ_BYTES
     assert limits.max_scan_bytes == DEFAULT_MAX_SCAN_BYTES
     assert limits.max_source_bytes == DEFAULT_MAX_SOURCE_BYTES
+    assert limits.max_file_payload_cache_bytes == DEFAULT_MAX_FILE_PAYLOAD_CACHE_BYTES
     assert limits.max_lines == DEFAULT_MAX_LINES
     assert limits.max_path_chars == DEFAULT_MAX_PATH_CHARS
     assert limits.max_pattern_chars == DEFAULT_MAX_PATTERN_CHARS
@@ -102,6 +106,7 @@ def test_tool_limits_accept_boundary_values() -> None:
         max_read_bytes=MIN_MAX_READ_BYTES,
         max_scan_bytes=MIN_MAX_SCAN_BYTES,
         max_source_bytes=MIN_MAX_SOURCE_BYTES,
+        max_file_payload_cache_bytes=MIN_MAX_FILE_PAYLOAD_CACHE_BYTES,
         max_lines=MIN_MAX_LINES,
         max_path_chars=MIN_MAX_PATH_CHARS,
         max_pattern_chars=MIN_MAX_PATTERN_CHARS,
@@ -126,6 +131,7 @@ def test_tool_limits_accept_boundary_values() -> None:
         max_read_bytes=MAX_MAX_READ_BYTES,
         max_scan_bytes=MAX_MAX_SCAN_BYTES,
         max_source_bytes=MAX_MAX_SOURCE_BYTES,
+        max_file_payload_cache_bytes=MAX_MAX_FILE_PAYLOAD_CACHE_BYTES,
         max_lines=MAX_MAX_LINES,
         max_path_chars=MAX_MAX_PATH_CHARS,
         max_pattern_chars=MAX_MAX_PATTERN_CHARS,
@@ -154,6 +160,8 @@ def test_tool_limits_accept_boundary_values() -> None:
         ("max_read_bytes", MIN_MAX_READ_BYTES - 1),
         ("max_scan_bytes", MAX_MAX_SCAN_BYTES + 1),
         ("max_source_bytes", MIN_MAX_SOURCE_BYTES - 1),
+        ("max_file_payload_cache_bytes", MIN_MAX_FILE_PAYLOAD_CACHE_BYTES - 1),
+        ("max_file_payload_cache_bytes", MAX_MAX_FILE_PAYLOAD_CACHE_BYTES + 1),
         ("max_lines", MAX_MAX_LINES + 1),
         ("max_path_chars", MIN_MAX_PATH_CHARS - 1),
         ("max_pattern_chars", MAX_MAX_PATTERN_CHARS + 1),

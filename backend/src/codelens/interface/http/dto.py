@@ -191,6 +191,7 @@ class ToolLimitsResponse(StrictDto):
     max_read_bytes: Annotated[int, Field(ge=1024, le=10 * 1024 * 1024)]
     max_scan_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
     max_source_bytes: Annotated[int, Field(ge=1024, le=100 * 1024 * 1024)]
+    max_file_payload_cache_bytes: Annotated[int, Field(ge=1, le=1024 * 1024 * 1024)]
     max_lines: Annotated[int, Field(ge=10, le=10_000)]
     max_path_chars: Annotated[int, Field(ge=64, le=4096)]
     max_pattern_chars: Annotated[int, Field(ge=64, le=4096)]
@@ -215,6 +216,9 @@ class UpdateToolLimitsRequest(StrictDto):
     max_read_bytes: Annotated[int | None, Field(ge=1024, le=10 * 1024 * 1024)] = None
     max_scan_bytes: Annotated[int | None, Field(ge=1024, le=100 * 1024 * 1024)] = None
     max_source_bytes: Annotated[int | None, Field(ge=1024, le=100 * 1024 * 1024)] = None
+    max_file_payload_cache_bytes: Annotated[
+        int | None, Field(ge=1, le=1024 * 1024 * 1024)
+    ] = None
     max_lines: Annotated[int | None, Field(ge=10, le=10_000)] = None
     max_path_chars: Annotated[int | None, Field(ge=64, le=4096)] = None
     max_pattern_chars: Annotated[int | None, Field(ge=64, le=4096)] = None
@@ -240,6 +244,30 @@ class UpdateToolLimitsRequest(StrictDto):
     context_compaction_max_consecutive_failures: Annotated[
         int | None, Field(ge=1, le=10)
     ] = None
+
+
+class NodeSettingsResponse(StrictDto):
+    """Expose process-level resource limits (applied on next restart)."""
+
+    memory_limit_mb: Annotated[int, Field(ge=512, le=1024 * 1024)]
+    memory_check_interval_seconds: Annotated[float, Field(ge=0.01, le=3600.0)]
+    memory_cleanup_threshold_ratio: Annotated[float, Field(gt=0.0, le=1.0)]
+    memory_reject_threshold_ratio: Annotated[float, Field(gt=0.0, le=1.0)]
+    max_active_reviews: Annotated[int, Field(ge=1, le=100)]
+    max_active_agent_runs: Annotated[int, Field(ge=1, le=200)]
+    max_agent_runs_per_review: Annotated[int, Field(ge=1, le=200)]
+
+
+class UpdateNodeSettingsRequest(StrictDto):
+    """Accept partial updates for node settings; omitted fields retain current values."""
+
+    memory_limit_mb: Annotated[int | None, Field(ge=512, le=1024 * 1024)] = None
+    memory_check_interval_seconds: Annotated[float | None, Field(ge=0.01, le=3600.0)] = None
+    memory_cleanup_threshold_ratio: Annotated[float | None, Field(gt=0.0, le=1.0)] = None
+    memory_reject_threshold_ratio: Annotated[float | None, Field(gt=0.0, le=1.0)] = None
+    max_active_reviews: Annotated[int | None, Field(ge=1, le=100)] = None
+    max_active_agent_runs: Annotated[int | None, Field(ge=1, le=200)] = None
+    max_agent_runs_per_review: Annotated[int | None, Field(ge=1, le=200)] = None
 
 
 class FileExclusionSettingsResponse(StrictDto):
@@ -855,5 +883,6 @@ class ResetAllSettingsResponse(StrictDto):
     trigger_idempotency: TriggerIdempotencySettingsResponse
     recent_repositories: RecentRepositorySettingsResponse
     tool_limits: ToolLimitsResponse
+    node_settings: NodeSettingsResponse
     logging: RuntimeLoggingSettingsResponse
     model_gateways: ModelGatewayCatalogResponse

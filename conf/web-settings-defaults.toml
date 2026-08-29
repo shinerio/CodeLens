@@ -24,6 +24,7 @@ max_results = 200
 max_read_bytes = 65536
 max_scan_bytes = 1048576
 max_source_bytes = 1048576
+max_file_payload_cache_bytes = 33554432
 max_lines = 1000
 max_path_chars = 1024
 max_pattern_chars = 512

@@ -5,6 +5,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Literal, Protocol
 
+from codelens.bootstrap.node_settings import NodeSettings
 from codelens.capabilities.domain.models import FrozenAgentExecutionSpec
 from codelens.findings.domain.candidates import CandidateFinding, CandidateFindingBatch
 from codelens.findings.domain.clusters import FindingCluster
@@ -581,5 +582,19 @@ class ToolLimitsStorePort(Protocol):
 
     def save_tool_limits(self, limits: ToolLimits) -> None:
         """Atomically replace the persisted tool limits."""
+
+        raise NotImplementedError
+
+
+class NodeSettingsStorePort(Protocol):
+    """Persist and provide process-level resource limits (applied at restart)."""
+
+    def get_node_settings(self) -> NodeSettings:
+        """Load persisted node settings or product defaults."""
+
+        raise NotImplementedError
+
+    def save_node_settings(self, settings: NodeSettings) -> None:
+        """Atomically replace the persisted node settings."""
 
         raise NotImplementedError

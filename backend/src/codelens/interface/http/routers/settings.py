@@ -10,6 +10,7 @@ from codelens.bootstrap.logging import (
     get_runtime_log_level,
     update_runtime_logging,
 )
+from codelens.bootstrap.node_settings import NodeSettings
 from codelens.interface.http.dependencies import HttpComponents, HttpProblem, get_components
 from codelens.interface.http.dto import (
     ActivateModelGatewayRequest,
@@ -20,6 +21,7 @@ from codelens.interface.http.dto import (
     InstructionFileSettingsResponse,
     ModelGatewayCatalogResponse,
     ModelGatewayResponse,
+    NodeSettingsResponse,
     RecentRepositorySettingsResponse,
     ResetAllSettingsResponse,
     ReviewCompletionSettingsResponse,
@@ -29,6 +31,7 @@ from codelens.interface.http.dto import (
     UpdateFileExclusionSettingsRequest,
     UpdateInstructionFileSettingsRequest,
     UpdateModelGatewayRequest,
+    UpdateNodeSettingsRequest,
     UpdateRecentRepositorySettingsRequest,
     UpdateReviewCompletionSettingsRequest,
     UpdateRuntimeLoggingSettingsRequest,
@@ -93,6 +96,7 @@ def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
         max_read_bytes=limits.max_read_bytes,
         max_scan_bytes=limits.max_scan_bytes,
         max_source_bytes=limits.max_source_bytes,
+        max_file_payload_cache_bytes=limits.max_file_payload_cache_bytes,
         max_lines=limits.max_lines,
         max_path_chars=limits.max_path_chars,
         max_pattern_chars=limits.max_pattern_chars,
@@ -112,6 +116,18 @@ def _tool_limits_response(limits: ToolLimits) -> ToolLimitsResponse:
         context_compaction_max_consecutive_failures=(
             limits.context_compaction_max_consecutive_failures
         ),
+    )
+
+
+def _node_settings_response(settings: NodeSettings) -> NodeSettingsResponse:
+    return NodeSettingsResponse(
+        memory_limit_mb=settings.memory_limit_mb,
+        memory_check_interval_seconds=settings.memory_check_interval_seconds,
+        memory_cleanup_threshold_ratio=settings.memory_cleanup_threshold_ratio,
+        memory_reject_threshold_ratio=settings.memory_reject_threshold_ratio,
+        max_active_reviews=settings.max_active_reviews,
+        max_active_agent_runs=settings.max_active_agent_runs,
+        max_agent_runs_per_review=settings.max_agent_runs_per_review,
     )
 
 
@@ -453,6 +469,7 @@ async def update_tool_limits(
             max_read_bytes=request.max_read_bytes,
             max_scan_bytes=request.max_scan_bytes,
             max_source_bytes=request.max_source_bytes,
+            max_file_payload_cache_bytes=request.max_file_payload_cache_bytes,
             max_lines=request.max_lines,
             max_path_chars=request.max_path_chars,
             max_pattern_chars=request.max_pattern_chars,
@@ -480,6 +497,38 @@ async def update_tool_limits(
     except ValueError as error:
         raise HttpProblem(422, "invalid_tool_limits", str(error)) from error
     return _tool_limits_response(limits)
+
+
+@router.get("/node-limits", response_model=NodeSettingsResponse)
+async def get_node_settings(
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> NodeSettingsResponse:
+    """Return the process-level resource limits applied on next restart."""
+
+    settings = await components.node_settings.get()
+    return _node_settings_response(settings)
+
+
+@router.put("/node-limits", response_model=NodeSettingsResponse)
+async def update_node_settings(
+    request: UpdateNodeSettingsRequest,
+    components: Annotated[HttpComponents, Depends(get_components)],
+) -> NodeSettingsResponse:
+    """Persist replacement node settings; they take effect on the next process restart."""
+
+    try:
+        settings = await components.node_settings.update(
+            memory_limit_mb=request.memory_limit_mb,
+            memory_check_interval_seconds=request.memory_check_interval_seconds,
+            memory_cleanup_threshold_ratio=request.memory_cleanup_threshold_ratio,
+            memory_reject_threshold_ratio=request.memory_reject_threshold_ratio,
+            max_active_reviews=request.max_active_reviews,
+            max_active_agent_runs=request.max_active_agent_runs,
+            max_agent_runs_per_review=request.max_agent_runs_per_review,
+        )
+    except ValueError as error:
+        raise HttpProblem(422, "invalid_node_settings", str(error)) from error
+    return _node_settings_response(settings)
 
 
 @router.post("/reset-all", response_model=ResetAllSettingsResponse)
@@ -534,6 +583,7 @@ async def reset_all_settings(
         max_read_bytes=default_tool_limits.max_read_bytes,
         max_scan_bytes=default_tool_limits.max_scan_bytes,
         max_source_bytes=default_tool_limits.max_source_bytes,
+        max_file_payload_cache_bytes=default_tool_limits.max_file_payload_cache_bytes,
         max_lines=default_tool_limits.max_lines,
         max_path_chars=default_tool_limits.max_path_chars,
         max_pattern_chars=default_tool_limits.max_pattern_chars,
@@ -557,6 +607,18 @@ async def reset_all_settings(
         context_compaction_max_consecutive_failures=(
             default_tool_limits.context_compaction_max_consecutive_failures
         ),
+    )
+
+    # Reset node settings to product defaults
+    node_defaults = NodeSettings()
+    node_settings = await components.node_settings.update(
+        memory_limit_mb=node_defaults.memory_limit_mb,
+        memory_check_interval_seconds=node_defaults.memory_check_interval_seconds,
+        memory_cleanup_threshold_ratio=node_defaults.memory_cleanup_threshold_ratio,
+        memory_reject_threshold_ratio=node_defaults.memory_reject_threshold_ratio,
+        max_active_reviews=node_defaults.max_active_reviews,
+        max_active_agent_runs=node_defaults.max_active_agent_runs,
+        max_agent_runs_per_review=node_defaults.max_agent_runs_per_review,
     )
 
     # Reset logging controls
@@ -620,6 +682,7 @@ async def reset_all_settings(
             recent_repository_limit=recent_repo_limit,
         ),
         tool_limits=_tool_limits_response(tool_limits),
+        node_settings=_node_settings_response(node_settings),
         logging=RuntimeLoggingSettingsResponse(
             default_level=defaults.log_level,
             level=log_level,

@@ -24,6 +24,7 @@ class ToolLimitsService:
         max_read_bytes: int | None = None,
         max_scan_bytes: int | None = None,
         max_source_bytes: int | None = None,
+        max_file_payload_cache_bytes: int | None = None,
         max_lines: int | None = None,
         max_path_chars: int | None = None,
         max_pattern_chars: int | None = None,
@@ -49,6 +50,11 @@ class ToolLimitsService:
             max_scan_bytes=max_scan_bytes if max_scan_bytes is not None else current.max_scan_bytes,
             max_source_bytes=(
                 max_source_bytes if max_source_bytes is not None else current.max_source_bytes
+            ),
+            max_file_payload_cache_bytes=(
+                max_file_payload_cache_bytes
+                if max_file_payload_cache_bytes is not None
+                else current.max_file_payload_cache_bytes
             ),
             max_lines=max_lines if max_lines is not None else current.max_lines,
             max_path_chars=max_path_chars if max_path_chars is not None else current.max_path_chars,

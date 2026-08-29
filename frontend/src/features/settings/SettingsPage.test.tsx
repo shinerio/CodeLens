@@ -46,12 +46,28 @@ function fileExclusionSettingsResponse(
   });
 }
 
+function nodeSettingsResponse() {
+  return new Response(JSON.stringify({
+    memory_limit_mb: 2048,
+    memory_check_interval_seconds: 5.0,
+    memory_cleanup_threshold_ratio: 0.85,
+    memory_reject_threshold_ratio: 0.95,
+    max_active_reviews: 4,
+    max_active_agent_runs: 8,
+    max_agent_runs_per_review: 4,
+  }), {
+    status: 200,
+    headers: { "Content-Type": "application/json" },
+  });
+}
+
 function toolLimitsResponse() {
   return new Response(JSON.stringify({
     max_results: 200,
     max_read_bytes: 65536,
     max_scan_bytes: 1048576,
     max_source_bytes: 1048576,
+    max_file_payload_cache_bytes: 33554432,
     max_lines: 1000,
     max_path_chars: 1024,
     max_pattern_chars: 512,
@@ -103,6 +119,9 @@ it("shows context and tool sizes in KB with compaction enabled by default", asyn
     if (url === "/api/settings/tool-limits") {
       return Promise.resolve(toolLimitsResponse());
     }
+    if (url === "/api/settings/node-limits") {
+      return Promise.resolve(nodeSettingsResponse());
+    }
     if (url === "/api/settings/file-exclusions") {
       return Promise.resolve(fileExclusionSettingsResponse());
     }
@@ -114,6 +133,8 @@ it("shows context and tool sizes in KB with compaction enabled by default", asyn
   expect(await screen.findByRole("spinbutton", { name: "Max read size (KB)" })).toHaveValue(64);
   expect(screen.getByRole("spinbutton", { name: "Max scan size (KB)" })).toHaveValue(1024);
   expect(screen.getByRole("spinbutton", { name: "Max source size (KB)" })).toHaveValue(1024);
+  expect(screen.getByRole("spinbutton", { name: "Memory limit (MB)" })).toHaveValue(2048);
+  expect(screen.getByRole("spinbutton", { name: "Max concurrent reviews" })).toHaveValue(4);
   expect(screen.getByRole("spinbutton", { name: "Context compaction trigger (tokens)" })).toHaveValue(160000);
   expect(
     screen.getByRole("checkbox", { name: "Enable deterministic context compaction" }),
@@ -148,6 +169,7 @@ it("creates the first persistent model gateway without retaining its API key", a
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(nodeSettingsResponse())
     .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
@@ -304,6 +326,7 @@ it("switches the active gateway without asking for the stored key", async () => 
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(nodeSettingsResponse())
     .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
@@ -472,6 +495,7 @@ it("sends a connectivity test request when the test connectivity button is click
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(nodeSettingsResponse())
     .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
@@ -535,6 +559,7 @@ it("sends an availability test request when the test availability button is clic
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(nodeSettingsResponse())
     .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(
@@ -586,6 +611,7 @@ it("updates the recent repository list limit", async () => {
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(nodeSettingsResponse())
     .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(
       new Response(JSON.stringify({ recent_repository_limit: 15 }), {
@@ -638,6 +664,7 @@ it("updates instruction file limits and omits credential handling details", asyn
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(nodeSettingsResponse())
     .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(instructionSettingsResponse(800, 240));
   const user = userEvent.setup();
@@ -689,6 +716,7 @@ it("updates the maximum incomplete review retry count", async () => {
     .mockResolvedValueOnce(reviewCompletionSettingsResponse())
     .mockResolvedValueOnce(triggerIdempotencySettingsResponse())
     .mockResolvedValueOnce(toolLimitsResponse())
+    .mockResolvedValueOnce(nodeSettingsResponse())
     .mockResolvedValueOnce(fileExclusionSettingsResponse())
     .mockResolvedValueOnce(reviewCompletionSettingsResponse(5));
   const user = userEvent.setup();

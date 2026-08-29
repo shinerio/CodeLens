@@ -182,10 +182,11 @@ class FilesystemReviewTools:
         self._review_files_by_path = {item.path: item for item in review_files}
         self._reviewed_paths: set[str] = set()
         # Bounded LRU cache for file payloads to avoid repeated disk reads within
-        # the same agent run. Without a bound, a large review that reads thousands
-        # of distinct files would accumulate bytes until the agent run ends.
+        # the same agent run. Bound is enforced by total bytes (not entry count) so
+        # that a few large files cannot exhaust the process memory budget. The limit
+        # is taken from ToolLimits, which is hot-reloadable per new agent run.
         self._file_payload_cache: OrderedDict[tuple[str, str], bytes] = OrderedDict()
-        self._file_payload_cache_maxsize: int = 100
+        self._file_payload_cache_bytes: int = 0
 
     async def find_files(self, path: str = "", pattern: str = "**") -> str:
         """Find visible files under one normalized directory using the shared v2 Glob."""
@@ -1238,10 +1239,18 @@ class FilesystemReviewTools:
         if b"\0" in payload:
             raise ValueError("Snapshot file is binary")
 
-        # Cache the payload for subsequent reads; evict oldest entry when bound hit.
+        # Cache the payload for subsequent reads; evict oldest entries until the
+        # total cached bytes fall under the configured budget. A single entry that
+        # alone exceeds the budget is kept (the loop guards on len > 1) so that a
+        # legitimately large source file remains cacheable for repeat reads.
         self._file_payload_cache[cache_key] = payload
-        if len(self._file_payload_cache) > self._file_payload_cache_maxsize:
-            self._file_payload_cache.popitem(last=False)
+        self._file_payload_cache_bytes += len(payload)
+        while (
+            self._file_payload_cache_bytes > self._limits.max_file_payload_cache_bytes
+            and len(self._file_payload_cache) > 1
+        ):
+            _evicted_key, evicted_payload = self._file_payload_cache.popitem(last=False)
+            self._file_payload_cache_bytes -= len(evicted_payload)
         return payload
 
     async def _revision_payload(self, path: str, version: Literal["base", "head"]) -> bytes:

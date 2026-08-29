@@ -6,6 +6,7 @@ DEFAULT_MAX_RESULTS = 200
 DEFAULT_MAX_READ_BYTES = 64 * 1024
 DEFAULT_MAX_SCAN_BYTES = 1024 * 1024
 DEFAULT_MAX_SOURCE_BYTES = 1024 * 1024
+DEFAULT_MAX_FILE_PAYLOAD_CACHE_BYTES = 32 * 1024 * 1024
 DEFAULT_MAX_LINES = 1000
 DEFAULT_MAX_PATH_CHARS = 1024
 DEFAULT_MAX_PATTERN_CHARS = 512
@@ -30,6 +31,8 @@ MIN_MAX_SCAN_BYTES = 1
 MAX_MAX_SCAN_BYTES = 100 * 1024 * 1024
 MIN_MAX_SOURCE_BYTES = 1
 MAX_MAX_SOURCE_BYTES = 100 * 1024 * 1024
+MIN_MAX_FILE_PAYLOAD_CACHE_BYTES = 1
+MAX_MAX_FILE_PAYLOAD_CACHE_BYTES = 1024 * 1024 * 1024
 MIN_MAX_LINES = 1
 MAX_MAX_LINES = 10_000
 MIN_MAX_PATH_CHARS = 1
@@ -68,6 +71,7 @@ class ToolLimits:
     max_read_bytes: int = DEFAULT_MAX_READ_BYTES
     max_scan_bytes: int = DEFAULT_MAX_SCAN_BYTES
     max_source_bytes: int = DEFAULT_MAX_SOURCE_BYTES
+    max_file_payload_cache_bytes: int = DEFAULT_MAX_FILE_PAYLOAD_CACHE_BYTES
     max_lines: int = DEFAULT_MAX_LINES
     max_path_chars: int = DEFAULT_MAX_PATH_CHARS
     max_pattern_chars: int = DEFAULT_MAX_PATTERN_CHARS
@@ -102,6 +106,12 @@ class ToolLimits:
                 self.max_source_bytes,
                 MIN_MAX_SOURCE_BYTES,
                 MAX_MAX_SOURCE_BYTES,
+            ),
+            (
+                "max_file_payload_cache_bytes",
+                self.max_file_payload_cache_bytes,
+                MIN_MAX_FILE_PAYLOAD_CACHE_BYTES,
+                MAX_MAX_FILE_PAYLOAD_CACHE_BYTES,
             ),
             ("max_lines", self.max_lines, MIN_MAX_LINES, MAX_MAX_LINES),
             ("max_path_chars", self.max_path_chars, MIN_MAX_PATH_CHARS, MAX_MAX_PATH_CHARS),

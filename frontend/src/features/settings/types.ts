@@ -114,6 +114,7 @@ export type ToolLimits = {
   max_read_bytes: number;
   max_scan_bytes: number;
   max_source_bytes: number;
+  max_file_payload_cache_bytes: number;
   max_lines: number;
   max_path_chars: number;
   max_pattern_chars: number;
@@ -138,6 +139,17 @@ export type ResetAllSettingsResponse = {
   trigger_idempotency: TriggerIdempotencySettings;
   recent_repositories: RecentRepositorySettings;
   tool_limits: ToolLimits;
+  node_settings: NodeSettings;
   logging: RuntimeLoggingSettings;
   model_gateways: ModelGatewayCatalog;
+};
+
+export type NodeSettings = {
+  memory_limit_mb: number;
+  memory_check_interval_seconds: number;
+  memory_cleanup_threshold_ratio: number;
+  memory_reject_threshold_ratio: number;
+  max_active_reviews: number;
+  max_active_agent_runs: number;
+  max_agent_runs_per_review: number;
 };

@@ -28,6 +28,7 @@ import {
   getRuntimeLoggingSettings,
   getToolLimits,
   getTriggerIdempotencySettings,
+  getNodeSettings,
   listModelGateways,
   resetAllSettings,
   testGatewayAvailability,
@@ -40,8 +41,13 @@ import {
   updateModelGateway,
   updateToolLimits,
   updateTriggerIdempotencySettings,
+  updateNodeSettings,
 } from "./api";
-import type { FileExclusionSettings, ToolLimits as ToolLimitsType } from "./types";
+import type {
+  FileExclusionSettings,
+  NodeSettings as NodeSettingsType,
+  ToolLimits as ToolLimitsType,
+} from "./types";
 import type {
   GatewayApiType,
   GatewayTestResult,
@@ -101,6 +107,7 @@ export function SettingsPage() {
   const [incompleteReviewRetryLimitDraft, setIncompleteReviewRetryLimitDraft] = useState("3");
   const [triggerIdempotencyEnabledDraft, setTriggerIdempotencyEnabledDraft] = useState(false);
   const [toolLimitsDraft, setToolLimitsDraft] = useState<ToolLimitsType | null>(null);
+  const [nodeSettingsDraft, setNodeSettingsDraft] = useState<NodeSettingsType | null>(null);
   const [fileExclusionsDraft, setFileExclusionsDraft] =
     useState<FileExclusionSettings | null>(null);
   const gatewayQuery = useQuery({
@@ -185,6 +192,17 @@ export function SettingsPage() {
       setToolLimitsDraft(limits);
     },
   });
+  const nodeSettingsQuery = useQuery({
+    queryKey: ["node-settings"],
+    queryFn: getNodeSettings,
+  });
+  const nodeSettingsMutation = useMutation({
+    mutationFn: updateNodeSettings,
+    onSuccess: (settings) => {
+      queryClient.setQueryData(["node-settings"], settings);
+      setNodeSettingsDraft(settings);
+    },
+  });
   const fileExclusionsQuery = useQuery({
     queryKey: FILE_EXCLUSION_SETTINGS_QUERY_KEY,
     queryFn: getFileExclusionSettings,
@@ -205,9 +223,11 @@ export function SettingsPage() {
       queryClient.setQueryData(TRIGGER_IDEMPOTENCY_SETTINGS_QUERY_KEY, response.trigger_idempotency);
       queryClient.setQueryData(RECENT_REPOSITORY_SETTINGS_QUERY_KEY, response.recent_repositories);
       queryClient.setQueryData(["tool-limits"], response.tool_limits);
+      queryClient.setQueryData(["node-settings"], response.node_settings);
       queryClient.setQueryData(RUNTIME_LOGGING_SETTINGS_QUERY_KEY, response.logging);
       queryClient.setQueryData(MODEL_GATEWAYS_QUERY_KEY, response.model_gateways);
       setToolLimitsDraft(response.tool_limits);
+      setNodeSettingsDraft(response.node_settings);
       setFileExclusionsDraft(response.file_exclusions);
       setRootInstructionLimitDraft(String(response.instruction_files.root_max_lines));
       setNestedInstructionLimitDraft(String(response.instruction_files.nested_max_lines));
@@ -284,6 +304,12 @@ export function SettingsPage() {
       setToolLimitsDraft(toolLimitsQuery.data);
     }
   }, [toolLimitsQuery.data]);
+
+  useEffect(() => {
+    if (nodeSettingsQuery.data !== undefined) {
+      setNodeSettingsDraft(nodeSettingsQuery.data);
+    }
+  }, [nodeSettingsQuery.data]);
 
   useEffect(() => {
     if (fileExclusionsQuery.data !== undefined) {
@@ -537,6 +563,10 @@ export function SettingsPage() {
   const areToolLimitsUnchanged =
     toolLimitsDraft === null ||
     JSON.stringify(toolLimitsDraft) === JSON.stringify(toolLimitsQuery.data);
+  const areNodeSettingsValid = nodeSettingsDraft !== null;
+  const areNodeSettingsUnchanged =
+    nodeSettingsDraft === null ||
+    JSON.stringify(nodeSettingsDraft) === JSON.stringify(nodeSettingsQuery.data);
   const normalizedFileExclusions =
     fileExclusionsDraft === null
       ? null
@@ -1215,6 +1245,18 @@ export function SettingsPage() {
                   />
                 </label>
                 <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxFilePayloadCacheBytes")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={1048576}
+                    value={toolLimitsDraft.max_file_payload_cache_bytes / BYTES_PER_KILOBYTE}
+                    onChange={(e) =>
+                      setToolLimitsDraft({ ...toolLimitsDraft, max_file_payload_cache_bytes: Number(e.currentTarget.value) * BYTES_PER_KILOBYTE })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
                   <span className="settings-field__label">{t("settings.maxLines")}</span>
                   <input
                     type="number"
@@ -1446,6 +1488,148 @@ export function SettingsPage() {
                 >
                   <Check aria-hidden="true" />
                   {t("settings.saveToolLimits")}
+                </button>
+              </div>
+            </section>
+          )}
+
+          {/* Node Resource Limits Panel */}
+          {nodeSettingsDraft !== null && (
+            <section className="settings-panel">
+              <header className="settings-panel__header">
+                <SlidersHorizontal className="settings-panel__icon" aria-hidden="true" />
+                <h2 className="settings-panel__title">{t("settings.nodeSettings")}</h2>
+              </header>
+              <small style={{ display: "block", marginBottom: "16px", color: "var(--muted)" }}>
+                {t("settings.nodeSettingsHint")}
+              </small>
+              <div className="settings-panel__grid">
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.memoryLimitMb")}</span>
+                  <input
+                    type="number"
+                    min={512}
+                    max={1048576}
+                    value={nodeSettingsDraft.memory_limit_mb}
+                    onChange={(e) =>
+                      setNodeSettingsDraft({
+                        ...nodeSettingsDraft,
+                        memory_limit_mb: Number(e.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.memoryCheckIntervalSeconds")}</span>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={3600}
+                    step={0.1}
+                    value={nodeSettingsDraft.memory_check_interval_seconds}
+                    onChange={(e) =>
+                      setNodeSettingsDraft({
+                        ...nodeSettingsDraft,
+                        memory_check_interval_seconds: Number(e.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.memoryCleanupThresholdRatio")}</span>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1}
+                    step={0.01}
+                    value={nodeSettingsDraft.memory_cleanup_threshold_ratio}
+                    onChange={(e) =>
+                      setNodeSettingsDraft({
+                        ...nodeSettingsDraft,
+                        memory_cleanup_threshold_ratio: Number(e.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.memoryRejectThresholdRatio")}</span>
+                  <input
+                    type="number"
+                    min={0.01}
+                    max={1}
+                    step={0.01}
+                    value={nodeSettingsDraft.memory_reject_threshold_ratio}
+                    onChange={(e) =>
+                      setNodeSettingsDraft({
+                        ...nodeSettingsDraft,
+                        memory_reject_threshold_ratio: Number(e.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxActiveReviews")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={100}
+                    value={nodeSettingsDraft.max_active_reviews}
+                    onChange={(e) =>
+                      setNodeSettingsDraft({
+                        ...nodeSettingsDraft,
+                        max_active_reviews: Number(e.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxActiveAgentRuns")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={nodeSettingsDraft.max_active_agent_runs}
+                    onChange={(e) =>
+                      setNodeSettingsDraft({
+                        ...nodeSettingsDraft,
+                        max_active_agent_runs: Number(e.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+                <label className="settings-field">
+                  <span className="settings-field__label">{t("settings.maxAgentRunsPerReview")}</span>
+                  <input
+                    type="number"
+                    min={1}
+                    max={200}
+                    value={nodeSettingsDraft.max_agent_runs_per_review}
+                    onChange={(e) =>
+                      setNodeSettingsDraft({
+                        ...nodeSettingsDraft,
+                        max_agent_runs_per_review: Number(e.currentTarget.value),
+                      })
+                    }
+                  />
+                </label>
+              </div>
+              <div className="settings-panel__actions">
+                <button
+                  className="settings-panel__save-button"
+                  disabled={
+                    nodeSettingsMutation.isPending ||
+                    !areNodeSettingsValid ||
+                    areNodeSettingsUnchanged
+                  }
+                  type="button"
+                  onClick={() => {
+                    if (nodeSettingsDraft !== null) {
+                      nodeSettingsMutation.mutate(nodeSettingsDraft);
+                    }
+                  }}
+                >
+                  <Check aria-hidden="true" />
+                  {t("settings.saveNodeSettings")}
                 </button>
               </div>
             </section>
