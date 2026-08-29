@@ -252,6 +252,13 @@ async def test_whitespace_only_modified_files_are_excluded(tmp_path: Path) -> No
         ReviewFileChange("real_change.py", "modified"),
     )
     assert all(hunk.path == "real_change.py" for hunk in index.hunks)
+    # Whitespace-only files are recorded so downstream consumers can
+    # distinguish a deliberate filter from a genuine metadata gap.
+    assert index.whitespace_only_paths == (
+        "blank_lines.py",
+        "crlf_only.py",
+        "indent_only.py",
+    )
 
 
 async def test_substantive_change_alongside_whitespace_is_kept(tmp_path: Path) -> None:
