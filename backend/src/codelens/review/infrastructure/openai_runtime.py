@@ -36,6 +36,7 @@ from agents.result import RunResult
 from agents.run_config import ToolErrorFormatterArgs
 from openai import (
     APIConnectionError,
+    APIError,
     APIStatusError,
     APITimeoutError,
     AsyncOpenAI,
@@ -766,6 +767,15 @@ class OpenAIAgentRuntime:
                 except InternalServerError:
                     attempt_failure = self._failure(
                         phase, "provider_server_error", "provider server error", retryable=True
+                    )
+                except APIError:
+                    # Bare APIError (e.g. from streaming interruption) is not caught
+                    # by the specific subclass handlers above. Treat as transient.
+                    attempt_failure = self._failure(
+                        phase,
+                        "provider_streaming_error",
+                        "provider streaming error",
+                        retryable=True,
                     )
                 except MaxTurnsExceeded:
                     attempt_failure = AgentMaxTurnsExceededError(

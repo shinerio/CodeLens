@@ -47,6 +47,7 @@ class Settings(BaseSettings):
     memory_check_interval_seconds: float = 5.0
     memory_cleanup_threshold_ratio: float = 0.85
     memory_reject_threshold_ratio: float = 0.95
+    git_max_output_bytes: int = 8 * 1024 * 1024  # 8MB default
     repository_roots: tuple[Path, ...] = ()
     database_url: str | None = None
     initialize_schema: bool = True

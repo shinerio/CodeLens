@@ -463,7 +463,7 @@ class WorkerReviewExecutor:
             FilesystemAgentPromptStore(settings.data_dir), settings.prompt_dir
         )
         self._repository_inspector = repository_inspector or RepositoryInspector(
-            GitRepositoryMetadataAdapter(GitCli()),
+            GitRepositoryMetadataAdapter(GitCli(max_output_bytes=settings.git_max_output_bytes)),
             settings.repository_roots,
         )
         self._provider_config = provider_config or FilesystemModelProviderConfigAdapter(

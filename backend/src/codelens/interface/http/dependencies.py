@@ -198,7 +198,7 @@ def build_components(settings: Settings) -> HttpComponents:
     )
     database = Database(settings.resolved_database_url)
     event_bus = InMemoryEventBus()
-    git = GitCli()
+    git = GitCli(max_output_bytes=settings.git_max_output_bytes)
     repository_inspector = RepositoryInspector(
         GitRepositoryMetadataAdapter(git),
         settings.repository_roots,

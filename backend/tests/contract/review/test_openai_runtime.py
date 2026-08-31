@@ -14,7 +14,7 @@ from agents.exceptions import ModelBehaviorError
 from agents.model_settings import ModelSettings
 from agents.run_config import CallModelData, ModelInputData
 from agents.tool_context import ToolContext
-from openai import APIConnectionError, AsyncOpenAI, InternalServerError, RateLimitError
+from openai import APIConnectionError, APIError, AsyncOpenAI, InternalServerError, RateLimitError
 
 from codelens.capabilities.application.resolve import CapabilityResolver
 from codelens.capabilities.domain.models import (
@@ -1174,6 +1174,33 @@ async def test_maps_retryable_provider_failures_without_leaking_details(failure:
         "provider_rate_limited",
         "provider_server_error",
     }
+    assert captured.value.phase == "investigation"
+    assert captured.value.retryable is True
+
+
+async def test_bare_api_error_from_streaming_is_retryable() -> None:
+    """Bare APIError (e.g. from streaming interruption) must be retried.
+
+    The OpenAI SDK raises APIError (not a subclass) when the HTTP stream is
+    interrupted. This must be treated as a transient failure so the retry
+    loop can recover.
+    """
+    failure = APIError(
+        "An error occurred during streaming",
+        request=httpx.Request("POST", "https://api.openai.com"),
+        body={"error": {"message": "streaming interrupted"}},
+    )
+    runtime = OpenAIAgentRuntime(
+        config_store=StaticProviderConfigStore(replace(_provider_config(), max_retries=0)),
+        git=GitCli(),
+        prompt_loader=_prompt_loader(),
+        runner=FakeRunner(failure),
+    )
+
+    with pytest.raises(TransientAgentRuntimeError) as captured:
+        await runtime.invoke(_spec(), _runtime_input(), _snapshot(), "en")
+
+    assert captured.value.reason_code == "provider_streaming_error"
     assert captured.value.phase == "investigation"
     assert captured.value.retryable is True
 

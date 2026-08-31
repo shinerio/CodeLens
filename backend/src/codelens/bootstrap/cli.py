@@ -89,7 +89,7 @@ async def prepare_runtime(settings: Settings, *, git: GitCli | None = None) -> N
         raise ValueError("configured data directory is not a directory") from None
     if not await asyncio.to_thread(data_dir.is_dir):
         raise ValueError("configured data directory is not a directory")
-    await (git or GitCli()).verify_available(Path.cwd())
+    await (git or GitCli(max_output_bytes=settings.git_max_output_bytes)).verify_available(Path.cwd())
 
 
 def main(arguments: Sequence[str] | None = None) -> None:

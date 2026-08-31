@@ -195,7 +195,7 @@ def build_unified_backend(
     )
     database = Database(settings.resolved_database_url)
     event_bus = InMemoryEventBus()
-    git = GitCli()
+    git = GitCli(max_output_bytes=settings.git_max_output_bytes)
 
     # Shared infrastructure
     review_store = SqlReviewStore(database, event_bus=event_bus)
