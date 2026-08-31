@@ -19,7 +19,7 @@ from codelens.review.domain.ports import (
     ReviewStorePort,
 )
 from codelens.review.domain.review_strategy import FixedReviewerSelection, ReviewProfileSnapshot
-from codelens.shared.domain.errors import DomainError
+from codelens.shared.domain.errors import DomainError, WorktreeOwnershipError
 from codelens.workspace.application.capture_overlay import ReviewInputCaptureService
 from codelens.workspace.application.file_exclusion_settings import (
     ReviewFileExclusionPolicyProviderPort,
@@ -355,7 +355,14 @@ class DeleteReviewHandler:
             raise ReviewNotFoundError("review does not exist")
         worktree = await self._worktree_registry.get(task_id)
         if worktree is not None:
-            await self._worktrees.remove_owned(worktree)
+            try:
+                await self._worktrees.remove_owned(worktree)
+            except WorktreeOwnershipError:
+                _LOGGER.warning(
+                    "Worktree ownership verification failed during deletion; "
+                    "review already marked as deleted",
+                    extra={"task_id": task_id},
+                )
 
 
 class CancelReviewHandler:
